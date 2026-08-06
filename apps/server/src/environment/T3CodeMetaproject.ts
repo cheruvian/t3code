@@ -3,6 +3,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { agentApiInventoryJson } from "@t3tools/contracts";
 import {
   getEmbeddedT3CodeCommit,
   normalizeT3CodeCommit,
@@ -23,6 +24,7 @@ This workspace exists to query and manage the T3 Code environment that launched 
 
 - Server settings: \`${input.settingsPath}\`
 - Keybindings: \`${input.keybindingsPath}\`
+- Typed API inventory: \`api-inventory.json\` (generated from the running contracts)
 
 Read a file before changing it, preserve valid JSON, and make the smallest change that satisfies the request. A missing file means T3 Code is using its defaults; create the file only when a requested change needs persisted configuration. The server watches both files and reloads valid edits. Never modify the state database, authentication material, runtime identifiers, logs, attachments, caches, or worktrees unless the user explicitly asks for that exact operation.
 
@@ -30,7 +32,7 @@ When the user asks what a setting currently does, inspect the live value first. 
 
 ## Managing T3 Code
 
-This project may also manage the environment itself. Projects can be added, renamed, or removed with the installed CLI (\`t3 project add\`, \`t3 project rename\`, and \`t3 project remove\`); use \`t3 project --help\` first and preserve the environment's data-directory flags. Actions and keybindings live in the keybindings file above. Provider settings, general settings, and other server configuration live in the settings file above. Confirm destructive project removals before executing them, and never edit the state database directly.
+This project may also manage the environment itself. The generated \`api-inventory.json\` lists every typed RPC and orchestration API known by this server, including whether it is read-only, mutating, or destructive and whether it is agent-exposed or UI-only. Projects can be added, renamed, or removed with the installed CLI (\`t3 project add\`, \`t3 project rename\`, and \`t3 project remove\`); use \`t3 project --help\` first and preserve the environment's data-directory flags. Actions and keybindings live in the keybindings file above. Provider settings, general settings, and other server configuration live in the settings file above. Confirm destructive project removals before executing them, and never edit the state database directly.
 
 ## Product knowledge
 
@@ -124,6 +126,10 @@ export const ensureT3CodeMetaproject = Effect.gen(function* () {
   yield* fs.writeFileString(
     path.join(config.t3CodeProjectDir, "README.md"),
     "# T3 Code\n\nAsk an agent in this project to inspect, explain, or change this environment's T3 Code configuration.\n",
+  );
+  yield* fs.writeFileString(
+    path.join(config.t3CodeProjectDir, "api-inventory.json"),
+    agentApiInventoryJson(),
   );
 
   return config.t3CodeProjectDir;

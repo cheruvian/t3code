@@ -80,6 +80,10 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(metaprojectInstructions).toContain("Use sources in this order");
       expect(metaprojectInstructions).toContain("t3 project add");
       expect(metaprojectInstructions).toContain("Actions and keybindings");
+      expect(yield* fileSystem.exists(`${baseDir}/t3code/api-inventory.json`)).toBe(true);
+      expect(yield* fileSystem.readFileString(`${baseDir}/t3code/api-inventory.json`)).toContain(
+        '"orchestration.dispatchCommand"',
+      );
       expect(metaprojectInstructions).toMatch(/checkout-source\.mjs.*read-only/s);
       expect(metaprojectInstructions).toMatch(/refuse the edit.*do not invoke a write tool/s);
       const checkoutSource = yield* fileSystem.readFileString(
