@@ -522,7 +522,7 @@ const spawnAndCollectOutput = Effect.fn("spawnAndCollectOutput")(function* (
 
 const resolveGitCommitHash = Effect.fn("resolveGitCommitHash")(function* (repoRoot: string) {
   const result = yield* spawnAndCollectOutput(
-    ChildProcess.make("git", ["rev-parse", "--short=12", "HEAD"], {
+    ChildProcess.make("git", ["rev-parse", "HEAD"], {
       cwd: repoRoot,
     }),
   ).pipe(
@@ -1798,6 +1798,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         cwd: repoRoot,
         shell: spawnCommand.shell,
+        env: { ...process.env, T3CODE_COMMIT_HASH: commitHash },
       }),
       { label: "vp run build:desktop", verbose: options.verbose },
     );

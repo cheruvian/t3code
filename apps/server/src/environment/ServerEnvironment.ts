@@ -14,6 +14,7 @@ import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
+import { ensureT3CodeMetaproject } from "./T3CodeMetaproject.ts";
 
 export class ServerEnvironmentIdPersistenceError extends Schema.TaggedErrorClass<ServerEnvironmentIdPersistenceError>()(
   "ServerEnvironmentIdPersistenceError",
@@ -131,6 +132,7 @@ export const make = Effect.gen(function* () {
     desktopManaged: serverConfig.mode === "desktop",
     launcherManaged: launcher.managed,
   });
+  const t3CodeProjectRoot = yield* ensureT3CodeMetaproject;
 
   const descriptor: ExecutionEnvironmentDescriptor = {
     environmentId,
@@ -140,6 +142,7 @@ export const make = Effect.gen(function* () {
       arch: platformArch(hostArchitecture),
     },
     serverVersion: packageJson.version,
+    t3CodeProjectRoot,
     capabilities: {
       repositoryIdentity: true,
       connectionProbe: true,

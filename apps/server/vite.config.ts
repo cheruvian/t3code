@@ -18,6 +18,17 @@ export function shouldBundleCliDependency(id: string): boolean {
 
 const repoEnv = loadRepoEnv();
 const cliBuildChannel = packageJson.version.includes("-nightly.") ? "nightly" : "latest";
+const cliBuildCommit = (() => {
+  for (const candidate of [
+    process.env.T3CODE_COMMIT_HASH,
+    process.env.GITHUB_SHA,
+    process.env.VERCEL_GIT_COMMIT_SHA,
+  ]) {
+    const value = candidate?.trim();
+    if (value && /^[0-9a-f]{7,40}$/i.test(value)) return value.toLowerCase();
+  }
+  return "";
+})();
 
 export default mergeConfig(
   baseConfig,
@@ -45,6 +56,7 @@ export default mergeConfig(
       },
       define: {
         __T3CODE_BUILD_CHANNEL__: JSON.stringify(cliBuildChannel),
+        __T3CODE_BUILD_COMMIT__: JSON.stringify(cliBuildCommit),
         __T3CODE_BUILD_RELAY_URL__: JSON.stringify(repoEnv.T3CODE_RELAY_URL?.trim() ?? ""),
         __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
           repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
