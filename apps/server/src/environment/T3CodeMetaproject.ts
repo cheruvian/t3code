@@ -28,6 +28,10 @@ Read a file before changing it, preserve valid JSON, and make the smallest chang
 
 When the user asks what a setting currently does, inspect the live value first. Explain defaults separately from configured values. Prefer the Settings UI when it supports the requested change; direct file edits are appropriate when the user asks you to make the change from this project.
 
+## Managing T3 Code
+
+This project may also manage the environment itself. Projects can be added, renamed, or removed with the installed CLI (\`t3 project add\`, \`t3 project rename\`, and \`t3 project remove\`); use \`t3 project --help\` first and preserve the environment's data-directory flags. Actions and keybindings live in the keybindings file above. Provider settings, general settings, and other server configuration live in the settings file above. Confirm destructive project removals before executing them, and never edit the state database directly.
+
 ## Product knowledge
 
 Running server version: \`${packageJson.version}\`${

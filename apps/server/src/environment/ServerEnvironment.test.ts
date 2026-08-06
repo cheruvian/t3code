@@ -78,6 +78,8 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(metaprojectInstructions).toContain(`${baseDir}/userdata/settings.json`);
       expect(metaprojectInstructions).toContain(`${baseDir}/userdata/keybindings.json`);
       expect(metaprojectInstructions).toContain("Use sources in this order");
+      expect(metaprojectInstructions).toContain("t3 project add");
+      expect(metaprojectInstructions).toContain("Actions and keybindings");
       expect(metaprojectInstructions).toMatch(/checkout-source\.mjs.*read-only/s);
       expect(metaprojectInstructions).toMatch(/refuse the edit.*do not invoke a write tool/s);
       const checkoutSource = yield* fileSystem.readFileString(
