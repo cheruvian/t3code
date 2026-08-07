@@ -245,26 +245,40 @@ jobs:
           console.log(`Build ${referenceBuildNumber} review: ${referenceReview?.attributes?.betaReviewState ?? "NOT_SUBMITTED"}`)
           console.log(`Build ${targetBuildNumber} review: ${targetReview?.attributes?.betaReviewState ?? "NOT_SUBMITTED"}`)
 
-          const groupsResponse = await request(query(`/builds/${referenceBuild.id}/betaGroups`, {
+          const groupsResponse = await request(query(`/apps/${appId}/betaGroups`, {
             "fields[betaGroups]": "name,isInternalGroup,hasAccessToAllBuilds",
             limit: "200",
           }))
-          const groups = groupsResponse.data.filter((group) => group.attributes.isInternalGroup)
-          if (groups.length === 0) {
-            throw new Error(`Build ${referenceBuildNumber} has no internal beta groups to mirror`)
-          }
+          const internalGroups = groupsResponse.data.filter((group) => group.attributes.isInternalGroup)
+          const groups = []
 
-          for (const group of groups) {
-            const name = group.attributes.name
+          for (const group of internalGroups) {
             if (group.attributes.hasAccessToAllBuilds) {
-              console.log(`${name}: already receives every build`)
+              groups.push({ group, existingBuilds: [] })
               continue
             }
 
             const existing = await request(query(`/betaGroups/${group.id}/relationships/builds`, {
               limit: "200",
             }))
-            if (existing.data.some((build) => build.id === targetBuild.id)) {
+            if (existing.data.some((build) => build.id === referenceBuild.id)) {
+              groups.push({ group, existingBuilds: existing.data })
+            }
+          }
+
+          if (groups.length === 0) {
+            throw new Error(`Build ${referenceBuildNumber} has no internal beta groups to mirror`)
+          }
+
+          for (const item of groups) {
+            const { group, existingBuilds } = item
+            const name = group.attributes.name
+            if (group.attributes.hasAccessToAllBuilds) {
+              console.log(`${name}: already receives every build`)
+              continue
+            }
+
+            if (existingBuilds.some((build) => build.id === targetBuild.id)) {
               console.log(`${name}: build ${targetBuildNumber} already available`)
               continue
             }
