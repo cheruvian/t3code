@@ -121,7 +121,7 @@ jobs:
             --non-interactive
 
   swiftui-publish-existing:
-    name: Inspect SwiftUI TestFlight builds
+    name: Publish SwiftUI build 21 to public TestFlight
     if: inputs.mode == 'swiftui-publish-existing'
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 30
@@ -132,7 +132,7 @@ jobs:
       APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
       APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
     steps:
-      - name: Inspect builds 20 and 21
+      - name: Add build 21 to public testing
         shell: bash
         run: |
           set -euo pipefail
@@ -205,48 +205,68 @@ jobs:
           }
           const appId = apps.data[0].id
 
-          for (const buildNumber of ["20", "21"]) {
-            const builds = await request(query("/builds", {
-              "filter[app]": appId,
-              "filter[version]": buildNumber,
-              "fields[builds]": "version,processingState,expired,buildAudienceType,uploadedDate",
-              limit: "1",
-            }))
-            const build = builds.data[0] ?? null
-            if (!build) {
-              console.log(`Build ${buildNumber}: NOT_FOUND`)
-              continue
-            }
-
-            const preReleaseVersion = await request(`/builds/${build.id}/preReleaseVersion`)
-            const betaDetail = await request(`/builds/${build.id}/buildBetaDetail`)
-            let review = null
-            try {
-              review = (await request(`/builds/${build.id}/betaAppReviewSubmission`)).data
-            } catch (error) {
-              if (error.status !== 404) throw error
-            }
-            console.log(JSON.stringify({
-              build: buildNumber,
-              id: build.id,
-              attributes: build.attributes,
-              appVersion: preReleaseVersion.data.attributes.version,
-              betaDetail: betaDetail.data.attributes,
-              review: review?.attributes ?? null,
-            }, null, 2))
+          const buildNumber = "21"
+          const builds = await request(query("/builds", {
+            "filter[app]": appId,
+            "filter[version]": buildNumber,
+            "fields[builds]": "version,processingState,expired,buildAudienceType",
+            limit: "1",
+          }))
+          const build = builds.data[0] ?? null
+          if (!build || build.attributes.processingState !== "VALID") {
+            throw new Error(`Build ${buildNumber} is not valid`)
           }
 
           const groups = await request(query(`/apps/${appId}/betaGroups`, {
             "fields[betaGroups]": "name,isInternalGroup,hasAccessToAllBuilds,publicLinkEnabled",
             limit: "200",
           }))
-          for (const group of groups.data) {
+          const publicGroups = groups.data.filter((group) =>
+            !group.attributes.isInternalGroup && group.attributes.publicLinkEnabled
+          )
+          if (publicGroups.length === 0) {
+            throw new Error("No public TestFlight group was found")
+          }
+
+          const missingGroups = []
+          for (const group of publicGroups) {
             const relationship = await request(query(`/betaGroups/${group.id}/relationships/builds`, {
               limit: "200",
             }))
-            console.log(JSON.stringify({
-              group: group.attributes,
-              buildIds: relationship.data.map((build) => build.id),
-            }, null, 2))
+            if (!relationship.data.some((candidate) => candidate.id === build.id)) {
+              missingGroups.push(group)
+            }
           }
+          if (missingGroups.length > 0) {
+            await request(`/builds/${build.id}/relationships/betaGroups`, {
+              method: "POST",
+              body: JSON.stringify({
+                data: missingGroups.map((group) => ({ type: "betaGroups", id: group.id })),
+              }),
+            })
+          }
+          for (const group of publicGroups) {
+            console.log(`${group.attributes.name}: build ${buildNumber} available`)
+          }
+
+          let review = null
+          try {
+            review = (await request(`/builds/${build.id}/betaAppReviewSubmission`)).data
+          } catch (error) {
+            if (error.status !== 404) throw error
+          }
+          if (!review) {
+            review = (await request("/betaAppReviewSubmissions", {
+              method: "POST",
+              body: JSON.stringify({
+                data: {
+                  type: "betaAppReviewSubmissions",
+                  relationships: {
+                    build: { data: { type: "builds", id: build.id } },
+                  },
+                },
+              }),
+            })).data
+          }
+          console.log(`Build ${buildNumber} review: ${review.attributes.betaReviewState}`)
           NODE
