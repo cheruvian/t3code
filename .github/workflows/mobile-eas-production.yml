@@ -226,11 +226,6 @@ jobs:
             } catch (error) {
               if (error.status !== 404) throw error
             }
-            const buildGroups = await request(query(`/builds/${build.id}/betaGroups`, {
-              "fields[betaGroups]": "name,isInternalGroup,hasAccessToAllBuilds,publicLinkEnabled",
-              limit: "200",
-            }))
-
             console.log(JSON.stringify({
               build: buildNumber,
               id: build.id,
@@ -238,7 +233,6 @@ jobs:
               appVersion: preReleaseVersion.data.attributes.version,
               betaDetail: betaDetail.data.attributes,
               review: review?.attributes ?? null,
-              groups: buildGroups.data.map((group) => group.attributes.name),
             }, null, 2))
           }
 
