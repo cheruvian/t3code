@@ -242,10 +242,19 @@ jobs:
               { limit: "200" }
             ))
             if (!relationship.data.some((candidate) => candidate.id === build.id)) {
-              await request(`/betaGroups/${group.id}/relationships/builds`, {
-                method: "POST",
-                body: JSON.stringify({ data: [{ type: "builds", id: build.id }] }),
-              })
+              for (let attempt = 1; attempt <= 20; attempt += 1) {
+                try {
+                  await request(`/betaGroups/${group.id}/relationships/builds`, {
+                    method: "POST",
+                    body: JSON.stringify({ data: [{ type: "builds", id: build.id }] }),
+                  })
+                  break
+                } catch (error) {
+                  if (error.status !== 404 || attempt === 20) throw error
+                  console.log(`Build ${buildNumber} is valid but not yet assignable; retrying`)
+                  await new Promise((resolve) => setTimeout(resolve, 15_000))
+                }
+              }
             }
             console.log(`${group.attributes.name}: build ${buildNumber} available`)
           }
