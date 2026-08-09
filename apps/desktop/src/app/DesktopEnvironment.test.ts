@@ -144,4 +144,13 @@ describe("DesktopEnvironment", () => {
       );
     }),
   );
+
+  it.effect("uses the explicit pipeline stage in desktop branding", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment({}, { T3CODE_DESKTOP_STAGE_LABEL: "Candidate" });
+
+      assert.equal(environment.branding.stageLabel, "Candidate");
+      assert.equal(environment.branding.displayName, "T3 Code (Candidate)");
+    }),
+  );
 });

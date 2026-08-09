@@ -1,0 +1,56 @@
+format_version: 3
+
+pipelines:
+  t3code-main:
+    group: t3code
+    label_template: ${COUNT}
+    lock_behavior: unlockWhenFinished
+    materials:
+      t3code:
+        git: https://github.com/cheruvian/t3code.git
+        branch: main
+        shallow_clone: false
+        auto_update: true
+    stages:
+      - build:
+          clean_workspace: true
+          jobs:
+            package:
+              resources: [t3-local]
+              tasks:
+                - exec:
+                    command: vp
+                    arguments: [i]
+                - exec:
+                    command: node
+                    arguments: [scripts/gocd/local-pipeline.mjs, build]
+              artifacts:
+                - build:
+                    source: build/pipeline-artifact
+                    destination: release
+      - deploy-main:
+          approval:
+            type: manual
+          jobs:
+            deploy:
+              resources: [t3-local]
+              tasks:
+                - fetch:
+                    stage: build
+                    job: package
+                    source: release/pipeline-artifact
+                    destination: build
+                - exec:
+                    command: vp
+                    arguments: [i]
+                - exec:
+                    command: node
+                    arguments: [scripts/gocd/local-pipeline.mjs, deploy, production]
+      - verify-main:
+          jobs:
+            smoke:
+              resources: [t3-local]
+              tasks:
+                - exec:
+                    command: node
+                    arguments: [scripts/gocd/verify-production.mjs]

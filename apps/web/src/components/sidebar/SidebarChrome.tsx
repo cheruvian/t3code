@@ -3,6 +3,7 @@ import { memo, useCallback } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
+import { APP_STAGE_LABEL } from "../../branding";
 import { cn } from "../../lib/utils";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -38,12 +39,19 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
     environmentIdentificationMode === "pill"
       ? resolveEnvironmentIdentificationPillLabel(stageLabel)
       : null;
+  const stageAccent =
+    APP_STAGE_LABEL === "Candidate"
+      ? "border-t-2 border-blue-500 bg-blue-500/10"
+      : APP_STAGE_LABEL === "Production"
+        ? "border-t-2 border-emerald-500 bg-emerald-500/10"
+        : null;
 
   return (
     <SidebarHeader
       className={cn(
         "@container/sidebar-header relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0 md:px-0",
         isElectron && "drag-region",
+        stageAccent,
       )}
     >
       {backdropVariant ? <SidebarStageBackdrop variant={backdropVariant} /> : null}
@@ -86,7 +94,9 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
           onBackdrop ? "text-white/70" : "text-muted-foreground",
         )}
       >
-        Code
+        {APP_STAGE_LABEL === "Alpha" || APP_STAGE_LABEL === "Dev" || APP_STAGE_LABEL === "Nightly"
+          ? "Code"
+          : `Code · ${APP_STAGE_LABEL}`}
       </span>
     </Link>
   );

@@ -12,7 +12,17 @@ const child = NodeChildProcess.spawn(electronCommand.electronPath, electronComma
   env: childEnv,
 });
 
+const forwardSignal = (signal) => {
+  if (!child.killed) child.kill(signal);
+};
+const handleSigint = () => forwardSignal("SIGINT");
+const handleSigterm = () => forwardSignal("SIGTERM");
+process.once("SIGINT", handleSigint);
+process.once("SIGTERM", handleSigterm);
+
 child.on("exit", (code, signal) => {
+  process.removeListener("SIGINT", handleSigint);
+  process.removeListener("SIGTERM", handleSigterm);
   if (signal) {
     process.kill(process.pid, signal);
     return;
