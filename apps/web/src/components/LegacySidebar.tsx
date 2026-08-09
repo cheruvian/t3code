@@ -108,6 +108,8 @@ import { readLocalApi } from "../localApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useDesktopUpdateState } from "../state/desktopUpdate";
+import { environmentServerConfigsAtom } from "../state/server";
+import { hasThreadForProject, isT3CodeSystemProject } from "../systemProjects";
 
 import { useThreadActions } from "../hooks/useThreadActions";
 import { projectEnvironment } from "../state/projects";
@@ -1051,6 +1053,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
 
 interface SidebarProjectItemProps {
   project: SidebarProjectSnapshot;
+  isSystemProject: boolean;
   isThreadListExpanded: boolean;
   activeRouteThreadKey: string | null;
   newThreadShortcutLabel: string | null;
@@ -1071,6 +1074,7 @@ interface SidebarProjectItemProps {
 const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjectItemProps) {
   const {
     project,
+    isSystemProject,
     isThreadListExpanded,
     activeRouteThreadKey,
     newThreadShortcutLabel,
@@ -2258,6 +2262,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             <span className="truncate text-sm font-medium text-sidebar-foreground/90">
               {project.displayName}
             </span>
+            {isSystemProject ? (
+              <span className="shrink-0 text-[10px] text-muted-foreground">System</span>
+            ) : null}
             {project.groupedProjectCount > 1 ? (
               <span className="shrink-0 text-secondary-label text-[10px]">
                 {project.groupedProjectCount} projects
@@ -2921,6 +2928,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                     {(dragHandleProps) => (
                       <SidebarProjectItem
                         project={project}
+                        isSystemProject={isT3CodeSystemProject(project, serverConfigs)}
                         isThreadListExpanded={expandedThreadListsByProject.has(project.projectKey)}
                         activeRouteThreadKey={
                           activeRouteProjectKey === project.projectKey ? routeThreadKey : null
@@ -2953,6 +2961,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
               <SidebarProjectListRow
                 key={project.projectKey}
                 project={project}
+                isSystemProject={isT3CodeSystemProject(project, serverConfigs)}
                 isThreadListExpanded={expandedThreadListsByProject.has(project.projectKey)}
                 activeRouteThreadKey={
                   activeRouteProjectKey === project.projectKey ? routeThreadKey : null
@@ -2986,6 +2995,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
 export default function LegacySidebar() {
   const projects = useProjects();
   const sidebarThreads = useThreadShells();
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const reorderProjects = useUiStateStore((store) => store.reorderProjects);
@@ -3279,7 +3289,11 @@ export default function LegacySidebar() {
       sidebarProjectSortOrder,
     ).flatMap((project) => {
       const resolvedProject = sidebarProjectByKey.get(project.id);
-      return resolvedProject ? [resolvedProject] : [];
+      return resolvedProject &&
+        (!isT3CodeSystemProject(resolvedProject, serverConfigs) ||
+          hasThreadForProject(resolvedProject, visibleThreads))
+        ? [resolvedProject]
+        : [];
     });
   }, [
     sidebarProjectSortOrder,
@@ -3287,6 +3301,7 @@ export default function LegacySidebar() {
     projectPhysicalKeyByScopedRef,
     sidebarProjectByKey,
     sidebarProjects,
+    serverConfigs,
     visibleThreads,
   ]);
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";

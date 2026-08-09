@@ -60,6 +60,49 @@ function environmentPaths(name) {
   };
 }
 
+function desktopRuntimePaths(release) {
+  const root = join(release, "apps", "desktop");
+  return {
+    root,
+    launcher: join(root, "scripts", "start-electron.mjs"),
+    electronPackage: join(root, "node_modules", "electron", "package.json"),
+    mainEntry: join(root, "dist-electron", "main.cjs"),
+    serverEntry: join(release, "apps", "server", "dist", "bin.mjs"),
+    candidateIcon: join(release, "assets", "dev", "blueprint-macos-1024.png"),
+    productionIcon: join(release, "assets", "prod", "black-macos-1024.png"),
+  };
+}
+
+function hasCompleteReleaseRuntime(release) {
+  const runtime = desktopRuntimePaths(release);
+  return Object.values(runtime).every(existsSync);
+}
+
+function launchRelease(name, paths, release, commitHash) {
+  const runtime = desktopRuntimePaths(release);
+  if (!hasCompleteReleaseRuntime(release)) {
+    fail(`Release ${release} is missing its self-contained desktop runtime.`);
+  }
+  const stageLabel = name === "staging" ? "candidate" : "production";
+  const logFd = openSync(paths.log, "a");
+  const child = spawn(process.execPath, [runtime.launcher], {
+    cwd: release,
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+    env: {
+      ...process.env,
+      T3CODE_HOME: paths.home,
+      T3CODE_PORT: String(paths.port),
+      T3CODE_COMMIT_HASH: commitHash,
+      T3CODE_DESKTOP_APP_USER_MODEL_ID: `com.t3tools.t3code.${stageLabel}`,
+      T3CODE_DESKTOP_STAGE_LABEL: stageLabel === "candidate" ? "Candidate" : "Production",
+    },
+  });
+  child.unref();
+  closeSync(logFd);
+  writeFileSync(paths.pid, `${child.pid}\n`);
+}
+
 function readPid(paths) {
   if (!existsSync(paths.pid)) return undefined;
   const pid = Number.parseInt(readFileSync(paths.pid, "utf8").trim(), 10);
@@ -129,23 +172,32 @@ async function deploy(name) {
   const release = join(paths.releases, manifest.sha);
   mkdirSync(paths.home, { recursive: true });
   mkdirSync(paths.releases, { recursive: true });
-  if (
-    !existsSync(join(release, "dist", "bin.mjs")) ||
-    !existsSync(join(release, "desktop-dist-electron", "main.cjs"))
-  ) {
+  const current = existsSync(paths.current) ? realpathSync(paths.current) : undefined;
+  if (!hasCompleteReleaseRuntime(release)) {
+    if (current === release) stop(name);
     rmSync(release, { recursive: true, force: true });
     run("pnpm", ["deploy", "--legacy", "--filter", "t3", "--prod", release]);
+    mkdirSync(join(release, "apps", "server"), { recursive: true });
+    symlinkSync("../../dist", join(release, "apps", "server", "dist"));
+    cpSync(join(root, "assets"), join(release, "assets"), { recursive: true });
+    run("pnpm", [
+      "deploy",
+      "--legacy",
+      "--filter",
+      "@t3tools/desktop",
+      "--prod",
+      join(release, "apps", "desktop"),
+    ]);
     cpSync(join(artifactRoot, "dist"), join(release, "dist"), { recursive: true });
-    cpSync(join(artifactRoot, "desktop-dist-electron"), join(release, "desktop-dist-electron"), {
-      recursive: true,
-    });
+    cpSync(
+      join(artifactRoot, "desktop-dist-electron"),
+      join(release, "apps", "desktop", "dist-electron"),
+      {
+        recursive: true,
+      },
+    );
   }
 
-  const current = existsSync(paths.current) ? realpathSync(paths.current) : undefined;
-  cpSync(join(release, "dist"), join(root, "apps/server/dist"), { recursive: true });
-  cpSync(join(release, "desktop-dist-electron"), join(root, "apps/desktop/dist-electron"), {
-    recursive: true,
-  });
   stop(name);
   if (current && current !== release) {
     try {
@@ -158,24 +210,7 @@ async function deploy(name) {
   } catch {}
   symlinkSync(release, paths.current);
 
-  const stageLabel = name === "staging" ? "candidate" : "production";
-  const logFd = openSync(paths.log, "a");
-  const child = spawn(process.execPath, [join(root, "apps/desktop/scripts/start-electron.mjs")], {
-    cwd: root,
-    detached: true,
-    stdio: ["ignore", logFd, logFd],
-    env: {
-      ...process.env,
-      T3CODE_HOME: paths.home,
-      T3CODE_PORT: String(paths.port),
-      T3CODE_COMMIT_HASH: manifest.sha,
-      T3CODE_DESKTOP_APP_USER_MODEL_ID: `com.t3tools.t3code.${stageLabel}`,
-      T3CODE_DESKTOP_STAGE_LABEL: stageLabel === "candidate" ? "Candidate" : "Production",
-    },
-  });
-  child.unref();
-  closeSync(logFd);
-  writeFileSync(paths.pid, `${child.pid}\n`);
+  launchRelease(name, paths, release, manifest.sha);
   try {
     await waitForServer(paths.port);
   } catch (error) {
@@ -210,37 +245,35 @@ async function status(name) {
   );
 }
 
+async function start(name) {
+  const paths = environmentPaths(name);
+  if (!existsSync(paths.current)) fail(`No current ${name} release is available.`);
+  const release = realpathSync(paths.current);
+  const manifestPath = join(release, "manifest.json");
+  const commitHash = existsSync(manifestPath)
+    ? JSON.parse(readFileSync(manifestPath, "utf8")).sha
+    : "unknown";
+  stop(name);
+  launchRelease(name, paths, release, commitHash);
+  await waitForServer(paths.port);
+  console.log(`[t3-pipeline] ${name} started from ${release}`);
+}
+
 async function rollback(name) {
   const paths = environmentPaths(name);
   if (!existsSync(paths.previous)) fail(`No previous ${name} release is available.`);
   const previous = realpathSync(paths.previous);
   const manifestPath = join(previous, "package.json");
   if (!existsSync(manifestPath)) fail(`Previous release is missing ${manifestPath}.`);
-  cpSync(join(previous, "dist"), join(root, "apps/server/dist"), { recursive: true });
-  cpSync(join(previous, "desktop-dist-electron"), join(root, "apps/desktop/dist-electron"), {
-    recursive: true,
-  });
   stop(name);
   try {
     unlinkSync(paths.current);
   } catch {}
   symlinkSync(previous, paths.current);
-  const logFd = openSync(paths.log, "a");
-  const child = spawn(process.execPath, [join(root, "apps/desktop/scripts/start-electron.mjs")], {
-    cwd: root,
-    detached: true,
-    stdio: ["ignore", logFd, logFd],
-    env: {
-      ...process.env,
-      T3CODE_HOME: paths.home,
-      T3CODE_PORT: String(paths.port),
-      T3CODE_DESKTOP_APP_USER_MODEL_ID: `com.t3tools.t3code.${name}`,
-      T3CODE_DESKTOP_STAGE_LABEL: name === "staging" ? "Candidate" : "Production",
-    },
-  });
-  child.unref();
-  closeSync(logFd);
-  writeFileSync(paths.pid, `${child.pid}\n`);
+  const rollbackHash = existsSync(join(previous, "manifest.json"))
+    ? JSON.parse(readFileSync(join(previous, "manifest.json"), "utf8")).sha
+    : "unknown";
+  launchRelease(name, paths, previous, rollbackHash);
   await waitForServer(paths.port);
   console.log(`[t3-pipeline] rolled ${name} back to ${previous}`);
 }
@@ -248,10 +281,14 @@ async function rollback(name) {
 try {
   if (command === "build") await build();
   else if (command === "deploy") await deploy(environment);
+  else if (command === "start") await start(environment);
   else if (command === "rollback") await rollback(environment);
   else if (command === "status") await status(environment);
   else if (command === "stop") stop(environment);
-  else fail("Usage: local-pipeline.mjs <build|deploy|rollback|status|stop> [staging|production]");
+  else
+    fail(
+      "Usage: local-pipeline.mjs <build|deploy|start|rollback|status|stop> [staging|production]",
+    );
   process.exit(0);
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));

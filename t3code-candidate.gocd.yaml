@@ -19,8 +19,8 @@ pipelines:
               resources: [t3-local]
               tasks:
                 - exec:
-                    command: vp
-                    arguments: [i]
+                    command: pnpm
+                    arguments: [install, --frozen-lockfile]
                 - exec:
                     command: node
                     arguments: [scripts/gocd/local-pipeline.mjs, build]
@@ -39,8 +39,8 @@ pipelines:
                     source: release/pipeline-artifact
                     destination: build
                 - exec:
-                    command: vp
-                    arguments: [i]
+                    command: pnpm
+                    arguments: [install, --frozen-lockfile]
                 - exec:
                     command: node
                     arguments: [scripts/gocd/local-pipeline.mjs, deploy, staging]

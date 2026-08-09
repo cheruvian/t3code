@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -21,6 +21,18 @@ try {
   }
   if (!existsSync(join(expectedProjectRoot, "AGENTS.md"))) {
     throw new Error("Staging did not materialize the T3 Code metaproject instructions.");
+  }
+  const currentRelease = join(runtimeRoot, "staging", "current");
+  if (!existsSync(currentRelease)) {
+    throw new Error("Staging did not publish a current release.");
+  }
+  const release = realpathSync(currentRelease);
+  if (
+    !existsSync(join(release, "apps", "desktop", "scripts", "start-electron.mjs")) ||
+    !existsSync(join(release, "apps", "desktop", "node_modules", "electron", "package.json")) ||
+    !existsSync(join(release, "apps", "server", "dist", "bin.mjs"))
+  ) {
+    throw new Error("Staging release is missing its self-contained desktop runtime.");
   }
   console.log(`[t3-pipeline] staging smoke check passed on port ${port}`);
 } catch (error) {

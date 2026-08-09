@@ -111,6 +111,7 @@ import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects, useThreadShells } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
+import { hasThreadForProject, isT3CodeSystemProject } from "../systemProjects";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
 import { projectEnvironment } from "../state/projects";
@@ -1473,6 +1474,7 @@ export default function Sidebar() {
       ),
     [environments],
   );
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const orderedProjects = useMemo(
     () =>
       orderItemsByPreferredIds({
@@ -1504,8 +1506,12 @@ export default function Sidebar() {
     ],
   );
   const projectGroups = useMemo(
-    () => sortLogicalProjectsForSidebar(unsortedProjectGroups, threads, sidebarProjectSortOrder),
-    [sidebarProjectSortOrder, threads, unsortedProjectGroups],
+    () =>
+      sortLogicalProjectsForSidebar(unsortedProjectGroups, threads, sidebarProjectSortOrder).filter(
+        (project) =>
+          !isT3CodeSystemProject(project, serverConfigs) || hasThreadForProject(project, threads),
+      ),
+    [serverConfigs, sidebarProjectSortOrder, threads, unsortedProjectGroups],
   );
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   const providerEntryByInstanceId = useMemo(
@@ -1758,7 +1764,6 @@ export default function Sidebar() {
   // the partition works directly off live shells: no archived-snapshot
   // merging, no optimistic holds. Archived threads remain hidden here —
   // archive keeps its original "remove from sidebar" meaning.
-  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const {
     pinnedThreads,
     reorderablePinnedKeys,
@@ -3154,6 +3159,11 @@ export default function Sidebar() {
                               className="size-4 shrink-0"
                             />
                             <span className="min-w-0 truncate text-sm">{project.displayName}</span>
+                            {isT3CodeSystemProject(project, serverConfigs) ? (
+                              <span className="shrink-0 text-[10px] text-muted-foreground">
+                                System
+                              </span>
+                            ) : null}
                             <button
                               type="button"
                               aria-label={`Project actions for ${project.displayName}`}
