@@ -2,11 +2,14 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -102,24 +105,14 @@ async function waitForServer(port) {
 }
 
 async function build() {
-  mkdirSync(artifactRoot, { recursive: true });
+  rmSync(artifactRoot, { recursive: true, force: true });
   run("vp", ["run", "build"]);
-  run("npm", ["pack", "./apps/server", "--pack-destination", artifactRoot]);
-  const tarballs = spawnSync(
-    "find",
-    [artifactRoot, "-maxdepth", "1", "-name", "t3-*.tgz", "-print"],
-    { encoding: "utf8" },
-  );
-  const tarball = tarballs.stdout.trim().split("\n").filter(Boolean).at(-1);
-  if (!tarball) fail(`No server package was produced in ${artifactRoot}.`);
+  run("pnpm", ["deploy", "--legacy", "--filter", "t3", "--prod", artifactRoot]);
   const sha = spawnSync("git", ["rev-parse", "HEAD"], {
     cwd: root,
     encoding: "utf8",
   }).stdout.trim();
-  writeFileSync(
-    join(artifactRoot, "manifest.json"),
-    `${JSON.stringify({ sha, tarball: tarball.split("/").at(-1) }, null, 2)}\n`,
-  );
+  writeFileSync(join(artifactRoot, "manifest.json"), `${JSON.stringify({ sha }, null, 2)}\n`);
   console.log(`[t3-pipeline] built ${sha}`);
 }
 
@@ -131,17 +124,11 @@ async function deploy(name) {
   const release = join(paths.releases, manifest.sha);
   mkdirSync(paths.home, { recursive: true });
   mkdirSync(paths.releases, { recursive: true });
-  if (!existsSync(release)) {
+  if (!existsSync(join(release, "dist", "bin.mjs"))) {
+    rmSync(release, { recursive: true, force: true });
     mkdirSync(release, { recursive: true });
-    run("npm", [
-      "install",
-      "--prefix",
-      release,
-      "--omit=dev",
-      "--no-audit",
-      "--no-fund",
-      join(artifactRoot, manifest.tarball),
-    ]);
+    for (const entry of readdirSync(artifactRoot))
+      cpSync(join(artifactRoot, entry), join(release, entry), { recursive: true });
   }
 
   const current = existsSync(paths.current) ? realpathSync(paths.current) : undefined;
@@ -157,7 +144,7 @@ async function deploy(name) {
   } catch {}
   symlinkSync(release, paths.current);
 
-  const entry = join(release, "node_modules", "t3", "dist", "bin.mjs");
+  const entry = join(release, "dist", "bin.mjs");
   const logFd = openSync(paths.log, "a");
   const child = spawn(
     process.execPath,
@@ -219,14 +206,14 @@ async function rollback(name) {
   const paths = environmentPaths(name);
   if (!existsSync(paths.previous)) fail(`No previous ${name} release is available.`);
   const previous = realpathSync(paths.previous);
-  const manifestPath = join(previous, "node_modules", "t3", "package.json");
+  const manifestPath = join(previous, "package.json");
   if (!existsSync(manifestPath)) fail(`Previous release is missing ${manifestPath}.`);
   stop(name);
   try {
     unlinkSync(paths.current);
   } catch {}
   symlinkSync(previous, paths.current);
-  const entry = join(previous, "node_modules", "t3", "dist", "bin.mjs");
+  const entry = join(previous, "dist", "bin.mjs");
   const logFd = openSync(paths.log, "a");
   const child = spawn(
     process.execPath,
