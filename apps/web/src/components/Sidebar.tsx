@@ -128,7 +128,9 @@ import {
   resolveAdjacentThreadId,
   resolveSettledTimestamp,
   resolveSidebarThreadStatus,
+  resolveSidebarSortableRowBag,
   searchSidebarThreadsByTitle,
+  sidebarThreadRowRenderKey,
   resolveWorkingStartedAt,
   sortLogicalProjectsForSidebar,
   sortPinnedThreadsForSidebar,
@@ -1110,12 +1112,26 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       <TerminalIcon className={cn("size-3", terminalStatus.pulse && "animate-status-pulse")} />
     </span>
   ) : null;
+  const sortable = resolveSidebarSortableRowBag(variant, props.sortable);
 
   if (variant === "slim") {
     return (
       <li
         data-thread-item
-        className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_30px]"
+        ref={sortable?.setNodeRef}
+        style={
+          sortable
+            ? {
+                transform: CSS.Translate.toString(sortable.transform),
+                transition: sortable.transition,
+              }
+            : undefined
+        }
+        {...(sortable?.listeners ?? {})}
+        className={cn(
+          "list-none [content-visibility:auto] [contain-intrinsic-size:auto_30px]",
+          sortable?.isDragging && "z-20 opacity-80",
+        )}
       >
         <Tooltip>
           <TooltipTrigger
@@ -1284,7 +1300,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
 
   const diff = latestTurnDiff(thread);
 
-  const sortable = props.sortable;
   return (
     <li
       data-thread-item
@@ -3475,7 +3490,7 @@ export default function Sidebar() {
                         // Keep the section in the key while lifecycle state
                         // changes so list transitions do not FLIP-slide a row
                         // through every neighboring item.
-                        key={`${threadKey}:${rowVariant}`}
+                        key={sidebarThreadRowRenderKey(threadKey, section, rowVariant)}
                         thread={thread}
                         variant={rowVariant}
                         // Snoozed rows wake; settled rows un-settle (explicit
