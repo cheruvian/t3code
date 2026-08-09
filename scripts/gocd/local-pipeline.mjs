@@ -95,7 +95,11 @@ async function waitForServer(port) {
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/`);
-      if (response.status >= 200 && response.status < 500) return;
+      if (response.status >= 200 && response.status < 500) {
+        await response.body?.cancel();
+        return;
+      }
+      await response.body?.cancel();
     } catch {
       // The server is still starting.
     }
