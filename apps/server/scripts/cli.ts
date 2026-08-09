@@ -7,6 +7,7 @@ import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
@@ -82,6 +83,25 @@ const runCommand = Effect.fn("runCommand")(function* (command: ChildProcess.Stan
   }
 });
 
+const resolveBuildCommit = Effect.fn("resolveBuildCommit")(function* (repoRoot: string) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const child = yield* spawner.spawn(
+    ChildProcess.make("git", ["rev-parse", "HEAD"], { cwd: repoRoot, stdout: "pipe" }),
+  );
+  const [stdout, exitCode] = yield* Effect.all([
+    child.stdout.pipe(
+      Stream.decodeText(),
+      Stream.runFold(
+        () => "",
+        (all, chunk) => all + chunk,
+      ),
+    ),
+    child.exitCode,
+  ]);
+  const commit = stdout.trim();
+  return exitCode === 0 && /^[0-9a-f]{7,40}$/i.test(commit) ? commit.toLowerCase() : "";
+});
+
 const preparePublishIcons = Effect.fn("preparePublishIcons")(function* (
   repoRoot: string,
   serverDir: string,
@@ -151,6 +171,7 @@ const buildCmd = Command.make(
       const fs = yield* FileSystem.FileSystem;
       const repoRoot = yield* RepoRoot;
       const serverDir = path.join(repoRoot, "apps/server");
+      const buildCommit = yield* resolveBuildCommit(repoRoot).pipe(Effect.orElseSucceed(() => ""));
 
       yield* Effect.log("[cli] Running tsdown...");
       yield* runCommand(
@@ -159,6 +180,7 @@ const buildCmd = Command.make(
           stdout: config.verbose ? "inherit" : "ignore",
           stderr: "inherit",
           shell: false,
+          env: { ...process.env, T3CODE_COMMIT_HASH: buildCommit },
         }),
       );
 

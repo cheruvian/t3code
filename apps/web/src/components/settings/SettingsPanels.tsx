@@ -10,7 +10,8 @@ import {
   type ScopedThreadRef,
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { findProjectByPath } from "@t3tools/client-runtime/state/projects";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -64,6 +65,7 @@ import {
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
+import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import {
   getCustomModelOptionsByInstance,
@@ -76,8 +78,13 @@ import {
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import { isMacPlatform } from "../../lib/utils";
-import { primaryServerObservabilityAtom, primaryServerProvidersAtom } from "../../state/server";
+import {
+  primaryServerConfigAtom,
+  primaryServerObservabilityAtom,
+  primaryServerProvidersAtom,
+} from "../../state/server";
 import { useProjects } from "../../state/entities";
+import { projectEnvironment } from "../../state/projects";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
@@ -115,6 +122,7 @@ import {
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { newProjectId } from "../../lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ThemeLibrary } from "./ThemeSettings";
 import {
@@ -1669,6 +1677,12 @@ function LegacyFeaturesSection() {
 export function GeneralSettingsPanel() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
+  const primaryEnvironment = usePrimaryEnvironment();
+  const serverConfig = useAtomValue(primaryServerConfigAtom);
+  const projects = useProjects();
+  const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
+  const openNewThread = useNewThreadHandler();
+  const [openingConfigurationProject, setOpeningConfigurationProject] = useState(false);
   const [backgroundActivityDialogOpen, setBackgroundActivityDialogOpen] = useState(false);
   const lastEnabledProjectGroupingMode = useRef<SidebarProjectGroupingMode>(
     readLastEnabledProjectGroupingMode(),
@@ -1718,10 +1732,69 @@ export function GeneralSettingsPanel() {
     settings.backgroundActivity,
     DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
   );
+  const t3CodeProjectRoot = serverConfig?.environment.t3CodeProjectRoot ?? null;
+  const openConfigurationProject = useCallback(async () => {
+    if (primaryEnvironment === null || t3CodeProjectRoot === null) return;
+    setOpeningConfigurationProject(true);
+    try {
+      const existing = findProjectByPath(
+        projects.filter((project) => project.environmentId === primaryEnvironment.environmentId),
+        t3CodeProjectRoot,
+      );
+      if (existing) {
+        await openNewThread(scopeProjectRef(existing.environmentId, existing.id));
+        return;
+      }
+
+      const projectId = newProjectId();
+      const result = await createProject({
+        environmentId: primaryEnvironment.environmentId,
+        input: {
+          projectId,
+          title: "T3 Code",
+          workspaceRoot: t3CodeProjectRoot,
+          createWorkspaceRootIfMissing: false,
+          defaultModelSelection: null,
+        },
+      });
+      if (result._tag === "Failure") {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to open T3 Code configuration",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+        return;
+      }
+      await openNewThread(scopeProjectRef(primaryEnvironment.environmentId, projectId));
+    } finally {
+      setOpeningConfigurationProject(false);
+    }
+  }, [createProject, openNewThread, primaryEnvironment, projects, t3CodeProjectRoot]);
 
   return (
     <SettingsPageContainer>
       <SettingsSection title="General">
+        <SettingsRow
+          title="T3 Code configuration"
+          description="Ask an agent about T3 Code, its docs, and this environment's live configuration."
+          control={
+            <Button
+              variant="outline"
+              onClick={() => void openConfigurationProject()}
+              disabled={t3CodeProjectRoot === null || openingConfigurationProject}
+            >
+              {openingConfigurationProject ? (
+                <LoaderIcon className="size-4 animate-spin" />
+              ) : (
+                <SettingsIcon className="size-4" />
+              )}
+              Open project
+            </Button>
+          }
+        />
         <SettingsRow
           {...searchableSetting("project-grouping")}
           description="Combine matching repositories across environments."

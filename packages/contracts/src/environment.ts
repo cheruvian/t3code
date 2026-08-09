@@ -80,6 +80,8 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   platform: ExecutionEnvironmentPlatform,
   serverVersion: TrimmedNonEmptyString,
   capabilities: ExecutionEnvironmentCapabilities,
+  /** Agent workspace for managing the T3 Code environment itself. */
+  t3CodeProjectRoot: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type ExecutionEnvironmentDescriptor = typeof ExecutionEnvironmentDescriptor.Type;
 

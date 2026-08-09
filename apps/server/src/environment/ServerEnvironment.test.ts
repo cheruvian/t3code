@@ -70,6 +70,27 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.repositoryIdentity).toBe(true);
       expect(second.capabilities.connectionProbe).toBe(true);
       expect(second.capabilities.threadTitleRegeneration).toBe(true);
+      expect(second.t3CodeProjectRoot).toBe(`${baseDir}/t3code`);
+      expect(yield* fileSystem.exists(`${baseDir}/t3code/AGENTS.md`)).toBe(true);
+      const metaprojectInstructions = yield* fileSystem.readFileString(
+        `${baseDir}/t3code/AGENTS.md`,
+      );
+      expect(metaprojectInstructions).toContain(`${baseDir}/userdata/settings.json`);
+      expect(metaprojectInstructions).toContain(`${baseDir}/userdata/keybindings.json`);
+      expect(metaprojectInstructions).toContain("Use sources in this order");
+      expect(metaprojectInstructions).toContain("t3 project add");
+      expect(metaprojectInstructions).toContain("Actions and keybindings");
+      expect(yield* fileSystem.exists(`${baseDir}/t3code/api-inventory.json`)).toBe(true);
+      expect(yield* fileSystem.readFileString(`${baseDir}/t3code/api-inventory.json`)).toContain(
+        '"orchestration.dispatchCommand"',
+      );
+      expect(metaprojectInstructions).toMatch(/checkout-source\.mjs.*read-only/s);
+      expect(metaprojectInstructions).toMatch(/refuse the edit.*do not invoke a write tool/s);
+      const checkoutSource = yield* fileSystem.readFileString(
+        `${baseDir}/t3code/checkout-source.mjs`,
+      );
+      expect(checkoutSource).toContain('checkout", "--detach", "--force');
+      expect(checkoutSource).toContain("chmodTree(target, 0o555, 0o444)");
     }),
   );
 
