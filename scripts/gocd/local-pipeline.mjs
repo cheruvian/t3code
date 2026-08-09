@@ -90,20 +90,16 @@ function stop(name) {
   unlinkSync(paths.pid);
 }
 
-async function waitForServer(port) {
+function waitForServer(port) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/`);
-      if (response.status >= 200 && response.status < 500) {
-        response.body?.cancel();
-        return;
-      }
-      response.body?.cancel();
-    } catch {
-      // The server is still starting.
-    }
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+    const response = spawnSync(
+      "curl",
+      ["--fail", "--silent", "--show-error", "--max-time", "2", `http://127.0.0.1:${port}/`],
+      { stdio: "ignore" },
+    );
+    if (response.status === 0) return;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
   }
   fail(`T3 server did not become ready on port ${port}.`);
 }
