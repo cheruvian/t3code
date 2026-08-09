@@ -36,7 +36,7 @@ pipelines:
                 - fetch:
                     stage: build
                     job: package
-                    source: release
+                    source: release/pipeline-artifact
                     destination: build/pipeline-artifact
                 - exec:
                     command: node
