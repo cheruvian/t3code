@@ -163,6 +163,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     appVersion: input.appVersion,
   });
   const displayName = Option.getOrElse(config.displayNameOverride, () => branding.displayName);
+  const effectiveBranding = { ...branding, displayName };
   const stateDir = resolveDesktopStateDir({
     baseDir,
     isDevelopment,
@@ -212,7 +213,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     commitHashOverride: config.commitHashOverride,
     otlpTracesUrl: config.otlpTracesUrl,
     otlpExportIntervalMs: config.otlpExportIntervalMs,
-    branding,
+    branding: effectiveBranding,
     displayName,
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
       isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
