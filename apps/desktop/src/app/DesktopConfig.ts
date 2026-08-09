@@ -27,6 +27,19 @@ const commaSeparatedStrings = (name: string) =>
     ),
   );
 
+const DESKTOP_STAGE_LABELS = ["Alpha", "Dev", "Nightly", "Candidate", "Production"] as const;
+type DesktopStageLabel = (typeof DESKTOP_STAGE_LABELS)[number];
+const desktopStageLabel = trimmedString("T3CODE_DESKTOP_STAGE_LABEL").pipe(
+  Config.map(
+    Option.flatMap(
+      (value): Option.Option<DesktopStageLabel> =>
+        DESKTOP_STAGE_LABELS.includes(value as DesktopStageLabel)
+          ? Option.some(value as DesktopStageLabel)
+          : Option.none(),
+    ),
+  ),
+);
+
 const compactEnv = (env: Readonly<Record<string, string | undefined>>): Record<string, string> =>
   Object.fromEntries(
     Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined),
@@ -37,6 +50,7 @@ export const DesktopConfig = Config.all({
   xdgConfigHome: trimmedString("XDG_CONFIG_HOME"),
   xdgDataHome: trimmedString("XDG_DATA_HOME"),
   t3Home: trimmedString("T3CODE_HOME"),
+  stageLabelOverride: desktopStageLabel,
   displayNameOverride: trimmedString("T3CODE_DESKTOP_DISPLAY_NAME"),
   devServerUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option),
   appUserModelIdOverride: trimmedString("T3CODE_DESKTOP_APP_USER_MODEL_ID"),

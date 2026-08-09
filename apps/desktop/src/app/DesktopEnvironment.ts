@@ -77,6 +77,7 @@ export class DesktopEnvironment extends Context.Service<
     readonly resolvePickFolderDefaultPath: (rawOptions: unknown) => Option.Option<string>;
     readonly resolveResourcePathCandidates: (fileName: string) => readonly string[];
     readonly developmentDockIconPath: string;
+    readonly stageIconPath: Option.Option<string>;
   }
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
@@ -94,14 +95,12 @@ function resolveDesktopAppStageLabel(input: {
 }
 
 function resolveDesktopAppBranding(input: {
-  readonly isDevelopment: boolean;
-  readonly appVersion: string;
+  readonly stageLabel: DesktopAppStageLabel;
 }): DesktopAppBranding {
-  const stageLabel = resolveDesktopAppStageLabel(input);
   return {
     baseName: APP_BASE_NAME,
-    stageLabel,
-    displayName: `${APP_BASE_NAME} (${stageLabel})`,
+    stageLabel: input.stageLabel,
+    displayName: `${APP_BASE_NAME} (${input.stageLabel})`,
   };
 }
 
@@ -143,6 +142,9 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const homeDirectory = input.homeDirectory;
   const devServerUrl = config.devServerUrl;
   const isDevelopment = Option.isSome(devServerUrl);
+  const stageLabel = Option.getOrElse(config.stageLabelOverride, () =>
+    resolveDesktopAppStageLabel({ isDevelopment, appVersion: input.appVersion }),
+  );
   const appDataDirectory =
     input.platform === "win32"
       ? Option.getOrElse(config.appDataDirectory, () =>
@@ -159,8 +161,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;
   const branding = resolveDesktopAppBranding({
-    isDevelopment,
-    appVersion: input.appVersion,
+    stageLabel,
   });
   const displayName = Option.getOrElse(config.displayNameOverride, () => branding.displayName);
   const effectiveBranding = { ...branding, displayName };
@@ -262,6 +263,12 @@ const make = Effect.fn("desktop.environment.make")(function* (
       path.join(resourcesPath, fileName),
     ],
     developmentDockIconPath: path.join(rootDir, "assets", "dev", "blueprint-macos-1024.png"),
+    stageIconPath:
+      stageLabel === "Candidate"
+        ? Option.some(path.join(rootDir, "assets", "dev", "blueprint-macos-1024.png"))
+        : stageLabel === "Production"
+          ? Option.some(path.join(rootDir, "assets", "prod", "black-macos-1024.png"))
+          : Option.none(),
   });
 });
 
