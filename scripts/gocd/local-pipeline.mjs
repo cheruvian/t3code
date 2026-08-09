@@ -54,8 +54,8 @@ function environmentPaths(name) {
     releases: join(base, "releases"),
     current: join(base, "current"),
     previous: join(base, "previous"),
-    pid: join(base, "server.pid"),
-    log: join(base, "server.log"),
+    pid: join(base, "electron.pid"),
+    log: join(base, "electron.log"),
     port: config.port,
   };
 }
@@ -108,7 +108,11 @@ async function build() {
   rmSync(artifactRoot, { recursive: true, force: true });
   mkdirSync(artifactRoot, { recursive: true });
   run("vp", ["run", "build"]);
+  run("vp", ["run", "build:desktop"]);
   cpSync(join(root, "apps/server/dist"), join(artifactRoot, "dist"), { recursive: true });
+  cpSync(join(root, "apps/desktop/dist-electron"), join(artifactRoot, "desktop-dist-electron"), {
+    recursive: true,
+  });
   const sha = spawnSync("git", ["rev-parse", "HEAD"], {
     cwd: root,
     encoding: "utf8",
@@ -125,13 +129,23 @@ async function deploy(name) {
   const release = join(paths.releases, manifest.sha);
   mkdirSync(paths.home, { recursive: true });
   mkdirSync(paths.releases, { recursive: true });
-  if (!existsSync(join(release, "dist", "bin.mjs"))) {
+  if (
+    !existsSync(join(release, "dist", "bin.mjs")) ||
+    !existsSync(join(release, "desktop-dist-electron", "main.cjs"))
+  ) {
     rmSync(release, { recursive: true, force: true });
     run("pnpm", ["deploy", "--legacy", "--filter", "t3", "--prod", release]);
     cpSync(join(artifactRoot, "dist"), join(release, "dist"), { recursive: true });
+    cpSync(join(artifactRoot, "desktop-dist-electron"), join(release, "desktop-dist-electron"), {
+      recursive: true,
+    });
   }
 
   const current = existsSync(paths.current) ? realpathSync(paths.current) : undefined;
+  cpSync(join(release, "dist"), join(root, "apps/server/dist"), { recursive: true });
+  cpSync(join(release, "desktop-dist-electron"), join(root, "apps/desktop/dist-electron"), {
+    recursive: true,
+  });
   stop(name);
   if (current && current !== release) {
     try {
@@ -144,28 +158,20 @@ async function deploy(name) {
   } catch {}
   symlinkSync(release, paths.current);
 
-  const entry = join(release, "dist", "bin.mjs");
+  const stageLabel = name === "staging" ? "candidate" : "production";
   const logFd = openSync(paths.log, "a");
-  const child = spawn(
-    process.execPath,
-    [
-      entry,
-      "serve",
-      "--base-dir",
-      paths.home,
-      "--port",
-      String(paths.port),
-      "--host",
-      "127.0.0.1",
-      "--no-browser",
-    ],
-    {
-      cwd: root,
-      detached: true,
-      stdio: ["ignore", logFd, logFd],
-      env: { ...process.env, T3CODE_NO_BROWSER: "1" },
+  const child = spawn(process.execPath, [join(root, "apps/desktop/scripts/start-electron.mjs")], {
+    cwd: root,
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+    env: {
+      ...process.env,
+      T3CODE_HOME: paths.home,
+      T3CODE_PORT: String(paths.port),
+      T3CODE_COMMIT_HASH: manifest.sha,
+      T3CODE_DESKTOP_APP_USER_MODEL_ID: `com.t3tools.t3code.${stageLabel}`,
     },
-  );
+  });
   child.unref();
   closeSync(logFd);
   writeFileSync(paths.pid, `${child.pid}\n`);
@@ -209,33 +215,27 @@ async function rollback(name) {
   const previous = realpathSync(paths.previous);
   const manifestPath = join(previous, "package.json");
   if (!existsSync(manifestPath)) fail(`Previous release is missing ${manifestPath}.`);
+  cpSync(join(previous, "dist"), join(root, "apps/server/dist"), { recursive: true });
+  cpSync(join(previous, "desktop-dist-electron"), join(root, "apps/desktop/dist-electron"), {
+    recursive: true,
+  });
   stop(name);
   try {
     unlinkSync(paths.current);
   } catch {}
   symlinkSync(previous, paths.current);
-  const entry = join(previous, "dist", "bin.mjs");
   const logFd = openSync(paths.log, "a");
-  const child = spawn(
-    process.execPath,
-    [
-      entry,
-      "serve",
-      "--base-dir",
-      paths.home,
-      "--port",
-      String(paths.port),
-      "--host",
-      "127.0.0.1",
-      "--no-browser",
-    ],
-    {
-      cwd: root,
-      detached: true,
-      stdio: ["ignore", logFd, logFd],
-      env: { ...process.env, T3CODE_NO_BROWSER: "1" },
+  const child = spawn(process.execPath, [join(root, "apps/desktop/scripts/start-electron.mjs")], {
+    cwd: root,
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+    env: {
+      ...process.env,
+      T3CODE_HOME: paths.home,
+      T3CODE_PORT: String(paths.port),
+      T3CODE_DESKTOP_APP_USER_MODEL_ID: `com.t3tools.t3code.${name}`,
     },
-  );
+  });
   child.unref();
   closeSync(logFd);
   writeFileSync(paths.pid, `${child.pid}\n`);

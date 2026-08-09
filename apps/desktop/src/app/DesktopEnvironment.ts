@@ -41,6 +41,7 @@ export class DesktopEnvironment extends Context.Service<
     readonly appPath: string;
     readonly resourcesPath: string;
     readonly homeDirectory: string;
+    readonly t3Home: Option.Option<string>;
     readonly appDataDirectory: string;
     readonly baseDir: string;
     readonly stateDir: string;
@@ -187,6 +188,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     appPath: input.appPath,
     resourcesPath,
     homeDirectory,
+    t3Home: config.t3Home,
     appDataDirectory,
     baseDir,
     stateDir,
