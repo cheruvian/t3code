@@ -9,7 +9,6 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { toPersistenceSqlError } from "../../persistence/Errors.ts";
 import {
-  defineProjector,
   orderProjectors,
   type AttachmentSideEffects,
   type ProjectorDefinition as RegistryProjectorDefinition,
@@ -19,7 +18,8 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
-import { ORCHESTRATION_PROJECTOR_NAMES, type ProjectorName } from "./projectors/names.ts";
+import { type ProjectorName } from "./projectors/names.ts";
+import { checkpointsProjector } from "./projectors/checkpoints.ts";
 import { makePendingApprovalsProjector } from "./projectors/pendingApprovals.ts";
 import { makeProjectsProjector } from "./projectors/projects.ts";
 import { makeThreadActivitiesProjector } from "./projectors/threadActivities.ts";
@@ -190,13 +190,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       yield* makeThreadActivitiesProjector(),
       yield* makeThreadSessionsProjector(),
       yield* makeThreadTurnsProjector(),
-      // Checkpoint state is projected by the turns projector; this projector
-      // exists to keep its cursor row advancing with the rest.
-      defineProjector({
-        name: ORCHESTRATION_PROJECTOR_NAMES.checkpoints,
-        reads: [],
-        on: {},
-      }),
+      checkpointsProjector,
       yield* makePendingApprovalsProjector(),
       yield* makeThreadsProjector(),
     ]);

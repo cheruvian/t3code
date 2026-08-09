@@ -27,12 +27,11 @@ import {
 } from "../../../persistence/Services/ProjectionTurns.ts";
 import { extractActivityRequestId } from "./shared.ts";
 import {
-  defineProjector,
   type AttachmentSideEffects,
   type OrchestrationEventOfType as EventOf,
   type ProjectorHandlers,
 } from "../ProjectorRegistry.ts";
-import { ORCHESTRATION_PROJECTOR_NAMES } from "./names.ts";
+import { defineOrchestrationProjector, ORCHESTRATION_PROJECTOR_NAMES } from "./names.ts";
 
 const PENDING_APPROVAL_ACTIVITY_KINDS: ReadonlySet<string> = new Set([
   "approval.requested",
@@ -638,7 +637,7 @@ export const makeThreadsProjector = Effect.fn("makeThreadsProjector")(function* 
     }),
   } satisfies ProjectorHandlers;
 
-  return defineProjector({
+  return defineOrchestrationProjector({
     name: ORCHESTRATION_PROJECTOR_NAMES.threads,
     // The shell summary counts rows these projections own, so they must
     // have applied this event before it is derived.

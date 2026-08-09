@@ -10,11 +10,10 @@ import * as Option from "effect/Option";
 import { ProjectionPendingApprovalRepository } from "../../../persistence/Services/ProjectionPendingApprovals.ts";
 import { extractActivityRequestId } from "./shared.ts";
 import {
-  defineProjector,
   type OrchestrationEventOfType as EventOf,
   type ProjectorHandlers,
 } from "../ProjectorRegistry.ts";
-import { ORCHESTRATION_PROJECTOR_NAMES } from "./names.ts";
+import { defineOrchestrationProjector, ORCHESTRATION_PROJECTOR_NAMES } from "./names.ts";
 
 function isStalePendingApprovalFailureDetail(detail: string | null): boolean {
   if (detail === null) {
@@ -149,7 +148,7 @@ export const makePendingApprovalsProjector = Effect.fn("makePendingApprovalsProj
       }),
     } satisfies ProjectorHandlers;
 
-    return defineProjector({
+    return defineOrchestrationProjector({
       name: ORCHESTRATION_PROJECTOR_NAMES.pendingApprovals,
       reads: [],
       on: pendingApprovalsHandlers,

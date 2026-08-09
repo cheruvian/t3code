@@ -12,11 +12,10 @@ import * as Option from "effect/Option";
 import { ProjectionThreadSessionRepository } from "../../../persistence/Services/ProjectionThreadSessions.ts";
 import { ProjectionTurnRepository } from "../../../persistence/Services/ProjectionTurns.ts";
 import {
-  defineProjector,
   type OrchestrationEventOfType as EventOf,
   type ProjectorHandlers,
 } from "../ProjectorRegistry.ts";
-import { ORCHESTRATION_PROJECTOR_NAMES } from "./names.ts";
+import { defineOrchestrationProjector, ORCHESTRATION_PROJECTOR_NAMES } from "./names.ts";
 
 function settledTurnStateForSessionStatus(
   status: OrchestrationSessionStatus,
@@ -372,7 +371,7 @@ export const makeThreadTurnsProjector = Effect.fn("makeThreadTurnsProjector")(fu
     }),
   } satisfies ProjectorHandlers;
 
-  return defineProjector({
+  return defineOrchestrationProjector({
     name: ORCHESTRATION_PROJECTOR_NAMES.threadTurns,
     reads: [],
     on: threadTurnsHandlers,

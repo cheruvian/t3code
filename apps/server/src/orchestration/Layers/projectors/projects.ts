@@ -8,11 +8,10 @@ import * as Option from "effect/Option";
 
 import { ProjectionProjectRepository } from "../../../persistence/Services/ProjectionProjects.ts";
 import {
-  defineProjector,
   type OrchestrationEventOfType as EventOf,
   type ProjectorHandlers,
 } from "../ProjectorRegistry.ts";
-import { ORCHESTRATION_PROJECTOR_NAMES } from "./names.ts";
+import { defineOrchestrationProjector, ORCHESTRATION_PROJECTOR_NAMES } from "./names.ts";
 
 export const makeProjectsProjector = Effect.fn("makeProjectsProjector")(function* () {
   const projectionProjectRepository = yield* ProjectionProjectRepository;
@@ -81,7 +80,7 @@ export const makeProjectsProjector = Effect.fn("makeProjectsProjector")(function
     }),
   } satisfies ProjectorHandlers;
 
-  return defineProjector({
+  return defineOrchestrationProjector({
     name: ORCHESTRATION_PROJECTOR_NAMES.projects,
     reads: [],
     on: projectsHandlers,

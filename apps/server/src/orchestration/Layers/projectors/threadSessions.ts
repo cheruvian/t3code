@@ -7,11 +7,10 @@ import * as Effect from "effect/Effect";
 
 import { ProjectionThreadSessionRepository } from "../../../persistence/Services/ProjectionThreadSessions.ts";
 import {
-  defineProjector,
   type OrchestrationEventOfType as EventOf,
   type ProjectorHandlers,
 } from "../ProjectorRegistry.ts";
-import { ORCHESTRATION_PROJECTOR_NAMES } from "./names.ts";
+import { defineOrchestrationProjector, ORCHESTRATION_PROJECTOR_NAMES } from "./names.ts";
 
 export const makeThreadSessionsProjector = Effect.fn("makeThreadSessionsProjector")(function* () {
   const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
@@ -33,7 +32,7 @@ export const makeThreadSessionsProjector = Effect.fn("makeThreadSessionsProjecto
     }),
   } satisfies ProjectorHandlers;
 
-  return defineProjector({
+  return defineOrchestrationProjector({
     name: ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
     reads: [],
     on: threadSessionsHandlers,

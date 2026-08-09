@@ -22,12 +22,11 @@ import {
   toSafeThreadAttachmentSegment,
 } from "../../../attachmentStore.ts";
 import {
-  defineProjector,
   type AttachmentSideEffects,
   type OrchestrationEventOfType as EventOf,
   type ProjectorHandlers,
 } from "../ProjectorRegistry.ts";
-import { ORCHESTRATION_PROJECTOR_NAMES } from "./names.ts";
+import { defineOrchestrationProjector, ORCHESTRATION_PROJECTOR_NAMES } from "./names.ts";
 
 const materializeAttachmentsForProjection = Effect.fn("materializeAttachmentsForProjection")(
   (input: { readonly attachments: ReadonlyArray<ChatAttachment> }) =>
@@ -221,7 +220,7 @@ export const makeThreadMessagesProjector = Effect.fn("makeThreadMessagesProjecto
     }),
   } satisfies ProjectorHandlers;
 
-  return defineProjector({
+  return defineOrchestrationProjector({
     name: ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
     reads: [],
     on: threadMessagesHandlers,

@@ -15,11 +15,10 @@ import {
   ProjectionTurnRepository,
 } from "../../../persistence/Services/ProjectionTurns.ts";
 import {
-  defineProjector,
   type OrchestrationEventOfType as EventOf,
   type ProjectorHandlers,
 } from "../ProjectorRegistry.ts";
-import { ORCHESTRATION_PROJECTOR_NAMES } from "./names.ts";
+import { defineOrchestrationProjector, ORCHESTRATION_PROJECTOR_NAMES } from "./names.ts";
 
 function retainProjectionActivitiesAfterRevert(
   activities: ReadonlyArray<ProjectionThreadActivity>,
@@ -94,7 +93,7 @@ export const makeThreadActivitiesProjector = Effect.fn("makeThreadActivitiesProj
       }),
     } satisfies ProjectorHandlers;
 
-    return defineProjector({
+    return defineOrchestrationProjector({
       name: ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
       reads: [],
       on: threadActivitiesHandlers,
