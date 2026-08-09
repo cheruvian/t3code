@@ -254,6 +254,7 @@ try {
   else if (command === "status") await status(environment);
   else if (command === "stop") stop(environment);
   else fail("Usage: local-pipeline.mjs <build|deploy|rollback|status|stop> [staging|production]");
+  process.exit(0);
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
 }
