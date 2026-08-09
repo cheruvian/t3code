@@ -1,0 +1,266 @@
+#!/usr/bin/env node
+
+import { spawn, spawnSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+
+const [command, environment = ""] = process.argv.slice(2);
+const root = resolve(import.meta.dirname, "../..");
+const runtimeRoot = resolve(process.env.T3_PIPELINE_RUNTIME_ROOT ?? join(homedir(), "t3-runtime"));
+const artifactRoot = resolve(
+  process.env.T3_PIPELINE_ARTIFACT_ROOT ?? join(root, "build", "pipeline-artifact"),
+);
+const environmentConfig = {
+  staging: { port: 17773 },
+  production: { port: 17774 },
+};
+
+function fail(message) {
+  console.error(`[t3-pipeline] ${message}`);
+  process.exit(1);
+}
+
+function run(commandName, args, options = {}) {
+  const result = spawnSync(commandName, args, {
+    cwd: root,
+    stdio: "inherit",
+    env: process.env,
+    ...options,
+  });
+  if (result.status !== 0)
+    fail(`${commandName} ${args.join(" ")} failed with status ${String(result.status)}`);
+}
+
+function environmentPaths(name) {
+  const config = environmentConfig[name];
+  if (!config) fail(`Unknown environment '${name}'. Expected staging or production.`);
+  const base = join(runtimeRoot, name);
+  return {
+    base,
+    home: join(base, "home"),
+    releases: join(base, "releases"),
+    current: join(base, "current"),
+    previous: join(base, "previous"),
+    pid: join(base, "server.pid"),
+    log: join(base, "server.log"),
+    port: config.port,
+  };
+}
+
+function readPid(paths) {
+  if (!existsSync(paths.pid)) return undefined;
+  const pid = Number.parseInt(readFileSync(paths.pid, "utf8").trim(), 10);
+  return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+}
+
+function isAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function stop(name) {
+  const paths = environmentPaths(name);
+  const pid = readPid(paths);
+  if (pid === undefined) return;
+  if (isAlive(pid)) {
+    console.log(`[t3-pipeline] stopping ${name} server pid ${pid}`);
+    process.kill(pid, "SIGTERM");
+    const deadline = Date.now() + 15_000;
+    while (isAlive(pid) && Date.now() < deadline)
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    if (isAlive(pid)) process.kill(pid, "SIGKILL");
+  }
+  unlinkSync(paths.pid);
+}
+
+async function waitForServer(port) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/`);
+      if (response.status >= 200 && response.status < 500) return;
+    } catch {
+      // The server is still starting.
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+  }
+  fail(`T3 server did not become ready on port ${port}.`);
+}
+
+async function build() {
+  mkdirSync(artifactRoot, { recursive: true });
+  run("vp", ["run", "build"]);
+  run("npm", ["pack", "./apps/server", "--pack-destination", artifactRoot]);
+  const tarballs = spawnSync(
+    "find",
+    [artifactRoot, "-maxdepth", "1", "-name", "t3-*.tgz", "-print"],
+    { encoding: "utf8" },
+  );
+  const tarball = tarballs.stdout.trim().split("\n").filter(Boolean).at(-1);
+  if (!tarball) fail(`No server package was produced in ${artifactRoot}.`);
+  const sha = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  }).stdout.trim();
+  writeFileSync(
+    join(artifactRoot, "manifest.json"),
+    `${JSON.stringify({ sha, tarball: tarball.split("/").at(-1) }, null, 2)}\n`,
+  );
+  console.log(`[t3-pipeline] built ${sha}`);
+}
+
+async function deploy(name) {
+  const paths = environmentPaths(name);
+  const manifestPath = join(artifactRoot, "manifest.json");
+  if (!existsSync(manifestPath)) fail(`Missing ${manifestPath}; run the build stage first.`);
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const release = join(paths.releases, manifest.sha);
+  mkdirSync(paths.home, { recursive: true });
+  mkdirSync(paths.releases, { recursive: true });
+  if (!existsSync(release)) {
+    mkdirSync(release, { recursive: true });
+    run("npm", [
+      "install",
+      "--prefix",
+      release,
+      "--omit=dev",
+      "--no-audit",
+      "--no-fund",
+      join(artifactRoot, manifest.tarball),
+    ]);
+  }
+
+  const current = existsSync(paths.current) ? realpathSync(paths.current) : undefined;
+  stop(name);
+  if (current && current !== release) {
+    try {
+      unlinkSync(paths.previous);
+    } catch {}
+    symlinkSync(current, paths.previous);
+  }
+  try {
+    unlinkSync(paths.current);
+  } catch {}
+  symlinkSync(release, paths.current);
+
+  const entry = join(release, "node_modules", "t3", "dist", "bin.mjs");
+  const logFd = openSync(paths.log, "a");
+  const child = spawn(
+    process.execPath,
+    [
+      entry,
+      "serve",
+      "--base-dir",
+      paths.home,
+      "--port",
+      String(paths.port),
+      "--host",
+      "127.0.0.1",
+      "--no-browser",
+    ],
+    {
+      cwd: root,
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+      env: { ...process.env, T3CODE_NO_BROWSER: "1" },
+    },
+  );
+  child.unref();
+  writeFileSync(paths.pid, `${child.pid}\n`);
+  try {
+    await waitForServer(paths.port);
+  } catch (error) {
+    stop(name);
+    if (current) {
+      try {
+        unlinkSync(paths.current);
+      } catch {}
+      symlinkSync(current, paths.current);
+    }
+    throw error;
+  }
+  console.log(`[t3-pipeline] ${name} is running at http://127.0.0.1:${paths.port}`);
+}
+
+async function status(name) {
+  const paths = environmentPaths(name);
+  const pid = readPid(paths);
+  console.log(
+    JSON.stringify(
+      {
+        environment: name,
+        port: paths.port,
+        home: paths.home,
+        current: existsSync(paths.current) ? realpathSync(paths.current) : null,
+        pid: pid ?? null,
+        running: pid === undefined ? false : isAlive(pid),
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+async function rollback(name) {
+  const paths = environmentPaths(name);
+  if (!existsSync(paths.previous)) fail(`No previous ${name} release is available.`);
+  const previous = realpathSync(paths.previous);
+  const manifestPath = join(previous, "node_modules", "t3", "package.json");
+  if (!existsSync(manifestPath)) fail(`Previous release is missing ${manifestPath}.`);
+  stop(name);
+  try {
+    unlinkSync(paths.current);
+  } catch {}
+  symlinkSync(previous, paths.current);
+  const entry = join(previous, "node_modules", "t3", "dist", "bin.mjs");
+  const logFd = openSync(paths.log, "a");
+  const child = spawn(
+    process.execPath,
+    [
+      entry,
+      "serve",
+      "--base-dir",
+      paths.home,
+      "--port",
+      String(paths.port),
+      "--host",
+      "127.0.0.1",
+      "--no-browser",
+    ],
+    {
+      cwd: root,
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+      env: { ...process.env, T3CODE_NO_BROWSER: "1" },
+    },
+  );
+  child.unref();
+  writeFileSync(paths.pid, `${child.pid}\n`);
+  await waitForServer(paths.port);
+  console.log(`[t3-pipeline] rolled ${name} back to ${previous}`);
+}
+
+try {
+  if (command === "build") await build();
+  else if (command === "deploy") await deploy(environment);
+  else if (command === "rollback") await rollback(environment);
+  else if (command === "status") await status(environment);
+  else if (command === "stop") stop(environment);
+  else fail("Usage: local-pipeline.mjs <build|deploy|rollback|status|stop> [staging|production]");
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
+}
