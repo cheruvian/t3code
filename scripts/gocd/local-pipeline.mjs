@@ -2,6 +2,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -106,6 +107,7 @@ async function build() {
   rmSync(artifactRoot, { recursive: true, force: true });
   mkdirSync(artifactRoot, { recursive: true });
   run("vp", ["run", "build"]);
+  cpSync(join(root, "apps/server/dist"), join(artifactRoot, "dist"), { recursive: true });
   const sha = spawnSync("git", ["rev-parse", "HEAD"], {
     cwd: root,
     encoding: "utf8",
@@ -125,6 +127,7 @@ async function deploy(name) {
   if (!existsSync(join(release, "dist", "bin.mjs"))) {
     rmSync(release, { recursive: true, force: true });
     run("pnpm", ["deploy", "--legacy", "--filter", "t3", "--prod", release]);
+    cpSync(join(artifactRoot, "dist"), join(release, "dist"), { recursive: true });
   }
 
   const current = existsSync(paths.current) ? realpathSync(paths.current) : undefined;
