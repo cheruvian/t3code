@@ -49,6 +49,14 @@ SOURCE_HOME="$HOME/.t3/userdata" \
 
 Copy secrets only when the workflow requires them, and copy them into staging rather than sharing the production files. If a release contains a database migration, staging must be migrated and exercised before production approval. This first version deliberately keeps staging and production databases separate; it does not attempt automatic schema compatibility analysis.
 
-## Current verification boundary
+## Candidate usability gate
 
-The checked-in verification jobs currently perform an HTTP readiness smoke check. Add the approved Playwright/session workflow command to `verify-staging.mjs` before treating the pipeline as a full release gate. Production is never promoted automatically, and a failed startup readiness check restores the previous release.
+Candidate verification is more than HTTP readiness. It requires the running server to publish its T3 Code metaproject root through `/.well-known/t3/environment` and to materialize that root's `AGENTS.md` instructions in the candidate runtime home. This prevents an artifact that does not contain the metaproject implementation from being marked deployable.
+
+Before approving production, complete the normal client journey against candidate:
+
+1. Open **Settings → General → T3 Code configuration → Open project**.
+2. Create a normal thread in the resulting **T3 Code** project.
+3. Send a configuration or documentation question and confirm the agent can use the generated project instructions.
+
+Record that result with the candidate artifact SHA. The structural verifier catches missing provisioning automatically; this session check is the user-facing proof that the project can be opened and used. Production is never promoted automatically, and a failed staging verifier restores the previous release.
