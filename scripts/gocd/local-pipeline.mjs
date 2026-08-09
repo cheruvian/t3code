@@ -3,6 +3,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import {
   cpSync,
+  closeSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -166,6 +167,7 @@ async function deploy(name) {
     },
   );
   child.unref();
+  closeSync(logFd);
   writeFileSync(paths.pid, `${child.pid}\n`);
   try {
     await waitForServer(paths.port);
@@ -235,6 +237,7 @@ async function rollback(name) {
     },
   );
   child.unref();
+  closeSync(logFd);
   writeFileSync(paths.pid, `${child.pid}\n`);
   await waitForServer(paths.port);
   console.log(`[t3-pipeline] rolled ${name} back to ${previous}`);
