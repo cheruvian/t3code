@@ -170,6 +170,7 @@ async function deploy(name) {
       T3CODE_PORT: String(paths.port),
       T3CODE_COMMIT_HASH: manifest.sha,
       T3CODE_DESKTOP_APP_USER_MODEL_ID: `com.t3tools.t3code.${stageLabel}`,
+      T3CODE_DESKTOP_DISPLAY_NAME: `T3 Code (${stageLabel[0].toUpperCase()}${stageLabel.slice(1)})`,
     },
   });
   child.unref();
@@ -234,6 +235,7 @@ async function rollback(name) {
       T3CODE_HOME: paths.home,
       T3CODE_PORT: String(paths.port),
       T3CODE_DESKTOP_APP_USER_MODEL_ID: `com.t3tools.t3code.${name}`,
+      T3CODE_DESKTOP_DISPLAY_NAME: `T3 Code (${name[0].toUpperCase()}${name.slice(1)})`,
     },
   });
   child.unref();

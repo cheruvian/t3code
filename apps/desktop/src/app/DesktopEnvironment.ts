@@ -162,7 +162,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     isDevelopment,
     appVersion: input.appVersion,
   });
-  const displayName = branding.displayName;
+  const displayName = Option.getOrElse(config.displayNameOverride, () => branding.displayName);
   const stateDir = resolveDesktopStateDir({
     baseDir,
     isDevelopment,
