@@ -37,7 +37,7 @@ pipelines:
                     stage: build
                     job: package
                     source: release/pipeline-artifact
-                    destination: build/pipeline-artifact
+                    destination: build
                 - exec:
                     command: node
                     arguments: [scripts/gocd/local-pipeline.mjs, deploy, staging]
