@@ -130,6 +130,61 @@ function isStalePendingApprovalFailureDetail(detail: string | null): boolean {
   );
 }
 
+/**
+ * Shell-summary fields a projected event asks the thread projector to re-derive.
+ *
+ * Every field an event cannot change stays as projected, which is what keeps a
+ * streamed assistant message from re-reading the whole thread per text delta.
+ */
+interface ThreadShellSummaryFields {
+  readonly latestUserMessageAt?: boolean;
+  readonly pendingApprovalCount?: boolean;
+  readonly pendingUserInputCount?: boolean;
+  readonly hasActionableProposedPlan?: boolean;
+}
+
+/** Activity kinds that move a thread's pending-approval accounting. */
+const PENDING_APPROVAL_ACTIVITY_KINDS: ReadonlySet<string> = new Set([
+  "approval.requested",
+  "approval.resolved",
+  "provider.approval.respond.failed",
+]);
+
+/** Activity kinds that move a thread's pending-user-input accounting. */
+const PENDING_USER_INPUT_ACTIVITY_KINDS: ReadonlySet<string> = new Set([
+  "user-input.requested",
+  "user-input.resolved",
+  "provider.user-input.respond.failed",
+]);
+
+/**
+ * Shell-summary fields an append-only thread event can invalidate.
+ *
+ * Tool and progress activities dominate a busy timeline and change no summary
+ * field, so they refresh nothing.
+ */
+function threadShellSummaryFieldsForEvent(event: OrchestrationEvent): ThreadShellSummaryFields {
+  switch (event.type) {
+    case "thread.proposed-plan-upserted":
+      return { hasActionableProposedPlan: true };
+
+    case "thread.approval-response-requested":
+      return { pendingApprovalCount: true };
+
+    case "thread.user-input-response-requested":
+      return { pendingUserInputCount: true };
+
+    case "thread.activity-appended":
+      return {
+        pendingApprovalCount: PENDING_APPROVAL_ACTIVITY_KINDS.has(event.payload.activity.kind),
+        pendingUserInputCount: PENDING_USER_INPUT_ACTIVITY_KINDS.has(event.payload.activity.kind),
+      };
+
+    default:
+      return {};
+  }
+}
+
 function derivePendingUserInputCountFromActivities(
   activities: ReadonlyArray<ProjectionThreadActivity>,
 ): number {
@@ -552,9 +607,29 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
+    /**
+     * Re-derive the shell-summary fields an event can actually invalidate.
+     *
+     * Each field is recomputed from the projection that owns it, so a caller
+     * naming no fields costs nothing: an assistant text delta arrives dozens of
+     * times per message and must not reload the thread's messages, activities,
+     * proposed plans or approvals. Recomputing (rather than incrementing) keeps
+     * replay and rebuild correct, because the owning projectors always run
+     * before this one for the same event.
+     */
     const refreshThreadShellSummary = Effect.fn("refreshThreadShellSummary")(function* (
       threadId: ThreadId,
+      fields: ThreadShellSummaryFields,
     ) {
+      if (
+        !fields.latestUserMessageAt &&
+        !fields.pendingApprovalCount &&
+        !fields.pendingUserInputCount &&
+        !fields.hasActionableProposedPlan
+      ) {
+        return;
+      }
+
       const existingRow = yield* projectionThreadRepository.getById({
         threadId,
       });
@@ -562,38 +637,55 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         return;
       }
 
-      const [messages, proposedPlans, activities, pendingApprovals] = yield* Effect.all([
-        projectionThreadMessageRepository.listByThreadId({ threadId }),
-        projectionThreadProposedPlanRepository.listByThreadId({ threadId }),
-        projectionThreadActivityRepository.listByThreadId({ threadId }),
-        projectionPendingApprovalRepository.listByThreadId({ threadId }),
-      ]);
-
-      let latestUserMessageAt: string | null = null;
-      for (const message of messages) {
-        if (
-          message.role === "user" &&
-          (latestUserMessageAt === null || message.createdAt > latestUserMessageAt)
-        ) {
-          latestUserMessageAt = message.createdAt;
+      let latestUserMessageAt = existingRow.value.latestUserMessageAt;
+      if (fields.latestUserMessageAt) {
+        const messages = yield* projectionThreadMessageRepository.listByThreadId({ threadId });
+        latestUserMessageAt = null;
+        for (const message of messages) {
+          if (
+            message.role === "user" &&
+            (latestUserMessageAt === null || message.createdAt > latestUserMessageAt)
+          ) {
+            latestUserMessageAt = message.createdAt;
+          }
         }
       }
 
-      const pendingApprovalCount = pendingApprovals.filter(
-        (approval) => approval.status === "pending",
-      ).length;
-      const pendingUserInputCount = derivePendingUserInputCountFromActivities(activities);
-      const hasActionableProposedPlan = deriveHasActionableProposedPlan({
-        latestTurnId: existingRow.value.latestTurnId,
-        proposedPlans,
-      });
+      let pendingApprovalCount = existingRow.value.pendingApprovalCount;
+      if (fields.pendingApprovalCount) {
+        const pendingApprovals = yield* projectionPendingApprovalRepository.listByThreadId({
+          threadId,
+        });
+        pendingApprovalCount = pendingApprovals.filter(
+          (approval) => approval.status === "pending",
+        ).length;
+      }
+
+      let pendingUserInputCount = existingRow.value.pendingUserInputCount;
+      if (fields.pendingUserInputCount) {
+        const activities = yield* projectionThreadActivityRepository.listByThreadId({ threadId });
+        pendingUserInputCount = derivePendingUserInputCountFromActivities(activities);
+      }
+
+      let hasActionableProposedPlan = existingRow.value.hasActionableProposedPlan;
+      if (fields.hasActionableProposedPlan) {
+        const proposedPlans = yield* projectionThreadProposedPlanRepository.listByThreadId({
+          threadId,
+        });
+        hasActionableProposedPlan = deriveHasActionableProposedPlan({
+          latestTurnId: existingRow.value.latestTurnId,
+          proposedPlans,
+        })
+          ? 1
+          : 0;
+      }
 
       yield* projectionThreadRepository.upsert({
         ...existingRow.value,
         latestUserMessageAt,
         pendingApprovalCount,
         pendingUserInputCount,
-        hasActionableProposedPlan: hasActionableProposedPlan ? 1 : 0,
+        hasActionableProposedPlan,
       });
     });
 
@@ -850,7 +942,31 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
-        case "thread.message-sent":
+        case "thread.message-sent": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          // Only a user message moves latestUserMessageAt, and messages are
+          // append-only outside thread.reverted, so the new timestamp is the
+          // running maximum. Assistant text arrives as dozens of streamed
+          // deltas per message and must stay free of thread-wide reads.
+          const latestUserMessageAt =
+            event.payload.role === "user" &&
+            (existingRow.value.latestUserMessageAt === null ||
+              event.payload.createdAt > existingRow.value.latestUserMessageAt)
+              ? event.payload.createdAt
+              : existingRow.value.latestUserMessageAt;
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            latestUserMessageAt,
+            updatedAt: event.occurredAt,
+          });
+          return;
+        }
+
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended":
         case "thread.approval-response-requested":
@@ -865,7 +981,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             updatedAt: event.occurredAt,
           });
-          yield* refreshThreadShellSummary(event.payload.threadId);
+          yield* refreshThreadShellSummary(
+            event.payload.threadId,
+            threadShellSummaryFieldsForEvent(event),
+          );
           return;
         }
 
@@ -882,7 +1001,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             latestTurnId: event.payload.session.activeTurnId ?? existingRow.value.latestTurnId,
             updatedAt: event.occurredAt,
           });
-          yield* refreshThreadShellSummary(event.payload.threadId);
+          // A new latest turn can change which proposed plan is actionable.
+          yield* refreshThreadShellSummary(event.payload.threadId, {
+            hasActionableProposedPlan: true,
+          });
           return;
         }
 
@@ -898,7 +1020,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             latestTurnId: event.payload.turnId,
             updatedAt: event.occurredAt,
           });
-          yield* refreshThreadShellSummary(event.payload.threadId);
+          yield* refreshThreadShellSummary(event.payload.threadId, {
+            hasActionableProposedPlan: true,
+          });
           return;
         }
 
@@ -936,7 +1060,14 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             latestTurnId,
             updatedAt: event.occurredAt,
           });
-          yield* refreshThreadShellSummary(event.payload.threadId);
+          // Revert is the one path that removes projected rows, so every
+          // summary field has to be re-derived from what survived.
+          yield* refreshThreadShellSummary(event.payload.threadId, {
+            latestUserMessageAt: true,
+            pendingApprovalCount: true,
+            pendingUserInputCount: true,
+            hasActionableProposedPlan: true,
+          });
           return;
         }
 
