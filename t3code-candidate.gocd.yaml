@@ -39,6 +39,9 @@ pipelines:
                     source: release/pipeline-artifact
                     destination: build
                 - exec:
+                    command: vp
+                    arguments: [i]
+                - exec:
                     command: node
                     arguments: [scripts/gocd/local-pipeline.mjs, deploy, staging]
       - verify-candidate:
