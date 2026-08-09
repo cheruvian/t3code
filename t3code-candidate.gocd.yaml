@@ -7,7 +7,7 @@ pipelines:
     lock_behavior: unlockWhenFinished
     materials:
       t3code:
-        git: https://github.com/pingdotgg/t3code.git
+        git: https://github.com/cheruvian/t3code.git
         branch: candidate
         shallow_clone: false
         auto_update: true
