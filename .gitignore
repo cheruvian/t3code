@@ -33,6 +33,8 @@ artifacts/app-store/screenshots/
 native/**/target/
 node_modules/
 .alchemy/
+.playwright-cli/
+.dev-loop/artifacts/
 *.log
 .env*
 !.env.example
