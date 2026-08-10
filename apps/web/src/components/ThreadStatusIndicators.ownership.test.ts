@@ -1,5 +1,8 @@
 import { EnvironmentId } from "@t3tools/contracts";
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import { Atom, AtomRegistry } from "effect/unstable/reactivity";
+import { beforeEach, vi } from "vite-plus/test";
 
 const observations = vi.hoisted(() => ({
   listRefs: vi.fn(),
@@ -71,5 +74,68 @@ describe("passive row VCS ownership", () => {
     expect(observations.status).not.toHaveBeenCalled();
     expect(observations.remoteStatus).not.toHaveBeenCalled();
     expect(observations.listRefs).not.toHaveBeenCalled();
+  });
+
+  it.effect("finalizes its local subscription when a visible row becomes hidden", () => {
+    const registry = AtomRegistry.make();
+    let started = 0;
+    let finalized = 0;
+    let mountedAtom: Atom.Atom<unknown> | null = null;
+    let releaseMountedAtom: (() => void) | null = null;
+    const localSubscriptionAtom = Atom.make(
+      Effect.sync(() => {
+        started += 1;
+      }).pipe(
+        Effect.andThen(Effect.never),
+        Effect.ensuring(
+          Effect.sync(() => {
+            finalized += 1;
+          }),
+        ),
+      ),
+    ).pipe(Atom.setIdleTTL(0));
+
+    observations.status.mockReturnValue(localSubscriptionAtom);
+    observations.query.mockImplementation((atom: Atom.Atom<unknown> | null) => {
+      if (atom !== mountedAtom) {
+        releaseMountedAtom?.();
+        mountedAtom = atom;
+        releaseMountedAtom = atom === null ? null : registry.mount(atom);
+      }
+      return { data: null, error: null, isPending: false, refresh: vi.fn() };
+    });
+
+    return Effect.gen(function* () {
+      const input = {
+        isVisible: true,
+        shouldSubscribe: true,
+        environmentId,
+        cwd: "/repo",
+      };
+      usePassiveRowVcsStatus(input);
+      yield* Effect.yieldNow;
+
+      expect(started).toBe(1);
+      expect(finalized).toBe(0);
+      expect(observations.status).toHaveBeenCalledOnce();
+      expect(observations.remoteStatus).not.toHaveBeenCalled();
+      expect(observations.listRefs).not.toHaveBeenCalled();
+
+      usePassiveRowVcsStatus({ ...input, isVisible: false });
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      expect(finalized).toBe(1);
+      expect(observations.query).toHaveBeenLastCalledWith(null);
+      expect(observations.remoteStatus).not.toHaveBeenCalled();
+      expect(observations.listRefs).not.toHaveBeenCalled();
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          releaseMountedAtom?.();
+          registry.dispose();
+        }),
+      ),
+    );
   });
 });

@@ -436,15 +436,15 @@ describe("VCS status subscription ownership", () => {
         yield* flushAtomDisposal;
         expect(yield* Ref.get(harness.finalized)).toHaveLength(0);
 
-        releaseLocalSecond();
+        releaseRemoteSecond();
         yield* flushAtomDisposal;
         expect(
           (yield* Ref.get(harness.finalized)).map(
             (observation) => statusSubscriptionInput(observation).includeRemote,
           ),
-        ).toEqual([false]);
+        ).toEqual([true]);
 
-        releaseRemoteSecond();
+        releaseLocalSecond();
         yield* flushAtomDisposal;
         expect(
           (yield* Ref.get(harness.finalized))
