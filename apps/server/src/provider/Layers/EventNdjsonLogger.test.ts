@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 import { ThreadId } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Logger from "effect/Logger";
@@ -16,6 +17,8 @@ import * as ResourceAttribution from "../../resourceTelemetry/ResourceAttributio
 import {
   makeEventNdjsonLogger,
   makeEventNdjsonLogStore,
+  type EventNdjsonLogStore,
+  type EventNdjsonLogStoreOptions,
   type PendingRecord,
   writeBatchedMessages,
 } from "./EventNdjsonLogger.ts";
@@ -47,6 +50,34 @@ function parseLogLine(line: string) {
     payload,
   };
 }
+
+interface TestEventNdjsonSink {
+  readonly write: (lines: string) => Effect.Effect<void>;
+}
+
+interface TestEventNdjsonSinkFactory {
+  (input: {
+    readonly filePath: string;
+    readonly maxBytes: number;
+    readonly maxFiles: number;
+  }): TestEventNdjsonSink;
+}
+
+interface TestEventNdjsonAdmissionCounts {
+  readonly pendingRecords: number;
+  readonly pendingBytes: number;
+  readonly lossCounts: {
+    readonly lowValue: number;
+    readonly protected: number;
+  };
+}
+
+type TestEventNdjsonAdmission =
+  | ({ readonly _tag: "Accepted" } & TestEventNdjsonAdmissionCounts)
+  | ({
+      readonly _tag: "Rejected";
+      readonly reason: "protected-buffer-full";
+    } & TestEventNdjsonAdmissionCounts);
 
 describe("EventNdjsonLogger", () => {
   it.effect("logs bounded diagnostics when an event cannot be serialized", () => {
@@ -258,6 +289,102 @@ describe("EventNdjsonLogger", () => {
       }
     }),
   );
+
+  it.effect("rejects protected overflow without blocking admission on a stalled sink", () => {
+    const messages: Array<unknown> = [];
+    const logCapture = Logger.make<unknown, void>(({ message }) => {
+      if (Array.isArray(message)) {
+        messages.push(...message);
+      } else {
+        messages.push(message);
+      }
+    });
+
+    return Effect.gen(function* () {
+      const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-"));
+      const basePath = NodePath.join(tempDir, "events.log");
+      const sinkStarted = yield* Deferred.make<void>();
+      const releaseSink = yield* Deferred.make<void>();
+      const written: Array<string> = [];
+      const maxBufferedRecords = 2;
+      const maxBufferedBytes = 4_096;
+      const sinkFactory: TestEventNdjsonSinkFactory = () => ({
+        write: (lines) =>
+          Deferred.succeed(sinkStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseSink)),
+            Effect.andThen(
+              Effect.sync(() => {
+                written.push(lines);
+              }),
+            ),
+          ),
+      });
+      const options: EventNdjsonLogStoreOptions & {
+        readonly sinkFactory: TestEventNdjsonSinkFactory;
+      } = {
+        batchWindowMs: 0,
+        maxBufferedRecords,
+        maxBufferedBytes,
+        sinkFactory,
+      };
+      let store: EventNdjsonLogStore | undefined;
+
+      try {
+        yield* TestClock.setTime(1_800_000_000_000);
+        store = yield* makeEventNdjsonLogStore(basePath, options);
+        const logger = store.logger("canonical");
+        const write = logger.write as (
+          event: unknown,
+          threadId: ThreadId | null,
+        ) => Effect.Effect<TestEventNdjsonAdmission>;
+        const threadId = ThreadId.make("thread-protected-overflow");
+
+        const first = yield* write({ type: "turn.started", id: "protected-first" }, threadId);
+        assert.equal(first?._tag, "Accepted");
+        assert.equal(first.pendingRecords, 1);
+        assert.isAbove(first.pendingBytes, 0);
+        assert.isAtMost(first.pendingBytes, maxBufferedBytes);
+
+        yield* Deferred.await(sinkStarted);
+
+        const second = yield* write({ type: "turn.completed", id: "protected-second" }, threadId);
+        const third = yield* write({ type: "turn.failed", id: "protected-rejected" }, threadId);
+
+        assert.equal(second._tag, "Accepted");
+        assert.equal(second.pendingRecords, maxBufferedRecords);
+        assert.isAbove(second.pendingBytes, first.pendingBytes);
+        assert.isAtMost(second.pendingBytes, maxBufferedBytes);
+        assert.deepEqual(third, {
+          _tag: "Rejected",
+          reason: "protected-buffer-full",
+          pendingRecords: maxBufferedRecords,
+          pendingBytes: second.pendingBytes,
+          lossCounts: { lowValue: 0, protected: 1 },
+        });
+
+        const diagnostic = encodeUnknownJson(messages);
+        assert.include(diagnostic, '"reason":"protected-buffer-full"');
+        assert.include(diagnostic, '"pendingRecords":2');
+        assert.include(diagnostic, '"protected":1');
+
+        yield* Deferred.succeed(releaseSink, undefined);
+        yield* store.close();
+        store = undefined;
+
+        const output = written.join("");
+        assert.include(output, '"id":"protected-first"');
+        assert.include(output, '"id":"protected-second"');
+        assert.notInclude(output, "protected-rejected");
+        assert.isBelow(output.indexOf("protected-first"), output.indexOf("protected-second"));
+      } finally {
+        yield* Deferred.succeed(releaseSink, undefined);
+        if (store) {
+          yield* store.close();
+        }
+        NodeFS.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }).pipe(Effect.provide(Logger.layer([logCapture], { mergeWithExisting: false })));
+  });
 
   it.effect("does not strand a later batch after an interrupted write", () =>
     Effect.gen(function* () {
