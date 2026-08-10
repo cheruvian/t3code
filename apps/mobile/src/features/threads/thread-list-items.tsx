@@ -420,6 +420,8 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly thread: EnvironmentThreadShell;
   readonly environmentLabel: string | null;
   readonly projectCwd: string | null;
+  /** Logically visible rows retain local VCS status; CSS-hidden sidebars do not. */
+  readonly visible?: boolean;
   readonly searchMatch?: EnvironmentThreadSearchMatch;
   readonly searchQuery?: string;
   readonly isLast: boolean;
@@ -453,7 +455,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
 
   const { thread, onSelectThread, onArchiveThread, onDeleteThread } = props;
   const status = resolveThreadStatus(thread);
-  const pr = useThreadPr(thread, props.projectCwd);
+  const pr = useThreadPr(thread, props.projectCwd, { enabled: props.visible !== false });
   const timestamp = relativeTime(
     thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
   );
