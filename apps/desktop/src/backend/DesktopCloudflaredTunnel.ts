@@ -38,7 +38,7 @@ export class DesktopCloudflaredTunnel extends Context.Service<
   }
 >()("@t3tools/desktop/backend/DesktopCloudflaredTunnel") {}
 
-const make = Effect.gen(function* () {
+export const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const relayClient = yield* RelayClient.RelayClient;
   const activeRef = yield* Ref.make<ActiveTunnel | null>(null);
@@ -67,7 +67,8 @@ const make = Effect.gen(function* () {
   ) {
     const normalized = {
       enabled: input.enabled,
-      configPath: input.configPath?.trim() || null,
+      configPath:
+        input.configPath !== null && input.configPath.trim().length > 0 ? input.configPath : null,
     } satisfies DesktopCloudflaredTunnelInput;
     const configPath = normalized.configPath;
     const key = configKey(normalized);
@@ -175,20 +176,25 @@ const make = Effect.gen(function* () {
     yield* Effect.forkDetach(
       Effect.gen(function* () {
         const result = yield* Effect.result(spawned.success.exitCode);
-        const currentActive = yield* Ref.get(activeRef);
-        if (currentActive?.child.pid !== spawned.success.pid) return;
-        yield* Ref.set(activeRef, null);
-        const failedState = {
-          status: "failed",
-          enabled: normalized.enabled,
-          configPath: normalized.configPath,
-          pid: null,
-          error:
-            result._tag === "Success"
-              ? `cloudflared exited with code ${Number(result.success)}.`
-              : "cloudflared stopped unexpectedly.",
-        } satisfies DesktopCloudflaredTunnelState;
-        yield* Ref.set(stateRef, failedState);
+        yield* reconcileSemaphore.withPermits(1)(
+          Effect.gen(function* () {
+            const currentActive = yield* Ref.get(activeRef);
+            if (currentActive?.child.pid !== spawned.success.pid) return;
+            yield* Scope.close(currentActive.scope, Exit.void).pipe(Effect.ignore);
+            yield* Ref.set(activeRef, null);
+            const failedState = {
+              status: "failed",
+              enabled: currentActive.enabled,
+              configPath: currentActive.configPath,
+              pid: null,
+              error:
+                result._tag === "Success"
+                  ? `cloudflared exited with code ${Number(result.success)}.`
+                  : "cloudflared stopped unexpectedly.",
+            } satisfies DesktopCloudflaredTunnelState;
+            yield* Ref.set(stateRef, failedState);
+          }),
+        );
       }).pipe(Effect.catchCause(() => Effect.void)),
     );
     return state;

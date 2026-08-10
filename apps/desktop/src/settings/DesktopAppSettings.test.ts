@@ -114,8 +114,8 @@ describe("DesktopSettings", () => {
 
         assert.isTrue(change.changed);
         assert.isTrue(change.settings.cloudflaredEnabled);
-        assert.equal(change.settings.cloudflaredConfigPath, "/tmp/t3-cloudflared.yml");
-        assert.equal((yield* settings.load).cloudflaredConfigPath, "/tmp/t3-cloudflared.yml");
+        assert.equal(change.settings.cloudflaredConfigPath, "  /tmp/t3-cloudflared.yml  ");
+        assert.equal((yield* settings.load).cloudflaredConfigPath, "  /tmp/t3-cloudflared.yml  ");
       }),
     ),
   );

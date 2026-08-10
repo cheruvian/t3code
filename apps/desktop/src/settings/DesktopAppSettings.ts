@@ -211,7 +211,7 @@ function normalizeWslDistro(value: unknown): string | null {
 }
 
 function normalizeCloudflaredConfigPath(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
 export function normalizeMainWindowBounds(value: unknown): DesktopWindowBounds | null {

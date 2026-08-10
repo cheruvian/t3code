@@ -97,6 +97,27 @@ describe("DesktopCloudflaredTunnel", () => {
     }),
   );
 
+  it.effect("preserves meaningful whitespace in the config path", () =>
+    Effect.gen(function* () {
+      const commands: Array<ChildProcess.StandardCommand> = [];
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.gen(function* () {
+          if (!ChildProcess.isStandardCommand(command))
+            throw new Error("Expected standard command");
+          commands.push(command);
+          const handle = makeHandle(150, () => Effect.void);
+          yield* Effect.addFinalizer(() => handle.kill().pipe(Effect.ignore));
+          return handle;
+        }),
+      );
+      const runtime = yield* buildRuntime(spawner);
+
+      yield* runtime.apply({ enabled: true, configPath: " /tmp/tunnel.yml " });
+
+      expect(commands[0]?.args).toEqual(["tunnel", "--config", " /tmp/tunnel.yml ", "run"]);
+    }),
+  );
+
   it.effect("fails clearly when enabled without a config path", () =>
     Effect.gen(function* () {
       let spawnCount = 0;
