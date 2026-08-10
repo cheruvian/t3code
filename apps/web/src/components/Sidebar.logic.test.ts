@@ -16,6 +16,7 @@ import {
   orderItemsByPreferredIds,
   resolveProjectStatusIndicator,
   resolveSidebarStageBadgeLabel,
+  resolveSidebarSortableRowBag,
   resolveThreadRowClassName,
   resolveSidebarThreadStatus,
   resolveThreadStatusPill,
@@ -32,6 +33,7 @@ import {
   sortThreadsForSidebar,
   sortProjectsForSidebar,
   sortScopedProjectsForSidebar,
+  sidebarThreadRowRenderKey,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
 import {
@@ -50,6 +52,23 @@ import {
 } from "../types";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
+
+describe("compact sidebar row identity and sorting", () => {
+  it("keeps lifecycle sections distinct when every section uses slim rows", () => {
+    expect(sidebarThreadRowRenderKey("environment:thread", "active", "slim")).toBe(
+      "environment:thread:active:slim",
+    );
+    expect(sidebarThreadRowRenderKey("environment:thread", "settled", "slim")).toBe(
+      "environment:thread:settled:slim",
+    );
+  });
+
+  it("keeps pinned drag-and-drop wiring on slim rows", () => {
+    const sortable = { id: "sortable-row" };
+
+    expect(resolveSidebarSortableRowBag("slim", sortable)).toBe(sortable);
+  });
+});
 
 describe("shouldNavigateAfterProjectRemoval", () => {
   const projectThreads = [{ environmentId: "environment-local", id: "thread-1" }];

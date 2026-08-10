@@ -469,6 +469,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarThreadPreviewCount !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount
         ? ["Visible threads"]
         : []),
+      ...(settings.sidebarCompactMode !== DEFAULT_UNIFIED_SETTINGS.sidebarCompactMode
+        ? ["Compact sidebar inbox"]
+        : []),
       ...(settings.sidebarProjectGroupingMode !==
       DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode
         ? ["Project Grouping"]
@@ -543,6 +546,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.enableLegacyTokenStreaming,
       settings.enableProviderUpdateChecks,
       settings.sidebarAutoSettleAfterDays,
+      settings.sidebarCompactMode,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadSortOrder,
       settings.sidebarThreadPreviewCount,
@@ -621,6 +625,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
+      sidebarCompactMode: DEFAULT_UNIFIED_SETTINGS.sidebarCompactMode,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarThreadSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarThreadSortOrder,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
@@ -1806,6 +1811,32 @@ export function GeneralSettingsPanel() {
                 ))}
               </SelectPopup>
             </Select>
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("compact-sidebar-inbox")}
+          description="Use one-line inbox rows with provider icons and timestamps. Turn this off to show active and pinned threads as larger two-line cards."
+          resetAction={
+            settings.sidebarCompactMode !== DEFAULT_UNIFIED_SETTINGS.sidebarCompactMode ? (
+              <SettingResetButton
+                label="compact sidebar inbox"
+                onClick={() =>
+                  updateSettings({
+                    sidebarCompactMode: DEFAULT_UNIFIED_SETTINGS.sidebarCompactMode,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarCompactMode}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarCompactMode: Boolean(checked) })
+              }
+              aria-label="Compact sidebar inbox"
+            />
           }
         />
 
