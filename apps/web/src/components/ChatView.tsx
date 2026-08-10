@@ -305,6 +305,7 @@ import {
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
+  shouldMountDiffPanel,
   shouldWriteThreadErrorToCurrentServerThread,
   startNewThreadForProject,
   waitForStartedServerThread,
@@ -2574,7 +2575,7 @@ function ChatViewContent(props: ChatViewProps) {
   const gitStatusQuery = useEnvironmentQuery(
     gitStatusCwd === null
       ? null
-      : vcsEnvironment.status({
+      : vcsEnvironment.remoteStatus({
           environmentId,
           input: { cwd: gitStatusCwd },
         }),
@@ -4071,11 +4072,11 @@ function ChatViewContent(props: ChatViewProps) {
   // The right panel offers the thread's own change request, so it can only offer it once the
   // branch has one; until then the picker says so rather than opening an empty panel.
   const addPullRequestSurface = useCallback(() => {
-    if (activeThreadPr === null) return;
+    if (activeThreadPr == null) return;
     openThreadPullRequest(activeThreadPr.number);
   }, [activeThreadPr, openThreadPullRequest]);
   const pullRequestSurfaceAvailable =
-    supportsPullRequests && activeThreadPr !== null && threadRepository !== null;
+    supportsPullRequests && activeThreadPr != null && threadRepository !== null;
   const supportsSettlement = serverConfig?.environment.capabilities.threadSettlement === true;
   const supportsSnooze = serverConfig?.environment.capabilities.threadSnooze === true;
   const nowMinute = useNowMinute();
@@ -4139,10 +4140,11 @@ function ChatViewContent(props: ChatViewProps) {
     if (activeThreadShell === null || !supportsSettlement) return false;
     return effectiveSettled(activeThreadShell, {
       now: `${nowMinute}:00.000Z`,
-      autoSettleAfterDays,
+      autoSettleAfterDays: activeThreadPr === undefined ? null : autoSettleAfterDays,
       changeRequestState: activeThreadPr?.state ?? null,
     });
   }, [
+    activeThreadPr,
     activeThreadPr?.state,
     activeThreadShell,
     autoSettleAfterDays,
@@ -5987,6 +5989,10 @@ function ChatViewContent(props: ChatViewProps) {
       {panelToggleControls}
     </div>
   );
+  const mountDiffPanel = shouldMountDiffPanel({
+    rightPanelOpen,
+    activeSurfaceKind: activeRightPanelSurface?.kind ?? null,
+  });
   const rightPanelContent = activeThreadRef ? (
     activeRightPanelSurface?.kind === "preview" ? (
       <Suspense fallback={null}>
@@ -6019,7 +6025,7 @@ function ChatViewContent(props: ChatViewProps) {
         newShortcutLabel={newTerminalShortcutLabel ?? undefined}
         closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
       />
-    ) : activeRightPanelSurface?.kind === "diff" ? (
+    ) : mountDiffPanel ? (
       <Suspense fallback={null}>
         <DiffPanel
           key={`${activeThreadKey}:${diffPanelGitStatusResolutionKey}`}
