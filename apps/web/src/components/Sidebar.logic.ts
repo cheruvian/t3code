@@ -23,6 +23,28 @@ export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
 // it small; cold opens still render instantly from the cached snapshot.
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 3;
 
+export type SidebarThreadRowVariant = "card" | "slim";
+export type SidebarThreadSection = "pinned" | "active" | "snoozed" | "settled";
+
+export function sidebarThreadRowRenderKey(
+  threadKey: string,
+  section: SidebarThreadSection,
+  rowVariant: SidebarThreadRowVariant,
+): string {
+  return `${threadKey}:${section}:${rowVariant}`;
+}
+
+export function resolveSidebarSortableRowBag<T>(
+  rowVariant: SidebarThreadRowVariant,
+  sortable: T | undefined,
+): T | undefined {
+  switch (rowVariant) {
+    case "card":
+    case "slim":
+      return sortable;
+  }
+}
+
 type SidebarProject = {
   id: string;
   title: string;
@@ -260,6 +282,28 @@ export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
   return completedAt > lastVisitedAt;
 }
 
+export function hasUnreadAssistantMessage(input: {
+  latestAssistantMessageId: string | null | undefined;
+  lastReadAssistantMessageId: string | undefined;
+}): boolean {
+  return (
+    input.latestAssistantMessageId != null &&
+    input.lastReadAssistantMessageId !== undefined &&
+    input.latestAssistantMessageId !== input.lastReadAssistantMessageId
+  );
+}
+
+export function resolveSidebarV2UnreadState(input: {
+  thread: ThreadStatusInput;
+  latestAssistantMessageId: string | null | undefined;
+  lastReadAssistantMessageId: string | undefined;
+}): { hasUnreadCompletion: boolean; hasUnreadAssistantMessage: boolean } {
+  return {
+    hasUnreadCompletion: hasUnseenCompletion(input.thread),
+    hasUnreadAssistantMessage: hasUnreadAssistantMessage(input),
+  };
+}
+
 export function shouldClearThreadSelectionOnMouseDown(target: HTMLElement | null): boolean {
   if (target === null) return true;
   return !target.closest(THREAD_SELECTION_SAFE_SELECTOR);
@@ -423,21 +467,27 @@ export function resolveThreadRowClassName(input: {
   );
 }
 
-// ── Sidebar v2 status model ─────────────────────────────────────────
+// ── Sidebar thread status model ─────────────────────────────────────
 // Five visual states, three colors: color is reserved for "act now"
 // (approval), "in motion" (working), and "broken" (failed). Ready is the
 // unlabeled resting state — the agent stopped and is waiting on the user,
 // whether it finished, asked a question, or proposed a plan.
 // Unread completion is tracked separately: it describes whether a ready
 // thread needs attention, not what the thread is currently doing.
-export type SidebarV2Status = "approval" | "input" | "working" | "monitoring" | "failed" | "ready";
+export type SidebarThreadStatus =
+  | "approval"
+  | "input"
+  | "working"
+  | "monitoring"
+  | "failed"
+  | "ready";
 
-type SidebarV2StatusInput = Pick<
+type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
   "hasPendingApprovals" | "hasPendingUserInput" | "session" | "backgroundLiveness"
 >;
 
-export function resolveSidebarV2Status(thread: SidebarV2StatusInput): SidebarV2Status {
+export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
   if (thread.hasPendingApprovals) {
     return "approval";
   }
@@ -496,16 +546,15 @@ export function firstValidTimestamp(
   return null;
 }
 
-// v2 sort: static creation order, newest thread on top. Activity NEVER
-// reorders the list — a row holds its position from open until settled, so
-// the screen only moves at lifecycle transitions. Status (including pending
+// Sidebar sort is selected in General settings. Status (including pending
 // approval) is carried by each card's edge strip, not by position.
-export function sortThreadsForSidebarV2<
+export function sortThreadsForSidebar<
   T extends { readonly id: string; readonly createdAt: string },
->(threads: readonly T[]): T[] {
+>(threads: readonly T[], sortOrder: SidebarThreadSortOrder = "created_at"): T[] {
   return [...threads].toSorted(
     (left, right) =>
-      parseTimestampMs(right.createdAt) - parseTimestampMs(left.createdAt) ||
+      getThreadSortTimestamp(right as T & ThreadSortInput, sortOrder) -
+        getThreadSortTimestamp(left as T & ThreadSortInput, sortOrder) ||
       left.id.localeCompare(right.id),
   );
 }
@@ -517,7 +566,7 @@ export {
   pinOrderKeyBetween,
   planPinnedReorder,
 } from "@t3tools/client-runtime/state/thread-sort";
-export { sortPinnedThreadsByOrderKey as sortPinnedThreadsForSidebarV2 } from "@t3tools/client-runtime/state/thread-sort";
+export { sortPinnedThreadsByOrderKey as sortPinnedThreadsForSidebar } from "@t3tools/client-runtime/state/thread-sort";
 
 /**
  * Search the already-ordered sidebar thread collection by title only.
@@ -566,7 +615,7 @@ export function resolveSettledTimestamp(thread: SettledTimestampInput): string |
 
 // Settled rows are history, so they order by when the work ENDED, not when
 // the thread was created or last touched.
-export function sortSettledThreadsForSidebarV2<
+export function sortSettledThreadsForSidebar<
   T extends SettledTimestampInput & { readonly id: string },
 >(threads: readonly T[]): T[] {
   const timestampMs = (thread: T) => {

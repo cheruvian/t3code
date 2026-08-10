@@ -13,6 +13,7 @@ import {
   setServerExposureMode,
   setTailscaleServeEnabled,
 } from "./methods/serverExposure.ts";
+import { getCloudflaredTunnelState, setCloudflaredTunnel } from "./methods/cloudflaredTunnel.ts";
 import {
   bootstrapSshBearerSession,
   disconnectSshEnvironment,
@@ -31,7 +32,6 @@ import {
   setUpdateChannel,
 } from "./methods/updates.ts";
 import {
-  confirm,
   getAppBranding,
   getLocalEnvironmentBootstraps,
   getLocalEnvironmentBearerToken,
@@ -75,6 +75,8 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(setServerExposureMode);
   yield* ipc.handle(setTailscaleServeEnabled);
   yield* ipc.handle(getAdvertisedEndpoints);
+  yield* ipc.handle(getCloudflaredTunnelState);
+  yield* ipc.handle(setCloudflaredTunnel);
 
   yield* ipc.handle(getWslState);
   yield* ipc.handle(setWslBackendEnabled);
@@ -83,7 +85,6 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
 
   yield* ipc.handle(pickFolder);
   yield* ipc.handle(pickThemeFiles);
-  yield* ipc.handle(confirm);
   yield* ipc.handle(setTheme);
   yield* ipc.handle(showContextMenu);
   yield* ipc.handle(openExternal);

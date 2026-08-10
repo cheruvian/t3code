@@ -1,9 +1,11 @@
-import { SettingsIcon } from "lucide-react";
+import { ChartNoAxesColumnIcon, GitPullRequestIcon, SettingsIcon } from "lucide-react";
 import { memo, useCallback } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
+import { APP_STAGE_LABEL } from "../../branding";
 import { cn } from "../../lib/utils";
+import { usePrimaryEnvironment } from "../../state/environments";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -38,12 +40,19 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
     environmentIdentificationMode === "pill"
       ? resolveEnvironmentIdentificationPillLabel(stageLabel)
       : null;
+  const stageAccent =
+    APP_STAGE_LABEL === "Candidate"
+      ? "border-t-2 border-blue-500 bg-blue-500/10"
+      : APP_STAGE_LABEL === "Production"
+        ? "border-t-2 border-emerald-500 bg-emerald-500/10"
+        : null;
 
   return (
     <SidebarHeader
       className={cn(
         "@container/sidebar-header relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0 md:px-0",
         isElectron && "drag-region",
+        stageAccent,
       )}
     >
       {backdropVariant ? <SidebarStageBackdrop variant={backdropVariant} /> : null}
@@ -86,7 +95,9 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
           onBackdrop ? "text-white/70" : "text-muted-foreground",
         )}
       >
-        Code
+        {APP_STAGE_LABEL === "Alpha" || APP_STAGE_LABEL === "Dev" || APP_STAGE_LABEL === "Nightly"
+          ? "Code"
+          : `Code · ${APP_STAGE_LABEL}`}
       </span>
     </Link>
   );
@@ -111,11 +122,28 @@ function T3Wordmark() {
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
-  const handleSettingsClick = useCallback(() => {
+  const primaryEnvironment = usePrimaryEnvironment();
+  const pullRequestsSupported =
+    primaryEnvironment?.serverConfig?.environment.capabilities.pullRequests === true;
+  const closeMobileSidebar = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
     }
+  }, [isMobile, setOpenMobile]);
+  const handlePullRequestsClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/pull-requests", search: { involvement: "all", state: "open" } });
+  }, [closeMobileSidebar, navigate]);
+  const handleSettingsClick = useCallback(() => {
+    closeMobileSidebar();
     void navigate({ to: "/settings" });
+  }, [closeMobileSidebar, navigate]);
+
+  const handleUsageClick = useCallback(() => {
+    if (isMobile) {
+      setOpenMobile(false);
+    }
+    void navigate({ to: "/usage" });
   }, [isMobile, navigate, setOpenMobile]);
 
   return (
@@ -123,6 +151,20 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
       <SidebarProviderUpdatePill />
       <SidebarUpdatePill />
       <SidebarMenu>
+        {pullRequestsSupported ? (
+          <SidebarMenuItem>
+            <SidebarMenuButton onClick={handlePullRequestsClick}>
+              <GitPullRequestIcon />
+              <span>Pull Requests</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        ) : null}
+        <SidebarMenuItem>
+          <SidebarMenuButton onClick={handleUsageClick}>
+            <ChartNoAxesColumnIcon />
+            <span>Usage</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton onClick={handleSettingsClick}>
             <SettingsIcon />

@@ -28,11 +28,14 @@ squashfs-root/
 dist-electron/
 .electron-runtime/
 .showcase/
+.dev-loop/
 apps/mobile/.showcase/
 artifacts/app-store/screenshots/
 native/**/target/
 node_modules/
 .alchemy/
+.playwright-cli/
+.dev-loop/artifacts/
 *.log
 .env*
 !.env.example

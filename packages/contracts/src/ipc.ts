@@ -150,7 +150,7 @@ export type DesktopUpdateStatus =
 export type DesktopRuntimeArch = "arm64" | "x64" | "other";
 export type DesktopTheme = "light" | "dark" | "system";
 export type DesktopUpdateChannel = "latest" | "nightly";
-export type DesktopAppStageLabel = "Alpha" | "Dev" | "Nightly";
+export type DesktopAppStageLabel = "Alpha" | "Dev" | "Nightly" | "Candidate" | "Production";
 
 export const DesktopUpdateStatusSchema = Schema.Literals([
   "disabled",
@@ -165,7 +165,35 @@ export const DesktopUpdateStatusSchema = Schema.Literals([
 export const DesktopRuntimeArchSchema = Schema.Literals(["arm64", "x64", "other"]);
 export const DesktopThemeSchema = Schema.Literals(["light", "dark", "system"]);
 export const DesktopUpdateChannelSchema = Schema.Literals(["latest", "nightly"]);
-export const DesktopAppStageLabelSchema = Schema.Literals(["Alpha", "Dev", "Nightly"]);
+export const DesktopAppStageLabelSchema = Schema.Literals([
+  "Alpha",
+  "Dev",
+  "Nightly",
+  "Candidate",
+  "Production",
+]);
+
+export const DesktopCloudflaredTunnelStatusSchema = Schema.Literals([
+  "disabled",
+  "running",
+  "failed",
+]);
+export type DesktopCloudflaredTunnelStatus = typeof DesktopCloudflaredTunnelStatusSchema.Type;
+
+export const DesktopCloudflaredTunnelStateSchema = Schema.Struct({
+  status: DesktopCloudflaredTunnelStatusSchema,
+  enabled: Schema.Boolean,
+  configPath: Schema.NullOr(Schema.String),
+  pid: Schema.NullOr(Schema.Number),
+  error: Schema.NullOr(Schema.String),
+});
+export type DesktopCloudflaredTunnelState = typeof DesktopCloudflaredTunnelStateSchema.Type;
+
+export const DesktopCloudflaredTunnelInputSchema = Schema.Struct({
+  enabled: Schema.Boolean,
+  configPath: Schema.NullOr(Schema.String),
+});
+export type DesktopCloudflaredTunnelInput = typeof DesktopCloudflaredTunnelInputSchema.Type;
 
 export interface DesktopAppBranding {
   baseName: string;
@@ -1030,6 +1058,10 @@ export interface DesktopBridge {
     readonly enabled: boolean;
     readonly port?: number;
   }) => Promise<DesktopServerExposureState>;
+  getCloudflaredTunnelState: () => Promise<DesktopCloudflaredTunnelState>;
+  setCloudflaredTunnel: (
+    input: DesktopCloudflaredTunnelInput,
+  ) => Promise<DesktopCloudflaredTunnelState>;
   getAdvertisedEndpoints: () => Promise<readonly AdvertisedEndpoint[]>;
   getWslState: () => Promise<DesktopWslState>;
   setWslBackendEnabled: (enabled: boolean) => Promise<DesktopWslState>;
@@ -1042,7 +1074,6 @@ export interface DesktopBridge {
    * web callers fall back to a plain file input.
    */
   pickThemeFiles?: () => Promise<readonly PickedThemeFile[] | null>;
-  confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
   showContextMenu: <T extends string>(
     items: readonly ContextMenuItem<T>[],
@@ -1149,6 +1180,12 @@ export interface DesktopPreviewBridge {
   onPointerEvent: (listener: (event: DesktopPreviewPointerEvent) => void) => () => void;
 }
 
+export type ConfirmDialogVariant = "default" | "destructive";
+
+export interface ConfirmDialogOptions {
+  readonly variant?: ConfirmDialogVariant;
+}
+
 /**
  * APIs bound to the local app shell, not to any particular backend environment.
  *
@@ -1162,7 +1199,7 @@ export interface DesktopPreviewBridge {
 export interface LocalApi {
   dialogs: {
     pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
-    confirm: (message: string) => Promise<boolean>;
+    confirm: (message: string, options?: ConfirmDialogOptions) => Promise<boolean>;
   };
   shell: {
     openExternal: (url: string) => Promise<void>;
