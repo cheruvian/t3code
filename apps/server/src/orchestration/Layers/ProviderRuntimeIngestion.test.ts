@@ -42,7 +42,9 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
@@ -56,7 +58,7 @@ import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
-import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
+import { ProviderRuntimeIngestionLayer } from "./ProviderRuntimeIngestion.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -286,30 +288,67 @@ describe("ProviderRuntimeIngestion", () => {
   async function createHarness(options?: {
     serverSettings?: Partial<ServerSettings>;
     providerService?: ProviderServiceShape;
+    beforeThreadShellRead?: (threadId: ThreadId) => Effect.Effect<void>;
+    beforePendingTurnStartRead?: (threadId: ThreadId) => Effect.Effect<void>;
   }) {
     const workspaceRoot = makeTempDir("t3-provider-project-");
     NodeFS.mkdirSync(NodePath.join(workspaceRoot, ".git"));
     const provider = createProviderServiceHarness();
+    const sqlitePersistence = SqlitePersistenceMemory;
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationProjectionPipelineLive),
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provide(RepositoryIdentityResolver.layer),
-      Layer.provide(SqlitePersistenceMemory),
+      Layer.provide(sqlitePersistence),
     );
-    const projectionSnapshotLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
+    const projectionSnapshotBaseLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
       Layer.provide(RepositoryIdentityResolver.layer),
-      Layer.provide(SqlitePersistenceMemory),
+      Layer.provide(sqlitePersistence),
     );
-    const layer = ProviderRuntimeIngestionLive.pipe(
+    const projectionSnapshotLayer = options?.beforeThreadShellRead
+      ? Layer.effect(
+          ProjectionSnapshotQuery,
+          Effect.gen(function* () {
+            const query = yield* ProjectionSnapshotQuery;
+            return ProjectionSnapshotQuery.of({
+              ...query,
+              getThreadShellById: (threadId) =>
+                options.beforeThreadShellRead!(threadId).pipe(
+                  Effect.andThen(query.getThreadShellById(threadId)),
+                ),
+            });
+          }),
+        ).pipe(Layer.provide(projectionSnapshotBaseLayer))
+      : projectionSnapshotBaseLayer;
+    const projectionTurnBaseLayer = ProjectionTurnRepositoryLive.pipe(
+      Layer.provide(sqlitePersistence),
+    );
+    const projectionTurnLayer = options?.beforePendingTurnStartRead
+      ? Layer.effect(
+          ProjectionTurnRepository,
+          Effect.gen(function* () {
+            const repository = yield* ProjectionTurnRepository;
+            return ProjectionTurnRepository.of({
+              ...repository,
+              getPendingTurnStartByThreadId: (input) =>
+                options.beforePendingTurnStartRead!(input.threadId).pipe(
+                  Effect.andThen(repository.getPendingTurnStartByThreadId(input)),
+                ),
+            });
+          }),
+        ).pipe(Layer.provide(projectionTurnBaseLayer))
+      : projectionTurnBaseLayer;
+    const layer = ProviderRuntimeIngestionLayer.pipe(
+      Layer.provide(projectionTurnLayer),
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       // Single shared liveness instance across ingestion (writer), the
       // engine, and the snapshot query (reader).
       Layer.provideMerge(ThreadBackgroundLiveness.layer),
       Layer.provideMerge(ThreadPlanProgress.layer),
-      Layer.provideMerge(SqlitePersistenceMemory),
+      Layer.provideMerge(sqlitePersistence),
       Layer.provideMerge(
         Layer.succeed(ProviderService, options?.providerService ?? provider.service),
       ),
@@ -407,6 +446,216 @@ describe("ProviderRuntimeIngestion", () => {
     expect(shell).toBeDefined();
     return { detail: detail!, shell: shell! };
   }
+
+  effectIt.effect("ingests activity bursts without lifecycle context reads", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-1");
+      const barrierReached = yield* Deferred.make<void>();
+      let shellReadCount = 0;
+      let pendingTurnStartReadCount = 0;
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          beforeThreadShellRead: () =>
+            Effect.sync(() => {
+              shellReadCount += 1;
+            }).pipe(Effect.andThen(Deferred.succeed(barrierReached, undefined)), Effect.asVoid),
+          beforePendingTurnStartRead: () =>
+            Effect.sync(() => {
+              pendingTurnStartReadCount += 1;
+            }),
+        }),
+      );
+
+      for (let index = 0; index < 10; index += 1) {
+        harness.emit({
+          type: "task.progress",
+          eventId: asEventId(`evt-read-count-task-progress-${index}`),
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
+          threadId,
+          turnId: asTurnId("turn-read-count"),
+          payload: {
+            taskId: `task-read-count-${index}`,
+            description: "Indexing repository files",
+            summary: `Indexed batch ${index}`,
+          },
+        });
+      }
+      harness.emit({
+        type: "session.state.changed",
+        eventId: asEventId("evt-read-count-barrier"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:10.000Z",
+        threadId,
+        payload: { state: "running" },
+      });
+
+      yield* Deferred.await(barrierReached);
+      yield* Effect.promise(() => harness.drain());
+      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === threadId,
+      );
+      expect(
+        thread?.activities.filter((activity) =>
+          activity.id.startsWith("task-progress:thread-1:task-read-count-"),
+        ),
+      ).toHaveLength(10);
+      expect(shellReadCount).toBe(1);
+      expect(pendingTurnStartReadCount).toBe(0);
+    }),
+  );
+
+  effectIt.effect("uses ingestion capacity across independent threads", () =>
+    Effect.gen(function* () {
+      const firstThreadId = asThreadId("thread-1");
+      const secondThreadId = asThreadId("thread-concurrent-ingestion");
+      const firstShellRead = yield* Deferred.make<void>();
+      const secondShellRead = yield* Deferred.make<void>();
+      const releaseFirstShellRead = yield* Deferred.make<void>();
+      let shouldBlockFirstThread = true;
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          beforeThreadShellRead: (threadId) =>
+            Effect.gen(function* () {
+              if (threadId === firstThreadId && shouldBlockFirstThread) {
+                shouldBlockFirstThread = false;
+                yield* Deferred.succeed(firstShellRead, undefined).pipe(Effect.orDie);
+                yield* Deferred.await(releaseFirstShellRead);
+              }
+              if (threadId === secondThreadId) {
+                yield* Deferred.succeed(secondShellRead, undefined).pipe(Effect.orDie);
+              }
+            }),
+        }),
+      );
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      yield* harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-create-concurrent-ingestion-thread"),
+        threadId: secondThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Concurrent ingestion",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-seed-concurrent-ingestion-session"),
+        threadId: secondThreadId,
+        session: {
+          threadId: secondThreadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      });
+
+      yield* Effect.gen(function* () {
+        harness.emit({
+          type: "session.state.changed",
+          eventId: asEventId("evt-concurrent-ingestion-first"),
+          provider: ProviderDriverKind.make("codex"),
+          threadId: firstThreadId,
+          createdAt,
+          payload: { state: "running" },
+        });
+        yield* Deferred.await(firstShellRead);
+        harness.emit({
+          type: "session.state.changed",
+          eventId: asEventId("evt-concurrent-ingestion-second"),
+          provider: ProviderDriverKind.make("codex"),
+          threadId: secondThreadId,
+          createdAt,
+          payload: { state: "running" },
+        });
+
+        yield* Deferred.await(secondShellRead);
+        yield* Deferred.succeed(releaseFirstShellRead, undefined);
+        yield* Effect.promise(() => harness.drain());
+        const snapshot = yield* Effect.promise(() => harness.readModel());
+        expect(
+          snapshot.threads.find((thread) => thread.id === firstThreadId)?.session?.status,
+        ).toBe("running");
+        expect(
+          snapshot.threads.find((thread) => thread.id === secondThreadId)?.session?.status,
+        ).toBe("running");
+      }).pipe(
+        Effect.ensuring(Deferred.succeed(releaseFirstShellRead, undefined).pipe(Effect.asVoid)),
+      );
+    }),
+  );
+
+  effectIt.effect("serializes same-thread lifecycle reads", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-1");
+      const turnId = asTurnId("turn-serialized-ingestion");
+      const firstShellRead = yield* Deferred.make<void>();
+      const secondShellRead = yield* Deferred.make<void>();
+      const releaseFirstShellRead = yield* Deferred.make<void>();
+      let shellReadCount = 0;
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          beforeThreadShellRead: (readThreadId) =>
+            Effect.gen(function* () {
+              if (readThreadId !== threadId) return;
+              shellReadCount += 1;
+              if (shellReadCount === 1) {
+                yield* Deferred.succeed(firstShellRead, undefined).pipe(Effect.orDie);
+                yield* Deferred.await(releaseFirstShellRead);
+              } else if (shellReadCount === 2) {
+                yield* Deferred.succeed(secondShellRead, undefined).pipe(Effect.orDie);
+              }
+            }),
+        }),
+      );
+      yield* Effect.gen(function* () {
+        const startedAt = "2026-01-01T00:00:01.000Z";
+        harness.emit({
+          type: "turn.started",
+          eventId: asEventId("evt-serialized-ingestion-started"),
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          turnId,
+          createdAt: startedAt,
+        });
+        yield* Deferred.await(firstShellRead);
+        harness.emit({
+          type: "turn.completed",
+          eventId: asEventId("evt-serialized-ingestion-completed"),
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          turnId,
+          createdAt: "2026-01-01T00:00:02.000Z",
+          payload: { state: "completed" },
+        });
+        yield* Effect.yieldNow;
+        expect(yield* Deferred.isDone(secondShellRead)).toBe(false);
+
+        yield* Deferred.succeed(releaseFirstShellRead, undefined);
+        yield* Deferred.await(secondShellRead);
+        yield* Effect.promise(() => harness.drain());
+        const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+          (entry) => entry.id === threadId,
+        );
+        expect(thread?.session?.status).toBe("ready");
+        expect(thread?.session?.activeTurnId).toBeNull();
+        expect(thread?.latestTurn?.state).toBe("completed");
+      }).pipe(
+        Effect.ensuring(Deferred.succeed(releaseFirstShellRead, undefined).pipe(Effect.asVoid)),
+      );
+    }),
+  );
 
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();
