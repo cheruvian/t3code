@@ -493,6 +493,46 @@ it("fails stop when the tracked runtime exited but its backend survived", async 
   }
 });
 
+it("fails stop when runtime ownership is missing or invalid but its backend survived", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-untracked-backend-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const artifactRoot = join(sandbox, "artifact");
+  const productionRoot = join(runtimeRoot, "production");
+  const runtimePidPath = join(productionRoot, "electron.pid");
+  const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+  const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
+  const backend = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+  });
+
+  try {
+    process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+    process.env.T3_PIPELINE_ARTIFACT_ROOT = artifactRoot;
+    writeFixture(
+      join(productionRoot, "home", "userdata", "server-runtime.json"),
+      `${JSON.stringify({ pid: backend.pid })}\n`,
+    );
+    const { stop } = await import("./local-pipeline.mjs?untracked-backend-test");
+
+    await expect(stop("production")).rejects.toThrow(
+      `has no valid runtime pid while backend pid ${String(backend.pid)} survived`,
+    );
+    writeFixture(runtimePidPath, "not-a-pid\n");
+    await expect(stop("production")).rejects.toThrow(
+      `has no valid runtime pid while backend pid ${String(backend.pid)} survived`,
+    );
+    assert.doesNotThrow(() => process.kill(backend.pid, 0));
+    assert.equal(readFileSync(runtimePidPath, "utf8"), "not-a-pid\n");
+  } finally {
+    if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+    else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
+    if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
+    else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
+    backend.kill("SIGKILL");
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
 it("recovers an interrupted deploy transaction before starting the next deploy", async () => {
   const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-interrupted-deploy-"));
   const runtimeRoot = join(sandbox, "runtime");

@@ -508,8 +508,15 @@ function waitForProcessExit(pid, deadline) {
 
 function stopUnlocked(name, paths = environmentPaths(name)) {
   const pid = readPid(paths);
-  if (pid === undefined) return;
   const backendPid = readBackendRuntimePid(paths);
+  if (pid === undefined) {
+    if (backendPid !== undefined && isAlive(backendPid)) {
+      throw new Error(
+        `${nameForError(paths)} has no valid runtime pid while backend pid ${String(backendPid)} survived.`,
+      );
+    }
+    return;
+  }
   if (!isAlive(pid) && backendPid !== undefined && isAlive(backendPid)) {
     throw new Error(
       `${nameForError(paths)} runtime pid ${String(pid)} exited while backend pid ${String(backendPid)} survived.`,
