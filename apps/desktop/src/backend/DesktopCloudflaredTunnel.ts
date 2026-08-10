@@ -55,6 +55,7 @@ export const make = Effect.gen(function* () {
     const active = yield* Ref.get(activeRef);
     if (active === null) return true;
     const closed = yield* Scope.close(active.scope, Exit.void).pipe(
+      Effect.tapCause((cause) => Effect.logError(cause)),
       Effect.as(true),
       Effect.catchCause(() => Effect.succeed(false)),
     );
@@ -144,6 +145,7 @@ export const make = Effect.gen(function* () {
       spawner.spawn(command).pipe(Effect.provideService(Scope.Scope, tunnelScope)),
     );
     if (spawned._tag === "Failure") {
+      yield* Effect.logError(spawned.failure);
       yield* Scope.close(tunnelScope, Exit.void).pipe(Effect.ignore);
       const state = {
         status: "failed",
@@ -192,6 +194,7 @@ export const make = Effect.gen(function* () {
                   ? `cloudflared exited with code ${Number(result.success)}.`
                   : "cloudflared stopped unexpectedly.",
             } satisfies DesktopCloudflaredTunnelState;
+            if (result._tag === "Failure") yield* Effect.logError(result.failure);
             yield* Ref.set(stateRef, failedState);
           }),
         );
@@ -200,7 +203,13 @@ export const make = Effect.gen(function* () {
     return state;
   });
 
-  yield* Effect.addFinalizer(() => stopActive.pipe(Effect.asVoid));
+  yield* Effect.addFinalizer(() =>
+    stopActive.pipe(
+      Effect.flatMap((stopped) =>
+        stopped ? Effect.void : Effect.die("cloudflared could not be stopped during shutdown"),
+      ),
+    ),
+  );
 
   return DesktopCloudflaredTunnel.of({
     getState: Ref.get(stateRef),
