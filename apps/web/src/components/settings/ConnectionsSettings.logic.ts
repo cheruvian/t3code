@@ -1,6 +1,31 @@
 import type { AdvertisedEndpoint, DesktopBridge, DesktopWslState } from "@t3tools/contracts";
 
 type WslEnableBridge = Pick<DesktopBridge, "setWslBackendEnabled" | "setWslDistro" | "setWslOnly">;
+type CloudflaredStateBridge = Pick<DesktopBridge, "getCloudflaredTunnelState">;
+
+export function resolveCloudflaredConfigPath(input: {
+  readonly draft: string;
+  readonly persisted: string;
+  readonly isDirty: boolean;
+}): string {
+  return input.isDirty ? input.draft : input.persisted;
+}
+
+export async function refreshCloudflaredTunnel(input: {
+  readonly bridge: CloudflaredStateBridge;
+  readonly getDraft: () => { readonly draft: string; readonly isDirty: boolean };
+}) {
+  const state = await input.bridge.getCloudflaredTunnelState();
+  const latestDraft = input.getDraft();
+  return {
+    state,
+    configPath: resolveCloudflaredConfigPath({
+      draft: latestDraft.draft,
+      persisted: state.configPath ?? "",
+      isDirty: latestDraft.isDirty,
+    }),
+  };
+}
 
 /**
  * A QR code encoding a loopback URL makes the scanning device dial itself, so
