@@ -77,6 +77,23 @@ const threadCollectionScanTables = (statements: ReadonlyArray<string>) =>
     );
   });
 
+const projectionStateWrites = (statements: ReadonlyArray<string>) =>
+  statements.filter((statement) =>
+    statement.replace(/\s+/g, " ").trim().toLowerCase().includes("insert into projection_state"),
+  );
+
+const PROJECTOR_NAMES = [
+  "projection.projects",
+  "projection.threads",
+  "projection.thread-messages",
+  "projection.thread-proposed-plans",
+  "projection.thread-activities",
+  "projection.thread-sessions",
+  "projection.thread-turns",
+  "projection.checkpoints",
+  "projection.pending-approvals",
+] as const;
+
 const at = (seconds: number) =>
   `2026-08-09T12:00:${String(seconds).padStart(2, "0")}.000Z` as const;
 
@@ -382,15 +399,17 @@ const seedThread = Effect.fn("seedThread")(function* (input: {
     eventStore
       .append(event)
       .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
-  const recordProjection = (event: AnyEventInput) =>
+  const recordProjectionResult = (event: AnyEventInput) =>
     Effect.gen(function* () {
       const savedEvent = yield* eventStore.append(event);
       recordedStatements.length = 0;
       yield* projectionPipeline.projectEvent(savedEvent);
       const statements = [...recordedStatements];
       recordedStatements.length = 0;
-      return statements;
+      return { sequence: savedEvent.sequence, statements };
     });
+  const recordProjection = (event: AnyEventInput) =>
+    recordProjectionResult(event).pipe(Effect.map(({ statements }) => statements));
   const projectAndAssert = (event: AnyEventInput, expected: TargetProjectionExpectation) =>
     recordProjection(event).pipe(
       Effect.flatMap((statements) => assertTargetProjection({ threadId, statements, ...expected })),
@@ -427,7 +446,14 @@ const seedThread = Effect.fn("seedThread")(function* (input: {
     { concurrency: 1, discard: true },
   );
 
-  return { appendAndProject, projectAndAssert, projectId, recordProjection, threadId };
+  return {
+    appendAndProject,
+    projectAndAssert,
+    projectId,
+    recordProjection,
+    recordProjectionResult,
+    threadId,
+  };
 });
 
 it.layer(TestLayer)("OrchestrationProjectionPipeline shell-summary cost", (it) => {
@@ -436,7 +462,7 @@ it.layer(TestLayer)("OrchestrationProjectionPipeline shell-summary cost", (it) =
     readonly historyLength: number;
   }) {
     const sql = yield* SqlClient.SqlClient;
-    const { appendAndProject, recordProjection, threadId } = yield* seedThread(input);
+    const { appendAndProject, recordProjectionResult, threadId } = yield* seedThread(input);
     const messageId = MessageId.make(`message-${input.slug}-assistant`);
 
     yield* appendAndProject(
@@ -453,7 +479,7 @@ it.layer(TestLayer)("OrchestrationProjectionPipeline shell-summary cost", (it) =
       }),
     );
 
-    const statements = yield* recordProjection(
+    const { sequence, statements } = yield* recordProjectionResult(
       messageEvent({
         slug: input.slug,
         label: "assistant-delta",
@@ -487,9 +513,21 @@ it.layer(TestLayer)("OrchestrationProjectionPipeline shell-summary cost", (it) =
       FROM projection_threads
       WHERE thread_id = ${threadId}
     `;
+    const projectionStateRows = yield* sql<{
+      readonly projector: string;
+      readonly lastAppliedSequence: number;
+      readonly updatedAt: string;
+    }>`
+      SELECT
+        projector,
+        last_applied_sequence AS "lastAppliedSequence",
+        updated_at AS "updatedAt"
+      FROM projection_state
+      ORDER BY projector ASC
+    `;
     recordedStatements.length = 0;
 
-    return { messageRows, statements, threadRows };
+    return { messageRows, projectionStateRows, sequence, statements, threadRows };
   });
 
   const measureTaskProgress = Effect.fn("measureTaskProgress")(function* (input: {
@@ -497,7 +535,7 @@ it.layer(TestLayer)("OrchestrationProjectionPipeline shell-summary cost", (it) =
     readonly historyLength: number;
   }) {
     const sql = yield* SqlClient.SqlClient;
-    const { appendAndProject, recordProjection, threadId } = yield* seedThread(input);
+    const { appendAndProject, recordProjectionResult, threadId } = yield* seedThread(input);
     const activityId = EventId.make(`task-progress:${threadId}:task-1`);
 
     yield* appendAndProject(
@@ -518,7 +556,7 @@ it.layer(TestLayer)("OrchestrationProjectionPipeline shell-summary cost", (it) =
       }),
     );
 
-    const statements = yield* recordProjection(
+    const { sequence, statements } = yield* recordProjectionResult(
       activityEvent({
         slug: input.slug,
         label: "progress-update",
@@ -558,9 +596,21 @@ it.layer(TestLayer)("OrchestrationProjectionPipeline shell-summary cost", (it) =
       FROM projection_threads
       WHERE thread_id = ${threadId}
     `;
+    const projectionStateRows = yield* sql<{
+      readonly projector: string;
+      readonly lastAppliedSequence: number;
+      readonly updatedAt: string;
+    }>`
+      SELECT
+        projector,
+        last_applied_sequence AS "lastAppliedSequence",
+        updated_at AS "updatedAt"
+      FROM projection_state
+      ORDER BY projector ASC
+    `;
     recordedStatements.length = 0;
 
-    return { activityRows, statements, threadRows };
+    return { activityRows, projectionStateRows, sequence, statements, threadRows };
   });
 
   it.effect("projects assistant deltas without thread-wide shell-summary scans", () =>
@@ -584,6 +634,22 @@ it.layer(TestLayer)("OrchestrationProjectionPipeline shell-summary cost", (it) =
       ]);
       assert.deepEqual(deep.threadRows, [{ updatedAt: at(4) }]);
       assert.equal(deep.statements.length, shallow.statements.length);
+      assert.equal(shallow.statements.length, 6);
+      for (const measurement of [shallow, deep]) {
+        assert.deepEqual(
+          measurement.projectionStateRows,
+          [...PROJECTOR_NAMES].sort().map((projector) => ({
+            projector,
+            lastAppliedSequence: measurement.sequence,
+            updatedAt: at(4),
+          })),
+        );
+        assert.lengthOf(
+          projectionStateWrites(measurement.statements),
+          1,
+          `assistant deltas must advance every projector cursor with one batched projection_state write; got ${projectionStateWrites(measurement.statements).length}`,
+        );
+      }
       assert.deepEqual(
         {
           shallow: threadCollectionScans(shallow.statements),
@@ -617,6 +683,18 @@ it.layer(TestLayer)("OrchestrationProjectionPipeline shell-summary cost", (it) =
       ]);
       assert.deepEqual(deep.threadRows, [{ updatedAt: at(4) }]);
       assert.equal(deep.statements.length, shallow.statements.length);
+      assert.equal(shallow.statements.length, 5);
+      for (const measurement of [shallow, deep]) {
+        assert.deepEqual(
+          measurement.projectionStateRows,
+          [...PROJECTOR_NAMES].sort().map((projector) => ({
+            projector,
+            lastAppliedSequence: measurement.sequence,
+            updatedAt: at(4),
+          })),
+        );
+        assert.lengthOf(projectionStateWrites(measurement.statements), 1);
+      }
       assert.deepEqual(
         {
           shallow: threadCollectionScans(shallow.statements),
@@ -891,6 +969,432 @@ it.layer(TestLayer)("OrchestrationProjectionPipeline shell-summary cost", (it) =
 });
 
 it.layer(RebuildTestLayer)("OrchestrationProjectionPipeline shell-summary rebuilds", (it) => {
+  it.effect("keeps the first thread and role bound to a reused message identity", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const fixture = yield* seedThread({ slug: "message-identity", historyLength: 0 });
+      const otherThreadId = ThreadId.make("thread-message-identity-other");
+      const sharedMessageId = MessageId.make("message-identity-shared");
+
+      yield* fixture.appendAndProject(
+        threadCreatedEvent({
+          slug: "message-identity-other",
+          projectId: fixture.projectId,
+          threadId: otherThreadId,
+          occurredAt: at(2),
+        }),
+      );
+      yield* fixture.appendAndProject(
+        messageEvent({
+          slug: "message-identity",
+          label: "user-original",
+          threadId: fixture.threadId,
+          messageId: sharedMessageId,
+          role: "user",
+          text: "Original user message",
+          turnId: null,
+          streaming: false,
+          occurredAt: at(3),
+        }),
+      );
+      yield* fixture.appendAndProject(
+        messageEvent({
+          slug: "message-identity-other",
+          label: "assistant-conflict",
+          threadId: otherThreadId,
+          messageId: sharedMessageId,
+          role: "assistant",
+          text: "Conflicting assistant delta",
+          turnId: null,
+          streaming: true,
+          occurredAt: at(4),
+        }),
+      );
+
+      const readMessages = () =>
+        sql<{
+          readonly messageId: string;
+          readonly threadId: string;
+          readonly role: string;
+          readonly text: string;
+          readonly isStreaming: number;
+          readonly createdAt: string;
+          readonly updatedAt: string;
+        }>`
+          SELECT
+            message_id AS "messageId",
+            thread_id AS "threadId",
+            role,
+            text,
+            is_streaming AS "isStreaming",
+            created_at AS "createdAt",
+            updated_at AS "updatedAt"
+          FROM projection_thread_messages
+          WHERE message_id = ${sharedMessageId}
+          ORDER BY thread_id ASC
+        `;
+      const expectedMessages = [
+        {
+          messageId: sharedMessageId,
+          threadId: fixture.threadId,
+          role: "user",
+          text: "Original user message",
+          isStreaming: 0,
+          createdAt: at(3),
+          updatedAt: at(3),
+        },
+      ];
+      const expectedShells = {
+        first: {
+          latestTurnId: null,
+          updatedAt: at(3),
+          latestUserMessageAt: at(3),
+          pendingApprovalCount: 0,
+          pendingUserInputCount: 0,
+          hasActionableProposedPlan: 0,
+        },
+        other: {
+          latestTurnId: null,
+          updatedAt: at(4),
+          latestUserMessageAt: null,
+          pendingApprovalCount: 0,
+          pendingUserInputCount: 0,
+          hasActionableProposedPlan: 0,
+        },
+      } satisfies Record<string, ShellRow>;
+
+      const liveMessages = yield* readMessages();
+      const liveShells = {
+        first: yield* readShellRow(fixture.threadId),
+        other: yield* readShellRow(otherThreadId),
+      };
+      assert.deepEqual(liveMessages, expectedMessages);
+      assert.deepEqual(liveShells, expectedShells);
+
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_thread_proposed_plans`;
+      yield* sql`DELETE FROM projection_pending_approvals`;
+      yield* sql`DELETE FROM projection_thread_sessions`;
+      yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_state`;
+
+      recordedStatements.length = 0;
+      yield* projectionPipeline.bootstrap;
+      recordedStatements.length = 0;
+
+      const rebuiltMessages = yield* readMessages();
+      const rebuiltShells = {
+        first: yield* readShellRow(fixture.threadId),
+        other: yield* readShellRow(otherThreadId),
+      };
+      assert.deepEqual(rebuiltMessages, expectedMessages);
+      assert.deepEqual(rebuiltMessages, liveMessages);
+      assert.deepEqual(rebuiltShells, expectedShells);
+      assert.deepEqual(rebuiltShells, liveShells);
+    }),
+  );
+
+  it.effect("keeps first ownership bindings across identity conflicts and replay", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const fixture = yield* seedThread({ slug: "owner-identity", historyLength: 0 });
+      const otherThreadId = ThreadId.make("thread-owner-identity-other");
+      const sharedActivityId = EventId.make("activity-owner-identity-shared");
+      const sharedPlanId = "plan-owner-identity-shared";
+      const sharedApprovalRequestId = ApprovalRequestId.make("approval-owner-identity-shared");
+      const firstPlanTurnId = TurnId.make("turn-owner-identity-first-plan");
+      const conflictingPlanTurnId = TurnId.make("turn-owner-identity-conflicting-plan");
+
+      yield* fixture.appendAndProject(
+        threadCreatedEvent({
+          slug: "owner-identity-other",
+          projectId: fixture.projectId,
+          threadId: otherThreadId,
+          occurredAt: at(2),
+        }),
+      );
+      yield* fixture.appendAndProject(
+        activityEvent({
+          slug: "owner-identity",
+          label: "user-input-original",
+          threadId: fixture.threadId,
+          occurredAt: at(3),
+          activity: {
+            id: sharedActivityId,
+            tone: "info",
+            kind: "user-input.requested",
+            summary: "Original user input request",
+            payload: { requestId: "user-input-owner-identity" },
+            turnId: null,
+            createdAt: at(3),
+          },
+        }),
+      );
+      yield* fixture.appendAndProject(
+        activityEvent({
+          slug: "owner-identity-other",
+          label: "task-progress-conflict",
+          threadId: otherThreadId,
+          occurredAt: at(4),
+          activity: {
+            id: sharedActivityId,
+            tone: "info",
+            kind: "task.progress",
+            summary: "Conflicting task progress",
+            payload: { taskId: "owner-identity", status: "running" },
+            turnId: null,
+            createdAt: at(4),
+          },
+        }),
+      );
+      assert.deepEqual(yield* readShellRow(otherThreadId), {
+        latestTurnId: null,
+        updatedAt: at(4),
+        latestUserMessageAt: null,
+        pendingApprovalCount: 0,
+        pendingUserInputCount: 0,
+        hasActionableProposedPlan: 0,
+      });
+
+      yield* fixture.appendAndProject(
+        proposedPlanEvent({
+          slug: "owner-identity",
+          label: "plan-original",
+          threadId: fixture.threadId,
+          planId: sharedPlanId,
+          turnId: firstPlanTurnId,
+          occurredAt: at(5),
+          createdAt: at(5),
+          implementedAt: null,
+        }),
+      );
+      yield* fixture.appendAndProject(
+        proposedPlanEvent({
+          slug: "owner-identity-other",
+          label: "plan-conflict",
+          threadId: otherThreadId,
+          planId: sharedPlanId,
+          turnId: conflictingPlanTurnId,
+          occurredAt: at(6),
+          createdAt: at(6),
+          implementedAt: at(6),
+        }),
+      );
+      assert.deepEqual(yield* readShellRow(otherThreadId), {
+        latestTurnId: null,
+        updatedAt: at(6),
+        latestUserMessageAt: null,
+        pendingApprovalCount: 0,
+        pendingUserInputCount: 0,
+        hasActionableProposedPlan: 0,
+      });
+
+      yield* fixture.appendAndProject(
+        activityEvent({
+          slug: "owner-identity",
+          label: "approval-original",
+          threadId: fixture.threadId,
+          occurredAt: at(7),
+          activity: {
+            id: EventId.make("activity-owner-identity-approval"),
+            tone: "approval",
+            kind: "approval.requested",
+            summary: "Original approval request",
+            payload: { requestId: sharedApprovalRequestId, requestKind: "command" },
+            turnId: null,
+            createdAt: at(7),
+          },
+        }),
+      );
+      const { sequence: lastConflictSequence } = yield* fixture.recordProjectionResult(
+        approvalResponseEvent({
+          slug: "owner-identity-other",
+          label: "approval-response-conflict",
+          threadId: otherThreadId,
+          requestId: sharedApprovalRequestId,
+          occurredAt: at(8),
+        }),
+      );
+
+      const readOwnerRows = Effect.fn("readOwnerRows")(function* () {
+        return {
+          activities: yield* sql<{
+            readonly activityId: string;
+            readonly threadId: string;
+            readonly kind: string;
+            readonly summary: string;
+            readonly requestId: string;
+            readonly createdAt: string;
+          }>`
+            SELECT
+              activity_id AS "activityId",
+              thread_id AS "threadId",
+              kind,
+              summary,
+              json_extract(payload_json, '$.requestId') AS "requestId",
+              created_at AS "createdAt"
+            FROM projection_thread_activities
+            WHERE activity_id = ${sharedActivityId}
+          `,
+          plans: yield* sql<{
+            readonly planId: string;
+            readonly threadId: string;
+            readonly turnId: string | null;
+            readonly implementedAt: string | null;
+            readonly createdAt: string;
+            readonly updatedAt: string;
+          }>`
+            SELECT
+              plan_id AS "planId",
+              thread_id AS "threadId",
+              turn_id AS "turnId",
+              implemented_at AS "implementedAt",
+              created_at AS "createdAt",
+              updated_at AS "updatedAt"
+            FROM projection_thread_proposed_plans
+            WHERE plan_id = ${sharedPlanId}
+          `,
+          approvals: yield* sql<{
+            readonly requestId: string;
+            readonly threadId: string;
+            readonly turnId: string | null;
+            readonly status: string;
+            readonly decision: string | null;
+            readonly createdAt: string;
+            readonly resolvedAt: string | null;
+          }>`
+            SELECT
+              request_id AS "requestId",
+              thread_id AS "threadId",
+              turn_id AS "turnId",
+              status,
+              decision,
+              created_at AS "createdAt",
+              resolved_at AS "resolvedAt"
+            FROM projection_pending_approvals
+            WHERE request_id = ${sharedApprovalRequestId}
+          `,
+        };
+      });
+      const readIdentityProjection = Effect.fn("readIdentityProjection")(function* () {
+        return {
+          owners: yield* readOwnerRows(),
+          shells: {
+            first: yield* readShellRow(fixture.threadId),
+            other: yield* readShellRow(otherThreadId),
+          },
+        };
+      });
+      const readProjectorCursors = () =>
+        sql<{
+          readonly projector: string;
+          readonly lastAppliedSequence: number;
+          readonly updatedAt: string;
+        }>`
+          SELECT
+            projector,
+            last_applied_sequence AS "lastAppliedSequence",
+            updated_at AS "updatedAt"
+          FROM projection_state
+          ORDER BY projector ASC
+        `;
+
+      const expectedProjection = {
+        owners: {
+          activities: [
+            {
+              activityId: sharedActivityId,
+              threadId: fixture.threadId,
+              kind: "user-input.requested",
+              summary: "Original user input request",
+              requestId: "user-input-owner-identity",
+              createdAt: at(3),
+            },
+          ],
+          plans: [
+            {
+              planId: sharedPlanId,
+              threadId: fixture.threadId,
+              turnId: firstPlanTurnId,
+              implementedAt: null,
+              createdAt: at(5),
+              updatedAt: at(5),
+            },
+          ],
+          approvals: [
+            {
+              requestId: sharedApprovalRequestId,
+              threadId: fixture.threadId,
+              turnId: null,
+              status: "pending",
+              decision: null,
+              createdAt: at(7),
+              resolvedAt: null,
+            },
+          ],
+        },
+        shells: {
+          first: {
+            latestTurnId: null,
+            updatedAt: at(7),
+            latestUserMessageAt: null,
+            pendingApprovalCount: 1,
+            pendingUserInputCount: 1,
+            hasActionableProposedPlan: 1,
+          },
+          other: {
+            latestTurnId: null,
+            updatedAt: at(8),
+            latestUserMessageAt: null,
+            pendingApprovalCount: 0,
+            pendingUserInputCount: 0,
+            hasActionableProposedPlan: 0,
+          },
+        },
+      } satisfies {
+        readonly owners: {
+          readonly activities: ReadonlyArray<Record<string, unknown>>;
+          readonly plans: ReadonlyArray<Record<string, unknown>>;
+          readonly approvals: ReadonlyArray<Record<string, unknown>>;
+        };
+        readonly shells: Record<string, ShellRow>;
+      };
+      const expectedProjectorCursors = [...PROJECTOR_NAMES].sort().map((projector) => ({
+        projector,
+        lastAppliedSequence: lastConflictSequence,
+        updatedAt: at(8),
+      }));
+
+      const liveProjection = yield* readIdentityProjection();
+      assert.deepEqual(liveProjection, expectedProjection);
+      assert.deepEqual(yield* readProjectorCursors(), expectedProjectorCursors);
+
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_thread_proposed_plans`;
+      yield* sql`DELETE FROM projection_pending_approvals`;
+      yield* sql`DELETE FROM projection_thread_sessions`;
+      yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_state`;
+
+      recordedStatements.length = 0;
+      yield* projectionPipeline.bootstrap;
+      recordedStatements.length = 0;
+
+      const rebuiltProjection = yield* readIdentityProjection();
+      assert.deepEqual(rebuiltProjection, expectedProjection);
+      assert.deepEqual(rebuiltProjection, liveProjection);
+      assert.deepEqual(yield* readProjectorCursors(), expectedProjectorCursors);
+    }),
+  );
+
   it.effect("rebuilds the exact live shell from the retained event log", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -1047,10 +1551,68 @@ it.layer(RebuildTestLayer)("OrchestrationProjectionPipeline shell-summary rebuil
   it.effect("rederives every shell summary from surviving owners after revert", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
       const fixture = yield* seedThread({ slug: "revert-summary", historyLength: 0 });
       const turnOne = TurnId.make("turn-revert-summary-1");
       const turnTwo = TurnId.make("turn-revert-summary-2");
-      const approvalRequestId = ApprovalRequestId.make("approval-revert-summary");
+      const retainedApprovalRequestId = ApprovalRequestId.make("approval-revert-summary-retained");
+      const turnlessApprovalRequestId = ApprovalRequestId.make("approval-revert-summary-turnless");
+      const removedPendingApprovalRequestId = ApprovalRequestId.make(
+        "approval-revert-summary-removed-pending",
+      );
+      const removedResolvedApprovalRequestId = ApprovalRequestId.make(
+        "approval-revert-summary-removed-resolved",
+      );
+
+      const readAffectedProjections = Effect.fn("readAffectedProjections")(function* () {
+        return {
+          messages: yield* sql<Record<string, unknown>>`
+            SELECT *
+            FROM projection_thread_messages
+            WHERE thread_id = ${fixture.threadId}
+            ORDER BY message_id ASC
+          `,
+          activities: yield* sql<Record<string, unknown>>`
+            SELECT *
+            FROM projection_thread_activities
+            WHERE thread_id = ${fixture.threadId}
+            ORDER BY activity_id ASC
+          `,
+          plans: yield* sql<Record<string, unknown>>`
+            SELECT *
+            FROM projection_thread_proposed_plans
+            WHERE thread_id = ${fixture.threadId}
+            ORDER BY plan_id ASC
+          `,
+          turns: yield* sql<Record<string, unknown>>`
+            SELECT
+              thread_id,
+              turn_id,
+              pending_message_id,
+              assistant_message_id,
+              state,
+              requested_at,
+              started_at,
+              completed_at,
+              checkpoint_turn_count,
+              checkpoint_ref,
+              checkpoint_status,
+              checkpoint_files_json,
+              source_proposed_plan_thread_id,
+              source_proposed_plan_id
+            FROM projection_turns
+            WHERE thread_id = ${fixture.threadId}
+            ORDER BY turn_id ASC
+          `,
+          approvals: yield* sql<Record<string, unknown>>`
+            SELECT *
+            FROM projection_pending_approvals
+            WHERE thread_id = ${fixture.threadId}
+            ORDER BY request_id ASC
+          `,
+          shell: yield* readShellRow(fixture.threadId),
+        };
+      });
 
       yield* fixture.appendAndProject(
         turnDiffEvent({
@@ -1088,13 +1650,65 @@ it.layer(RebuildTestLayer)("OrchestrationProjectionPipeline shell-summary rebuil
         }),
       );
       yield* fixture.appendAndProject(
+        activityEvent({
+          slug: "revert-summary",
+          label: "approval-retained",
+          threadId: fixture.threadId,
+          occurredAt: at(5),
+          activity: {
+            id: EventId.make("activity-revert-summary-approval-retained"),
+            tone: "approval",
+            kind: "approval.requested",
+            summary: "Retained approval",
+            payload: { requestId: retainedApprovalRequestId, requestKind: "command" },
+            turnId: turnOne,
+            createdAt: at(5),
+          },
+        }),
+      );
+      yield* fixture.appendAndProject(
+        approvalResponseEvent({
+          slug: "revert-summary",
+          label: "approval-retained-response",
+          threadId: fixture.threadId,
+          requestId: retainedApprovalRequestId,
+          occurredAt: at(6),
+        }),
+      );
+      yield* fixture.appendAndProject(
+        activityEvent({
+          slug: "revert-summary",
+          label: "approval-turnless",
+          threadId: fixture.threadId,
+          occurredAt: at(7),
+          activity: {
+            id: EventId.make("activity-revert-summary-approval-turnless"),
+            tone: "approval",
+            kind: "approval.requested",
+            summary: "Turnless approval",
+            payload: { requestId: turnlessApprovalRequestId, requestKind: "command" },
+            turnId: null,
+            createdAt: at(7),
+          },
+        }),
+      );
+      yield* fixture.appendAndProject(
+        approvalResponseEvent({
+          slug: "revert-summary",
+          label: "approval-turnless-response",
+          threadId: fixture.threadId,
+          requestId: turnlessApprovalRequestId,
+          occurredAt: at(8),
+        }),
+      );
+      yield* fixture.appendAndProject(
         turnDiffEvent({
           slug: "revert-summary",
           label: "turn-two",
           threadId: fixture.threadId,
           turnId: turnTwo,
           turnCount: 2,
-          occurredAt: at(5),
+          occurredAt: at(9),
         }),
       );
       yield* fixture.appendAndProject(
@@ -1107,7 +1721,7 @@ it.layer(RebuildTestLayer)("OrchestrationProjectionPipeline shell-summary rebuil
           text: "Remove",
           turnId: turnTwo,
           streaming: false,
-          occurredAt: at(6),
+          occurredAt: at(10),
         }),
       );
       yield* fixture.appendAndProject(
@@ -1115,7 +1729,7 @@ it.layer(RebuildTestLayer)("OrchestrationProjectionPipeline shell-summary rebuil
           slug: "revert-summary",
           label: "user-input-remove",
           threadId: fixture.threadId,
-          occurredAt: at(7),
+          occurredAt: at(11),
           activity: {
             id: EventId.make("activity-revert-summary-user-input-remove"),
             tone: "info",
@@ -1123,7 +1737,7 @@ it.layer(RebuildTestLayer)("OrchestrationProjectionPipeline shell-summary rebuil
             summary: "Removed user input",
             payload: { requestId: "user-input-revert-summary" },
             turnId: turnTwo,
-            createdAt: at(7),
+            createdAt: at(11),
           },
         }),
       );
@@ -1134,26 +1748,52 @@ it.layer(RebuildTestLayer)("OrchestrationProjectionPipeline shell-summary rebuil
           threadId: fixture.threadId,
           planId: "plan-revert-summary-remove",
           turnId: turnTwo,
-          occurredAt: at(8),
-          createdAt: at(8),
+          occurredAt: at(12),
+          createdAt: at(12),
           implementedAt: null,
         }),
       );
       yield* fixture.appendAndProject(
         activityEvent({
           slug: "revert-summary",
-          label: "approval-survives",
+          label: "approval-removed-pending",
           threadId: fixture.threadId,
-          occurredAt: at(9),
+          occurredAt: at(13),
           activity: {
-            id: EventId.make("activity-revert-summary-approval"),
+            id: EventId.make("activity-revert-summary-approval-removed-pending"),
             tone: "approval",
             kind: "approval.requested",
-            summary: "Approval survives",
-            payload: { requestId: approvalRequestId, requestKind: "command" },
+            summary: "Removed pending approval",
+            payload: { requestId: removedPendingApprovalRequestId, requestKind: "command" },
             turnId: turnTwo,
-            createdAt: at(9),
+            createdAt: at(13),
           },
+        }),
+      );
+      yield* fixture.appendAndProject(
+        activityEvent({
+          slug: "revert-summary",
+          label: "approval-removed-resolved",
+          threadId: fixture.threadId,
+          occurredAt: at(14),
+          activity: {
+            id: EventId.make("activity-revert-summary-approval-removed-resolved"),
+            tone: "approval",
+            kind: "approval.requested",
+            summary: "Removed resolved approval",
+            payload: { requestId: removedResolvedApprovalRequestId, requestKind: "command" },
+            turnId: turnTwo,
+            createdAt: at(14),
+          },
+        }),
+      );
+      yield* fixture.appendAndProject(
+        approvalResponseEvent({
+          slug: "revert-summary",
+          label: "approval-removed-resolved-response",
+          threadId: fixture.threadId,
+          requestId: removedResolvedApprovalRequestId,
+          occurredAt: at(15),
         }),
       );
 
@@ -1169,18 +1809,19 @@ it.layer(RebuildTestLayer)("OrchestrationProjectionPipeline shell-summary rebuil
           slug: "revert-summary",
           threadId: fixture.threadId,
           turnCount: 1,
-          occurredAt: at(10),
+          occurredAt: at(16),
         }),
       );
 
-      assert.deepEqual(yield* readShellRow(fixture.threadId), {
+      const expectedShell: ShellRow = {
         latestTurnId: turnOne,
-        updatedAt: at(10),
+        updatedAt: at(16),
         latestUserMessageAt: at(3),
-        pendingApprovalCount: 1,
+        pendingApprovalCount: 0,
         pendingUserInputCount: 0,
         hasActionableProposedPlan: 0,
-      });
+      };
+      assert.deepEqual(yield* readShellRow(fixture.threadId), expectedShell);
 
       const messageRows = yield* sql<{ readonly messageId: string }>`
         SELECT message_id AS "messageId"
@@ -1188,8 +1829,11 @@ it.layer(RebuildTestLayer)("OrchestrationProjectionPipeline shell-summary rebuil
         WHERE thread_id = ${fixture.threadId}
         ORDER BY message_id ASC
       `;
-      const activityRows = yield* sql<{ readonly activityId: string }>`
-        SELECT activity_id AS "activityId"
+      const activityRows = yield* sql<{
+        readonly activityId: string;
+        readonly turnId: string | null;
+      }>`
+        SELECT activity_id AS "activityId", turn_id AS "turnId"
         FROM projection_thread_activities
         WHERE thread_id = ${fixture.threadId}
         ORDER BY activity_id ASC
@@ -1200,18 +1844,58 @@ it.layer(RebuildTestLayer)("OrchestrationProjectionPipeline shell-summary rebuil
         WHERE thread_id = ${fixture.threadId}
         ORDER BY plan_id ASC
       `;
+      const turnRows = yield* sql<{
+        readonly turnId: string;
+        readonly checkpointTurnCount: number | null;
+      }>`
+        SELECT
+          turn_id AS "turnId",
+          checkpoint_turn_count AS "checkpointTurnCount"
+        FROM projection_turns
+        WHERE thread_id = ${fixture.threadId}
+        ORDER BY turn_id ASC
+      `;
       const approvalRows = yield* sql<{
         readonly requestId: string;
+        readonly turnId: string | null;
         readonly status: string;
       }>`
-        SELECT request_id AS "requestId", status
+        SELECT request_id AS "requestId", turn_id AS "turnId", status
         FROM projection_pending_approvals
         WHERE thread_id = ${fixture.threadId}
+        ORDER BY request_id ASC
       `;
       assert.deepEqual(messageRows, [{ messageId: "message-revert-summary-keep" }]);
-      assert.deepEqual(activityRows, []);
+      assert.deepEqual(activityRows, [
+        { activityId: "activity-revert-summary-approval-retained", turnId: turnOne },
+        { activityId: "activity-revert-summary-approval-turnless", turnId: null },
+      ]);
       assert.deepEqual(planRows, [{ planId: "plan-revert-summary-keep" }]);
-      assert.deepEqual(approvalRows, [{ requestId: approvalRequestId, status: "pending" }]);
+      assert.deepEqual(turnRows, [{ turnId: turnOne, checkpointTurnCount: 1 }]);
+      assert.deepEqual(approvalRows, [
+        { requestId: retainedApprovalRequestId, turnId: turnOne, status: "resolved" },
+        { requestId: turnlessApprovalRequestId, turnId: null, status: "resolved" },
+      ]);
+
+      const liveProjection = yield* readAffectedProjections();
+
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_thread_proposed_plans`;
+      yield* sql`DELETE FROM projection_pending_approvals`;
+      yield* sql`DELETE FROM projection_thread_sessions`;
+      yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_state`;
+
+      recordedStatements.length = 0;
+      yield* projectionPipeline.bootstrap;
+      recordedStatements.length = 0;
+
+      const rebuiltProjection = yield* readAffectedProjections();
+      assert.deepEqual(rebuiltProjection, liveProjection);
+      assert.deepEqual(rebuiltProjection.shell, expectedShell);
     }),
   );
 });

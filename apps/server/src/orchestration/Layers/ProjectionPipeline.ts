@@ -13,7 +13,11 @@ import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { toPersistenceSqlError, type ProjectionRepositoryError } from "../../persistence/Errors.ts";
+import {
+  PersistenceSqlError,
+  toPersistenceSqlError,
+  type ProjectionRepositoryError,
+} from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { ProjectionPendingApprovalRepository } from "../../persistence/Services/ProjectionPendingApprovals.ts";
 import { ProjectionProjectRepository } from "../../persistence/Services/ProjectionProjects.ts";
@@ -155,6 +159,96 @@ const PENDING_USER_INPUT_ACTIVITY_KINDS: ReadonlySet<string> = new Set([
   "user-input.resolved",
   "provider.user-input.respond.failed",
 ]);
+
+/** Semantic projector subscribers for each persisted event. */
+function projectorNamesForEvent(event: OrchestrationEvent): ReadonlyArray<ProjectorName> {
+  switch (event.type) {
+    case "project.created":
+    case "project.meta-updated":
+    case "project.deleted":
+      return [ORCHESTRATION_PROJECTOR_NAMES.projects];
+
+    case "thread.created":
+    case "thread.archived":
+    case "thread.unarchived":
+    case "thread.settled":
+    case "thread.unsettled":
+    case "thread.snoozed":
+    case "thread.unsnoozed":
+    case "thread.pinned":
+    case "thread.unpinned":
+    case "thread.pin-reordered":
+    case "thread.meta-updated":
+    case "thread.runtime-mode-set":
+    case "thread.interaction-mode-set":
+    case "thread.deleted":
+    case "thread.user-input-response-requested":
+      return [ORCHESTRATION_PROJECTOR_NAMES.threads];
+
+    case "thread.message-sent":
+      return event.payload.role === "assistant" && event.payload.turnId !== null
+        ? [
+            ORCHESTRATION_PROJECTOR_NAMES.threadTurns,
+            ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
+            ORCHESTRATION_PROJECTOR_NAMES.threads,
+          ]
+        : [ORCHESTRATION_PROJECTOR_NAMES.threadMessages, ORCHESTRATION_PROJECTOR_NAMES.threads];
+
+    case "thread.activity-appended":
+      return PENDING_APPROVAL_ACTIVITY_KINDS.has(event.payload.activity.kind)
+        ? [
+            ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
+            ORCHESTRATION_PROJECTOR_NAMES.pendingApprovals,
+            ORCHESTRATION_PROJECTOR_NAMES.threads,
+          ]
+        : [ORCHESTRATION_PROJECTOR_NAMES.threadActivities, ORCHESTRATION_PROJECTOR_NAMES.threads];
+
+    case "thread.session-set":
+      return [
+        ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
+        ORCHESTRATION_PROJECTOR_NAMES.threadTurns,
+        ORCHESTRATION_PROJECTOR_NAMES.threads,
+      ];
+
+    case "thread.turn-start-requested":
+    case "thread.turn-interrupt-requested":
+      return [ORCHESTRATION_PROJECTOR_NAMES.threadTurns];
+
+    case "thread.proposed-plan-upserted":
+      return [
+        ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
+        ORCHESTRATION_PROJECTOR_NAMES.threads,
+      ];
+
+    case "thread.turn-diff-completed":
+      return [ORCHESTRATION_PROJECTOR_NAMES.threadTurns, ORCHESTRATION_PROJECTOR_NAMES.threads];
+
+    case "thread.approval-response-requested":
+      return [
+        ORCHESTRATION_PROJECTOR_NAMES.pendingApprovals,
+        ORCHESTRATION_PROJECTOR_NAMES.threads,
+      ];
+
+    case "thread.reverted":
+      return [
+        ORCHESTRATION_PROJECTOR_NAMES.threadTurns,
+        ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
+        ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
+        ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
+        ORCHESTRATION_PROJECTOR_NAMES.pendingApprovals,
+        ORCHESTRATION_PROJECTOR_NAMES.threads,
+      ];
+
+    case "thread.checkpoint-revert-requested":
+    case "thread.session-stop-requested":
+      return [];
+
+    default: {
+      const unhandledEvent: never = event;
+      return unhandledEvent;
+    }
+  }
+}
 
 /** Derived shell-summary fields an event can invalidate. */
 function threadShellSummaryFieldsForEvent(event: OrchestrationEvent): ThreadShellSummaryFields {
@@ -949,6 +1043,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             });
             if (
               Option.isSome(projectedMessage) &&
+              projectedMessage.value.threadId === event.payload.threadId &&
               projectedMessage.value.role === "user" &&
               (latestUserMessageAt === null ||
                 projectedMessage.value.createdAt > latestUserMessageAt)
@@ -1080,6 +1175,13 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             messageId: event.payload.messageId,
           });
           const previousMessage = Option.getOrUndefined(existingMessage);
+          if (
+            previousMessage !== undefined &&
+            (previousMessage.threadId !== event.payload.threadId ||
+              previousMessage.role !== event.payload.role)
+          ) {
+            return;
+          }
           const nextText = Option.match(existingMessage, {
             onNone: () => event.payload.text,
             onSome: (message) => {
@@ -1623,6 +1725,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           const existingRow = yield* projectionPendingApprovalRepository.getByRequestId({
             requestId,
           });
+          if (Option.isSome(existingRow) && existingRow.value.threadId !== event.payload.threadId) {
+            return;
+          }
           if (event.payload.activity.kind === "approval.resolved") {
             const resolvedDecisionRaw =
               typeof event.payload.activity.payload === "object" &&
@@ -1711,6 +1816,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           const existingRow = yield* projectionPendingApprovalRepository.getByRequestId({
             requestId: event.payload.requestId,
           });
+          if (Option.isSome(existingRow) && existingRow.value.threadId !== event.payload.threadId) {
+            return;
+          }
           yield* projectionPendingApprovalRepository.upsert({
             requestId: event.payload.requestId,
             threadId: Option.isSome(existingRow)
@@ -1727,15 +1835,50 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.reverted": {
+          const approvalRows = yield* projectionPendingApprovalRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (approvalRows.length === 0) {
+            return;
+          }
+
+          const retainedTurns = yield* projectionTurnRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const retainedTurnIds = new Set(
+            retainedTurns.flatMap((turn) => (turn.turnId === null ? [] : [turn.turnId])),
+          );
+          yield* Effect.forEach(
+            approvalRows.filter(
+              (approval) => approval.turnId !== null && !retainedTurnIds.has(approval.turnId),
+            ),
+            (approval) =>
+              projectionPendingApprovalRepository.deleteByRequestId({
+                requestId: approval.requestId,
+              }),
+            { concurrency: 1, discard: true },
+          );
+          return;
+        }
+
         default:
           return;
       }
     });
 
-    const projectors: ReadonlyArray<ProjectorDefinition> = [
+    const projectors = [
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.projects,
         apply: applyProjectsProjection,
+      },
+      {
+        name: ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
+        apply: applyThreadSessionsProjection,
+      },
+      {
+        name: ORCHESTRATION_PROJECTOR_NAMES.threadTurns,
+        apply: applyThreadTurnsProjection,
       },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
@@ -1750,14 +1893,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         apply: applyThreadActivitiesProjection,
       },
       {
-        name: ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
-        apply: applyThreadSessionsProjection,
-      },
-      {
-        name: ORCHESTRATION_PROJECTOR_NAMES.threadTurns,
-        apply: applyThreadTurnsProjection,
-      },
-      {
         name: ORCHESTRATION_PROJECTOR_NAMES.checkpoints,
         apply: applyCheckpointsProjection,
       },
@@ -1769,19 +1904,36 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         name: ORCHESTRATION_PROJECTOR_NAMES.threads,
         apply: applyThreadsProjection,
       },
-    ];
+    ] as const satisfies ReadonlyArray<ProjectorDefinition>;
+
+    const makeAttachmentSideEffects = (): AttachmentSideEffects => ({
+      deletedThreadIds: new Set<string>(),
+      prunedThreadRelativePaths: new Map<string, Set<string>>(),
+    });
+
+    const runProjectedAttachmentSideEffects = (
+      event: OrchestrationEvent,
+      attachmentSideEffects: AttachmentSideEffects,
+    ) =>
+      runAttachmentSideEffects(attachmentSideEffects).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("failed to apply projected attachment side-effects", {
+            sequence: event.sequence,
+            eventType: event.type,
+            cause,
+          }),
+        ),
+      );
 
     const runProjectorForEvent = Effect.fn("runProjectorForEvent")(function* (
       projector: ProjectorDefinition,
       event: OrchestrationEvent,
     ) {
-      const attachmentSideEffects: AttachmentSideEffects = {
-        deletedThreadIds: new Set<string>(),
-        prunedThreadRelativePaths: new Map<string, Set<string>>(),
-      };
+      const attachmentSideEffects = makeAttachmentSideEffects();
+      const isSubscriber = projectorNamesForEvent(event).includes(projector.name);
 
       yield* sql.withTransaction(
-        projector.apply(event, attachmentSideEffects).pipe(
+        (isSubscriber ? projector.apply(event, attachmentSideEffects) : Effect.void).pipe(
           Effect.flatMap(() =>
             projectionStateRepository.upsert({
               projector: projector.name,
@@ -1792,16 +1944,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         ),
       );
 
-      yield* runAttachmentSideEffects(attachmentSideEffects).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("failed to apply projected attachment side-effects", {
-            projector: projector.name,
-            sequence: event.sequence,
-            eventType: event.type,
-            cause,
-          }),
-        ),
-      );
+      yield* runProjectedAttachmentSideEffects(event, attachmentSideEffects);
     });
 
     const bootstrapProjector = (projector: ProjectorDefinition) =>
@@ -1820,10 +1963,63 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           ),
         );
 
+    const assertLiveProjectorCursors = Effect.fn("assertLiveProjectorCursors")(function* (
+      event: OrchestrationEvent,
+    ) {
+      const stateRows = yield* projectionStateRepository.listAll();
+      if (event.sequence === 1 && stateRows.length === 0) {
+        return;
+      }
+
+      const expectedSequence = event.sequence - 1;
+      const expectedProjectorNames = new Set<ProjectorName>(
+        projectors.map((projector) => projector.name),
+      );
+      const currentProjectorRows = stateRows.filter((row) =>
+        expectedProjectorNames.has(row.projector as ProjectorName),
+      );
+      const allProjectorsReady =
+        currentProjectorRows.length === projectors.length &&
+        currentProjectorRows.every((row) => row.lastAppliedSequence === expectedSequence);
+      if (!allProjectorsReady) {
+        return yield* new PersistenceSqlError({
+          operation: "ProjectionPipeline.projectEvent:cursorInvariant",
+          detail: `Projector cursors must all be at sequence ${expectedSequence} before projecting sequence ${event.sequence}`,
+        });
+      }
+    });
+
+    const projectLiveEvent = Effect.fn("projectLiveEvent")(function* (event: OrchestrationEvent) {
+      const attachmentSideEffects = makeAttachmentSideEffects();
+      const subscriberNames = new Set(projectorNamesForEvent(event));
+
+      yield* assertLiveProjectorCursors(event);
+      yield* Effect.forEach(
+        projectors,
+        (projector) =>
+          subscriberNames.has(projector.name)
+            ? projector.apply(event, attachmentSideEffects)
+            : Effect.void,
+        { concurrency: 1, discard: true },
+      );
+
+      const cursorRowForProjector = (projector: ProjectorDefinition) => ({
+        projector: projector.name,
+        lastAppliedSequence: event.sequence,
+        updatedAt: event.occurredAt,
+      });
+      yield* projectionStateRepository.upsertMany([
+        cursorRowForProjector(projectors[0]),
+        ...projectors.slice(1).map(cursorRowForProjector),
+      ]);
+      return attachmentSideEffects;
+    });
+
     const projectEvent: OrchestrationProjectionPipelineShape["projectEvent"] = (event) =>
-      Effect.forEach(projectors, (projector) => runProjectorForEvent(projector, event), {
-        concurrency: 1,
-      }).pipe(
+      sql.withTransaction(projectLiveEvent(event)).pipe(
+        Effect.tap((attachmentSideEffects) =>
+          runProjectedAttachmentSideEffects(event, attachmentSideEffects),
+        ),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
         Effect.provideService(ServerConfig, serverConfig),
