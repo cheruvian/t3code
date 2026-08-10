@@ -33,7 +33,7 @@ function getFirstSortableTimestamp(...values: Array<string | null | undefined>):
   return null;
 }
 
-function getLatestUserMessageTimestamp(thread: ThreadSortInput): number {
+function getLatestUserMessageTimestampOrNull(thread: ThreadSortInput): number | null {
   if (thread.latestUserMessageAt) {
     const latestUserMessageTimestamp = toSortableTimestamp(thread.latestUserMessageAt);
     if (latestUserMessageTimestamp !== null) {
@@ -53,11 +53,15 @@ function getLatestUserMessageTimestamp(thread: ThreadSortInput): number {
         : Math.max(latestUserMessageTimestamp, messageTimestamp);
   }
 
-  if (latestUserMessageTimestamp !== null) {
-    return latestUserMessageTimestamp;
-  }
+  return latestUserMessageTimestamp;
+}
 
-  return getFirstSortableTimestamp(thread.updatedAt, thread.createdAt) ?? Number.NEGATIVE_INFINITY;
+function getLatestUserMessageTimestamp(thread: ThreadSortInput): number {
+  return (
+    getLatestUserMessageTimestampOrNull(thread) ??
+    getFirstSortableTimestamp(thread.updatedAt, thread.createdAt) ??
+    Number.NEGATIVE_INFINITY
+  );
 }
 
 export function getThreadSortTimestamp(
@@ -71,7 +75,10 @@ export function getThreadSortTimestamp(
   }
   if (sortOrder === "activity") {
     const completedAt = toSortableTimestamp(thread.latestTurn?.completedAt ?? undefined);
-    return Math.max(getLatestUserMessageTimestamp(thread), completedAt ?? Number.NEGATIVE_INFINITY);
+    const userMessageAt = getLatestUserMessageTimestampOrNull(thread);
+    const terminalFallback =
+      getFirstSortableTimestamp(thread.createdAt) ?? Number.NEGATIVE_INFINITY;
+    return Math.max(userMessageAt ?? terminalFallback, completedAt ?? Number.NEGATIVE_INFINITY);
   }
   return getLatestUserMessageTimestamp(thread);
 }
