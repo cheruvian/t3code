@@ -26,7 +26,8 @@ export interface ProviderRuntimeIngestionShape {
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
 
   /**
-   * Resolves when the internal processing queue is empty and idle.
+   * Resolves after every runtime input admitted before this effect starts has
+   * retired. Admission remains open, so later inputs belong to a later drain.
    * Intended for test use to replace timing-sensitive sleeps.
    */
   readonly drain: Effect.Effect<void>;
