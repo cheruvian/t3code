@@ -182,7 +182,28 @@ function compareThreadActivities(
     return -1;
   }
 
-  return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
+  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+  if (createdAtComparison !== 0) {
+    return createdAtComparison;
+  }
+
+  const lifecycleComparison =
+    threadActivityLifecycleRank(left.kind) - threadActivityLifecycleRank(right.kind);
+  if (lifecycleComparison !== 0) {
+    return lifecycleComparison;
+  }
+
+  return left.id.localeCompare(right.id);
+}
+
+function threadActivityLifecycleRank(kind: string): number {
+  if (kind.endsWith(".started")) {
+    return 0;
+  }
+  if (kind.endsWith(".completed") || kind.endsWith(".resolved")) {
+    return 2;
+  }
+  return 1;
 }
 
 export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {

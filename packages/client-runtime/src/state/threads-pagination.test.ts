@@ -8,6 +8,7 @@ import {
   TurnId,
   type OrchestrationMessage,
   type OrchestrationThread,
+  type OrchestrationThreadActivity,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadStreamItem,
 } from "@t3tools/contracts";
@@ -241,6 +242,12 @@ const hasMessage = (state: EnvironmentThreadState, id: string): boolean =>
     onSome: (thread) => thread.messages.some((entry) => entry.id === id),
   });
 
+const hasActivity = (state: EnvironmentThreadState, id: string): boolean =>
+  Option.match(state.data, {
+    onNone: () => false,
+    onSome: (thread) => thread.activities.some((entry) => entry.id === id),
+  });
+
 const titleEvent = (title: string, sequence: number): OrchestrationThreadStreamItem => ({
   kind: "event",
   event: {
@@ -336,6 +343,45 @@ describe("thread pagination state", () => {
         hasMore: false,
         loadingOlder: false,
       });
+    }),
+  );
+
+  it.effect("keeps activity order canonical across a history-page boundary", () =>
+    Effect.gen(function* () {
+      const makeActivity = (id: string, kind: string): OrchestrationThreadActivity => ({
+        id: EventId.make(id),
+        tone: "tool",
+        kind,
+        summary: id,
+        payload: {},
+        turnId: TurnId.make("turn-1"),
+        sequence: 2,
+        createdAt: "2026-04-01T00:30:00.000Z",
+      });
+      const loadedActivity = makeActivity("activity-updated", "tool.updated");
+      const olderActivity = makeActivity("activity-completed", "tool.completed");
+      const initialSnapshot: OrchestrationThreadDetailSnapshot = {
+        ...WINDOWED_SNAPSHOT,
+        thread: { ...WINDOWED_SNAPSHOT.thread, activities: [loadedActivity] },
+      };
+      const olderPage: OrchestrationThreadDetailSnapshot = {
+        ...OLDER_PAGE,
+        thread: { ...OLDER_PAGE.thread, activities: [olderActivity] },
+      };
+      const harness = yield* makeHarness({ initialResponse: Option.some(initialSnapshot) });
+      yield* harness.awaitState((value) => Option.isSome(value.page));
+
+      expect(requestOlderThreadTurns(TARGET.environmentId, THREAD_ID)).toBe(true);
+      yield* harness.awaitState((value) =>
+        Option.match(value.page, { onNone: () => false, onSome: (page) => page.loadingOlder }),
+      );
+      yield* harness.resolveNextPage(Option.some(olderPage));
+
+      const state = yield* harness.awaitState((value) => hasActivity(value, olderActivity.id));
+      expect(Option.getOrThrow(state.data).activities.map((activity) => activity.id)).toEqual([
+        "activity-updated",
+        "activity-completed",
+      ]);
     }),
   );
 

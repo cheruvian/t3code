@@ -70,7 +70,6 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
               sequence = excluded.sequence,
               created_at = excluded.created_at
               WHERE projection_thread_activities.thread_id = excluded.thread_id
-                AND projection_thread_activities.kind = excluded.kind
           `,
   });
 
@@ -95,6 +94,11 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
           CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
           sequence ASC,
           created_at ASC,
+          CASE
+            WHEN kind GLOB '*.started' THEN 0
+            WHEN kind GLOB '*.completed' OR kind GLOB '*.resolved' THEN 2
+            ELSE 1
+          END ASC,
           activity_id ASC
       `,
   });
