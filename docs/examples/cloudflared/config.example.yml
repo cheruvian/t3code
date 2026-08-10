@@ -1,0 +1,9 @@
+# Named Cloudflare Tunnel configuration for a desktop T3 Code backend.
+# Replace the placeholders before using this file.
+tunnel: YOUR_TUNNEL_ID_OR_NAME
+credentials-file: /absolute/path/to/.cloudflared/YOUR_TUNNEL_ID.json
+
+ingress:
+  - hostname: t3.example.com
+    service: http://127.0.0.1:3773
+  - service: http_status:404
