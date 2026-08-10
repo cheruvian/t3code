@@ -1,4 +1,5 @@
 import { ApprovalRequestId, isToolLifecycleItemType } from "@t3tools/contracts";
+import { orderThreadActivities } from "@t3tools/client-runtime/state/thread-activity";
 import type {
   OrchestrationLatestTurn,
   OrchestrationThread,
@@ -315,7 +316,7 @@ function isAgentInternalActivity(activity: OrchestrationThreadActivity): boolean
 function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): DerivedWorkLogEntry[] {
-  const ordered = Arr.sort(activities, activityOrder);
+  const ordered = orderThreadActivities(activities);
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of ordered) {
     if (activity.kind === "tool.started") continue;
@@ -1038,26 +1039,6 @@ function extractChangedFiles(payload: Record<string, unknown> | null): string[] 
   return changedFiles;
 }
 
-function compareActivityLifecycleRank(kind: string): number {
-  if (kind.endsWith(".started") || kind === "tool.started") {
-    return 0;
-  }
-  if (kind.endsWith(".progress") || kind.endsWith(".updated")) {
-    return 1;
-  }
-  if (kind.endsWith(".completed") || kind.endsWith(".resolved")) {
-    return 2;
-  }
-  return 1;
-}
-
-const activityOrder = Order.combineAll<OrchestrationThreadActivity>([
-  Order.mapInput(Order.Number, (activity) => activity.sequence ?? Number.MAX_SAFE_INTEGER),
-  Order.mapInput(Order.String, (activity) => activity.createdAt),
-  Order.mapInput(Order.Number, (activity) => compareActivityLifecycleRank(activity.kind)),
-  Order.mapInput(Order.String, (activity) => activity.id),
-]);
-
 function isEmptyMessage(entry: RawThreadFeedEntry): boolean {
   if (entry.type !== "message") {
     return false;
@@ -1350,7 +1331,7 @@ function appendPresentedFeedEntry(
 export function sortThreadActivities(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ReadonlyArray<OrchestrationThreadActivity> {
-  return Arr.sort(activities, activityOrder);
+  return orderThreadActivities(activities);
 }
 
 export function derivePendingApprovals(

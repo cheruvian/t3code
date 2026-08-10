@@ -151,6 +151,40 @@ function makeThread(
 }
 
 describe("buildThreadFeed", () => {
+  it("keeps sequence-less history before sequenced activity at the same timestamp", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-1"),
+      projectId: ProjectId.make("project-1"),
+      title: "Mixed activity history",
+      activities: [
+        makeActivity({
+          id: EventId.make("activity-sequenced"),
+          kind: "runtime.warning",
+          summary: "Sequenced warning",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          turnId: TurnId.make("turn-1"),
+          sequence: 1,
+        }),
+        makeActivity({
+          id: EventId.make("activity-legacy"),
+          kind: "runtime.warning",
+          summary: "Legacy warning",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          turnId: TurnId.make("turn-1"),
+        }),
+      ],
+    });
+
+    const group = buildThreadFeed(thread)[0];
+    expect(group?.type).toBe("activity-group");
+    if (group?.type === "activity-group") {
+      expect(group.activities.map((activity) => activity.id)).toEqual([
+        "activity-legacy",
+        "activity-sequenced",
+      ]);
+    }
+  });
+
   it("keeps historic work entries attributed to their turns", () => {
     const thread = makeThread({
       id: ThreadId.make("thread-1"),

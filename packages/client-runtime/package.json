@@ -127,6 +127,10 @@
       "types": "./src/state/threads.ts",
       "default": "./src/state/threads.ts"
     },
+    "./state/thread-activity": {
+      "types": "./src/state/threadActivity.ts",
+      "default": "./src/state/threadActivity.ts"
+    },
     "./state/subagentRuntime": {
       "types": "./src/state/subagentRuntime.ts",
       "default": "./src/state/subagentRuntime.ts"

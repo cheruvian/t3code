@@ -13,6 +13,8 @@ import type {
   TurnId,
 } from "@t3tools/contracts";
 
+import { upsertThreadActivity } from "./threadActivity.ts";
+
 export type ThreadDetailReducerResult =
   | { readonly kind: "updated"; readonly thread: OrchestrationThread }
   | { readonly kind: "deleted" }
@@ -28,12 +30,6 @@ const checkpointOrder = O.mapInput(
   (cp: OrchestrationThread["checkpoints"][number]) =>
     cp.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER,
 );
-
-const activityOrder = O.combineAll<OrchestrationThreadActivity>([
-  O.mapInput(O.Number, (a) => a.sequence ?? Number.MAX_SAFE_INTEGER),
-  O.mapInput(O.String, (a) => a.createdAt),
-  O.mapInput(O.String, (a) => a.id),
-]);
 
 /**
  * Matches the validity rule in `deriveLatestContextWindowSnapshot` (and the
@@ -571,19 +567,13 @@ export function applyThreadDetailEvent(
       // thread.reverted that discards turns can still resolve a value from
       // the turns that survive.
       const supersedesContextWindow = isResolvableContextWindowActivity(activity);
-      const activities = pipe(
+      const activities = upsertThreadActivity(
         thread.activities,
-        Arr.filter(
-          (entry) =>
-            entry.id !== activity.id &&
-            !(
-              supersedesContextWindow &&
-              entry.turnId === activity.turnId &&
-              isResolvableContextWindowActivity(entry)
-            ),
-        ),
-        Arr.append(activity),
-        Arr.sort(activityOrder),
+        activity,
+        (entry) =>
+          supersedesContextWindow &&
+          entry.turnId === activity.turnId &&
+          isResolvableContextWindowActivity(entry),
       );
 
       return {

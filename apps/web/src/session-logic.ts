@@ -1,5 +1,6 @@
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
+import { orderThreadActivities } from "@t3tools/client-runtime/state/thread-activity";
 import { isBackgroundTaskActivity } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
   ApprovalRequestId,
@@ -387,7 +388,7 @@ export function derivePendingApprovals(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): PendingApproval[] {
   const openByRequestId = new Map<ApprovalRequestId, PendingApproval>();
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = orderThreadActivities(activities);
 
   for (const activity of ordered) {
     const payload =
@@ -493,7 +494,7 @@ export function derivePendingUserInputs(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): PendingUserInput[] {
   const openByRequestId = new Map<ApprovalRequestId, PendingUserInput>();
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = orderThreadActivities(activities);
 
   for (const activity of ordered) {
     const payload =
@@ -583,7 +584,7 @@ export function deriveActivePlanState(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
 ): ActivePlanState | null {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = orderThreadActivities(activities);
   const allPlanActivities = ordered.filter((activity) => activity.kind === "turn.plan.updated");
   // Prefer plan from the current turn; fall back to the most recent plan from any turn
   // so that TodoWrite tasks persist across follow-up messages.
@@ -616,7 +617,7 @@ export interface TurnPlanEntry {
 export function deriveTurnPlans(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): TurnPlanEntry[] {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = orderThreadActivities(activities);
   const byTurn = new Map<string, TurnPlanEntry>();
   for (const activity of ordered) {
     if (activity.kind !== "turn.plan.updated") {
@@ -745,7 +746,7 @@ function isAgentInternalActivity(activity: OrchestrationThreadActivity): boolean
 export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): WorkLogEntry[] {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = orderThreadActivities(activities);
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of ordered) {
     if (activity.kind === "tool.started") continue;
@@ -1529,45 +1530,44 @@ function extractChangedFiles(payload: Record<string, unknown> | null): string[] 
   return changedFiles;
 }
 
-function compareActivitiesByOrder(
-  left: OrchestrationThreadActivity,
-  right: OrchestrationThreadActivity,
-): number {
-  if (left.sequence !== undefined && right.sequence !== undefined) {
-    if (left.sequence !== right.sequence) {
-      return left.sequence - right.sequence;
+function isTimelineSourceOrdered(rows: ReadonlyArray<TimelineEntry>): boolean {
+  for (let index = 1; index < rows.length; index += 1) {
+    if (rows[index - 1]!.createdAt.localeCompare(rows[index]!.createdAt) > 0) {
+      return false;
     }
-  } else if (left.sequence !== undefined) {
-    return 1;
-  } else if (right.sequence !== undefined) {
-    return -1;
   }
-
-  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
-  if (createdAtComparison !== 0) {
-    return createdAtComparison;
-  }
-
-  const lifecycleRankComparison =
-    compareActivityLifecycleRank(left.kind) - compareActivityLifecycleRank(right.kind);
-  if (lifecycleRankComparison !== 0) {
-    return lifecycleRankComparison;
-  }
-
-  return left.id.localeCompare(right.id);
+  return true;
 }
 
-function compareActivityLifecycleRank(kind: string): number {
-  if (kind.endsWith(".started") || kind === "tool.started") {
-    return 0;
+function mergeOrderedTimelineSources(
+  sources: ReadonlyArray<ReadonlyArray<TimelineEntry>>,
+): TimelineEntry[] {
+  const merged: TimelineEntry[] = [];
+  const cursors = sources.map(() => 0);
+  const total = sources.reduce((sum, rows) => sum + rows.length, 0);
+
+  while (merged.length < total) {
+    let nextEntry: TimelineEntry | undefined;
+    let nextSource = -1;
+    for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex += 1) {
+      const candidate = sources[sourceIndex]![cursors[sourceIndex]!];
+      if (
+        candidate !== undefined &&
+        (nextEntry === undefined || candidate.createdAt.localeCompare(nextEntry.createdAt) < 0)
+      ) {
+        nextEntry = candidate;
+        nextSource = sourceIndex;
+      }
+    }
+
+    if (nextEntry === undefined) {
+      break;
+    }
+    merged.push(nextEntry);
+    cursors[nextSource] = cursors[nextSource]! + 1;
   }
-  if (kind.endsWith(".progress") || kind.endsWith(".updated")) {
-    return 1;
-  }
-  if (kind.endsWith(".completed") || kind.endsWith(".resolved")) {
-    return 2;
-  }
-  return 1;
+
+  return merged;
 }
 
 export function deriveTimelineEntries(
@@ -1600,9 +1600,10 @@ export function deriveTimelineEntries(
     createdAt: entry.createdAt,
     entry,
   }));
-  return [...messageRows, ...proposedPlanRows, ...turnPlanRows, ...workRows].toSorted((a, b) =>
-    a.createdAt.localeCompare(b.createdAt),
-  );
+  const sources = [messageRows, proposedPlanRows, turnPlanRows, workRows];
+  return sources.every(isTimelineSourceOrdered)
+    ? mergeOrderedTimelineSources(sources)
+    : sources.flat().toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
 }
 
 export function inferCheckpointTurnCountByTurnId(
