@@ -26,6 +26,13 @@ export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
 export const MAX_HIDDEN_MOUNTED_PREVIEW_THREADS = 3;
 
+export function shouldMountDiffPanel(input: {
+  rightPanelOpen: boolean;
+  activeSurfaceKind: string | null;
+}): boolean {
+  return input.rightPanelOpen && input.activeSurfaceKind === "diff";
+}
+
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 
 export function startNewThreadForProject(

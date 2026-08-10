@@ -27,6 +27,7 @@ import {
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   startNewThreadForProject,
+  shouldMountDiffPanel,
   shouldShowBranchMismatchBanner,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
@@ -35,6 +36,19 @@ const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");
 const threadId = ThreadId.make("thread-1");
 const now = "2026-03-29T00:00:00.000Z";
+
+describe("DiffPanel ownership", () => {
+  it.each([
+    ["closed", false, "diff", false],
+    ["open", true, "diff", true],
+    ["closed again", false, "diff", false],
+  ] as const)(
+    "is %s when panel open is %s and the active surface is %s",
+    (_phase, rightPanelOpen, activeSurfaceKind, expected) => {
+      expect(shouldMountDiffPanel({ rightPanelOpen, activeSurfaceKind })).toBe(expected);
+    },
+  );
+});
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {

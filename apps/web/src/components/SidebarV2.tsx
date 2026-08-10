@@ -111,10 +111,8 @@ import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects, useThreadShells } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
-import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
 import { projectEnvironment } from "../state/projects";
-import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 import {
   buildThreadRouteParams,
@@ -146,11 +144,18 @@ import {
 } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
+  mergeThreadPrLifecycleSnapshot,
   prStatusIndicator,
+  resolvePassiveRowVcsDemand,
   resolveThreadPr,
+  resolveThreadPrLifecycleState,
   settledPrHoverColorClass,
   terminalStatusFromRunningIds,
+  threadPrLifecycleSnapshot,
+  threadPrLifecycleTargetKey,
+  type ThreadPrLifecycleSnapshot,
   type TerminalStatusIndicator,
+  usePassiveRowVcsStatus,
 } from "./ThreadStatusIndicators";
 import {
   resolveSnoozePresets,
@@ -178,7 +183,13 @@ import {
 import { Input } from "./ui/input";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
-import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
+import {
+  SidebarContent,
+  SidebarGroup,
+  SidebarMenuButton,
+  useSidebar,
+  useSidebarVisibility,
+} from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -480,11 +491,11 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
   onUnpin: (threadRef: ScopedThreadRef) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
-  onChangeRequestState: (threadKey: string, state: "open" | "closed" | "merged" | null) => void;
+  onChangeRequestSnapshot: (threadKey: string, snapshot: ThreadPrLifecycleSnapshot) => void;
 }) {
   const {
     isRenaming,
-    onChangeRequestState,
+    onChangeRequestSnapshot,
     onCancelRename,
     onCommitRename,
     onContextMenu,
@@ -520,19 +531,32 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   const terminalProcessCount = runningTerminalIds.length;
 
   const gitCwd = thread.worktreePath ?? props.projectCwd;
-  const gitStatus = useEnvironmentQuery(
-    (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
-      ? vcsEnvironment.status({
-          environmentId: thread.environmentId,
-          input: { cwd: gitCwd },
-        })
-      : null,
-  );
+  const isSidebarVisible = useSidebarVisibility();
+  const gitStatusTarget = resolvePassiveRowVcsDemand({
+    isVisible: isSidebarVisible,
+    shouldSubscribe: thread.branch != null || thread.worktreePath !== null,
+    environmentId: thread.environmentId,
+    cwd: gitCwd,
+  });
+  const gitStatus = usePassiveRowVcsStatus({
+    isVisible: isSidebarVisible,
+    shouldSubscribe: thread.branch != null || thread.worktreePath !== null,
+    environmentId: thread.environmentId,
+    cwd: gitCwd,
+  });
   const pr = resolveThreadPr({
     threadBranch: thread.branch,
     gitStatus: gitStatus.data,
   });
-  const prState = pr?.state ?? null;
+  const prState = pr?.state;
+  const prLifecycleTargetKey = threadPrLifecycleTargetKey({
+    environmentId: thread.environmentId,
+    cwd: gitStatusTarget?.target.input.cwd ?? null,
+  });
+  const prLifecycleSnapshot = useMemo(
+    () => threadPrLifecycleSnapshot(gitStatus.data, prLifecycleTargetKey, thread.branch),
+    [gitStatus.data, prLifecycleTargetKey, thread.branch],
+  );
 
   // Same semantics as v1 (never-visited counts as read): flipping the beta
   // flag must not light up every historical thread as unread.
@@ -628,11 +652,14 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   });
   const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
   const settledPrHoverClass = pr ? settledPrHoverColorClass(pr.state) : undefined;
-  // Report the PR state up: the parent partitions rows with effectiveSettled,
-  // and a merged/closed PR auto-settles a thread — data only rows have.
+  // Report target/ref-bound PR state up for lifecycle partitioning. Same-target
+  // remote uncertainty preserves the last known state; a target or local ref
+  // change replaces it with an unknown binding so stale PR state cannot settle
+  // another checkout.
   useEffect(() => {
-    onChangeRequestState(threadKey, prState);
-  }, [onChangeRequestState, prState, threadKey]);
+    if (prLifecycleSnapshot === undefined) return;
+    onChangeRequestSnapshot(threadKey, prLifecycleSnapshot);
+  }, [onChangeRequestSnapshot, prLifecycleSnapshot, threadKey]);
 
   const modelInstanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
   const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
@@ -1270,14 +1297,13 @@ const SidebarV2SearchResultRow = memo(function SidebarV2SearchResultRow(props: {
   // Same details tooltip as the regular rows: a search hit is still a thread,
   // and the hover card is how you disambiguate identically-titled results.
   const gitCwd = thread.worktreePath ?? props.projectCwd;
-  const gitStatus = useEnvironmentQuery(
-    (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
-      ? vcsEnvironment.status({
-          environmentId: thread.environmentId,
-          input: { cwd: gitCwd },
-        })
-      : null,
-  );
+  const isSidebarVisible = useSidebarVisibility();
+  const gitStatus = usePassiveRowVcsStatus({
+    isVisible: isSidebarVisible,
+    shouldSubscribe: thread.branch != null || thread.worktreePath !== null,
+    environmentId: thread.environmentId,
+    cwd: gitCwd,
+  });
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
     effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
     activeWorktreePath: thread.worktreePath,
@@ -1551,19 +1577,23 @@ export default function SidebarV2() {
 
   // PR states stream in per-row (rows own the VCS subscriptions); a merged or
   // closed PR auto-settles its thread on the next partition.
-  const [changeRequestStateByKey, setChangeRequestStateByKey] = useState<
-    ReadonlyMap<string, "open" | "closed" | "merged">
+  const [changeRequestSnapshotByKey, setChangeRequestSnapshotByKey] = useState<
+    ReadonlyMap<string, ThreadPrLifecycleSnapshot>
   >(() => new Map());
-  const handleChangeRequestState = useCallback(
-    (threadKey: string, state: "open" | "closed" | "merged" | null) => {
-      setChangeRequestStateByKey((current) => {
-        if ((current.get(threadKey) ?? null) === state) return current;
-        const next = new Map(current);
-        if (state === null) {
-          next.delete(threadKey);
-        } else {
-          next.set(threadKey, state);
+  const handleChangeRequestSnapshot = useCallback(
+    (threadKey: string, snapshot: ThreadPrLifecycleSnapshot) => {
+      setChangeRequestSnapshotByKey((current) => {
+        const nextSnapshot = mergeThreadPrLifecycleSnapshot(current.get(threadKey), snapshot);
+        const currentSnapshot = current.get(threadKey);
+        if (
+          currentSnapshot?.targetKey === nextSnapshot.targetKey &&
+          currentSnapshot?.refName === nextSnapshot.refName &&
+          currentSnapshot.state === nextSnapshot.state
+        ) {
+          return current;
         }
+        const next = new Map(current);
+        next.set(threadKey, nextSnapshot);
         return next;
       });
     },
@@ -1794,7 +1824,18 @@ export default function SidebarV2() {
       const supportsSnooze =
         serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      const changeRequestState = changeRequestStateByKey.get(threadKey) ?? null;
+      const lifecycleTargetKey = threadPrLifecycleTargetKey({
+        environmentId: thread.environmentId,
+        cwd:
+          thread.worktreePath ??
+          projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
+          null,
+      });
+      const changeRequestState = resolveThreadPrLifecycleState(
+        changeRequestSnapshotByKey.get(threadKey),
+        thread.branch,
+        lifecycleTargetKey,
+      );
       // Snooze outranks everything, including a pin: "hide until Tuesday"
       // temporarily suspends "keep on top". The pin survives underneath —
       // and so does its pinOrderKey, so on wake the thread reappears at
@@ -1811,7 +1852,11 @@ export default function SidebarV2() {
         pinned.push(thread);
       } else if (
         supportsSettlement &&
-        effectiveSettled(thread, { now, autoSettleAfterDays, changeRequestState })
+        effectiveSettled(thread, {
+          now,
+          autoSettleAfterDays: changeRequestState === undefined ? null : autoSettleAfterDays,
+          changeRequestState: changeRequestState ?? null,
+        })
       ) {
         settled.push(thread);
       } else {
@@ -1846,8 +1891,9 @@ export default function SidebarV2() {
     };
   }, [
     autoSettleAfterDays,
-    changeRequestStateByKey,
+    changeRequestSnapshotByKey,
     nowMinute,
+    projectCwdByKey,
     scopedProjectKeys,
     serverConfigs,
     snoozeWakeTick,
@@ -3348,7 +3394,7 @@ export default function SidebarV2() {
                         onUnsnooze={attemptUnsnooze}
                         onUnpin={attemptUnpin}
                         onAcknowledgeWoke={acknowledgeWoke}
-                        onChangeRequestState={handleChangeRequestState}
+                        onChangeRequestSnapshot={handleChangeRequestSnapshot}
                       />
                     );
                   };
