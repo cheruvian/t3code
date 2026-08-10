@@ -1185,7 +1185,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 />
               )
             ) : null}
-            {title}
             {compactStatusDotClassName ? (
               <span
                 aria-label={topStatus?.label ?? "Ready"}
@@ -1194,18 +1193,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 title={topStatus?.label ?? "Ready"}
               />
             ) : null}
-            {driverKind ? (
-              <span
-                className="inline-flex shrink-0 items-center opacity-65"
-                title={thread.session?.providerName ?? modelInstanceId}
-              >
-                <ProviderInstanceIcon
-                  driverKind={driverKind}
-                  displayName={thread.session?.providerName ?? modelInstanceId}
-                  iconClassName="size-3"
-                />
-              </span>
-            ) : null}
+            {title}
             {terminalStatusIcon}
             {isRegeneratingTitle ? (
               <span role="status" className="sr-only">
@@ -1290,6 +1278,18 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 </button>
               )}
             </span>
+            {driverKind ? (
+              <span
+                className="inline-flex shrink-0 items-center opacity-65"
+                title={thread.session?.providerName ?? modelInstanceId}
+              >
+                <ProviderInstanceIcon
+                  driverKind={driverKind}
+                  displayName={thread.session?.providerName ?? modelInstanceId}
+                  iconClassName="size-3"
+                />
+              </span>
+            ) : null}
             {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
           </TooltipTrigger>
           {detailsTooltip}
