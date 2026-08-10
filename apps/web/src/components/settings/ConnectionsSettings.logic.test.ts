@@ -1,12 +1,45 @@
 import type { AdvertisedEndpoint, DesktopWslState } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
+  areCloudflaredSettingsAccepted,
   applyWslEnableSelection,
   isQrShareableEndpoint,
   refreshCloudflaredTunnel,
   selectQrEndpointOption,
   resolveCloudflaredConfigPath,
 } from "./ConnectionsSettings.logic";
+
+describe("areCloudflaredSettingsAccepted", () => {
+  it("accepts persisted settings even when process startup failed", () => {
+    expect(
+      areCloudflaredSettingsAccepted(
+        { enabled: true, configPath: "/tmp/tunnel.yml" },
+        {
+          status: "failed",
+          enabled: true,
+          configPath: "/tmp/tunnel.yml",
+          pid: null,
+          error: "cloudflared could not be started.",
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects settings when the old tunnel remains active", () => {
+    expect(
+      areCloudflaredSettingsAccepted(
+        { enabled: true, configPath: "/tmp/new.yml" },
+        {
+          status: "running",
+          enabled: true,
+          configPath: "/tmp/old.yml",
+          pid: 42,
+          error: "The previous cloudflared process could not be stopped.",
+        },
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("resolveCloudflaredConfigPath", () => {
   it("does not replace a draft while the user is editing", () => {
