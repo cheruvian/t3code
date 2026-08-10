@@ -51,6 +51,7 @@ import { cn } from "../../lib/utils";
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
 import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
 import {
+  areCloudflaredSettingsAccepted,
   applyWslEnableSelection,
   isQrShareableEndpoint,
   refreshCloudflaredTunnel,
@@ -2958,9 +2959,8 @@ export function ConnectionsSettings() {
       ++cloudflaredRefreshGenerationRef.current;
       const state = await desktopBridge.setCloudflaredTunnel({ enabled, configPath });
       setCloudflaredTunnelState(state);
-      const applied =
-        state.error === null && state.enabled === enabled && state.configPath === configPath;
-      if (applied) {
+      const settingsAccepted = areCloudflaredSettingsAccepted({ enabled, configPath }, state);
+      if (settingsAccepted) {
         cloudflaredConfigPathRef.current = cloudflaredConfigPath;
         cloudflaredConfigPathDirtyRef.current = false;
         setCloudflaredConfigPathDirty(false);

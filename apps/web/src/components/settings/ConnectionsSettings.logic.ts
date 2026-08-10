@@ -1,7 +1,20 @@
-import type { AdvertisedEndpoint, DesktopBridge, DesktopWslState } from "@t3tools/contracts";
+import type {
+  AdvertisedEndpoint,
+  DesktopBridge,
+  DesktopCloudflaredTunnelInput,
+  DesktopCloudflaredTunnelState,
+  DesktopWslState,
+} from "@t3tools/contracts";
 
 type WslEnableBridge = Pick<DesktopBridge, "setWslBackendEnabled" | "setWslDistro" | "setWslOnly">;
 type CloudflaredStateBridge = Pick<DesktopBridge, "getCloudflaredTunnelState">;
+
+export function areCloudflaredSettingsAccepted(
+  requested: DesktopCloudflaredTunnelInput,
+  state: DesktopCloudflaredTunnelState,
+): boolean {
+  return state.enabled === requested.enabled && state.configPath === requested.configPath;
+}
 
 export function resolveCloudflaredConfigPath(input: {
   readonly draft: string;
