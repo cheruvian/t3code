@@ -521,8 +521,12 @@ it("fails stop when runtime ownership is missing or invalid but its backend surv
     await expect(stop("production")).rejects.toThrow(
       `has no valid runtime pid while backend pid ${String(backend.pid)} survived`,
     );
+    writeFixture(runtimePidPath, `${String(backend.pid)}junk\n`);
+    await expect(stop("production")).rejects.toThrow(
+      `has no valid runtime pid while backend pid ${String(backend.pid)} survived`,
+    );
     assert.doesNotThrow(() => process.kill(backend.pid, 0));
-    assert.equal(readFileSync(runtimePidPath, "utf8"), "not-a-pid\n");
+    assert.equal(readFileSync(runtimePidPath, "utf8"), `${String(backend.pid)}junk\n`);
   } finally {
     if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
     else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;

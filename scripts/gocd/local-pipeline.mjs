@@ -132,7 +132,9 @@ export function launchRelease(name, paths, release, commitHash, { spawnProcess =
 
 function readPid(paths) {
   if (!existsSync(paths.pid)) return undefined;
-  const pid = Number.parseInt(readFileSync(paths.pid, "utf8").trim(), 10);
+  const serializedPid = readFileSync(paths.pid, "utf8").trim();
+  if (!/^[1-9]\d*$/.test(serializedPid)) return undefined;
+  const pid = Number(serializedPid);
   return Number.isInteger(pid) && pid > 0 ? pid : undefined;
 }
 
