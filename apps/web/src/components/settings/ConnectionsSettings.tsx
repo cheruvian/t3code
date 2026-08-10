@@ -1865,7 +1865,9 @@ export function ConnectionsSettings() {
           setCloudflaredEnabled(state.enabled);
         })
         .catch(() => {
-          if (mounted) setCloudflaredTunnelState(null);
+          if (mounted && generation === cloudflaredRefreshGenerationRef.current) {
+            setCloudflaredTunnelState(null);
+          }
         });
     };
     refresh();
@@ -2956,13 +2958,17 @@ export function ConnectionsSettings() {
       ++cloudflaredRefreshGenerationRef.current;
       const state = await desktopBridge.setCloudflaredTunnel({ enabled, configPath });
       setCloudflaredTunnelState(state);
-      cloudflaredConfigPathRef.current = cloudflaredConfigPath;
-      cloudflaredConfigPathDirtyRef.current = false;
-      setCloudflaredConfigPathDirty(false);
-      setCloudflaredEnabled(enabled);
+      const applied =
+        state.error === null && state.enabled === enabled && state.configPath === configPath;
+      if (applied) {
+        cloudflaredConfigPathRef.current = cloudflaredConfigPath;
+        cloudflaredConfigPathDirtyRef.current = false;
+        setCloudflaredConfigPathDirty(false);
+      }
+      setCloudflaredEnabled(state.enabled);
       toastManager.add({
-        type: state.status === "failed" ? "error" : "success",
-        title: state.status === "failed" ? "Cloudflare Tunnel failed" : "Cloudflare Tunnel updated",
+        type: state.error !== null ? "error" : "success",
+        title: state.error !== null ? "Cloudflare Tunnel failed" : "Cloudflare Tunnel updated",
         description:
           state.error ??
           (enabled ? "The tunnel will start with T3 Code." : "The tunnel is stopped."),
@@ -2984,12 +2990,16 @@ export function ConnectionsSettings() {
       title="Cloudflare Tunnel"
       description={
         cloudflaredTunnelState?.status === "running"
-          ? `Running${cloudflaredTunnelState.pid === null ? "" : ` · process ${cloudflaredTunnelState.pid}`}`
+          ? `${cloudflaredTunnelState.error ?? "Running"}${cloudflaredTunnelState.pid === null ? "" : ` · process ${cloudflaredTunnelState.pid}`}`
           : cloudflaredTunnelState?.status === "failed"
             ? cloudflaredTunnelState.error
             : "Run your named cloudflared tunnel automatically when T3 Code starts."
       }
-      status={cloudflaredTunnelState?.status === "failed" ? "Tunnel process failed" : null}
+      status={
+        cloudflaredTunnelState?.error !== null && cloudflaredTunnelState?.error !== undefined
+          ? "Tunnel update failed"
+          : null
+      }
       control={
         <Switch
           checked={cloudflaredEnabled}

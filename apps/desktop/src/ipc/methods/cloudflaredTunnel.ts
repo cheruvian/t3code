@@ -27,7 +27,12 @@ export const setCloudflaredTunnel = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.cloudflaredTunnel.set")(function* (input) {
     const settings = yield* DesktopAppSettings.DesktopAppSettings;
     const tunnel = yield* DesktopCloudflaredTunnel.DesktopCloudflaredTunnel;
-    yield* settings.setCloudflaredTunnel(input);
-    return yield* tunnel.apply(input);
+    const state = yield* tunnel.apply(input);
+    const runtimeMatchesRequest =
+      state.enabled === input.enabled && state.configPath === input.configPath;
+    if (state.error === null || state.status !== "running" || runtimeMatchesRequest) {
+      yield* settings.setCloudflaredTunnel(input);
+    }
+    return state;
   }),
 });
