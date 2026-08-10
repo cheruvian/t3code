@@ -1,3 +1,4 @@
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -384,19 +385,58 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       });
 
       yield* Scope.close(protocolScope, Exit.void);
-      yield* Effect.yieldNow;
+      yield* Fiber.join(notificationsFiber);
+      yield* Fiber.join(requestsFiber);
+      const pendingExit = yield* Fiber.await(pendingRequest);
+      assert.isTrue(Exit.isFailure(pendingExit));
+      if (Exit.isFailure(pendingExit)) {
+        assert.strictEqual(Cause.squash(pendingExit.cause), terminationError);
+      }
+    }),
+  );
 
-      const notificationsExit = notificationsFiber.pollUnsafe();
-      assert.exists(notificationsExit);
-      assert.isTrue(Exit.isSuccess(notificationsExit));
-      const requestsExit = requestsFiber.pollUnsafe();
-      assert.exists(requestsExit);
-      assert.isTrue(Exit.isSuccess(requestsExit));
+  it.effect("finishes in-flight termination when the protocol scope closes", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const protocolScope = yield* Scope.make();
+      yield* Effect.addFinalizer(() => Scope.close(protocolScope, Exit.void));
+
+      const terminationStarted = yield* Deferred.make<void>();
+      const finishTermination = yield* Deferred.make<void>();
+      const terminationCalls = yield* Ref.make(0);
+      const terminationError = new CodexError.CodexAppServerProcessExitedError({ code: 23 });
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        terminationError: Deferred.succeed(terminationStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(finishTermination)),
+          Effect.as(terminationError),
+        ),
+        onTermination: () => Ref.update(terminationCalls, (current) => current + 1),
+      }).pipe(Effect.provideService(Scope.Scope, protocolScope));
+
+      const pendingRequest = yield* transport
+        .request("test/pending-during-termination")
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      assert.deepEqual(yield* decodeJson(yield* Queue.take(output)), {
+        id: 1,
+        method: "test/pending-during-termination",
+      });
+
+      yield* Queue.end(input);
+      yield* Deferred.await(terminationStarted);
+      const closeFiber = yield* Scope.close(protocolScope, Exit.void).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(finishTermination, undefined);
+      yield* Fiber.join(closeFiber);
 
       const pendingExit = pendingRequest.pollUnsafe();
       assert.exists(pendingExit);
       assert.isTrue(Exit.isFailure(pendingExit));
-      assert.strictEqual(yield* Fiber.join(pendingRequest).pipe(Effect.flip), terminationError);
+      if (pendingExit && Exit.isFailure(pendingExit)) {
+        assert.strictEqual(Cause.squash(pendingExit.cause), terminationError);
+      }
+      assert.equal(yield* Ref.get(terminationCalls), 1);
     }),
   );
 
