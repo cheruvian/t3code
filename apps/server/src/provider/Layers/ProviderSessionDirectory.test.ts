@@ -135,6 +135,7 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       const owner = ServerOwnerGeneration.make("owner-1");
       const generation1 = ProviderSessionGeneration.make("generation-1");
       const generation2 = ProviderSessionGeneration.make("generation-2");
+      const generation3 = ProviderSessionGeneration.make("generation-3");
       const staleGeneration = ProviderSessionGeneration.make("generation-stale");
       assert.notEqual(generation2, staleGeneration);
 
@@ -143,6 +144,9 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
         threadId,
         ownerGeneration: owner,
         sessionGeneration: generation1,
+        status: "starting",
+        resumeCursor: { nested: { offsets: [1, 2, 3] } },
+        runtimePayload: { cwd: "/tmp/initial", flags: ["initial"] },
       });
       const replaced = yield* directory.upsert({
         provider: ProviderDriverKind.make("codex"),
@@ -150,23 +154,60 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
         ownerGeneration: owner,
         sessionGeneration: generation2,
         expectedSessionGeneration: generation1,
+        status: "running",
+        resumeCursor: { nested: { offsets: [4, 5, 6] } },
+        runtimePayload: { cwd: "/tmp/replaced", flags: ["active"] },
       });
       assert.equal(replaced, true);
-      assert.equal(
-        Option.getOrThrow(yield* runtimeRepository.getByThreadId({ threadId })).sessionGeneration,
-        generation2,
+      const committedRuntime = Option.getOrThrow(
+        yield* runtimeRepository.getByThreadId({ threadId }),
       );
-      const staleRejected = yield* directory.upsert({
+      assert.deepEqual(committedRuntime, {
+        threadId,
+        providerName: "codex",
+        providerInstanceId: null,
+        adapterKey: "codex",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: committedRuntime.lastSeenAt,
+        resumeCursor: { nested: { offsets: [4, 5, 6] } },
+        runtimePayload: { cwd: "/tmp/replaced", flags: ["active"] },
+        ownerGeneration: owner,
+        sessionGeneration: generation2,
+        terminalDisposition: null,
+      });
+      const replacedWithNull = yield* directory.upsert({
         provider: ProviderDriverKind.make("codex"),
         threadId,
         ownerGeneration: owner,
+        sessionGeneration: generation3,
+        expectedSessionGeneration: generation2,
+        resumeCursor: null,
+      });
+      assert.equal(replacedWithNull, true);
+      const nullCursorRuntime = Option.getOrThrow(
+        yield* runtimeRepository.getByThreadId({ threadId }),
+      );
+      assert.equal(nullCursorRuntime.resumeCursor, null);
+      assert.equal(nullCursorRuntime.sessionGeneration, generation3);
+      const staleRejected = yield* directory.upsert({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        threadId,
+        ownerGeneration: owner,
         sessionGeneration: staleGeneration,
-        expectedSessionGeneration: generation1,
+        expectedSessionGeneration: generation2,
+        status: "stopped",
+        resumeCursor: null,
+        runtimePayload: { cwd: "/tmp/stale", flags: ["must-not-commit"] },
       });
       assert.equal(staleRejected, false);
 
+      assert.deepEqual(
+        Option.getOrThrow(yield* runtimeRepository.getByThreadId({ threadId })),
+        nullCursorRuntime,
+      );
       const binding = yield* directory.getBinding(threadId);
-      assert.equal(Option.getOrThrow(binding).sessionGeneration, generation2);
+      assert.equal(Option.getOrThrow(binding).sessionGeneration, generation3);
       assert.notEqual(Option.getOrThrow(binding).sessionGeneration, staleGeneration);
     }));
 

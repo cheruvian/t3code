@@ -102,25 +102,28 @@ function hasCompleteReleaseRuntime(release) {
   return Object.values(runtime).every(existsSync);
 }
 
-function launchRelease(name, paths, release, commitHash) {
+export function launchRelease(name, paths, release, commitHash, { spawnProcess = spawn } = {}) {
   const runtime = desktopRuntimePaths(release);
   if (!hasCompleteReleaseRuntime(release)) {
     throw new Error(`Release ${release} is missing its self-contained desktop runtime.`);
   }
   const stageLabel = name === "staging" ? "candidate" : "production";
+  mkdirSync(paths.base, { recursive: true });
   const logFd = openSync(paths.log, "a");
-  const child = spawn(process.execPath, [runtime.launcher], {
+  const childEnv = {
+    ...process.env,
+    T3CODE_HOME: paths.home,
+    T3CODE_PORT: String(paths.port),
+    T3CODE_COMMIT_HASH: commitHash,
+    T3CODE_DESKTOP_APP_USER_MODEL_ID: `com.t3tools.t3code.${stageLabel}`,
+    T3CODE_DESKTOP_STAGE_LABEL: stageLabel === "candidate" ? "Candidate" : "Production",
+  };
+  delete childEnv.ELECTRON_RUN_AS_NODE;
+  const child = spawnProcess(runtime.electronExecutable, [runtime.mainEntry], {
     cwd: release,
     detached: true,
     stdio: ["ignore", logFd, logFd],
-    env: {
-      ...process.env,
-      T3CODE_HOME: paths.home,
-      T3CODE_PORT: String(paths.port),
-      T3CODE_COMMIT_HASH: commitHash,
-      T3CODE_DESKTOP_APP_USER_MODEL_ID: `com.t3tools.t3code.${stageLabel}`,
-      T3CODE_DESKTOP_STAGE_LABEL: stageLabel === "candidate" ? "Candidate" : "Production",
-    },
+    env: childEnv,
   });
   child.unref();
   closeSync(logFd);
@@ -469,8 +472,13 @@ function assertManagedLauncher(name, paths, pid) {
     selectedRelease = undefined;
   }
   if (selectedRelease) {
-    const expectedLauncher = desktopRuntimePaths(selectedRelease).launcher;
-    if (launcher.cwd === selectedRelease && launcher.command.includes(expectedLauncher)) {
+    const runtime = desktopRuntimePaths(selectedRelease);
+    if (
+      launcher.cwd === selectedRelease &&
+      (launcher.command.includes(runtime.launcher) ||
+        (launcher.command.includes(runtime.electronExecutable) &&
+          launcher.command.includes(runtime.mainEntry)))
+    ) {
       return launcher;
     }
   }
@@ -491,22 +499,41 @@ function assertManagedLauncher(name, paths, pid) {
   );
 }
 
+function waitForProcessExit(pid, deadline) {
+  while (isAlive(pid) && Date.now() < deadline) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  }
+  return !isAlive(pid);
+}
+
 function stopUnlocked(name, paths = environmentPaths(name)) {
   const pid = readPid(paths);
   if (pid === undefined) return;
+  const backendPid = readBackendRuntimePid(paths);
+  if (!isAlive(pid) && backendPid !== undefined && isAlive(backendPid)) {
+    throw new Error(
+      `${nameForError(paths)} runtime pid ${String(pid)} exited while backend pid ${String(backendPid)} survived.`,
+    );
+  }
   if (isAlive(pid)) {
     const launcher = assertManagedLauncher(name, paths, pid);
     console.log(`[t3-pipeline] stopping ${name} server pid ${pid}`);
     process.kill(pid, "SIGTERM");
     const deadline = Date.now() + 15_000;
-    while (isAlive(pid) && Date.now() < deadline)
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-    if (isAlive(pid)) {
+    if (!waitForProcessExit(pid, deadline)) {
       const selectedLauncher = assertManagedLauncher(name, paths, pid);
       if (selectedLauncher.command !== launcher.command || selectedLauncher.cwd !== launcher.cwd) {
         throw new Error(`Refusing to kill reused ${name} launcher pid ${String(pid)}.`);
       }
       process.kill(pid, "SIGKILL");
+      if (!waitForProcessExit(pid, Date.now() + 5_000)) {
+        throw new Error(`${nameForError(paths)} runtime pid ${String(pid)} survived SIGKILL.`);
+      }
+    }
+    if (backendPid !== undefined && !waitForProcessExit(backendPid, Date.now() + 5_000)) {
+      throw new Error(
+        `${nameForError(paths)} backend pid ${String(backendPid)} survived runtime shutdown.`,
+      );
     }
   }
   unlinkSync(paths.pid);

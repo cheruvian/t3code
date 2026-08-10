@@ -128,6 +128,11 @@ const ProviderSessionRuntimeDbRowSchema = ProviderSessionRuntime.mapFields(
   }),
 );
 
+const ReplaceProviderSessionGenerationDbInput = Schema.Struct({
+  runtime: ProviderSessionRuntimeDbRowSchema,
+  expectedSessionGeneration: Schema.NullOr(ProviderSessionGeneration),
+});
+
 const ProviderSessionRuntimeRawDbRowSchema = Schema.Struct({
   threadId: Schema.String,
   providerName: Schema.Unknown,
@@ -273,7 +278,7 @@ export const make = Effect.gen(function* () {
   });
 
   const replaceRuntimeGeneration = SqlSchema.findOneOption({
-    Request: ReplaceProviderSessionGenerationInput,
+    Request: ReplaceProviderSessionGenerationDbInput,
     Result: Schema.Struct({ threadId: Schema.String }),
     execute: ({ runtime, expectedSessionGeneration }) =>
       sql`

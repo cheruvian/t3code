@@ -8,11 +8,11 @@ import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
-layer("040_ServerDrainState", (it) => {
+layer("042_ServerDrainState", (it) => {
   it.effect("persists at most one authoritative drain snapshot", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 40 });
+      yield* runMigrations({ toMigrationInclusive: 42 });
       yield* sql`
         INSERT INTO server_drain_state (singleton_id, snapshot_json)
         VALUES (1, '{"phase":"draining"}')

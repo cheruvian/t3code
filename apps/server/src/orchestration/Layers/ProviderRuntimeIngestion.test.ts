@@ -204,6 +204,8 @@ function providerServiceFromCodexAdapter(
       }),
     rollbackConversation: ({ threadId, numTurns }) =>
       adapter.rollbackThread(threadId, numTurns).pipe(Effect.asVoid),
+    runIfCurrentGeneration: (_input, effect) => Effect.map(effect, Option.some),
+    getTerminalDisposition: () => Effect.succeed(null),
     get streamEvents() {
       if (!receiptAfterTurnCompletion) {
         return adapter.streamEvents;

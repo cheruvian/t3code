@@ -47,6 +47,49 @@ function createCompleteRelease(release, sha) {
   if (platform() !== "win32") chmodSync(electronExecutable, 0o755);
 }
 
+it("launches the long-lived Electron runtime directly and records its pid", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-launch-owner-"));
+  const release = join(sandbox, "release");
+  const runtimeRoot = join(sandbox, "runtime");
+  const sha = "a".repeat(40);
+
+  try {
+    createCompleteRelease(release, sha);
+    const { launchRelease } = await import("./local-pipeline.mjs?launch-owner-test");
+    const launches = [];
+    launchRelease(
+      "production",
+      {
+        base: runtimeRoot,
+        home: join(runtimeRoot, "home"),
+        pid: join(runtimeRoot, "electron.pid"),
+        log: join(runtimeRoot, "electron.log"),
+        port: 17774,
+      },
+      release,
+      sha,
+      {
+        spawnProcess: (command, args, options) => {
+          launches.push({ command, args, options });
+          return { pid: 4242, unref() {} };
+        },
+      },
+    );
+
+    assert.equal(launches.length, 1);
+    assert.equal(launches[0].command, electronExecutablePath(release));
+    assert.deepStrictEqual(launches[0].args, [
+      join(release, "apps/desktop/dist-electron/main.cjs"),
+    ]);
+    assert.equal(launches[0].options.cwd, release);
+    assert.equal(launches[0].options.detached, true);
+    assert.equal(launches[0].options.env.ELECTRON_RUN_AS_NODE, undefined);
+    assert.equal(readFileSync(join(runtimeRoot, "electron.pid"), "utf8"), "4242\n");
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
 it("restores the complete release snapshot when the replacement cannot launch", async () => {
   const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-deploy-"));
   const runtimeRoot = join(sandbox, "runtime");
@@ -410,6 +453,42 @@ it("refuses to stop a live pid that does not own the production runtime", async 
     else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
     if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
     else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+it("fails stop when the tracked runtime exited but its backend survived", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-orphaned-backend-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const artifactRoot = join(sandbox, "artifact");
+  const productionRoot = join(runtimeRoot, "production");
+  const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+  const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
+  const backend = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+  });
+
+  try {
+    process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+    process.env.T3_PIPELINE_ARTIFACT_ROOT = artifactRoot;
+    writeFixture(join(productionRoot, "electron.pid"), "2147483647\n");
+    writeFixture(
+      join(productionRoot, "home", "userdata", "server-runtime.json"),
+      `${JSON.stringify({ pid: backend.pid })}\n`,
+    );
+
+    const { stop } = await import("./local-pipeline.mjs?orphaned-backend-test");
+    await expect(stop("production")).rejects.toThrow(
+      `runtime pid 2147483647 exited while backend pid ${String(backend.pid)} survived`,
+    );
+    assert.doesNotThrow(() => process.kill(backend.pid, 0));
+    assert.equal(existsSync(join(productionRoot, "electron.pid")), true);
+  } finally {
+    if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+    else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
+    if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
+    else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
+    backend.kill("SIGKILL");
     rmSync(sandbox, { recursive: true, force: true });
   }
 });
