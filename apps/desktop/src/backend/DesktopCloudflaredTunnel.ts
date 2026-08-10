@@ -182,7 +182,10 @@ export const make = Effect.gen(function* () {
           Effect.gen(function* () {
             const currentActive = yield* Ref.get(activeRef);
             if (currentActive?.child.pid !== spawned.success.pid) return;
-            yield* Scope.close(currentActive.scope, Exit.void).pipe(Effect.ignore);
+            yield* Scope.close(currentActive.scope, Exit.void).pipe(
+              Effect.tapCause((cause) => Effect.logError(cause)),
+              Effect.ignore,
+            );
             yield* Ref.set(activeRef, null);
             const failedState = {
               status: "failed",
