@@ -683,6 +683,100 @@ describe("applyThreadDetailEvent", () => {
       }
     });
 
+    it("maintains the canonical total order for out-of-order inserts and stable-ID replacements", () => {
+      const tiedAt = "2026-04-01T11:00:00.000Z";
+      const laterAt = "2026-04-01T12:00:00.000Z";
+      const makeActivity = (
+        id: string,
+        kind: string,
+        createdAt: string,
+        sequence?: number,
+        summary = id,
+      ): OrchestrationThread["activities"][number] => ({
+        id: EventId.make(id),
+        tone: "tool",
+        kind,
+        summary,
+        payload: {},
+        turnId: TurnId.make("turn-1"),
+        ...(sequence === undefined ? {} : { sequence }),
+        createdAt,
+      });
+      const appendActivity = (
+        thread: OrchestrationThread,
+        activity: OrchestrationThread["activities"][number],
+        sequence: number,
+      ) => {
+        const result = applyThreadDetailEvent(thread, {
+          ...baseEventFields,
+          sequence,
+          occurredAt: laterAt,
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.activity-appended",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            activity,
+          },
+        });
+        expect(result.kind).toBe("updated");
+        if (result.kind !== "updated") {
+          throw new Error("Expected activity append to update the thread");
+        }
+        return result.thread;
+      };
+
+      let thread = appendActivity(
+        {
+          ...baseThread,
+          activities: [
+            makeActivity("activity-sequence-one", "command", laterAt, 1),
+            makeActivity(
+              "activity-created-earlier",
+              "tool.completed",
+              "2026-04-01T10:00:00.000Z",
+              2,
+            ),
+            makeActivity("activity-b-other", "file-edit", tiedAt, 2),
+            makeActivity("activity-c-progress", "tool.progress", tiedAt, 2),
+            makeActivity("activity-a-completed", "tool.completed", tiedAt, 2),
+            makeActivity("activity-z-stable", "tool.completed", tiedAt, 2, "Stale activity"),
+          ],
+        },
+        makeActivity("activity-legacy", "command", laterAt),
+        22,
+      );
+
+      expect(thread.activities.map((activity) => activity.id)).toEqual([
+        "activity-legacy",
+        "activity-sequence-one",
+        "activity-created-earlier",
+        "activity-b-other",
+        "activity-c-progress",
+        "activity-a-completed",
+        "activity-z-stable",
+      ]);
+
+      thread = appendActivity(
+        thread,
+        makeActivity("activity-z-stable", "tool.started", tiedAt, 2, "Replacement activity"),
+        23,
+      );
+
+      expect(thread.activities.map((activity) => activity.id)).toEqual([
+        "activity-legacy",
+        "activity-sequence-one",
+        "activity-created-earlier",
+        "activity-z-stable",
+        "activity-b-other",
+        "activity-c-progress",
+        "activity-a-completed",
+      ]);
+      expect(
+        thread.activities.find((activity) => activity.id === "activity-z-stable")?.summary,
+      ).toBe("Replacement activity");
+    });
+
     it("replaces earlier resolvable context-window updates for the same turn", () => {
       const contextWindowActivity = (id: string, sequence: number, usedTokens: unknown) => ({
         id: EventId.make(id),
