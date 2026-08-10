@@ -1811,6 +1811,7 @@ export function ConnectionsSettings() {
   const [cloudflaredConfigPathDirty, setCloudflaredConfigPathDirty] = useState(false);
   const cloudflaredConfigPathRef = useRef("");
   const cloudflaredConfigPathDirtyRef = useRef(false);
+  const cloudflaredRefreshGenerationRef = useRef(0);
   const [cloudflaredEnabled, setCloudflaredEnabled] = useState(false);
   const [isUpdatingCloudflaredTunnel, setIsUpdatingCloudflaredTunnel] = useState(false);
   const [revokingDesktopPairingLinkId, setRevokingDesktopPairingLinkId] = useState<string | null>(
@@ -1841,6 +1842,7 @@ export function ConnectionsSettings() {
     if (!desktopBridge) return;
     let mounted = true;
     const refresh = () => {
+      const generation = ++cloudflaredRefreshGenerationRef.current;
       void refreshCloudflaredTunnel({
         bridge: desktopBridge,
         getDraft: () => ({
@@ -1849,7 +1851,7 @@ export function ConnectionsSettings() {
         }),
       })
         .then(({ state, configPath }) => {
-          if (!mounted) return;
+          if (!mounted || generation !== cloudflaredRefreshGenerationRef.current) return;
           setCloudflaredTunnelState(state);
           setCloudflaredConfigPath((draft) => {
             const latestPath = resolveCloudflaredConfigPath({
@@ -2940,7 +2942,7 @@ export function ConnectionsSettings() {
 
   const handleCloudflaredTunnelChange = async (enabled: boolean) => {
     if (!desktopBridge) return;
-    const configPath = cloudflaredConfigPath.trim() || null;
+    const configPath = cloudflaredConfigPath.trim().length > 0 ? cloudflaredConfigPath : null;
     if (enabled && configPath === null) {
       toastManager.add({
         type: "error",
@@ -2951,6 +2953,7 @@ export function ConnectionsSettings() {
     }
     setIsUpdatingCloudflaredTunnel(true);
     try {
+      ++cloudflaredRefreshGenerationRef.current;
       const state = await desktopBridge.setCloudflaredTunnel({ enabled, configPath });
       setCloudflaredTunnelState(state);
       cloudflaredConfigPathRef.current = cloudflaredConfigPath;
