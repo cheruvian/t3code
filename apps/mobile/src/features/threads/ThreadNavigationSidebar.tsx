@@ -79,8 +79,10 @@ import {
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
+  mergeThreadListV2ChangeRequestSnapshot,
   THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
+  type ThreadListV2ChangeRequestSnapshot,
   type ThreadListV2ListItem,
 } from "./threadListV2";
 
@@ -412,19 +414,16 @@ function ThreadNavigationSidebarPane(
   // (HomeScreen.tsx): flat creation-order card block + settled recency tail.
   // PR states stream in per-row; merged/closed PRs auto-settle their thread
   // on the next partition.
-  const [changeRequestStateByKey, setChangeRequestStateByKey] = useState<
-    ReadonlyMap<string, "open" | "closed" | "merged">
+  const [changeRequestSnapshotByKey, setChangeRequestSnapshotByKey] = useState<
+    ReadonlyMap<string, ThreadListV2ChangeRequestSnapshot>
   >(() => new Map());
-  const handleChangeRequestState = useCallback(
-    (threadKey: string, state: "open" | "closed" | "merged" | null) => {
-      setChangeRequestStateByKey((current) => {
-        if ((current.get(threadKey) ?? null) === state) return current;
+  const handleChangeRequestSnapshot = useCallback(
+    (threadKey: string, snapshot: ThreadListV2ChangeRequestSnapshot) => {
+      setChangeRequestSnapshotByKey((current) => {
+        const merged = mergeThreadListV2ChangeRequestSnapshot(current.get(threadKey), snapshot);
+        if (current.get(threadKey) === merged) return current;
         const next = new Map(current);
-        if (state === null) {
-          next.delete(threadKey);
-        } else {
-          next.set(threadKey, state);
-        }
+        next.set(threadKey, merged);
         return next;
       });
     },
@@ -535,7 +534,8 @@ function ThreadNavigationSidebarPane(
       projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
       searchQuery: props.searchQuery,
       matchedThreadKeys,
-      changeRequestStateByKey,
+      projectCwdByKey,
+      changeRequestSnapshotByKey,
       settlementEnvironmentIds,
       snoozeEnvironmentIds,
       settledLimit: settledVisibleCount,
@@ -546,7 +546,7 @@ function ThreadNavigationSidebarPane(
       selectedThreadKey: props.selectedThreadKey ?? null,
     });
   }, [
-    changeRequestStateByKey,
+    changeRequestSnapshotByKey,
     nowMinute,
     snoozeWakeTick,
     snoozedShelfExpanded,
@@ -561,6 +561,7 @@ function ThreadNavigationSidebarPane(
     threadListV2Enabled,
     threads,
     selectedProjectScope,
+    projectCwdByKey,
   ]);
   // Re-partition the moment the earliest snooze expires (clamped to the
   // signed-32-bit setTimeout range; far-future wakes re-arm at the clamp).
@@ -808,6 +809,7 @@ function ThreadNavigationSidebarPane(
       serverConfigs,
       snoozePresetMinute: nowMinute,
       threadSearchMatchByKey,
+      visible: props.visible,
     }),
     [
       props.selectedThreadKey,
@@ -818,6 +820,7 @@ function ThreadNavigationSidebarPane(
       serverConfigs,
       nowMinute,
       threadSearchMatchByKey,
+      props.visible,
     ],
   );
   const sidebarItemsAreEqual = useCallback(
@@ -968,8 +971,9 @@ function ThreadNavigationSidebarPane(
               onPinThread={pinThread}
               onUnpinThread={unpinThread}
               onMovePinnedThread={movePinnedThread}
-              onChangeRequestState={handleChangeRequestState}
+              onChangeRequestSnapshot={handleChangeRequestSnapshot}
               projectCwd={projectCwdByKey.get(scopeKey) ?? null}
+              visible={props.visible}
               onSwipeableClose={handleSwipeableClose}
               onSwipeableWillOpen={handleSwipeableWillOpen}
               simultaneousSwipeGesture={sidebarScrollGesture}
@@ -1053,6 +1057,7 @@ function ThreadNavigationSidebarPane(
                 projectCwdByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ??
                 null
               }
+              visible={props.visible}
               isLast={item.isLast}
               searchMatch={threadSearchMatchByKey.get(
                 threadSearchMatchKey({
@@ -1091,7 +1096,7 @@ function ThreadNavigationSidebarPane(
       arrangedPinnedKeys,
       confirmDeletePendingTask,
       confirmDeleteThread,
-      handleChangeRequestState,
+      handleChangeRequestSnapshot,
       handleSelectThread,
       handleSwipeableClose,
       handleSwipeableWillOpen,
@@ -1106,6 +1111,7 @@ function ThreadNavigationSidebarPane(
       props.onNewThreadInProject,
       props.searchQuery,
       props.selectedThreadKey,
+      props.visible,
       props.width,
       savedConnectionsById,
       serverConfigs,

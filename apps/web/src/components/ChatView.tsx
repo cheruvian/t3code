@@ -299,6 +299,7 @@ import {
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
+  shouldMountDiffPanel,
   shouldWriteThreadErrorToCurrentServerThread,
   startNewThreadForProject,
   waitForStartedServerThread,
@@ -2534,7 +2535,7 @@ function ChatViewContent(props: ChatViewProps) {
   const gitStatusQuery = useEnvironmentQuery(
     gitStatusCwd === null
       ? null
-      : vcsEnvironment.status({
+      : vcsEnvironment.remoteStatus({
           environmentId,
           input: { cwd: gitStatusCwd },
         }),
@@ -4070,10 +4071,11 @@ function ChatViewContent(props: ChatViewProps) {
     if (activeThreadShell === null || !supportsSettlement) return false;
     return effectiveSettled(activeThreadShell, {
       now: `${nowMinute}:00.000Z`,
-      autoSettleAfterDays,
+      autoSettleAfterDays: activeThreadPr === undefined ? null : autoSettleAfterDays,
       changeRequestState: activeThreadPr?.state ?? null,
     });
   }, [
+    activeThreadPr,
     activeThreadPr?.state,
     activeThreadShell,
     autoSettleAfterDays,
@@ -5912,6 +5914,10 @@ function ChatViewContent(props: ChatViewProps) {
       {panelToggleControls}
     </div>
   );
+  const mountDiffPanel = shouldMountDiffPanel({
+    rightPanelOpen,
+    activeSurfaceKind: activeRightPanelSurface?.kind ?? null,
+  });
   const rightPanelContent = activeThreadRef ? (
     activeRightPanelSurface?.kind === "preview" ? (
       <Suspense fallback={null}>
@@ -5944,7 +5950,7 @@ function ChatViewContent(props: ChatViewProps) {
         newShortcutLabel={newTerminalShortcutLabel ?? undefined}
         closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
       />
-    ) : activeRightPanelSurface?.kind === "diff" ? (
+    ) : mountDiffPanel ? (
       <Suspense fallback={null}>
         <DiffPanel
           key={`${activeThreadKey}:${diffPanelGitStatusResolutionKey}`}

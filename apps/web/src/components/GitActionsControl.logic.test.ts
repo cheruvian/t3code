@@ -1,16 +1,48 @@
-import type { VcsStatusResult } from "@t3tools/contracts";
-import { assert, describe, it } from "vite-plus/test";
+import { EnvironmentId, type VcsStatusResult } from "@t3tools/contracts";
+import { assert, describe, expect, it } from "vite-plus/test";
 import {
   buildGitActionProgressStages,
   buildMenuItems,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
   resolveDefaultBranchActionDialogCopy,
+  resolveGitStatusForActions,
   resolveLiveThreadBranchUpdate,
+  resolvePublishDiscoveryTarget,
   resolveQuickAction,
   resolveThreadBranchUpdate,
   resolveThreadBranchMetadataPatch,
 } from "./GitActionsControl.logic";
+
+const environmentId = EnvironmentId.make("env-1");
+
+describe("publish discovery ownership", () => {
+  it.each([
+    ["closed", false, null],
+    ["open", true, { environmentId, input: {} }],
+    ["closed again", false, null],
+  ] as const)("has a %s target", (_phase, open, expected) => {
+    assert.deepEqual(resolvePublishDiscoveryTarget({ open, environmentId }), expected);
+  });
+});
+
+describe("resolveGitStatusForActions", () => {
+  it("withholds remote-shaped actions until the current ref has remote status", () => {
+    const localOnly = { ...status({ hasWorkingTreeChanges: true }), remoteStatusKnown: false };
+
+    expect(resolveGitStatusForActions(localOnly)).toBeNull();
+    expect(resolveGitStatusForActions({ ...localOnly, remoteStatusKnown: true })).toEqual({
+      ...localOnly,
+      remoteStatusKnown: true,
+    });
+  });
+
+  it("preserves unary and legacy status results without accumulated knownness", () => {
+    const unaryStatus = status({ hasWorkingTreeChanges: true });
+
+    expect(resolveGitStatusForActions(unaryStatus)).toBe(unaryStatus);
+  });
+});
 
 function status(overrides: Partial<VcsStatusResult> = {}): VcsStatusResult {
   return {
