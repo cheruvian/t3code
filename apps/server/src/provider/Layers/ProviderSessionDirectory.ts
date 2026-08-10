@@ -1,4 +1,11 @@
-import { defaultInstanceIdForDriver, ProviderDriverKind, type ThreadId } from "@t3tools/contracts";
+import { randomUUID } from "node:crypto";
+
+import {
+  defaultInstanceIdForDriver,
+  ProviderDriverKind,
+  ServerOwnerGeneration,
+  type ThreadId,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -77,6 +84,9 @@ function toRuntimeBinding(
           status: runtime.status,
           resumeCursor: runtime.resumeCursor,
           runtimePayload: runtime.runtimePayload,
+          ownerGeneration: runtime.ownerGeneration ?? null,
+          sessionGeneration: runtime.sessionGeneration ?? null,
+          terminalDisposition: runtime.terminalDisposition ?? null,
           lastSeenAt: runtime.lastSeenAt,
         }) satisfies ProviderRuntimeBindingWithMetadata,
     ),
@@ -85,6 +95,10 @@ function toRuntimeBinding(
 
 const makeProviderSessionDirectory = Effect.gen(function* () {
   const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+  const ownerGeneration = ServerOwnerGeneration.make(randomUUID());
+  yield* repository
+    .installOwnerGeneration(ownerGeneration)
+    .pipe(Effect.mapError(toPersistenceError("ProviderSessionDirectory.installOwnerGeneration")));
 
   const getBinding = (threadId: ThreadId) =>
     repository.getByThreadId({ threadId }).pipe(
@@ -125,27 +139,51 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
         issue: "providerInstanceId is required for provider session runtime bindings.",
       });
     }
+    const runtime = {
+      threadId: resolvedThreadId,
+      providerName: binding.provider,
+      providerInstanceId,
+      adapterKey:
+        binding.adapterKey ??
+        (providerChanged ? binding.provider : (existingRuntime?.adapterKey ?? binding.provider)),
+      runtimeMode: binding.runtimeMode ?? existingRuntime?.runtimeMode ?? "full-access",
+      status: binding.status ?? existingRuntime?.status ?? "running",
+      lastSeenAt: now,
+      resumeCursor:
+        binding.resumeCursor !== undefined
+          ? binding.resumeCursor
+          : (existingRuntime?.resumeCursor ?? null),
+      runtimePayload: mergeRuntimePayload(
+        existingRuntime?.runtimePayload ?? null,
+        binding.runtimePayload,
+      ),
+      ownerGeneration:
+        binding.ownerGeneration !== undefined ? binding.ownerGeneration : ownerGeneration,
+      sessionGeneration:
+        binding.sessionGeneration !== undefined
+          ? binding.sessionGeneration
+          : (existingRuntime?.sessionGeneration ?? null),
+      terminalDisposition:
+        binding.terminalDisposition !== undefined
+          ? binding.terminalDisposition
+          : (existingRuntime?.terminalDisposition ?? null),
+    } satisfies ProviderSessionRuntime.ProviderSessionRuntime;
+    if (binding.expectedSessionGeneration !== undefined) {
+      return yield* repository
+        .replaceIfGenerationMatches({
+          runtime,
+          expectedSessionGeneration: binding.expectedSessionGeneration,
+        })
+        .pipe(
+          Effect.mapError(
+            toPersistenceError("ProviderSessionDirectory.upsert:replaceIfGenerationMatches"),
+          ),
+        );
+    }
     yield* repository
-      .upsert({
-        threadId: resolvedThreadId,
-        providerName: binding.provider,
-        providerInstanceId,
-        adapterKey:
-          binding.adapterKey ??
-          (providerChanged ? binding.provider : (existingRuntime?.adapterKey ?? binding.provider)),
-        runtimeMode: binding.runtimeMode ?? existingRuntime?.runtimeMode ?? "full-access",
-        status: binding.status ?? existingRuntime?.status ?? "running",
-        lastSeenAt: now,
-        resumeCursor:
-          binding.resumeCursor !== undefined
-            ? binding.resumeCursor
-            : (existingRuntime?.resumeCursor ?? null),
-        runtimePayload: mergeRuntimePayload(
-          existingRuntime?.runtimePayload ?? null,
-          binding.runtimePayload,
-        ),
-      })
+      .upsert(runtime)
       .pipe(Effect.mapError(toPersistenceError("ProviderSessionDirectory.upsert:upsert")));
+    return true;
   });
 
   const getProvider: ProviderSessionDirectoryShape["getProvider"] = (threadId) =>
@@ -183,6 +221,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
     );
 
   return {
+    ownerGeneration,
     upsert,
     getProvider,
     getBinding,

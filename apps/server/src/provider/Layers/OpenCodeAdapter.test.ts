@@ -19,6 +19,8 @@ import {
   OpenCodeSettings,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderSessionGeneration,
+  ServerOwnerGeneration,
   ThreadId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -68,6 +70,7 @@ const runtimeMock = {
     closeError: null as Error | null,
     messages: [] as MessageEntry[],
     subscribedEvents: [] as unknown[],
+    subscribedEventsError: null as Error | null,
     sessionGetIds: [] as string[],
     missingSessionIds: new Set<string>(),
     transientErrorSessionIds: new Set<string>(),
@@ -88,6 +91,7 @@ const runtimeMock = {
     this.state.closeError = null;
     this.state.messages = [];
     this.state.subscribedEvents = [];
+    this.state.subscribedEventsError = null;
     this.state.sessionGetIds.length = 0;
     this.state.missingSessionIds.clear();
     this.state.transientErrorSessionIds.clear();
@@ -209,6 +213,9 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
             for (const event of runtimeMock.state.subscribedEvents) {
               yield event;
             }
+            if (runtimeMock.state.subscribedEventsError !== null) {
+              throw runtimeMock.state.subscribedEventsError;
+            }
           })(),
         }),
       },
@@ -232,7 +239,8 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
 };
 
 const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory, {
-  upsert: () => Effect.void,
+  ownerGeneration: ServerOwnerGeneration.make("opencode-adapter-test-owner"),
+  upsert: () => Effect.succeed(true),
   getProvider: () =>
     Effect.die(new Error("ProviderSessionDirectory.getProvider is not used in test")),
   getBinding: () => Effect.succeed(Option.none()),
@@ -624,6 +632,37 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.deepEqual(
         events.map((event) => event.type),
         ["session.started", "thread.started", "session.exited"],
+      );
+    }),
+  );
+
+  it.effect("keeps the current generation on unexpected-exit lifecycle events", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-unexpected-exit-generation");
+      const sessionGeneration = ProviderSessionGeneration.make("generation-unexpected-exit");
+      runtimeMock.state.subscribedEventsError = new Error("event stream failed");
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.take(4),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        sessionGeneration,
+        runtimeMode: "full-access",
+      });
+
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+      const terminal = events.filter(
+        (event) => event.type === "runtime.error" || event.type === "session.exited",
+      );
+      NodeAssert.deepEqual(
+        terminal.map((event) => event.sessionGeneration),
+        [sessionGeneration, sessionGeneration],
       );
     }),
   );

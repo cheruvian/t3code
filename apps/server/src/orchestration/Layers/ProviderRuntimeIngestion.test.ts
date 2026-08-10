@@ -27,6 +27,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -95,7 +96,7 @@ function isLegacyTurnCompletedEvent(
   );
 }
 
-function createProviderServiceHarness() {
+function createProviderServiceHarness(terminalDisposition: "interrupted" | null = null) {
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
   const runtimeSessions: ProviderSession[] = [];
 
@@ -123,6 +124,8 @@ function createProviderServiceHarness() {
       });
     },
     rollbackConversation: () => unsupported(),
+    runIfCurrentGeneration: (_input, effect) => Effect.map(effect, Option.some),
+    getTerminalDisposition: () => Effect.succeed(terminalDisposition),
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
     },
@@ -220,10 +223,13 @@ describe("ProviderRuntimeIngestion", () => {
     }
   });
 
-  async function createHarness(options?: { serverSettings?: Partial<ServerSettings> }) {
+  async function createHarness(options?: {
+    serverSettings?: Partial<ServerSettings>;
+    terminalDisposition?: "interrupted" | null;
+  }) {
     const workspaceRoot = makeTempDir("t3-provider-project-");
     NodeFS.mkdirSync(NodePath.join(workspaceRoot, ".git"));
-    const provider = createProviderServiceHarness();
+    const provider = createProviderServiceHarness(options?.terminalDisposition);
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationProjectionPipelineLive),
@@ -675,6 +681,43 @@ describe("ProviderRuntimeIngestion", () => {
         (entry) => entry.id === threadId,
       );
       expect(thread?.session?.status).toBe("stopped");
+      expect(thread?.session?.activeTurnId).toBeNull();
+    }),
+  );
+
+  effectIt.effect("does not downgrade a shutdown-owned interruption on adapter exit", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({ terminalDisposition: "interrupted" }),
+      );
+      const threadId = asThreadId("thread-1");
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-shutdown-interrupted"),
+        threadId,
+        session: {
+          threadId,
+          status: "interrupted",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:02.000Z",
+        },
+        createdAt: "2026-01-01T00:00:02.000Z",
+      });
+      harness.emit({
+        type: "session.exited",
+        eventId: asEventId("evt-exit-after-shutdown-interruption"),
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        createdAt: "2026-01-01T00:00:03.000Z",
+      });
+      yield* Effect.promise(() => harness.drain());
+      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === threadId,
+      );
+      expect(thread?.session?.status).toBe("interrupted");
       expect(thread?.session?.activeTurnId).toBeNull();
     }),
   );

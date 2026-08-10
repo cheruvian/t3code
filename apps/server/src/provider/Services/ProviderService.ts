@@ -20,6 +20,7 @@ import type {
   ProviderSendTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
+  ProviderSessionGeneration,
   ProviderStopSessionInput,
   ThreadId,
   ProviderTurnStartResult,
@@ -27,6 +28,7 @@ import type {
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
+import type * as Option from "effect/Option";
 
 import type { ProviderServiceError } from "../Errors.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
@@ -104,6 +106,18 @@ export interface ProviderServiceShape {
     readonly threadId: ThreadId;
     readonly numTurns: number;
   }) => Effect.Effect<void, ProviderServiceError>;
+
+  readonly runIfCurrentGeneration: <A, E, R>(
+    input: {
+      readonly threadId: ThreadId;
+      readonly sessionGeneration?: ProviderSessionGeneration;
+    },
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<Option.Option<A>, E | ProviderServiceError, R>;
+
+  readonly getTerminalDisposition: (
+    threadId: ThreadId,
+  ) => Effect.Effect<"interrupted" | null, ProviderServiceError>;
 
   /**
    * Canonical provider runtime event stream.

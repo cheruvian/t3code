@@ -20,6 +20,7 @@ import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopState from "../app/DesktopState.ts";
+import * as DesktopSafeShutdown from "../app/DesktopSafeShutdown.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
 
 interface UpdatesHarnessOptions {
@@ -31,6 +32,7 @@ interface UpdatesHarnessOptions {
   readonly setDisableDifferentialDownload?: Effect.Effect<void>;
   readonly stopBackend?: Effect.Effect<void>;
   readonly env?: Record<string, string | undefined>;
+  readonly safeShutdownResolution?: "committed" | "cancelled" | "failed";
 }
 
 const flushCallbacks = Effect.yieldNow;
@@ -171,6 +173,12 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     : DesktopAppSettings.layer;
 
   const layer = DesktopUpdates.layer.pipe(
+    Layer.provideMerge(
+      Layer.succeed(DesktopSafeShutdown.DesktopSafeShutdown, {
+        request: () => Effect.succeed(options.safeShutdownResolution ?? "committed"),
+        resolve: () => Effect.void,
+      }),
+    ),
     Layer.provideMerge(updaterLayer),
     Layer.provideMerge(windowLayer),
     Layer.provideMerge(backendLayer),
@@ -505,6 +513,32 @@ describe("DesktopUpdates", () => {
 
         const changedState = yield* updates.setChannel("nightly");
         assert.equal(changedState.channel, "nightly");
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("keeps a downloaded update pending when safe shutdown is cancelled", () => {
+    let stopCalls = 0;
+    const harness = makeHarness({
+      safeShutdownResolution: "cancelled",
+      stopBackend: Effect.sync(() => {
+        stopCalls += 1;
+      }),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const desktopState = yield* DesktopState.DesktopState;
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* flushCallbacks;
+
+        const result = yield* updates.install;
+        assert.isFalse(result.accepted);
+        assert.equal(stopCalls, 0);
+        assert.isFalse(yield* Ref.get(desktopState.quitting));
+        assert.equal((yield* updates.getState).status, "downloaded");
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });

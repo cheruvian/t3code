@@ -5,6 +5,7 @@ import {
   EventId,
   IsoDateTime,
   ProviderItemId,
+  ProviderSessionGeneration,
   ThreadId,
   TurnId,
 } from "./baseSchemas.ts";
@@ -47,6 +48,7 @@ export const ProviderSession = Schema.Struct({
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   lastError: Schema.optional(TrimmedNonEmptyString),
+  sessionGeneration: Schema.optional(ProviderSessionGeneration),
 });
 export type ProviderSession = typeof ProviderSession.Type;
 
@@ -61,6 +63,7 @@ export const ProviderSessionStartInput = Schema.Struct({
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
   runtimeMode: RuntimeMode,
+  sessionGeneration: Schema.optional(ProviderSessionGeneration),
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 

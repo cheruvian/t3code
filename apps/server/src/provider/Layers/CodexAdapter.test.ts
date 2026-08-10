@@ -10,6 +10,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderItemId,
+  ServerOwnerGeneration,
   type ProviderApprovalDecision,
   type ProviderEvent,
   type ProviderSession,
@@ -212,7 +213,8 @@ function makeScopedRuntimeFactory(options?: { readonly failConstruction?: boolea
 }
 
 const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory, {
-  upsert: () => Effect.void,
+  ownerGeneration: ServerOwnerGeneration.make("codex-adapter-test-owner"),
+  upsert: () => Effect.succeed(true),
   getProvider: () =>
     Effect.die(new Error("ProviderSessionDirectory.getProvider is not used in test")),
   getBinding: () => Effect.succeed(Option.none()),

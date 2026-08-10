@@ -1674,7 +1674,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
 
   const offerRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
-    Queue.offer(runtimeEventQueue, event).pipe(Effect.asVoid);
+    Queue.offer(runtimeEventQueue, {
+      ...event,
+      ...(event.sessionGeneration !== undefined
+        ? { sessionGeneration: event.sessionGeneration }
+        : sessions.get(event.threadId)?.session.sessionGeneration !== undefined
+          ? { sessionGeneration: sessions.get(event.threadId)?.session.sessionGeneration }
+          : {}),
+    }).pipe(Effect.asVoid);
 
   const logNativeSdkMessage = Effect.fnUntraced(function* (
     context: ClaudeSessionContext,
@@ -4187,6 +4194,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         },
         createdAt: startedAt,
         updatedAt: startedAt,
+        ...(input.sessionGeneration !== undefined
+          ? { sessionGeneration: input.sessionGeneration }
+          : {}),
       };
 
       const context: ClaudeSessionContext = {

@@ -5,6 +5,7 @@ import {
   IsoDateTime,
   NonNegativeInt,
   ProviderItemId,
+  ProviderSessionGeneration,
   PositiveInt,
   RuntimeItemId,
   RuntimeRequestId,
@@ -261,6 +262,7 @@ const ProviderRuntimeEventBase = Schema.Struct({
   requestId: Schema.optional(RuntimeRequestId),
   providerRefs: Schema.optional(ProviderRefs),
   raw: Schema.optional(RuntimeEventRaw),
+  sessionGeneration: Schema.optional(ProviderSessionGeneration),
 });
 export type ProviderRuntimeEventBase = typeof ProviderRuntimeEventBase.Type;
 

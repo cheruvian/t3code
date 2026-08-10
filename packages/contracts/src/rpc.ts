@@ -141,6 +141,10 @@ import {
   ServerProcessDiagnosticsResult,
   ServerProcessResourceHistoryInput,
   ServerProcessResourceHistoryResult,
+  ServerDrainingError,
+  ServerDrainControlError,
+  ServerDrainControlInput,
+  ServerDrainSnapshot,
   ServerSignalProcessInput,
   ServerSignalProcessResult,
   ServerUpsertKeybindingInput,
@@ -230,6 +234,7 @@ export const WS_METHODS = {
   serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
+  serverControlDrain: "server.controlDrain",
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverRemoveKeybinding: "server.removeKeybinding",
   serverGetSettings: "server.getSettings",
@@ -326,6 +331,12 @@ export const WsServerUpdateServerWithProgressRpc = Rpc.make(
     stream: true,
   },
 );
+
+export const WsServerControlDrainRpc = Rpc.make(WS_METHODS.serverControlDrain, {
+  payload: ServerDrainControlInput,
+  success: Schema.NullOr(ServerDrainSnapshot),
+  error: Schema.Union([ServerDrainControlError, EnvironmentAuthorizationError]),
+});
 
 export const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
   payload: Schema.Struct({}),
@@ -693,7 +704,11 @@ export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   {
     payload: ClientOrchestrationCommand,
     success: OrchestrationRpcSchemas.dispatchCommand.output,
-    error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
+    error: Schema.Union([
+      OrchestrationDispatchCommandError,
+      ServerDrainingError,
+      EnvironmentAuthorizationError,
+    ]),
   },
 );
 
@@ -809,6 +824,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerUpdateProviderRpc,
   WsServerUpdateServerRpc,
   WsServerUpdateServerWithProgressRpc,
+  WsServerControlDrainRpc,
   WsServerUpsertKeybindingRpc,
   WsServerRemoveKeybindingRpc,
   WsServerGetSettingsRpc,

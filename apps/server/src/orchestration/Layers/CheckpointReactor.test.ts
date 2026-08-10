@@ -25,6 +25,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -125,6 +126,8 @@ function createProviderServiceHarness(
         },
       }),
     rollbackConversation,
+    runIfCurrentGeneration: (_input, effect) => Effect.map(effect, Option.some),
+    getTerminalDisposition: () => Effect.succeed(null),
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
     },

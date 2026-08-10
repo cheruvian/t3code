@@ -4,6 +4,7 @@ import {
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
+  type ServerDrainSnapshot,
   type ServerProvider,
   type ServerSettings,
 } from "@t3tools/contracts";
@@ -70,6 +71,14 @@ export const primaryServerConfigEventAtom = Atom.make(
 export const primaryServerWelcomeAtom = Atom.make(
   (get): ServerLifecycleWelcomePayload | null => get(primaryServerStateAtom).welcome,
 ).pipe(Atom.withLabel("web-primary-server-welcome"));
+
+export const primaryServerDrainAtom = Atom.make((get): ServerDrainSnapshot | null => {
+  const environmentId = get(primaryEnvironmentIdAtom);
+  if (environmentId === null) return null;
+  return Option.getOrNull(
+    AsyncResult.value(get(serverEnvironment.drain({ environmentId, input: {} }))),
+  );
+}).pipe(Atom.withLabel("web-primary-server-drain"));
 
 export const primaryServerSettingsAtom = Atom.make(
   (get): ServerSettings => get(primaryServerConfigAtom)?.settings ?? DEFAULT_SERVER_SETTINGS,

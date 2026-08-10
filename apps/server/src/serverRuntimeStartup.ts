@@ -29,11 +29,13 @@ import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngi
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as OrchestrationReactor from "./orchestration/Services/OrchestrationReactor.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import * as ServerDrainCoordinator from "./serverDrainCoordinator.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
+import * as SessionReconciler from "./provider/Services/SessionReconciler.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import {
@@ -296,17 +298,44 @@ interface StartupOptions {
   readonly abort?: (error: ServerRuntimeStartupError) => Effect.Effect<void>;
 }
 
+export const completeSessionStartupBarrier = <E, R>(options: {
+  readonly reconcile: Effect.Effect<
+    {
+      readonly remainingOrphans: ReadonlyArray<unknown>;
+    },
+    E,
+    R
+  >;
+  readonly completePersistedDrain: Effect.Effect<void, E, R>;
+  readonly startReaper: Effect.Effect<void, E, R>;
+}) =>
+  Effect.gen(function* () {
+    const reconciliation = yield* options.reconcile;
+    if (reconciliation.remainingOrphans.length > 0) {
+      return yield* new SessionReconciler.SessionReconciliationError({
+        cause: `Provider session reconciliation left ${reconciliation.remainingOrphans.length} orphaned sessions.`,
+      });
+    }
+    yield* options.completePersistedDrain;
+    yield* options.startReaper;
+    return reconciliation;
+  });
+
 export const make = (options?: StartupOptions) =>
   Effect.gen(function* () {
     const serverConfig = yield* ServerConfig.ServerConfig;
     const keybindings = yield* Keybindings.Keybindings;
     const orchestrationReactor = yield* OrchestrationReactor.OrchestrationReactor;
     const providerSessionReaper = yield* ProviderSessionReaper.ProviderSessionReaper;
+    const sessionReconciler = yield* SessionReconciler.SessionReconciler;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     const crypto = yield* Crypto.Crypto;
     const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
+    const drainCoordinator = yield* Effect.serviceOption(
+      ServerDrainCoordinator.ServerDrainCoordinator,
+    );
 
     const commandGate = yield* makeCommandGate;
     const httpListening = yield* Deferred.make<void>();
@@ -348,11 +377,20 @@ export const make = (options?: StartupOptions) =>
       yield* Effect.logDebug("startup phase: parking orchestration roots at activation");
       yield* runStartupPhase(
         "reactors.start",
-        Effect.gen(function* () {
-          yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
-          yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
-        }),
+        orchestrationReactor.start().pipe(Scope.provide(reactorScope)),
       );
+
+      yield* Effect.logDebug("startup phase: reconciling orphaned provider sessions");
+      yield* completeSessionStartupBarrier({
+        reconcile: runStartupPhase(
+          "provider-sessions.reconcile",
+          sessionReconciler.reconcileOrphanedSessions,
+        ),
+        completePersistedDrain: Option.isSome(drainCoordinator)
+          ? drainCoordinator.value.completeStartupReconciliation
+          : Effect.void,
+        startReaper: providerSessionReaper.start().pipe(Scope.provide(reactorScope)),
+      });
 
       const welcomeBase = yield* resolveWelcomeBase;
       const environment = yield* serverEnvironment.getDescriptor;

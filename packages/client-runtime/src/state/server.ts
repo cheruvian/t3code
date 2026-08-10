@@ -2,6 +2,7 @@ import {
   type EnvironmentId,
   type ServerConfig,
   type ServerConfigStreamEvent,
+  type ServerDrainSnapshot,
   type ServerLifecycleWelcomePayload,
   type ServerLifecycleStreamReadyEvent,
   type ServerSelfUpdateProgressEvent,
@@ -442,6 +443,15 @@ export function projectServerWelcome(
   return [Option.some(welcome), [welcome]];
 }
 
+export function projectServerDrain(
+  current: ServerDrainSnapshot | null,
+  event: { readonly type: "welcome" | "ready"; readonly payload: unknown },
+): readonly [ServerDrainSnapshot | null, ReadonlyArray<ServerDrainSnapshot | null>] {
+  if (event.type !== "ready") return [current, []];
+  const drain = (event.payload as ServerLifecycleStreamReadyEvent["payload"]).drain ?? null;
+  return [drain, [drain]];
+}
+
 export function resolveServerConfigValue(
   projection: ServerConfigProjection | null,
   initialConfig: ServerConfig | null,
@@ -715,6 +725,17 @@ export function createServerEnvironmentAtoms<R, E>(
         stream.pipe(
           Stream.mapAccum(Option.none<ServerLifecycleWelcomePayload>, projectServerWelcome),
         ),
+    }),
+    drain: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:drain",
+      tag: WS_METHODS.subscribeServerLifecycle,
+      transform: (stream) =>
+        stream.pipe(Stream.mapAccum(() => null as ServerDrainSnapshot | null, projectServerDrain)),
+    }),
+    controlDrain: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:control-drain",
+      tag: WS_METHODS.serverControlDrain,
+      concurrency: configConcurrency,
     }),
     refreshProviders: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-providers",

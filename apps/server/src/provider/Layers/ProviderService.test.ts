@@ -23,6 +23,7 @@ import { createModelSelection } from "@t3tools/shared/model";
 import { it, assert, vi } from "@effect/vitest";
 
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -105,6 +106,9 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
         cwd: input.cwd ?? process.cwd(),
         createdAt: now,
         updatedAt: now,
+        ...(input.sessionGeneration !== undefined
+          ? { sessionGeneration: input.sessionGeneration }
+          : {}),
       };
       sessions.set(session.threadId, session);
       return session;
@@ -221,7 +225,13 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
   };
 
   const emit = (event: LegacyProviderRuntimeEvent): void => {
-    Effect.runSync(PubSub.publish(runtimeEventPubSub, event as unknown as ProviderRuntimeEvent));
+    const sessionGeneration = sessions.get(event.threadId)?.sessionGeneration;
+    Effect.runSync(
+      PubSub.publish(runtimeEventPubSub, {
+        ...event,
+        ...(sessionGeneration !== undefined ? { sessionGeneration } : {}),
+      } as unknown as ProviderRuntimeEvent),
+    );
   };
 
   const updateSession = (
@@ -841,6 +851,84 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("holds the lifecycle lease through durable event work before replacement", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-generation-interleaving");
+      const first = yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      if (first.sessionGeneration === undefined) {
+        return yield* Effect.die(new Error("provider sessions must have generations"));
+      }
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const oldEvent = yield* provider
+        .runIfCurrentGeneration(
+          { threadId, sessionGeneration: first.sessionGeneration },
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      const replacement = yield* provider
+        .startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId,
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      assert.isUndefined(replacement.pollUnsafe());
+      yield* Deferred.succeed(release, undefined);
+      assert.equal(Option.isSome(yield* Fiber.join(oldEvent)), true);
+      const second = yield* Fiber.join(replacement);
+      assert.notEqual(second.sessionGeneration, first.sessionGeneration);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("runs lifecycle effects only for the current provider session generation", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-generation-fence");
+      const first = yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const second = yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      if (first.sessionGeneration === undefined || second.sessionGeneration === undefined) {
+        return yield* Effect.die(new Error("provider sessions must have generations"));
+      }
+      const effectsRun = yield* Ref.make(0);
+
+      const staleResult = yield* provider.runIfCurrentGeneration(
+        { threadId, sessionGeneration: first.sessionGeneration },
+        Ref.update(effectsRun, (count) => count + 1),
+      );
+      const currentResult = yield* provider.runIfCurrentGeneration(
+        { threadId, sessionGeneration: second.sessionGeneration },
+        Ref.update(effectsRun, (count) => count + 1),
+      );
+
+      assert.equal(first.sessionGeneration === second.sessionGeneration, false);
+      assert.equal(Option.isNone(staleResult), true);
+      assert.equal(Option.isSome(currentResult), true);
+      assert.equal(yield* Ref.get(effectsRun), 1);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("routes provider operations and rollback conversation", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;
@@ -1262,6 +1350,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.equal(Option.isSome(runningRuntime), true);
       if (Option.isSome(runningRuntime)) {
         assert.equal(runningRuntime.value.status, "running");
+        assert.equal(runningRuntime.value.ownerGeneration === null, false);
+        assert.equal(runningRuntime.value.sessionGeneration, session.sessionGeneration);
         assert.deepEqual(runningRuntime.value.resumeCursor, session.resumeCursor);
         const payload = runningRuntime.value.runtimePayload;
         assert.equal(payload !== null && typeof payload === "object", true);
@@ -1356,15 +1446,29 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       secondClaude.startSession.mockClear();
 
-      yield* Effect.gen(function* () {
+      const recovered = yield* Effect.gen(function* () {
         const provider = yield* ProviderService.ProviderService;
-        yield* provider.startSession(initial.threadId, {
+        const session = yield* provider.startSession(initial.threadId, {
           provider: ProviderDriverKind.make("claudeAgent"),
           providerInstanceId: claudeAgentInstanceId,
           threadId: initial.threadId,
           cwd: "/tmp/project-claude-start",
           runtimeMode: "full-access",
         });
+        if (initial.sessionGeneration === undefined || session.sessionGeneration === undefined) {
+          return yield* Effect.die("expected provider generations");
+        }
+        const stale = yield* provider.runIfCurrentGeneration(
+          { threadId: initial.threadId, sessionGeneration: initial.sessionGeneration },
+          Effect.succeed("stale"),
+        );
+        const current = yield* provider.runIfCurrentGeneration(
+          { threadId: initial.threadId, sessionGeneration: session.sessionGeneration },
+          Effect.succeed("current"),
+        );
+        assert.equal(stale._tag, "None");
+        assert.equal(current._tag, "Some");
+        return session;
       }).pipe(Effect.provide(secondProviderLayer));
 
       assert.equal(secondClaude.startSession.mock.calls.length, 1);
@@ -1376,12 +1480,15 @@ routing.layer("ProviderServiceLive routing", (it) => {
           cwd?: string;
           resumeCursor?: unknown;
           threadId?: string;
+          sessionGeneration?: string;
         };
         assert.equal(startPayload.provider, "claudeAgent");
         assert.equal(startPayload.cwd, "/tmp/project-claude-start");
         assert.deepEqual(startPayload.resumeCursor, initial.resumeCursor);
         assert.equal(startPayload.threadId, initial.threadId);
+        assert.equal(startPayload.sessionGeneration, recovered.sessionGeneration);
       }
+      assert.notEqual(recovered.sessionGeneration, initial.sessionGeneration);
 
       NodeFS.rmSync(tempDir, { recursive: true, force: true });
     }).pipe(Effect.provide(NodeServices.layer)),
@@ -1525,6 +1632,10 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
       assert.equal(
         events.some((entry) => entry.type === "turn.completed"),
         true,
+      );
+      assert.equal(
+        events.find((entry) => entry.type === "turn.completed")?.sessionGeneration,
+        session.sessionGeneration,
       );
       assert.equal(
         events.some(

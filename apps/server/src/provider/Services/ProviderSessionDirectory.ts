@@ -1,8 +1,10 @@
 import type {
   ProviderInstanceId,
+  ProviderSessionGeneration,
   ProviderDriverKind,
   ProviderSessionRuntimeStatus,
   RuntimeMode,
+  ServerOwnerGeneration,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -28,6 +30,10 @@ export interface ProviderRuntimeBinding {
   readonly resumeCursor?: unknown | null;
   readonly runtimePayload?: unknown | null;
   readonly runtimeMode?: RuntimeMode;
+  readonly ownerGeneration?: ServerOwnerGeneration | null;
+  readonly sessionGeneration?: ProviderSessionGeneration | null;
+  readonly terminalDisposition?: "interrupted" | null;
+  readonly expectedSessionGeneration?: ProviderSessionGeneration | null;
 }
 
 export interface ProviderRuntimeBindingWithMetadata extends ProviderRuntimeBinding {
@@ -41,9 +47,10 @@ export type ProviderSessionDirectoryWriteError =
   | ProviderSessionDirectoryPersistenceError;
 
 export interface ProviderSessionDirectoryShape {
+  readonly ownerGeneration: ServerOwnerGeneration;
   readonly upsert: (
     binding: ProviderRuntimeBinding,
-  ) => Effect.Effect<void, ProviderSessionDirectoryWriteError>;
+  ) => Effect.Effect<boolean, ProviderSessionDirectoryWriteError>;
 
   readonly getProvider: (
     threadId: ThreadId,

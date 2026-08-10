@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   ServerConfig,
+  ServerLifecycleReadyPayload,
   ServerProvider,
   ServerProviders,
   ServerUpsertKeybindingResult,
@@ -153,5 +154,51 @@ describe("server config forward compatibility", () => {
     ]);
 
     expect(parsed).toEqual([decodedBase]);
+  });
+});
+
+describe("server drain lifecycle contracts", () => {
+  it("preserves additive drain state while continuing to decode legacy ready payloads", () => {
+    const decode = Schema.decodeUnknownSync(ServerLifecycleReadyPayload);
+    const environment = {
+      environmentId: "environment-1",
+      label: "Local",
+      platform: { os: "darwin", arch: "arm64" },
+      serverVersion: "0.0.32",
+      capabilities: {},
+    };
+
+    expect(
+      decode({
+        at: "2026-08-10T00:00:00.000Z",
+        environment,
+      }).drain,
+    ).toBeUndefined();
+
+    expect(
+      decode({
+        at: "2026-08-10T00:00:00.000Z",
+        environment,
+        drain: {
+          id: "drain-1",
+          action: "restart",
+          phase: "draining",
+          activeWorkCount: 2,
+          blockedThreadIds: ["thread-1"],
+          canCancel: true,
+          canForce: true,
+          requestedAt: "2026-08-10T00:00:00.000Z",
+        },
+      }).drain,
+    ).toEqual({
+      id: "drain-1",
+      action: "restart",
+      phase: "draining",
+      activeWorkCount: 2,
+      blockedThreadIds: ["thread-1"],
+      canCancel: true,
+      canForce: true,
+      requestedAt: "2026-08-10T00:00:00.000Z",
+    });
   });
 });

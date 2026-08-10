@@ -18,6 +18,7 @@ import * as Schema from "effect/Schema";
 
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
 import * as DesktopLocalEnvironmentAuth from "../../backend/DesktopLocalEnvironmentAuth.ts";
+import * as DesktopSafeShutdown from "../../app/DesktopSafeShutdown.ts";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
 import * as DesktopWslBackend from "../../wsl/DesktopWslBackend.ts";
@@ -150,6 +151,21 @@ export const getLocalEnvironmentBearerToken = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.window.getLocalEnvironmentBearerToken")(function* () {
     const localAuth = yield* DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuth;
     return yield* localAuth.getBearerToken;
+  }),
+});
+
+export const resolveSafeShutdown = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.SAFE_SHUTDOWN_RESOLVE_CHANNEL,
+  payload: Schema.Struct({
+    requestId: Schema.String,
+    resolution: Schema.Literals(["committed", "cancelled", "failed"]),
+  }),
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.window.resolveSafeShutdown")(function* (input) {
+    const safeShutdown = yield* Effect.serviceOption(DesktopSafeShutdown.DesktopSafeShutdown);
+    if (Option.isSome(safeShutdown)) {
+      yield* safeShutdown.value.resolve(input.requestId, input.resolution);
+    }
   }),
 });
 

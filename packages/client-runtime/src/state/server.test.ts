@@ -36,6 +36,7 @@ import {
   matchesServerUpdateReadyEvent,
   nudgeReconnectDuringUpdateRestart,
   projectServerWelcome,
+  projectServerDrain,
   resolveServerConfigValue,
   resolveServerUpdateProgressResult,
   serverUpdateStateForProgressEvent,
@@ -299,6 +300,26 @@ describe("server state projection", () => {
 
     expect(Option.getOrThrow(afterReady)).toBe(welcome);
     expect(emitted).toEqual([]);
+  });
+
+  it("projects and clears authoritative drain state from ready events", () => {
+    const drain = {
+      id: "drain-1",
+      action: "restart" as const,
+      phase: "draining" as const,
+      activeWorkCount: 1,
+      blockedThreadIds: [],
+      canCancel: true,
+      canForce: true,
+      requestedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const [active, emitted] = projectServerDrain(null, {
+      type: "ready",
+      payload: { drain },
+    });
+    expect(active).toEqual(drain);
+    expect(emitted).toEqual([drain]);
+    expect(projectServerDrain(active, { type: "ready", payload: {} })).toEqual([null, [null]]);
   });
 
   it("prefers an active session config over cache until a live event arrives", () => {

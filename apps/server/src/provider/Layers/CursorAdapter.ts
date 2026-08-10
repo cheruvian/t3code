@@ -362,7 +362,14 @@ export function makeCursorAdapter(
       );
 
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
-      PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
+      PubSub.publish(runtimeEventPubSub, {
+        ...event,
+        ...(event.sessionGeneration !== undefined
+          ? { sessionGeneration: event.sessionGeneration }
+          : sessions.get(event.threadId)?.session.sessionGeneration !== undefined
+            ? { sessionGeneration: sessions.get(event.threadId)?.session.sessionGeneration }
+            : {}),
+      }).pipe(Effect.asVoid);
 
     const getThreadSemaphore = (threadId: string) =>
       SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
@@ -465,6 +472,7 @@ export function makeCursorAdapter(
         if (ctx.notificationFiber) {
           yield* Fiber.interrupt(ctx.notificationFiber);
         }
+        const sessionGeneration = ctx.session.sessionGeneration;
         yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
         sessions.delete(ctx.threadId);
         yield* offerRuntimeEvent({
@@ -472,6 +480,7 @@ export function makeCursorAdapter(
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
           threadId: ctx.threadId,
+          ...(sessionGeneration !== undefined ? { sessionGeneration } : {}),
           payload: { exitKind: "graceful" },
         });
       });
@@ -765,6 +774,9 @@ export function makeCursorAdapter(
             },
             createdAt: now,
             updatedAt: now,
+            ...(input.sessionGeneration !== undefined
+              ? { sessionGeneration: input.sessionGeneration }
+              : {}),
           };
 
           ctx = {

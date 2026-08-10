@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -13,6 +14,7 @@ import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as DesktopState from "./DesktopState.ts";
+import * as DesktopSafeShutdown from "./DesktopSafeShutdown.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 export class DesktopLifecycleRelaunchError extends Schema.TaggedErrorClass<DesktopLifecycleRelaunchError>()(
@@ -50,6 +52,16 @@ export class DesktopLifecycle extends Context.Service<
 
 const { logInfo: logLifecycleInfo, logError: logLifecycleError } =
   makeComponentLogger("desktop-lifecycle");
+
+const requestSafeShutdown = (action: "shutdown" | "restart") =>
+  Effect.serviceOption(DesktopSafeShutdown.DesktopSafeShutdown).pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.succeed("committed" as const),
+        onSome: (safeShutdown) => safeShutdown.request(action),
+      }),
+    ),
+  );
 
 function addScopedListener<Args extends ReadonlyArray<unknown>>(
   target: unknown,
@@ -109,17 +121,17 @@ function handleBeforeQuit(
       const state = yield* DesktopState.DesktopState;
       yield* Ref.set(state.quitting, true);
       yield* logLifecycleInfo("before-quit received");
+      const resolution = yield* requestSafeShutdown("shutdown");
+      if (resolution !== "committed") {
+        yield* Ref.set(state.quitting, false);
+        return;
+      }
       yield* requestDesktopShutdownAndWait();
+      markQuitAllowed();
+      const electronApp = yield* ElectronApp.ElectronApp;
+      yield* electronApp.quit;
     }).pipe(Effect.withSpan("desktop.lifecycle.beforeQuit")),
-  ).finally(() => {
-    markQuitAllowed();
-    void runEffect(
-      Effect.gen(function* () {
-        const electronApp = yield* ElectronApp.ElectronApp;
-        yield* electronApp.quit;
-      }).pipe(Effect.withSpan("desktop.lifecycle.quitAfterShutdown")),
-    );
-  });
+  );
 }
 
 function quitFromSignal(
@@ -148,6 +160,7 @@ export const make = DesktopLifecycle.of({
     yield* logLifecycleInfo("desktop relaunch requested", { reason });
     yield* Effect.gen(function* () {
       yield* Effect.yieldNow;
+      if ((yield* requestSafeShutdown("restart")) !== "committed") return;
       yield* Ref.set(state.quitting, true);
       yield* requestDesktopShutdownAndWait();
       if (environment.isDevelopment) {

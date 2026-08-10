@@ -650,7 +650,14 @@ export function makeOpenCodeAdapter(
     );
 
     const emit = (event: ProviderRuntimeEvent) =>
-      Queue.offer(runtimeEvents, event).pipe(Effect.asVoid);
+      Queue.offer(runtimeEvents, {
+        ...event,
+        ...(event.sessionGeneration !== undefined
+          ? { sessionGeneration: event.sessionGeneration }
+          : sessions.get(event.threadId)?.session.sessionGeneration !== undefined
+            ? { sessionGeneration: sessions.get(event.threadId)?.session.sessionGeneration }
+            : {}),
+      }).pipe(Effect.asVoid);
     const writeNativeEvent = (
       threadId: ThreadId,
       event: {
@@ -678,6 +685,7 @@ export function makeOpenCodeAdapter(
         return;
       }
       const turnId = context.activeTurnId;
+      const sessionGeneration = context.session.sessionGeneration;
       sessions.delete(context.session.threadId);
       // Emit lifecycle events BEFORE tearing down the scope. Both call sites
       // run this inside a fiber forked via `Effect.forkIn(context.sessionScope)`;
@@ -689,6 +697,7 @@ export function makeOpenCodeAdapter(
           turnId,
         })),
         type: "runtime.error",
+        ...(sessionGeneration !== undefined ? { sessionGeneration } : {}),
         payload: {
           message,
           class: "transport_error",
@@ -700,6 +709,7 @@ export function makeOpenCodeAdapter(
           turnId,
         })),
         type: "session.exited",
+        ...(sessionGeneration !== undefined ? { sessionGeneration } : {}),
         payload: {
           reason: message,
           recoverable: false,
@@ -1366,6 +1376,9 @@ export function makeOpenCodeAdapter(
           },
           createdAt,
           updatedAt: createdAt,
+          ...(input.sessionGeneration !== undefined
+            ? { sessionGeneration: input.sessionGeneration }
+            : {}),
         };
 
         const context: OpenCodeSessionContext = {
@@ -1608,6 +1621,7 @@ export function makeOpenCodeAdapter(
             threadId,
           });
         }
+        const sessionGeneration = context.session.sessionGeneration;
         const stopped = yield* stopOpenCodeContext(context);
         sessions.delete(threadId);
         if (!stopped) {
@@ -1616,6 +1630,7 @@ export function makeOpenCodeAdapter(
         yield* emit({
           ...(yield* buildEventBase({ threadId })),
           type: "session.exited",
+          ...(sessionGeneration !== undefined ? { sessionGeneration } : {}),
           payload: {
             reason: "Session stopped.",
             recoverable: false,

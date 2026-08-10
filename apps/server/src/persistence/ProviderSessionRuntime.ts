@@ -12,8 +12,10 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import {
   IsoDateTime,
   ProviderInstanceId,
+  ProviderSessionGeneration,
   ProviderSessionRuntimeStatus,
   RuntimeMode,
+  ServerOwnerGeneration,
   ThreadId,
 } from "@t3tools/contracts";
 
@@ -49,6 +51,9 @@ export const ProviderSessionRuntime = Schema.Struct({
   lastSeenAt: IsoDateTime,
   resumeCursor: Schema.NullOr(Schema.Unknown),
   runtimePayload: Schema.NullOr(Schema.Unknown),
+  ownerGeneration: Schema.optionalKey(Schema.NullOr(ServerOwnerGeneration)),
+  sessionGeneration: Schema.optionalKey(Schema.NullOr(ProviderSessionGeneration)),
+  terminalDisposition: Schema.optionalKey(Schema.NullOr(Schema.Literal("interrupted"))),
 });
 export type ProviderSessionRuntime = typeof ProviderSessionRuntime.Type;
 
@@ -57,6 +62,12 @@ export type GetProviderSessionRuntimeInput = typeof GetProviderSessionRuntimeInp
 
 export const DeleteProviderSessionRuntimeInput = Schema.Struct({ threadId: ThreadId });
 export type DeleteProviderSessionRuntimeInput = typeof DeleteProviderSessionRuntimeInput.Type;
+export const ReplaceProviderSessionGenerationInput = Schema.Struct({
+  runtime: ProviderSessionRuntime,
+  expectedSessionGeneration: Schema.NullOr(ProviderSessionGeneration),
+});
+export type ReplaceProviderSessionGenerationInput =
+  typeof ReplaceProviderSessionGenerationInput.Type;
 
 /**
  * ProviderSessionRuntimeRepository - Service tag for provider runtime persistence.
@@ -71,6 +82,14 @@ export class ProviderSessionRuntimeRepository extends Context.Service<
      */
     readonly upsert: (
       runtime: ProviderSessionRuntime,
+    ) => Effect.Effect<void, ProviderSessionRuntimeRepositoryError>;
+
+    readonly replaceIfGenerationMatches: (
+      input: ReplaceProviderSessionGenerationInput,
+    ) => Effect.Effect<boolean, ProviderSessionRuntimeRepositoryError>;
+
+    readonly installOwnerGeneration: (
+      ownerGeneration: ServerOwnerGeneration,
     ) => Effect.Effect<void, ProviderSessionRuntimeRepositoryError>;
 
     /**
@@ -119,6 +138,9 @@ const ProviderSessionRuntimeRawDbRowSchema = Schema.Struct({
   lastSeenAt: Schema.Unknown,
   resumeCursor: Schema.Unknown,
   runtimePayload: Schema.Unknown,
+  ownerGeneration: Schema.Unknown,
+  sessionGeneration: Schema.Unknown,
+  terminalDisposition: Schema.Unknown,
 });
 
 const decodeRuntimeRow = Schema.decodeUnknownEffect(ProviderSessionRuntimeDbRowSchema);
@@ -161,6 +183,9 @@ export const make = Effect.gen(function* () {
           last_seen_at,
           resume_cursor_json,
           runtime_payload_json
+          , owner_generation
+          , session_generation
+          , terminal_disposition
         )
         VALUES (
           ${runtime.threadId},
@@ -172,6 +197,9 @@ export const make = Effect.gen(function* () {
           ${runtime.lastSeenAt},
           ${runtime.resumeCursor},
           ${runtime.runtimePayload}
+          , ${runtime.ownerGeneration}
+          , ${runtime.sessionGeneration}
+          , ${runtime.terminalDisposition}
         )
         ON CONFLICT (thread_id)
         DO UPDATE SET
@@ -183,6 +211,9 @@ export const make = Effect.gen(function* () {
           last_seen_at = excluded.last_seen_at,
           resume_cursor_json = excluded.resume_cursor_json,
           runtime_payload_json = excluded.runtime_payload_json
+          , owner_generation = excluded.owner_generation
+          , session_generation = excluded.session_generation
+          , terminal_disposition = excluded.terminal_disposition
       `,
   });
 
@@ -201,6 +232,9 @@ export const make = Effect.gen(function* () {
           last_seen_at AS "lastSeenAt",
           resume_cursor_json AS "resumeCursor",
           runtime_payload_json AS "runtimePayload"
+          , owner_generation AS "ownerGeneration"
+          , session_generation AS "sessionGeneration"
+          , terminal_disposition AS "terminalDisposition"
         FROM provider_session_runtime
         WHERE thread_id = ${threadId}
       `,
@@ -221,6 +255,9 @@ export const make = Effect.gen(function* () {
           last_seen_at AS "lastSeenAt",
           resume_cursor_json AS "resumeCursor",
           runtime_payload_json AS "runtimePayload"
+          , owner_generation AS "ownerGeneration"
+          , session_generation AS "sessionGeneration"
+          , terminal_disposition AS "terminalDisposition"
         FROM provider_session_runtime
         ORDER BY last_seen_at ASC, thread_id ASC
       `,
@@ -235,8 +272,37 @@ export const make = Effect.gen(function* () {
       `,
   });
 
+  const replaceRuntimeGeneration = SqlSchema.findOneOption({
+    Request: ReplaceProviderSessionGenerationInput,
+    Result: Schema.Struct({ threadId: Schema.String }),
+    execute: ({ runtime, expectedSessionGeneration }) =>
+      sql`
+        UPDATE provider_session_runtime
+        SET
+          provider_name = ${runtime.providerName},
+          provider_instance_id = ${runtime.providerInstanceId},
+          adapter_key = ${runtime.adapterKey},
+          runtime_mode = ${runtime.runtimeMode},
+          status = ${runtime.status},
+          last_seen_at = ${runtime.lastSeenAt},
+          resume_cursor_json = ${runtime.resumeCursor},
+          runtime_payload_json = ${runtime.runtimePayload},
+          owner_generation = ${runtime.ownerGeneration ?? null},
+          session_generation = ${runtime.sessionGeneration ?? null},
+          terminal_disposition = ${runtime.terminalDisposition ?? null}
+        WHERE thread_id = ${runtime.threadId}
+          AND session_generation IS ${expectedSessionGeneration}
+        RETURNING thread_id AS "threadId"
+      `,
+  });
+
   const upsert: ProviderSessionRuntimeRepository["Service"]["upsert"] = (runtime) =>
-    upsertRuntimeRow(runtime).pipe(
+    upsertRuntimeRow({
+      ...runtime,
+      ownerGeneration: runtime.ownerGeneration ?? null,
+      sessionGeneration: runtime.sessionGeneration ?? null,
+      terminalDisposition: runtime.terminalDisposition ?? null,
+    }).pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "ProviderSessionRuntimeRepository.upsert:query",
@@ -273,6 +339,19 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  const replaceIfGenerationMatches: ProviderSessionRuntimeRepository["Service"]["replaceIfGenerationMatches"] =
+    (input) =>
+      replaceRuntimeGeneration(input).pipe(
+        Effect.map(Option.isSome),
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProviderSessionRuntimeRepository.replaceIfGenerationMatches:query",
+            "ProviderSessionRuntimeRepository.replaceIfGenerationMatches:decodeRequest",
+            { threadId: input.runtime.threadId },
+          ),
+        ),
+      );
+
   const list: ProviderSessionRuntimeRepository["Service"]["list"] = () =>
     listRuntimeRows(undefined).pipe(
       Effect.mapError(
@@ -308,6 +387,23 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  const installOwnerGeneration: ProviderSessionRuntimeRepository["Service"]["installOwnerGeneration"] =
+    (ownerGeneration) =>
+      sql`
+        INSERT INTO server_owner_state (singleton_id, owner_generation)
+        VALUES (1, ${ownerGeneration})
+        ON CONFLICT (singleton_id) DO UPDATE SET owner_generation = excluded.owner_generation
+      `.pipe(
+        Effect.asVoid,
+        Effect.mapError(
+          (cause) =>
+            new PersistenceSqlError({
+              operation: "ProviderSessionRuntime.installOwnerGeneration",
+              cause,
+            }),
+        ),
+      );
+
   const deleteByThreadId: ProviderSessionRuntimeRepository["Service"]["deleteByThreadId"] = (
     input,
   ) =>
@@ -324,6 +420,8 @@ export const make = Effect.gen(function* () {
 
   return {
     upsert,
+    replaceIfGenerationMatches,
+    installOwnerGeneration,
     getByThreadId,
     list,
     deleteByThreadId,

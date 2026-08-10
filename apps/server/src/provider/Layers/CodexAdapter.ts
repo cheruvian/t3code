@@ -15,6 +15,7 @@ import {
   type ProviderEvent,
   ProviderInstanceId,
   type ProviderRuntimeEvent,
+  type ProviderSessionGeneration,
   type ProviderRequestKind,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
@@ -89,6 +90,7 @@ export interface CodexAdapterLiveOptions {
 
 interface CodexAdapterSessionContext {
   readonly threadId: ThreadId;
+  readonly sessionGeneration: ProviderSessionGeneration | undefined;
   readonly scope: Scope.Closeable;
   readonly runtime: CodexSessionRuntimeShape;
   readonly eventFiber: Fiber.Fiber<void, never>;
@@ -1728,7 +1730,14 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               });
               return;
             }
-            yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
+            const sessionGeneration = input.sessionGeneration;
+            yield* Queue.offerAll(
+              runtimeEventQueue,
+              runtimeEvents.map((runtimeEvent) => ({
+                ...runtimeEvent,
+                ...(sessionGeneration !== undefined ? { sessionGeneration } : {}),
+              })),
+            );
           }),
         ).pipe(Effect.forkChild);
 
@@ -1753,6 +1762,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
         sessions.set(input.threadId, {
           threadId: input.threadId,
+          sessionGeneration: input.sessionGeneration,
           scope: sessionScope,
           runtime,
           eventFiber,

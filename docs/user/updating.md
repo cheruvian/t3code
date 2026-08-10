@@ -15,8 +15,15 @@ update the server, and the version difference remains visible in Connections.
 
 ## Before You Update
 
-Let active agent work and terminal commands finish first. Updating restarts the server, so the
-connection will disappear briefly and work that is still running may be interrupted.
+When an update needs to restart the server, T3 Code enters a safe shutdown drain. A prominent
+warning shows how many agent sessions are still working and whether any need approval or input.
+New turns are paused, while approvals, requested input, and steering for existing turns remain
+available so they can finish normally.
+
+You can cancel while the server is still waiting. **Stop now** durably marks remaining active work
+as interrupted before the provider processes stop. Interrupted work remains in the thread history,
+but T3 Code does not automatically resubmit it after restart; review it and explicitly send the
+next instruction when you are ready.
 
 The update does not remove saved threads, settings, or project files.
 

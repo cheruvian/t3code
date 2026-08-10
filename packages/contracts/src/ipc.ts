@@ -1050,6 +1050,11 @@ export interface DesktopBridge {
   ) => Promise<T | null>;
   openExternal: (url: string) => Promise<boolean>;
   onMenuAction: (listener: (action: string) => void) => () => void;
+  onSafeShutdownRequest: (listener: (request: DesktopSafeShutdownRequest) => void) => () => void;
+  resolveSafeShutdown: (
+    requestId: string,
+    resolution: DesktopSafeShutdownResolution,
+  ) => Promise<void>;
   getWindowFullscreenState: () => boolean;
   onWindowFullscreenStateChange: (listener: (fullscreen: boolean) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
@@ -1063,6 +1068,13 @@ export interface DesktopBridge {
    * Electron desktop build; web builds have `preview === undefined`.
    */
   preview?: DesktopPreviewBridge;
+}
+
+export type DesktopSafeShutdownAction = "shutdown" | "restart" | "update";
+export type DesktopSafeShutdownResolution = "committed" | "cancelled" | "failed";
+export interface DesktopSafeShutdownRequest {
+  readonly requestId: string;
+  readonly action: DesktopSafeShutdownAction;
 }
 
 export interface DesktopPreviewBridge {

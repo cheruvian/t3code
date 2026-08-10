@@ -42,8 +42,9 @@ import {
   ProjectWriteFileError,
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
-  type ServerSelfUpdateError,
+  ServerSelfUpdateError,
   type ServerSelfUpdateProgressEvent,
+  ServerDrainControlError,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
@@ -82,6 +83,8 @@ import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import * as ServerDrainCoordinator from "./serverDrainCoordinator.ts";
+import { requiresDrainAdmission } from "./serverDrainAdmission.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -371,6 +374,47 @@ const makeWsRpcLayer = (
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
+      const drainCoordinatorOption = yield* Effect.serviceOption(
+        ServerDrainCoordinator.ServerDrainCoordinator,
+      );
+      const drainCoordinator: ServerDrainCoordinator.ServerDrainCoordinator["Service"] =
+        Option.getOrElse(drainCoordinatorOption, () => ({
+          control: () =>
+            Effect.fail(
+              new ServerDrainControlError({
+                reason: "persistence-failed",
+                message: "Safe shutdown is not available in this runtime.",
+              }),
+            ),
+          snapshot: Effect.succeed(null),
+          assertTurnAdmission: Effect.void,
+          admitTurn: (effect) => effect,
+          awaitCommit: () =>
+            Effect.fail(
+              new ServerDrainControlError({
+                reason: "not-draining",
+                message: "Safe shutdown is not available in this runtime.",
+              }),
+            ),
+          completeStartupReconciliation: Effect.void,
+          clearFailedUpdateDrain: Effect.void,
+          drainForProcessExit: Effect.void,
+        }));
+      const awaitSafeUpdateDrain = Option.isNone(drainCoordinatorOption)
+        ? Effect.void
+        : Effect.gen(function* () {
+            const drain = yield* drainCoordinator.control({ operation: "begin", action: "update" });
+            if (drain === null) return;
+            yield* drainCoordinator.awaitCommit(drain.id);
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ServerSelfUpdateError({
+                  reason: "Safe shutdown was cancelled or could not settle active work.",
+                  cause,
+                }),
+            ),
+          );
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
@@ -1049,7 +1093,10 @@ const makeWsRpcLayer = (
                         Effect.orElseSucceed(() => false),
                       )
                   : false;
-              const result = yield* dispatchNormalizedCommand(normalizedCommand);
+              const dispatch = dispatchNormalizedCommand(normalizedCommand);
+              const result = yield* requiresDrainAdmission(normalizedCommand)
+                ? drainCoordinator.admitTurn(dispatch)
+                : dispatch;
               if (normalizedCommand.type === "thread.archive") {
                 if (shouldStopSessionAfterArchive) {
                   yield* Effect.gen(function* () {
@@ -1422,19 +1469,29 @@ const makeWsRpcLayer = (
             },
           ),
         [WS_METHODS.serverUpdateServer]: (input) =>
-          observeRpcEffect(WS_METHODS.serverUpdateServer, serverSelfUpdate.update(input), {
-            "rpc.aggregate": "server",
-          }),
+          observeRpcEffect(
+            WS_METHODS.serverUpdateServer,
+            awaitSafeUpdateDrain.pipe(
+              Effect.andThen(serverSelfUpdate.update(input)),
+              Effect.tapError(() => drainCoordinator.clearFailedUpdateDrain),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverUpdateServerWithProgress]: (input) =>
           observeRpcStream(
             WS_METHODS.serverUpdateServerWithProgress,
             Stream.callback<ServerSelfUpdateProgressEvent, ServerSelfUpdateError>((queue) =>
-              serverSelfUpdate
-                .update(input, (stage) =>
-                  Queue.offer(queue, {
-                    type: "progress",
-                    stage,
-                  }).pipe(Effect.asVoid),
+              awaitSafeUpdateDrain
+                .pipe(
+                  Effect.andThen(
+                    serverSelfUpdate.update(input, (stage) =>
+                      Queue.offer(queue, {
+                        type: "progress",
+                        stage,
+                      }).pipe(Effect.asVoid),
+                    ),
+                  ),
+                  Effect.tapError(() => drainCoordinator.clearFailedUpdateDrain),
                 )
                 .pipe(
                   Effect.flatMap((result) =>
@@ -1555,6 +1612,10 @@ const makeWsRpcLayer = (
               ),
             ),
           ),
+        [WS_METHODS.serverControlDrain]: (input) =>
+          observeRpcEffect(WS_METHODS.serverControlDrain, drainCoordinator.control(input), {
+            "rpc.aggregate": "server",
+          }),
         [WS_METHODS.serverReportHostPowerState]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverReportHostPowerState,

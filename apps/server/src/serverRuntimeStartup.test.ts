@@ -45,6 +45,27 @@ it.effect("enqueueCommand waits for readiness and then drains queued work", () =
   ),
 );
 
+it.effect("keeps activation work behind durable session reconciliation", () =>
+  Effect.gen(function* () {
+    const reconciliation = yield* Deferred.make<void>();
+    const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+    const barrier = yield* ServerRuntimeStartup.completeSessionStartupBarrier({
+      reconcile: Deferred.await(reconciliation).pipe(
+        Effect.tap(() => Ref.update(calls, (current) => [...current, "reconcile"])),
+        Effect.as({ remainingOrphans: [] }),
+      ),
+      completePersistedDrain: Ref.update(calls, (current) => [...current, "drain"]),
+      startReaper: Ref.update(calls, (current) => [...current, "reaper"]),
+    }).pipe(Effect.forkChild);
+
+    yield* Effect.yieldNow;
+    assert.deepStrictEqual(yield* Ref.get(calls), []);
+    yield* Deferred.succeed(reconciliation, undefined);
+    yield* Fiber.join(barrier);
+    assert.deepStrictEqual(yield* Ref.get(calls), ["reconcile", "drain", "reaper"]);
+  }),
+);
+
 it.effect("enqueueCommand fails queued work when readiness fails", () =>
   Effect.scoped(
     Effect.gen(function* () {

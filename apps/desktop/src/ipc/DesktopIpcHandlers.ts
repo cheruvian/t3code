@@ -39,6 +39,7 @@ import {
   openExternal,
   pickFolder,
   pickThemeFiles,
+  resolveSafeShutdown,
   setTheme,
   showContextMenu,
 } from "./methods/window.ts";
@@ -53,6 +54,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handleSync(getWindowFullscreenState);
   yield* ipc.handleSync(getLocalEnvironmentBootstraps);
   yield* ipc.handle(getLocalEnvironmentBearerToken);
+  yield* ipc.handle(resolveSafeShutdown);
 
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);

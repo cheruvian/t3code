@@ -542,11 +542,69 @@ export const ServerSelfUpdateOutcome = Schema.Struct({
 });
 export type ServerSelfUpdateOutcome = typeof ServerSelfUpdateOutcome.Type;
 
+export const ServerDrainAction = Schema.Literals(["shutdown", "restart", "update"]);
+export type ServerDrainAction = typeof ServerDrainAction.Type;
+
+export const ServerDrainPhase = Schema.Literals(["draining", "action-required", "committing"]);
+export type ServerDrainPhase = typeof ServerDrainPhase.Type;
+
+export const ServerDrainSnapshot = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  action: ServerDrainAction,
+  phase: ServerDrainPhase,
+  activeWorkCount: NonNegativeInt,
+  blockedThreadIds: Schema.Array(ThreadId),
+  canCancel: Schema.Boolean,
+  canForce: Schema.Boolean,
+  requestedAt: IsoDateTime,
+});
+export type ServerDrainSnapshot = typeof ServerDrainSnapshot.Type;
+
+export const ServerDrainControlInput = Schema.Union([
+  Schema.Struct({
+    operation: Schema.Literal("begin"),
+    action: ServerDrainAction,
+  }),
+  Schema.Struct({
+    operation: Schema.Literal("cancel"),
+    drainId: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    operation: Schema.Literal("force"),
+    drainId: TrimmedNonEmptyString,
+  }),
+]);
+export type ServerDrainControlInput = typeof ServerDrainControlInput.Type;
+
+export class ServerDrainControlError extends Schema.TaggedErrorClass<ServerDrainControlError>()(
+  "ServerDrainControlError",
+  {
+    reason: Schema.Literals([
+      "already-draining",
+      "not-draining",
+      "drain-mismatch",
+      "already-committing",
+      "persistence-failed",
+    ]),
+    message: TrimmedNonEmptyString,
+  },
+) {}
+
+export class ServerDrainingError extends Schema.TaggedErrorClass<ServerDrainingError>()(
+  "ServerDrainingError",
+  {
+    drain: ServerDrainSnapshot,
+  },
+) {}
+
 export const ServerLifecycleReadyPayload = Schema.Struct({
   at: IsoDateTime,
   environment: ExecutionEnvironmentDescriptor,
   /** Present when this process resumed a launcher-managed update. */
   updateOutcome: Schema.optionalKey(ServerSelfUpdateOutcome),
+  /** Additive lifecycle state. Older clients ignore this field and continue
+      decoding the existing ready event variant during version skew. */
+  drain: Schema.optionalKey(ServerDrainSnapshot),
 });
 export type ServerLifecycleReadyPayload = typeof ServerLifecycleReadyPayload.Type;
 

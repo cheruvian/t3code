@@ -1551,6 +1551,10 @@ const make = Effect.gen(function* () {
         event.type === "turn.started" ||
         event.type === "turn.completed"
       ) {
+        const preserveInterruptedExit =
+          event.type === "session.exited"
+            ? (yield* providerService.getTerminalDisposition(thread.id)) === "interrupted"
+            : false;
         const status = (() => {
           switch (event.type) {
             case "session.state.changed": {
@@ -1560,7 +1564,7 @@ const make = Effect.gen(function* () {
             case "turn.started":
               return "running";
             case "session.exited":
-              return "stopped";
+              return preserveInterruptedExit ? "interrupted" : "stopped";
             case "turn.completed":
               return normalizeRuntimeTurnState(event.payload.state) === "failed"
                 ? "error"
@@ -2017,7 +2021,19 @@ const make = Effect.gen(function* () {
   const processDomainEvent = (_event: TurnStartRequestedDomainEvent) => Effect.void;
 
   const processInput = (input: RuntimeIngestionInput) =>
-    input.source === "runtime" ? processRuntimeEvent(input.event) : processDomainEvent(input.event);
+    input.source === "runtime"
+      ? providerService
+          .runIfCurrentGeneration(
+            {
+              threadId: input.event.threadId,
+              ...(input.event.sessionGeneration !== undefined
+                ? { sessionGeneration: input.event.sessionGeneration }
+                : {}),
+            },
+            processRuntimeEvent(input.event),
+          )
+          .pipe(Effect.asVoid)
+      : processDomainEvent(input.event);
 
   const processInputSafely = (input: RuntimeIngestionInput) =>
     processInput(input).pipe(

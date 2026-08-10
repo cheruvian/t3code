@@ -49,5 +49,24 @@ it.effect(
       const snapshot = yield* lifecycleEvents.snapshot;
       assert.equal(snapshot.sequence, 2);
       assert.deepEqual(snapshot.events.map((event) => event.type).toSorted(), ["ready", "welcome"]);
+
+      yield* lifecycleEvents.setDrain({
+        id: "drain-1",
+        action: "restart",
+        phase: "draining",
+        activeWorkCount: 2,
+        blockedThreadIds: [],
+        canCancel: true,
+        canForce: true,
+        requestedAt: "2026-01-01T00:00:01.000Z",
+      });
+      const drainingSnapshot = yield* lifecycleEvents.snapshot;
+      const drainingReady = drainingSnapshot.events.find((event) => event.type === "ready");
+      assert.equal(drainingReady?.payload.drain?.activeWorkCount, 2);
+
+      yield* lifecycleEvents.setDrain(undefined);
+      const clearedSnapshot = yield* lifecycleEvents.snapshot;
+      const clearedReady = clearedSnapshot.events.find((event) => event.type === "ready");
+      assert.isUndefined(clearedReady?.payload.drain);
     }).pipe(Effect.provide(ServerLifecycleEvents.layer)),
 );

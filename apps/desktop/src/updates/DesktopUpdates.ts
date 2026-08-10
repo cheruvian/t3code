@@ -23,6 +23,7 @@ import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
+import * as DesktopSafeShutdown from "../app/DesktopSafeShutdown.ts";
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
@@ -248,6 +249,7 @@ export const make = Effect.gen(function* () {
   const config = yield* DesktopConfig.DesktopConfig;
   const pool = yield* DesktopBackendPool.DesktopBackendPool;
   const desktopState = yield* DesktopState.DesktopState;
+  const safeShutdown = yield* Effect.serviceOption(DesktopSafeShutdown.DesktopSafeShutdown);
   const electronUpdater = yield* ElectronUpdater.ElectronUpdater;
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -458,6 +460,14 @@ export const make = Effect.gen(function* () {
       !(yield* Ref.get(updaterConfiguredRef)) ||
       state.status !== "downloaded"
     ) {
+      return { accepted: false, completed: false };
+    }
+
+    const safeShutdownResolution = yield* Option.match(safeShutdown, {
+      onNone: () => Effect.succeed("committed" as const),
+      onSome: (service) => service.request("update"),
+    });
+    if (safeShutdownResolution !== "committed") {
       return { accepted: false, completed: false };
     }
 

@@ -4,7 +4,12 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderDriverKind, ThreadId } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  ProviderSessionGeneration,
+  ServerOwnerGeneration,
+  ThreadId,
+} from "@t3tools/contracts";
 import { it, assert } from "@effect/vitest";
 import { assertSome } from "@effect/vitest/utils";
 import * as Effect from "effect/Effect";
@@ -120,6 +125,49 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
           activeTurnId: "turn-1",
         });
       }
+    }));
+
+  it("rejects a stale generation replacement after another owner commits", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const runtimeRepository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      const threadId = ThreadId.make("thread-generation-cas");
+      const owner = ServerOwnerGeneration.make("owner-1");
+      const generation1 = ProviderSessionGeneration.make("generation-1");
+      const generation2 = ProviderSessionGeneration.make("generation-2");
+      const staleGeneration = ProviderSessionGeneration.make("generation-stale");
+      assert.notEqual(generation2, staleGeneration);
+
+      yield* directory.upsert({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        ownerGeneration: owner,
+        sessionGeneration: generation1,
+      });
+      const replaced = yield* directory.upsert({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        ownerGeneration: owner,
+        sessionGeneration: generation2,
+        expectedSessionGeneration: generation1,
+      });
+      assert.equal(replaced, true);
+      assert.equal(
+        Option.getOrThrow(yield* runtimeRepository.getByThreadId({ threadId })).sessionGeneration,
+        generation2,
+      );
+      const staleRejected = yield* directory.upsert({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        ownerGeneration: owner,
+        sessionGeneration: staleGeneration,
+        expectedSessionGeneration: generation1,
+      });
+      assert.equal(staleRejected, false);
+
+      const binding = yield* directory.getBinding(threadId);
+      assert.equal(Option.getOrThrow(binding).sessionGeneration, generation2);
+      assert.notEqual(Option.getOrThrow(binding).sessionGeneration, staleGeneration);
     }));
 
   it("lists persisted bindings with metadata in oldest-first order", () =>
