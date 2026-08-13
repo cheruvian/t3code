@@ -38,7 +38,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { it as effectIt } from "@effect/vitest";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -59,6 +59,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import { ProviderRuntimeIngestionLayer } from "./ProviderRuntimeIngestion.ts";
+import { RuntimeReceiptBusTest } from "./RuntimeReceiptBus.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import {
@@ -66,6 +67,7 @@ import {
   type AssistantPreviewPublication,
 } from "../Services/AssistantPreviewBus.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -259,7 +261,10 @@ async function waitForThread(
 
 describe("ProviderRuntimeIngestion", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderRuntimeIngestionService | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderRuntimeIngestionService
+    | ProjectionSnapshotQuery
+    | RuntimeReceiptBus,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -354,6 +359,7 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(ThreadBackgroundLiveness.layer),
       Layer.provideMerge(ThreadPlanProgress.layer),
       Layer.provideMerge(sqlitePersistence),
+      Layer.provideMerge(RuntimeReceiptBusTest),
       Layer.provideMerge(
         Layer.succeed(ProviderService, options?.providerService ?? provider.service),
       ),
@@ -377,6 +383,7 @@ describe("ProviderRuntimeIngestion", () => {
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const ingestion = await runtime.runPromise(Effect.service(ProviderRuntimeIngestionService));
+    const receiptBus = await runtime.runPromise(Effect.service(RuntimeReceiptBus));
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(ingestion.start().pipe(Scope.provide(scope)));
     const drain = () => Effect.runPromise(ingestion.drain);
@@ -447,6 +454,7 @@ describe("ProviderRuntimeIngestion", () => {
       emit: provider.emit,
       setProviderSession: provider.setSession,
       assistantPreviews,
+      receiptBus,
       drain,
     };
   }
@@ -715,6 +723,210 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("turn failed");
+  });
+
+  it("publishes one settled receipt after terminal turn projections are finalized", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-ingestion-settled");
+    const completedEventId = asEventId("evt-turn-ingestion-settled");
+    const settledAt = "2026-01-01T00:00:03.000Z";
+    let observed:
+      | {
+          readonly receipt: unknown;
+          readonly thread: ProviderRuntimeTestThread | undefined;
+        }
+      | undefined;
+    const publish = harness.receiptBus.publish;
+    vi.spyOn(harness.receiptBus, "publish").mockImplementation((receipt) =>
+      publish(receipt).pipe(
+        Effect.andThen(
+          (receipt as { readonly type: string }).type === "turn.ingestion-settled"
+            ? Effect.map(Effect.promise(harness.readModel), (snapshot) => {
+                observed = {
+                  receipt,
+                  thread: snapshot.threads.find((entry) => entry.id === threadId),
+                };
+              })
+            : Effect.void,
+        ),
+        Effect.asVoid,
+      ),
+    );
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-ingestion-settled-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-turn-ingestion-settled-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      itemId: asItemId("item-turn-ingestion-settled"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      payload: {
+        streamKind: "assistant_text",
+        delta: "final answer",
+      },
+    });
+    harness.emit({
+      type: "turn.proposed.delta",
+      eventId: asEventId("evt-turn-ingestion-settled-plan"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      createdAt: "2026-01-01T00:00:02.000Z",
+      payload: { delta: "# Final plan" },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: completedEventId,
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      createdAt: settledAt,
+      payload: { state: "completed" },
+    });
+
+    await harness.drain();
+
+    expect(observed?.receipt).toEqual({
+      type: "turn.ingestion-settled",
+      sourceEventId: completedEventId,
+      threadId,
+      turnId,
+      outcome: "completed",
+      settledAt,
+    });
+    expect(observed?.thread?.session).toMatchObject({
+      status: "ready",
+      activeTurnId: null,
+    });
+    expect(observed?.thread?.messages).toContainEqual(
+      expect.objectContaining({
+        id: asMessageId("assistant:item-turn-ingestion-settled"),
+        text: "final answer",
+        streaming: false,
+      }),
+    );
+    expect(observed?.thread?.proposedPlans).toContainEqual(
+      expect.objectContaining({
+        id: "plan:thread-1:turn:turn-ingestion-settled",
+        planMarkdown: "# Final plan",
+      }),
+    );
+  });
+
+  it("suppresses settled receipts for stale, duplicate, and post-abort terminals", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const firstTurnId = asTurnId("turn-settled-receipt-first");
+    const secondTurnId = asTurnId("turn-settled-receipt-second");
+    const settledReceipts: Array<unknown> = [];
+    const publish = harness.receiptBus.publish;
+    vi.spyOn(harness.receiptBus, "publish").mockImplementation((receipt) =>
+      publish(receipt).pipe(
+        Effect.tap(() =>
+          receipt.type === "turn.ingestion-settled"
+            ? Effect.sync(() => settledReceipts.push(receipt))
+            : Effect.void,
+        ),
+        Effect.asVoid,
+      ),
+    );
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-settled-receipt-first-started"),
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      turnId: firstTurnId,
+      createdAt: "2026-01-01T00:00:01.000Z",
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-settled-receipt-stale-completion"),
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      turnId: secondTurnId,
+      createdAt: "2026-01-01T00:00:02.000Z",
+      payload: { state: "completed" },
+    });
+    const abort = {
+      type: "turn.aborted" as const,
+      eventId: asEventId("evt-settled-receipt-first-aborted"),
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      turnId: firstTurnId,
+      createdAt: "2026-01-01T00:00:03.000Z",
+      payload: { reason: "Interrupted by user." },
+    };
+    harness.emit(abort);
+    harness.emit(abort);
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-settled-receipt-late-after-abort"),
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      turnId: firstTurnId,
+      createdAt: "2026-01-01T00:00:04.000Z",
+      payload: { state: "completed" },
+    });
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-settled-receipt-second-started"),
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      turnId: secondTurnId,
+      createdAt: "2026-01-01T00:00:05.000Z",
+    });
+    const completion = {
+      type: "turn.completed" as const,
+      eventId: asEventId("evt-settled-receipt-second-completed"),
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      turnId: secondTurnId,
+      createdAt: "2026-01-01T00:00:06.000Z",
+      payload: { state: "failed" as const, errorMessage: "Turn failed" },
+    };
+    harness.emit(completion);
+    harness.emit(completion);
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-settled-receipt-stale-after-newer-terminal"),
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      turnId: firstTurnId,
+      createdAt: "2026-01-01T00:00:07.000Z",
+      payload: { state: "completed" },
+    });
+
+    await harness.drain();
+
+    expect(settledReceipts).toEqual([
+      {
+        type: "turn.ingestion-settled",
+        sourceEventId: abort.eventId,
+        threadId,
+        turnId: firstTurnId,
+        outcome: "interrupted",
+        settledAt: abort.createdAt,
+      },
+      {
+        type: "turn.ingestion-settled",
+        sourceEventId: completion.eventId,
+        threadId,
+        turnId: secondTurnId,
+        outcome: "failed",
+        settledAt: completion.createdAt,
+      },
+    ]);
   });
 
   it.each(["codex", "opencode"] as const)(
