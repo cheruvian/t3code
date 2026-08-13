@@ -1747,7 +1747,7 @@ const make = Effect.gen(function* () {
           const buffered = yield* appendBufferedAssistantText(assistantMessageId, assistantDelta);
           if (turnId) {
             yield* publishAssistantPreviewOnce({
-              threadId: thread.id,
+              threadId,
               turnId,
               messageId: assistantMessageId,
               text: buffered.bufferedText,
@@ -2115,7 +2115,7 @@ const make = Effect.gen(function* () {
         yield* receiptBus.publish({
           type: "turn.ingestion-settled",
           sourceEventId: event.eventId,
-          threadId: thread.id,
+          threadId,
           turnId: eventTurnId,
           outcome:
             event.type === "turn.completed"
