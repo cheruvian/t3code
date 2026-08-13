@@ -1453,9 +1453,8 @@ const make = Effect.gen(function* () {
 
   const getExpectedProviderTurnIdForThread = Effect.fn("getExpectedProviderTurnIdForThread")(
     function* (threadId: ThreadId) {
-      const sessions = yield* providerService.listSessions();
-      const session = sessions.find((entry) => entry.threadId === threadId);
-      return session?.activeTurnId;
+      const session = yield* providerService.getSession(threadId);
+      return Option.getOrUndefined(session)?.activeTurnId;
     },
   );
 
