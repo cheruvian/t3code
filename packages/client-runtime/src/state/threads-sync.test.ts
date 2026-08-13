@@ -1,6 +1,7 @@
 import {
   EnvironmentId,
   EventId,
+  MessageId,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
   ProviderInstanceId,
@@ -44,6 +45,9 @@ const TARGET = new PrimaryConnectionTarget({
   wsBaseUrl: "wss://environment.example.test",
 });
 const THREAD_ID = ThreadId.make("thread-1");
+const TURN_ID = TurnId.make("turn-1");
+const ASSISTANT_MESSAGE_ID = MessageId.make("assistant-message-1");
+const SECOND_ASSISTANT_MESSAGE_ID = MessageId.make("assistant-message-2");
 const CACHED_SNAPSHOT_SEQUENCE = 7;
 const PREPARED: PreparedConnection = {
   environmentId: TARGET.environmentId,
@@ -99,19 +103,28 @@ const ACTIVE_THREAD: OrchestrationThread = {
   },
 };
 
+interface TestSubscribeThreadInput {
+  readonly threadId: ThreadId;
+  readonly afterSequence?: number;
+  readonly requestCompletionMarker?: boolean;
+  readonly includeAssistantPreviews?: true;
+}
+
 type TestThreadInput = OrchestrationThreadStreamItem | Error;
 
 function testSession(
   client: WsRpcProtocolClient,
-  options?: { readonly completionMarker?: boolean },
+  options?: {
+    readonly completionMarker?: boolean;
+    readonly assistantPreviews?: boolean;
+  },
 ): RpcSession.RpcSession {
   return {
     client,
-    initialConfig: Effect.succeed(
-      options?.completionMarker === true
-        ? ({ threadResumeCompletionMarker: true } as never)
-        : ({} as never),
-    ),
+    initialConfig: Effect.succeed({
+      ...(options?.completionMarker === true ? { threadResumeCompletionMarker: true } : {}),
+      ...(options?.assistantPreviews === true ? { assistantPreviews: true } : {}),
+    } as never),
     ready: Effect.void,
     probe: Effect.void,
     closed: Effect.never,
@@ -133,6 +146,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   readonly cached?: OrchestrationThread;
   readonly httpSnapshot?: Option.Option<OrchestrationThreadDetailSnapshot>;
   readonly completionMarker?: boolean;
+  readonly assistantPreviews?: boolean;
 }) {
   const inputs = yield* Queue.unbounded<TestThreadInput>();
   const observed = yield* Queue.unbounded<EnvironmentThreadState>();
@@ -142,6 +156,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   const loaderCalls = yield* Ref.make(0);
   const lastSubscribeAfterSequence = yield* Ref.make<number | undefined>(undefined);
   const lastRequestCompletionMarker = yield* Ref.make<boolean | undefined>(undefined);
+  const subscribeInputs = yield* Queue.unbounded<TestSubscribeThreadInput>();
   const savedThreads = yield* Ref.make<ReadonlyArray<OrchestrationThreadDetailSnapshot>>([]);
   const removedThreads = yield* Ref.make<ReadonlyArray<ThreadId>>([]);
   const wakeups = yield* Queue.unbounded<ConnectionWakeups.ConnectionWakeup>();
@@ -155,14 +170,12 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
       ),
     );
   const client = {
-    [ORCHESTRATION_WS_METHODS.subscribeThread]: (input: {
-      readonly afterSequence?: number;
-      readonly requestCompletionMarker?: boolean;
-    }) =>
+    [ORCHESTRATION_WS_METHODS.subscribeThread]: (input: TestSubscribeThreadInput) =>
       Stream.unwrap(
         Ref.updateAndGet(subscriptionCount, (count) => count + 1).pipe(
           Effect.andThen(Ref.set(lastSubscribeAfterSequence, input.afterSequence)),
           Effect.andThen(Ref.set(lastRequestCompletionMarker, input.requestCompletionMarker)),
+          Effect.andThen(Queue.offer(subscribeInputs, input)),
           Effect.as(streamFrom(inputs)),
         ),
       ),
@@ -171,7 +184,12 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     Option.some(
       testSession(
         client,
-        options?.completionMarker === true ? { completionMarker: true } : undefined,
+        options?.completionMarker === true || options?.assistantPreviews === true
+          ? {
+              ...(options.completionMarker === true ? { completionMarker: true } : {}),
+              ...(options.assistantPreviews === true ? { assistantPreviews: true } : {}),
+            }
+          : undefined,
       ),
     ),
   );
@@ -246,6 +264,8 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     loaderCalls,
     lastSubscribeAfterSequence,
     lastRequestCompletionMarker,
+    subscribeInputs,
+    threadState,
     supervisorState,
     supervisorSession,
     savedThreads,
@@ -256,7 +276,12 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
       Option.some(
         testSession(
           client,
-          options?.completionMarker === true ? { completionMarker: true } : undefined,
+          options?.completionMarker === true || options?.assistantPreviews === true
+            ? {
+                ...(options.completionMarker === true ? { completionMarker: true } : {}),
+                ...(options.assistantPreviews === true ? { assistantPreviews: true } : {}),
+              }
+            : undefined,
         ),
       ),
     ),
@@ -314,7 +339,239 @@ const deleted = (): OrchestrationThreadStreamItem => ({
   },
 });
 
+// Assistant previews are cumulative, unsequenced stream frames. Shared client
+// state presents one as a streaming assistant message, using createdAt as the
+// transient message's updatedAt until the matching durable message arrives.
+const assistantPreview = (
+  text: string,
+  messageId = ASSISTANT_MESSAGE_ID,
+): OrchestrationThreadStreamItem => ({
+  kind: "assistant-preview",
+  messageId,
+  turnId: TURN_ID,
+  text,
+  createdAt: "2026-04-01T01:30:00.000Z",
+});
+
+const assistantCompleted = (text: string): OrchestrationThreadStreamItem => ({
+  kind: "event",
+  event: {
+    eventId: EventId.make("event-assistant-completed"),
+    sequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+    occurredAt: "2026-04-01T01:31:00.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    aggregateKind: "thread",
+    aggregateId: THREAD_ID,
+    type: "thread.message-sent",
+    payload: {
+      threadId: THREAD_ID,
+      messageId: ASSISTANT_MESSAGE_ID,
+      role: "assistant",
+      text,
+      turnId: TURN_ID,
+      streaming: false,
+      createdAt: "2026-04-01T01:30:00.000Z",
+      updatedAt: "2026-04-01T01:31:00.000Z",
+    },
+  },
+});
+
+const sessionSettled = (): OrchestrationThreadStreamItem => ({
+  kind: "event",
+  event: {
+    eventId: EventId.make("event-session-settled"),
+    sequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+    occurredAt: "2026-04-01T01:31:00.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    aggregateKind: "thread",
+    aggregateId: THREAD_ID,
+    type: "thread.session-set",
+    payload: {
+      threadId: THREAD_ID,
+      session: {
+        threadId: THREAD_ID,
+        status: "ready",
+        providerName: "codex",
+        runtimeMode: "full-access",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: "2026-04-01T01:31:00.000Z",
+      },
+    },
+  },
+});
+
 describe("EnvironmentThreads", () => {
+  it.effect("does not request assistant previews from servers without the capability", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      const subscription = yield* Queue.take(harness.subscribeInputs);
+
+      expect(subscription.includeAssistantPreviews).toBeUndefined();
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("keeps assistant previews transient across completion and reconnect", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        cached: BASE_THREAD,
+        assistantPreviews: true,
+      });
+      const initialSubscription = yield* Queue.take(harness.subscribeInputs);
+
+      expect(initialSubscription.includeAssistantPreviews).toBe(true);
+      expect(initialSubscription.afterSequence).toBe(CACHED_SNAPSHOT_SEQUENCE);
+
+      yield* Queue.offer(harness.inputs, assistantPreview("Cumulative preview"));
+      const previewed = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.messages.some(
+            (message) =>
+              message.id === ASSISTANT_MESSAGE_ID &&
+              message.text === "Cumulative preview" &&
+              message.streaming,
+          ),
+      );
+      expect(Option.getOrThrow(previewed.data).messages).toEqual([
+        {
+          id: ASSISTANT_MESSAGE_ID,
+          role: "assistant",
+          text: "Cumulative preview",
+          turnId: TURN_ID,
+          streaming: true,
+          createdAt: "2026-04-01T01:30:00.000Z",
+          updatedAt: "2026-04-01T01:30:00.000Z",
+        },
+      ]);
+
+      yield* Queue.offer(harness.inputs, assistantPreview("Cumulative preview replacement"));
+      const replaced = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.messages.some(
+            (message) =>
+              message.id === ASSISTANT_MESSAGE_ID &&
+              message.text === "Cumulative preview replacement",
+          ),
+      );
+      expect(
+        Option.getOrThrow(replaced.data).messages.filter(
+          (message) => message.id === ASSISTANT_MESSAGE_ID,
+        ),
+      ).toHaveLength(1);
+
+      yield* TestClock.adjust("500 millis");
+      yield* Effect.yieldNow;
+      expect(yield* Ref.get(harness.savedThreads)).toEqual([]);
+
+      yield* harness.replaceSession;
+      const resumedSubscription = yield* Queue.take(harness.subscribeInputs);
+      expect(resumedSubscription.includeAssistantPreviews).toBe(true);
+      expect(resumedSubscription.afterSequence).toBe(CACHED_SNAPSHOT_SEQUENCE);
+      expect(
+        Option.getOrThrow((yield* SubscriptionRef.get(harness.threadState)).data).messages,
+      ).toEqual([]);
+
+      yield* Queue.offer(harness.inputs, assistantPreview("Cumulative preview"));
+      yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.messages.some(
+            (message) => message.id === ASSISTANT_MESSAGE_ID && message.streaming,
+          ),
+      );
+      yield* Queue.offer(harness.inputs, assistantCompleted("Durable answer"));
+      const completed = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.messages.some(
+            (message) =>
+              message.id === ASSISTANT_MESSAGE_ID &&
+              message.text === "Durable answer" &&
+              !message.streaming,
+          ),
+      );
+      const matchingMessages = Option.getOrThrow(completed.data).messages.filter(
+        (message) => message.id === ASSISTANT_MESSAGE_ID,
+      );
+      expect(matchingMessages).toHaveLength(1);
+      expect(matchingMessages[0]?.text).toBe("Durable answer");
+      expect(matchingMessages[0]?.streaming).toBe(false);
+
+      yield* Queue.offer(
+        harness.inputs,
+        assistantPreview("Next segment preview", SECOND_ASSISTANT_MESSAGE_ID),
+      );
+      const nextSegment = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.messages.some(
+            (message) =>
+              message.id === SECOND_ASSISTANT_MESSAGE_ID &&
+              message.text === "Next segment preview" &&
+              message.streaming,
+          ),
+      );
+      expect(
+        Option.getOrThrow(nextSegment.data).messages.some(
+          (message) => message.id === ASSISTANT_MESSAGE_ID && !message.streaming,
+        ),
+      ).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("clears previews when the turn settles and ignores late frames", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        cached: ACTIVE_THREAD,
+        assistantPreviews: true,
+      });
+      yield* Queue.take(harness.subscribeInputs);
+      yield* Queue.offer(harness.inputs, assistantPreview("Transient answer"));
+      yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.messages.some(
+            (message) => message.id === ASSISTANT_MESSAGE_ID && message.streaming,
+          ),
+      );
+
+      yield* Queue.offer(harness.inputs, sessionSettled());
+      const settled = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.session?.status === "ready" &&
+          value.data.value.messages.length === 0,
+      );
+      expect(Option.getOrThrow(settled.data).messages).toEqual([]);
+
+      yield* Queue.offer(harness.inputs, assistantPreview("Late stale preview"));
+      yield* Queue.offer(
+        harness.inputs,
+        titleUpdated("After settle", CACHED_SNAPSHOT_SEQUENCE + 2),
+      );
+      const afterLateFrame = yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.title === "After settle",
+      );
+      expect(Option.getOrThrow(afterLateFrame.data).messages).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("publishes cached data immediately from a warm cache", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_THREAD });

@@ -9,7 +9,7 @@
  *
  * @module ProviderServiceLive
  */
-import { randomUUID } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 
 import {
   ModelSelection,
@@ -185,6 +185,32 @@ const dieOnMissingBindingInstanceId = (
       : `${operation}: provider instance id is required.`,
   );
 };
+
+function mergePersistedBindingIntoSession(
+  operation: string,
+  session: ProviderSession,
+  binding: ProviderSessionDirectory.ProviderRuntimeBinding,
+): ProviderSession {
+  const providerInstanceId = dieOnMissingBindingInstanceId(operation, binding);
+  if (binding.provider !== session.provider) {
+    throw new Error(
+      `${operation}: thread '${session.threadId}' is active on provider '${session.provider}' but persisted binding names provider '${binding.provider}'.`,
+    );
+  }
+  if (providerInstanceId !== session.providerInstanceId) {
+    throw new Error(
+      `${operation}: thread '${session.threadId}' is active on provider instance '${session.providerInstanceId}' but persisted binding names '${providerInstanceId}'.`,
+    );
+  }
+  return {
+    ...session,
+    providerInstanceId,
+    ...(session.resumeCursor === undefined && binding.resumeCursor !== undefined
+      ? { resumeCursor: binding.resumeCursor }
+      : {}),
+    ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
+  };
+}
 
 const correlateRuntimeEventWithInstance = (
   source: {
@@ -396,29 +422,23 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       input.binding.threadId,
       Effect.gen(function* () {
         const adapter = yield* registry.getByInstance(bindingInstanceId);
-        const recoveredGeneration = ProviderSessionGeneration.make(randomUUID());
+        const recoveredGeneration = ProviderSessionGeneration.make(NodeCrypto.randomUUID());
         const hasResumeCursor =
           input.binding.resumeCursor !== null && input.binding.resumeCursor !== undefined;
-        const hasActiveSession = yield* adapter.hasSession(input.binding.threadId);
-        if (hasActiveSession) {
-          const activeSessions = yield* adapter.listSessions();
-          const existing = activeSessions.find(
-            (session) => session.threadId === input.binding.threadId,
-          );
-          if (existing) {
-            const recovered = {
-              ...existing,
-              providerInstanceId: bindingInstanceId,
-              sessionGeneration: existing.sessionGeneration ?? recoveredGeneration,
-            };
-            yield* upsertSessionBinding(recovered, input.binding.threadId);
-            yield* analytics.record("provider.session.recovered", {
-              provider: existing.provider,
-              strategy: "adopt-existing",
-              hasResumeCursor: existing.resumeCursor !== undefined,
-            });
-            return { adapter, session: recovered } as const;
-          }
+        const existingOption = yield* adapter.getSession(input.binding.threadId);
+        if (Option.isSome(existingOption)) {
+          const existing = {
+            ...existingOption.value,
+            providerInstanceId: bindingInstanceId,
+            sessionGeneration: existingOption.value.sessionGeneration ?? recoveredGeneration,
+          };
+          yield* upsertSessionBinding(existing, input.binding.threadId);
+          yield* analytics.record("provider.session.recovered", {
+            provider: existing.provider,
+            strategy: "adopt-existing",
+            hasResumeCursor: existing.resumeCursor !== undefined,
+          });
+          return { adapter, session: existing } as const;
         }
 
         if (!hasResumeCursor) {
@@ -634,7 +654,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           });
           const adapter = yield* registry.getByInstance(resolvedInstanceId);
           yield* prepareMcpSession(threadId, resolvedInstanceId);
-          const sessionGeneration = ProviderSessionGeneration.make(randomUUID());
+          const sessionGeneration = ProviderSessionGeneration.make(NodeCrypto.randomUUID());
           const session = yield* adapter
             .startSession({
               ...input,
@@ -974,6 +994,22 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const getSession: ProviderServiceMethod<"getSession"> = Effect.fn("getSession")(
+    function* (threadId) {
+      const bindingOption = yield* directory.getBinding(threadId);
+      if (Option.isNone(bindingOption)) {
+        return Option.none();
+      }
+      const binding = bindingOption.value;
+      const instanceId = yield* requireBindingInstanceId("ProviderService.getSession", binding);
+      const adapter = yield* registry.getByInstance(instanceId);
+      const sessionOption = yield* adapter.getSession(threadId);
+      return Option.map(sessionOption, (session) =>
+        mergePersistedBindingIntoSession("ProviderService.getSession", session, binding),
+      );
+    },
+  );
+
   const listSessions: ProviderServiceMethod<"listSessions"> = Effect.fn("listSessions")(
     function* () {
       const currentAdapters = yield* getAdapterEntries;
@@ -988,34 +1024,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         ),
       );
       const activeSessions = sessionsByProvider.flatMap((sessions) => sessions);
-      const persistedBindings = yield* directory.listThreadIds().pipe(
-        Effect.flatMap((threadIds) =>
-          Effect.forEach(
-            threadIds,
-            (threadId) =>
-              directory
-                .getBinding(threadId)
-                .pipe(
-                  Effect.orElseSucceed(() =>
-                    Option.none<ProviderSessionDirectory.ProviderRuntimeBinding>(),
-                  ),
-                ),
-            { concurrency: "unbounded" },
-          ),
-        ),
-        Effect.orElseSucceed(
-          () => [] as Array<Option.Option<ProviderSessionDirectory.ProviderRuntimeBinding>>,
-        ),
-      );
+      const persistedBindings = yield* directory
+        .listBindings()
+        .pipe(Effect.orElseSucceed(() => []));
       const bindingsByThreadId = new Map<
         ThreadId,
         ProviderSessionDirectory.ProviderRuntimeBinding
       >();
-      for (const bindingOption of persistedBindings) {
-        const binding = Option.getOrUndefined(bindingOption);
-        if (binding) {
-          bindingsByThreadId.set(binding.threadId, binding);
-        }
+      for (const binding of persistedBindings) {
+        bindingsByThreadId.set(binding.threadId, binding);
       }
 
       const sessions: ProviderSession[] = [];
@@ -1025,37 +1042,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           sessions.push(session);
           continue;
         }
-
-        const overrides: {
-          resumeCursor?: ProviderSession["resumeCursor"];
-          runtimeMode?: ProviderSession["runtimeMode"];
-          providerInstanceId?: ProviderSession["providerInstanceId"];
-        } = {};
-        overrides.providerInstanceId = dieOnMissingBindingInstanceId(
-          "ProviderService.listSessions",
-          binding,
+        sessions.push(
+          mergePersistedBindingIntoSession("ProviderService.listSessions", session, binding),
         );
-        if (binding.provider !== session.provider) {
-          return yield* Effect.die(
-            new Error(
-              `ProviderService.listSessions: thread '${session.threadId}' is active on provider '${session.provider}' but persisted binding names provider '${binding.provider}'.`,
-            ),
-          );
-        }
-        if (overrides.providerInstanceId !== session.providerInstanceId) {
-          return yield* Effect.die(
-            new Error(
-              `ProviderService.listSessions: thread '${session.threadId}' is active on provider instance '${session.providerInstanceId}' but persisted binding names '${overrides.providerInstanceId}'.`,
-            ),
-          );
-        }
-        if (session.resumeCursor === undefined && binding.resumeCursor !== undefined) {
-          overrides.resumeCursor = binding.resumeCursor;
-        }
-        if (binding.runtimeMode !== undefined) {
-          overrides.runtimeMode = binding.runtimeMode;
-        }
-        sessions.push(Object.assign({}, session, overrides));
       }
       return sessions;
     },
@@ -1200,6 +1189,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     respondToRequest,
     respondToUserInput,
     stopSession,
+    getSession,
     listSessions,
     getCapabilities,
     getInstanceInfo,

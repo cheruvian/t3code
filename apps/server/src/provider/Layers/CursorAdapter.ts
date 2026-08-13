@@ -1150,6 +1150,14 @@ export function makeCursorAdapter(
         }),
       );
 
+    const getSession: CursorAdapterShape["getSession"] = (threadId) =>
+      Effect.sync(() => {
+        const context = sessions.get(threadId);
+        return context === undefined || context.stopped
+          ? Option.none()
+          : Option.some({ ...context.session });
+      });
+
     const listSessions: CursorAdapterShape["listSessions"] = () =>
       Effect.sync(() => Array.from(sessions.values(), (c) => ({ ...c.session })));
 
@@ -1185,6 +1193,7 @@ export function makeCursorAdapter(
       respondToRequest,
       respondToUserInput,
       stopSession,
+      getSession,
       listSessions,
       hasSession,
       stopAll,

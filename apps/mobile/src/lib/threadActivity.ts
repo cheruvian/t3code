@@ -1,4 +1,5 @@
 import { ApprovalRequestId, isToolLifecycleItemType } from "@t3tools/contracts";
+import { orderThreadActivities } from "@t3tools/client-runtime/state/thread-activity";
 import type {
   OrchestrationLatestTurn,
   OrchestrationThread,
@@ -26,7 +27,7 @@ export interface PendingUserInput {
 }
 
 export interface PendingUserInputDraftAnswer {
-  readonly selectedOptionLabel?: string;
+  readonly selectedOptionLabels?: ReadonlyArray<string>;
   readonly customAnswer?: string;
 }
 
@@ -227,14 +228,32 @@ function normalizeDraftAnswer(value: string | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function normalizeSelectedOptionLabels(
+  value: ReadonlyArray<string> | undefined,
+): ReadonlyArray<string> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(value.map((entry) => entry.trim()).filter((entry) => entry.length > 0)),
+  );
+}
+
 function resolvePendingUserInputAnswer(
+  question: UserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
-): string | null {
+): string | ReadonlyArray<string> | null {
   const customAnswer = normalizeDraftAnswer(draft?.customAnswer);
   if (customAnswer) {
     return customAnswer;
   }
-  return normalizeDraftAnswer(draft?.selectedOptionLabel);
+
+  const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
+  if (question.multiSelect) {
+    return selectedOptionLabels.length > 0 ? selectedOptionLabels : null;
+  }
+  return selectedOptionLabels[0] ?? null;
 }
 
 /** Codex children settle via task.updated (idle/failed/interrupted), never
@@ -297,7 +316,7 @@ function isAgentInternalActivity(activity: OrchestrationThreadActivity): boolean
 function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): DerivedWorkLogEntry[] {
-  const ordered = Arr.sort(activities, activityOrder);
+  const ordered = orderThreadActivities(activities);
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of ordered) {
     if (activity.kind === "tool.started") continue;
@@ -1020,26 +1039,6 @@ function extractChangedFiles(payload: Record<string, unknown> | null): string[] 
   return changedFiles;
 }
 
-function compareActivityLifecycleRank(kind: string): number {
-  if (kind.endsWith(".started") || kind === "tool.started") {
-    return 0;
-  }
-  if (kind.endsWith(".progress") || kind.endsWith(".updated")) {
-    return 1;
-  }
-  if (kind.endsWith(".completed") || kind.endsWith(".resolved")) {
-    return 2;
-  }
-  return 1;
-}
-
-const activityOrder = Order.combineAll<OrchestrationThreadActivity>([
-  Order.mapInput(Order.Number, (activity) => activity.sequence ?? Number.MAX_SAFE_INTEGER),
-  Order.mapInput(Order.String, (activity) => activity.createdAt),
-  Order.mapInput(Order.Number, (activity) => compareActivityLifecycleRank(activity.kind)),
-  Order.mapInput(Order.String, (activity) => activity.id),
-]);
-
 function isEmptyMessage(entry: RawThreadFeedEntry): boolean {
   if (entry.type !== "message") {
     return false;
@@ -1332,7 +1331,7 @@ function appendPresentedFeedEntry(
 export function sortThreadActivities(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ReadonlyArray<OrchestrationThreadActivity> {
-  return Arr.sort(activities, activityOrder);
+  return orderThreadActivities(activities);
 }
 
 export function derivePendingApprovals(
@@ -1428,22 +1427,62 @@ export function setPendingUserInputCustomAnswer(
   draft: PendingUserInputDraftAnswer | undefined,
   customAnswer: string,
 ): PendingUserInputDraftAnswer {
-  const selectedOptionLabel =
-    customAnswer.trim().length > 0 ? undefined : draft?.selectedOptionLabel;
+  const selectedOptionLabels =
+    customAnswer.trim().length > 0
+      ? undefined
+      : normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
   return {
     customAnswer,
-    ...(selectedOptionLabel ? { selectedOptionLabel } : {}),
+    ...(selectedOptionLabels && selectedOptionLabels.length > 0 ? { selectedOptionLabels } : {}),
+  };
+}
+
+export function isPendingUserInputOptionSelected(
+  draft: PendingUserInputDraftAnswer | undefined,
+  optionLabel: string,
+): boolean {
+  if (normalizeDraftAnswer(draft?.customAnswer)) {
+    return false;
+  }
+
+  return normalizeSelectedOptionLabels(draft?.selectedOptionLabels).includes(optionLabel.trim());
+}
+
+export function togglePendingUserInputOptionSelection(
+  question: UserInputQuestion,
+  draft: PendingUserInputDraftAnswer | undefined,
+  optionLabel: string,
+): PendingUserInputDraftAnswer {
+  const normalizedOptionLabel = optionLabel.trim();
+
+  if (question.multiSelect) {
+    const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
+    const nextSelectedOptionLabels = selectedOptionLabels.includes(normalizedOptionLabel)
+      ? selectedOptionLabels.filter((label) => label !== normalizedOptionLabel)
+      : [...selectedOptionLabels, normalizedOptionLabel];
+
+    return {
+      customAnswer: "",
+      ...(nextSelectedOptionLabels.length > 0
+        ? { selectedOptionLabels: nextSelectedOptionLabels }
+        : {}),
+    };
+  }
+
+  return {
+    customAnswer: "",
+    selectedOptionLabels: [normalizedOptionLabel],
   };
 }
 
 export function buildPendingUserInputAnswers(
   questions: ReadonlyArray<UserInputQuestion>,
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
-): Record<string, string> | null {
-  const answers: Record<string, string> = {};
+): Record<string, string | ReadonlyArray<string>> | null {
+  const answers: Record<string, string | ReadonlyArray<string>> = {};
 
   for (const question of questions) {
-    const answer = resolvePendingUserInputAnswer(draftAnswers[question.id]);
+    const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
     if (!answer) {
       return null;
     }

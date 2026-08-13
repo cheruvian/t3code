@@ -594,6 +594,53 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("preserves child item identity and lifecycle without changing task status", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 2)).pipe(
+        Effect.forkChild,
+      );
+
+      for (const itemLifecycle of ["started", "completed"] as const) {
+        yield* runtime.emit({
+          id: asEventId(`evt-child-item-${itemLifecycle}`),
+          kind: "notification",
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          method: "collabAgent/item",
+          threadId: asThreadId("thread-1"),
+          payload: {
+            agentThreadId: "agent-thread-1",
+            nickname: "reviewer",
+            itemLifecycle,
+            item: {
+              id: "child-command-1",
+              type: "commandExecution",
+              command: "vp test run",
+              status: itemLifecycle === "started" ? "inProgress" : "declined",
+            },
+          },
+        } satisfies ProviderEvent);
+      }
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      NodeAssert.equal(events.length, 2);
+      for (const [index, expectedLifecycle] of ["started", "completed"].entries()) {
+        const event = events[index];
+        NodeAssert.equal(event?.type, "task.progress");
+        if (event?.type !== "task.progress") {
+          continue;
+        }
+        NodeAssert.equal(event.itemId, "child-command-1");
+        NodeAssert.equal(
+          (event.payload as Record<string, unknown>).itemLifecycle,
+          expectedLifecycle,
+        );
+        NodeAssert.equal(event.payload.status, undefined);
+      }
+    }),
+  );
+
   it.effect("maps completed agent message items to canonical item.completed events", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

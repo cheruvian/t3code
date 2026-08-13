@@ -1640,6 +1640,12 @@ export function makeOpenCodeAdapter(
       },
     );
 
+    const getSession: OpenCodeAdapterShape["getSession"] = (threadId) =>
+      Effect.sync(() => {
+        const context = sessions.get(threadId);
+        return context === undefined ? Option.none() : Option.some({ ...context.session });
+      });
+
     const listSessions: OpenCodeAdapterShape["listSessions"] = () =>
       Effect.sync(() => [...sessions.values()].map((context) => context.session));
 
@@ -1723,6 +1729,7 @@ export function makeOpenCodeAdapter(
       respondToRequest,
       respondToUserInput,
       stopSession,
+      getSession,
       listSessions,
       hasSession,
       readThread,

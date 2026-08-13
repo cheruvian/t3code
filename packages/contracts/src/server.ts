@@ -434,6 +434,8 @@ export const ServerConfig = Schema.Struct({
   shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /** Whether thread subscriptions can emit an opt-in catch-up completion marker. */
   threadResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
+  /** Whether thread subscriptions can emit opt-in transient assistant previews. */
+  assistantPreviews: Schema.optionalKey(Schema.Literal(true)),
   /**
    * Whether thread detail reads accept a turn window (`turnLimit`/
    * `beforeCursor`) and return `page` metadata. Clients must not send window

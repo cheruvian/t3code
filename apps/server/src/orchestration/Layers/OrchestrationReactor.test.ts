@@ -23,7 +23,7 @@ describe("OrchestrationReactor", () => {
     runtime = null;
   });
 
-  it("starts provider ingestion, provider command, checkpoint, and thread deletion reactors", async () => {
+  it("starts checkpoint receipt consumption before provider ingestion", async () => {
     const started: string[] = [];
 
     runtime = ManagedRuntime.make(
@@ -81,9 +81,9 @@ describe("OrchestrationReactor", () => {
     await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
 
     expect(started).toEqual([
+      "checkpoint-reactor",
       "provider-runtime-ingestion",
       "provider-command-reactor",
-      "checkpoint-reactor",
       "thread-deletion-reactor",
       "agent-awareness-relay",
     ]);

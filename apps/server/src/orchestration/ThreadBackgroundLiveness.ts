@@ -25,6 +25,7 @@ export type ThreadBackgroundLiveness = "working" | "monitoring" | null;
 interface ThreadLivenessState {
   readonly agents: Set<string>;
   readonly monitors: Set<string>;
+  readonly itemsByTask: Map<string, Set<string>>;
 }
 
 // Classification sets are the shared contracts copies (MONITOR_TASK_TYPES:
@@ -59,6 +60,8 @@ export class ThreadBackgroundLivenessService extends Context.Service<
       readonly status: string | undefined;
       readonly kind: "started" | "progress" | "updated" | "completed";
       readonly agentId?: string | undefined;
+      readonly itemId?: string | undefined;
+      readonly itemLifecycle?: "started" | "completed" | undefined;
     }) => void;
 
     /** Session death orphans all of a thread's background work. */
@@ -80,32 +83,76 @@ export function make(): ThreadBackgroundLivenessService["Service"] {
     if (existing) {
       return existing;
     }
-    const created: ThreadLivenessState = { agents: new Set(), monitors: new Set() };
+    const created: ThreadLivenessState = {
+      agents: new Set(),
+      monitors: new Set(),
+      itemsByTask: new Map(),
+    };
     stateByThreadId.set(threadId, created);
     return created;
+  };
+
+  const cleanup = (threadId: string, state: ThreadLivenessState) => {
+    if (state.agents.size === 0 && state.monitors.size === 0 && state.itemsByTask.size === 0) {
+      stateByThreadId.delete(threadId);
+    }
   };
 
   // Classification is per-transition, not sticky: a task first seen without
   // a taskType may later reveal itself as a shell, become inert, or turn out
   // to be agent-owned. Every path drops any prior entry for the taskId so a
   // stale bucket assignment can't pin the thread's status (review finding).
-  const drop = (threadId: string, taskId: string) => {
+  const dropTask = (threadId: string, taskId: string) => {
     const state = stateByThreadId.get(threadId);
     if (!state) {
       return;
     }
     state.agents.delete(taskId);
     state.monitors.delete(taskId);
-    if (state.agents.size === 0 && state.monitors.size === 0) {
-      stateByThreadId.delete(threadId);
+    cleanup(threadId, state);
+  };
+
+  const dropTaskItems = (threadId: string, taskId: string) => {
+    const state = stateByThreadId.get(threadId);
+    if (!state) {
+      return;
     }
+    state.itemsByTask.delete(taskId);
+    cleanup(threadId, state);
+  };
+
+  const recordItem = (
+    threadId: string,
+    taskId: string,
+    itemId: string,
+    lifecycle: "started" | "completed",
+  ) => {
+    if (lifecycle === "completed") {
+      const state = stateByThreadId.get(threadId);
+      const items = state?.itemsByTask.get(taskId);
+      if (!state || !items) {
+        return;
+      }
+      items.delete(itemId);
+      if (items.size === 0) {
+        state.itemsByTask.delete(taskId);
+      }
+      cleanup(threadId, state);
+      return;
+    }
+
+    const state = stateFor(threadId);
+    const items = state.itemsByTask.get(taskId) ?? new Set<string>();
+    items.add(itemId);
+    state.itemsByTask.set(taskId, items);
   };
 
   return {
     recordTaskLiveness: (input) => {
       const taskType = input.taskType;
       if (taskType !== undefined && INERT_TASK_TYPES.has(taskType)) {
-        drop(input.threadId, input.taskId);
+        dropTask(input.threadId, input.taskId);
+        dropTaskItems(input.threadId, input.taskId);
         return;
       }
       // A subagent's internal non-agent work (its own shells/monitors) is
@@ -115,7 +162,13 @@ export function make(): ThreadBackgroundLivenessService["Service"] {
         input.agentId !== undefined &&
         (taskType === undefined || MONITOR_TASK_TYPES.has(taskType))
       ) {
-        drop(input.threadId, input.taskId);
+        dropTask(input.threadId, input.taskId);
+        dropTaskItems(input.threadId, input.taskId);
+        return;
+      }
+
+      if (input.itemId !== undefined && input.itemLifecycle !== undefined) {
+        recordItem(input.threadId, input.taskId, input.itemId, input.itemLifecycle);
         return;
       }
 
@@ -126,11 +179,20 @@ export function make(): ThreadBackgroundLivenessService["Service"] {
         input.status === "idle" ||
         (input.status !== undefined && TERMINAL_STATUSES.has(input.status));
       if (terminal) {
-        drop(input.threadId, input.taskId);
+        dropTask(input.threadId, input.taskId);
+        if (input.status !== "idle") {
+          dropTaskItems(input.threadId, input.taskId);
+        }
         return;
       }
 
-      drop(input.threadId, input.taskId);
+      // Progress and telemetry without an explicit lifecycle update preserve
+      // current state. In particular, they must not resurrect an idle task.
+      if (input.kind !== "started" && input.status === undefined) {
+        return;
+      }
+
+      dropTask(input.threadId, input.taskId);
       const state = stateFor(input.threadId);
       const bucket =
         taskType !== undefined && MONITOR_TASK_TYPES.has(taskType) ? state.monitors : state.agents;
@@ -146,7 +208,7 @@ export function make(): ThreadBackgroundLivenessService["Service"] {
       if (!state) {
         return null;
       }
-      if (state.agents.size > 0) {
+      if (state.agents.size > 0 || state.itemsByTask.size > 0) {
         return "working";
       }
       if (state.monitors.size > 0) {

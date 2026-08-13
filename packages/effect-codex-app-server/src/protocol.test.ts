@@ -1,7 +1,11 @@
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -288,6 +292,152 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
           },
         });
       }),
+  );
+
+  it.effect("delivers raw messages only to live subscribers and releases them on close", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const protocolScope = yield* Scope.make();
+      yield* Effect.addFinalizer(() => Scope.close(protocolScope, Exit.void));
+
+      const historicalMessagesRouted = yield* Deferred.make<void>();
+      const terminationError = new CodexError.CodexAppServerProcessExitedError({ code: 19 });
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        terminationError: Effect.succeed(terminationError),
+        onNotification: ({ method }) =>
+          method === "test/historical-barrier"
+            ? Deferred.succeed(historicalMessagesRouted, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+      }).pipe(Effect.provideService(Scope.Scope, protocolScope));
+
+      yield* Queue.offer(
+        input,
+        encodeJsonl({ method: "test/historical-notification", params: { phase: "historical" } }),
+      );
+      yield* Queue.offer(
+        input,
+        encodeJsonl({
+          id: 41,
+          method: "test/historical-request",
+          params: { phase: "historical" },
+        }),
+      );
+      yield* Queue.offer(input, encodeJsonl({ method: "test/historical-barrier" }));
+      yield* Deferred.await(historicalMessagesRouted);
+
+      const liveNotification = {
+        method: "test/live-notification",
+        params: { phase: "live" },
+      } as const;
+      const liveRequest = {
+        id: 42,
+        method: "test/live-request",
+        params: { phase: "live" },
+      } as const;
+      const seenNotifications = yield* Ref.make<
+        Array<CodexProtocol.CodexAppServerIncomingNotification>
+      >([]);
+      const seenRequests = yield* Ref.make<Array<CodexProtocol.CodexAppServerIncomingRequest>>([]);
+      const liveNotificationObserved = yield* Deferred.make<void>();
+      const liveRequestObserved = yield* Deferred.make<void>();
+
+      const notificationsFiber = yield* transport.incomingNotifications.pipe(
+        Stream.runForEach((notification) =>
+          Ref.update(seenNotifications, (current) => [...current, notification]).pipe(
+            Effect.andThen(
+              notification.method === liveNotification.method
+                ? Deferred.succeed(liveNotificationObserved, undefined)
+                : Effect.void,
+            ),
+          ),
+        ),
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      const requestsFiber = yield* transport.incomingRequests.pipe(
+        Stream.runForEach((request) =>
+          Ref.update(seenRequests, (current) => [...current, request]).pipe(
+            Effect.andThen(
+              request.method === liveRequest.method
+                ? Deferred.succeed(liveRequestObserved, undefined)
+                : Effect.void,
+            ),
+          ),
+        ),
+        Effect.forkScoped({ startImmediately: true }),
+      );
+
+      yield* Queue.offer(input, encodeJsonl(liveNotification));
+      yield* Queue.offer(input, encodeJsonl(liveRequest));
+      yield* Deferred.await(liveNotificationObserved);
+      yield* Deferred.await(liveRequestObserved);
+
+      assert.deepEqual(yield* Ref.get(seenNotifications), [liveNotification]);
+      assert.deepEqual(yield* Ref.get(seenRequests), [liveRequest]);
+
+      const pendingRequest = yield* transport
+        .request("test/pending-request", { phase: "close" })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      assert.deepEqual(yield* decodeJson(yield* Queue.take(output)), {
+        id: 1,
+        method: "test/pending-request",
+        params: { phase: "close" },
+      });
+
+      yield* Scope.close(protocolScope, Exit.void);
+      yield* Fiber.join(notificationsFiber);
+      yield* Fiber.join(requestsFiber);
+      const pendingExit = yield* Fiber.await(pendingRequest);
+      assert.isTrue(Exit.isFailure(pendingExit));
+      if (Exit.isFailure(pendingExit)) {
+        assert.strictEqual(Cause.squash(pendingExit.cause), terminationError);
+      }
+    }),
+  );
+
+  it.effect("finishes in-flight termination when the protocol scope closes", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const protocolScope = yield* Scope.make();
+      yield* Effect.addFinalizer(() => Scope.close(protocolScope, Exit.void));
+
+      const terminationStarted = yield* Deferred.make<void>();
+      const finishTermination = yield* Deferred.make<void>();
+      const terminationCalls = yield* Ref.make(0);
+      const terminationError = new CodexError.CodexAppServerProcessExitedError({ code: 23 });
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        terminationError: Deferred.succeed(terminationStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(finishTermination)),
+          Effect.as(terminationError),
+        ),
+        onTermination: () => Ref.update(terminationCalls, (current) => current + 1),
+      }).pipe(Effect.provideService(Scope.Scope, protocolScope));
+
+      const pendingRequest = yield* transport
+        .request("test/pending-during-termination")
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      assert.deepEqual(yield* decodeJson(yield* Queue.take(output)), {
+        id: 1,
+        method: "test/pending-during-termination",
+      });
+
+      yield* Queue.end(input);
+      yield* Deferred.await(terminationStarted);
+      const closeFiber = yield* Scope.close(protocolScope, Exit.void).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(finishTermination, undefined);
+      yield* Fiber.join(closeFiber);
+
+      const pendingExit = pendingRequest.pollUnsafe();
+      assert.exists(pendingExit);
+      assert.isTrue(Exit.isFailure(pendingExit));
+      if (pendingExit && Exit.isFailure(pendingExit)) {
+        assert.strictEqual(Cause.squash(pendingExit.cause), terminationError);
+      }
+      assert.equal(yield* Ref.get(terminationCalls), 1);
+    }),
   );
 
   it.effect("surfaces JSON encoding failures as protocol parse errors", () =>

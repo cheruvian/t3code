@@ -6,6 +6,7 @@
 - [Permission modes](./user/permission-modes.md)
 - [Keyboard shortcuts](./user/keybindings.md)
 - [Organizing threads](./user/thread-sidebar.md)
+- [Review usage](./user/usage.md)
 - [Customize a project icon](./user/project-settings.md)
 - [T3 Code agent project](./user/t3-code-project.md)
 - [Remote access](./user/remote-access.md)

@@ -4,7 +4,9 @@ import {
   ProjectId,
   ProviderDriverKind,
   ThreadId,
+  TurnId,
   type OrchestrationEvent,
+  type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vite-plus/test";
@@ -101,6 +103,96 @@ describe("orchestration projector", () => {
         session: null,
       },
     ]);
+  });
+
+  it("maintains canonical activity order across delivery order and stable-ID replacement", async () => {
+    const createdAt = "2026-04-01T09:00:00.000Z";
+    let model = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(createdAt),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-activity-order",
+          occurredAt: createdAt,
+          commandId: "cmd-thread-create",
+          payload: {
+            threadId: "thread-activity-order",
+            projectId: "project-1",
+            title: "activity order",
+            modelSelection: {
+              provider: ProviderDriverKind.make("codex"),
+              model: "gpt-5.4",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+    const tiedAt = "2026-04-01T11:00:00.000Z";
+    const makeActivity = (
+      id: string,
+      kind: string,
+      activityCreatedAt: string,
+      sequence?: number,
+      summary = id,
+    ): OrchestrationThreadActivity => ({
+      id: EventId.make(id),
+      tone: "tool",
+      kind,
+      summary,
+      payload: {},
+      turnId: TurnId.make("turn-1"),
+      ...(sequence === undefined ? {} : { sequence }),
+      createdAt: activityCreatedAt,
+    });
+    const delivered = [
+      makeActivity("activity-sequence-one", "command", "2026-04-01T12:00:00.000Z", 1),
+      makeActivity("activity-created-earlier", "tool.completed", "2026-04-01T10:00:00.000Z", 2),
+      makeActivity("activity-b-other", "file-edit", tiedAt, 2),
+      makeActivity("activity-c-progress", "tool.progress", tiedAt, 2),
+      makeActivity("activity-a-completed", "tool.completed", tiedAt, 2),
+      makeActivity("activity-z-stable", "tool.completed", tiedAt, 2, "Stale activity"),
+      makeActivity("activity-legacy", "command", "2026-04-01T12:00:00.000Z"),
+      makeActivity("activity-z-stable", "tool.started", tiedAt, 2, "Replacement activity"),
+    ];
+
+    for (let index = 0; index < delivered.length; index += 1) {
+      const activity = delivered[index]!;
+      model = await Effect.runPromise(
+        projectEvent(
+          model,
+          makeEvent({
+            sequence: index + 2,
+            type: "thread.activity-appended",
+            aggregateKind: "thread",
+            aggregateId: "thread-activity-order",
+            occurredAt: activity.createdAt,
+            commandId: `cmd-activity-${index}`,
+            payload: { threadId: "thread-activity-order", activity },
+          }),
+        ),
+      );
+    }
+
+    const activities = model.threads[0]?.activities ?? [];
+    expect(activities.map((activity) => activity.id)).toEqual([
+      "activity-legacy",
+      "activity-sequence-one",
+      "activity-created-earlier",
+      "activity-z-stable",
+      "activity-b-other",
+      "activity-c-progress",
+      "activity-a-completed",
+    ]);
+    expect(activities.find((activity) => activity.id === "activity-z-stable")?.summary).toBe(
+      "Replacement activity",
+    );
   });
 
   it("fails when event payload cannot be decoded by runtime schema", async () => {

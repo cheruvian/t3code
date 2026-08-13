@@ -607,6 +607,9 @@ export const RuntimeTaskStatus = Schema.Literals([
 ]);
 export type RuntimeTaskStatus = typeof RuntimeTaskStatus.Type;
 
+export const RuntimeTaskItemLifecycle = Schema.Literals(["started", "completed"]);
+export type RuntimeTaskItemLifecycle = typeof RuntimeTaskItemLifecycle.Type;
+
 const TaskProgressPayload = Schema.Struct({
   taskId: RuntimeTaskId,
   description: TrimmedNonEmptyStringSchema,
@@ -616,6 +619,8 @@ const TaskProgressPayload = Schema.Struct({
   lastToolName: Schema.optional(TrimmedNonEmptyStringSchema),
   /** Present on synthesized member/child progress rows that carry state. */
   status: Schema.optional(RuntimeTaskStatus),
+  /** Lifecycle of an item owned by this task; distinct from task status. */
+  itemLifecycle: Schema.optional(RuntimeTaskItemLifecycle),
   error: Schema.optional(TrimmedNonEmptyStringSchema),
   ...taskAgentLinkageFields,
 });

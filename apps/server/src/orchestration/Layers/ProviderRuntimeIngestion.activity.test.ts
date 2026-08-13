@@ -1,6 +1,7 @@
 import {
   EventId,
   ProviderDriverKind,
+  RuntimeItemId,
   RuntimeTaskId,
   ThreadId,
   type ProviderRuntimeEvent,
@@ -80,5 +81,28 @@ describe("runtimeEventToActivities task progress", () => {
     expect(usagePayload.typedUsage).toEqual({ totalTokens: 4_200, toolUses: 7 });
     expect(usagePayload.usageSnapshot).toBe(true);
     expect(usagePayload).not.toHaveProperty("status");
+  });
+
+  it("keeps child item progress visible without projecting item lifecycle as task status", () => {
+    const event = {
+      ...base,
+      type: "task.progress",
+      eventId: EventId.make("evt-child-item-completed"),
+      itemId: RuntimeItemId.make("child-command-1"),
+      payload: {
+        taskId: RuntimeTaskId.make("agent-3"),
+        description: "Agent three",
+        summary: "Finished running tests",
+        itemLifecycle: "completed",
+      },
+    } satisfies ProviderRuntimeEvent;
+
+    const activities = runtimeEventToActivities(event);
+    const payload = activities[0]?.payload as Record<string, unknown>;
+
+    expect(activities).toHaveLength(1);
+    expect(payload.summary).toBe("Finished running tests");
+    expect(payload).not.toHaveProperty("itemLifecycle");
+    expect(payload).not.toHaveProperty("status");
   });
 });

@@ -1,6 +1,7 @@
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
@@ -153,12 +154,13 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
     options: CodexAppServerPatchedProtocolOptions,
   ): Effect.fn.Return<CodexAppServerPatchedProtocol, never, Scope.Scope> {
     const outgoing = yield* Queue.unbounded<string, Cause.Done<void>>();
-    const incomingNotifications = yield* Queue.unbounded<CodexAppServerIncomingNotification>();
-    const incomingRequests = yield* Queue.unbounded<CodexAppServerIncomingRequest>();
+    const incomingNotifications = yield* PubSub.unbounded<CodexAppServerIncomingNotification>();
+    const incomingRequests = yield* PubSub.unbounded<CodexAppServerIncomingRequest>();
     const pending = yield* Ref.make(new Map<string, CodexAppServerPendingRequest>());
     const nextRequestId = yield* Ref.make(1);
     const remainder = yield* Ref.make("");
     const terminationHandled = yield* Ref.make(false);
+    const terminationComplete = yield* Deferred.make<void>();
 
     const logProtocol = (event: CodexAppServerProtocolLogEvent) => {
       if (event.direction === "incoming" && !options.logIncoming) {
@@ -186,20 +188,22 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
     const handleTermination = (classify: () => Effect.Effect<CodexError.CodexAppServerError>) =>
       Ref.modify(terminationHandled, (handled) => {
         if (handled) {
-          return [Effect.void, true] as const;
+          return [Deferred.await(terminationComplete), true] as const;
         }
         return [
           Effect.gen(function* () {
+            yield* Queue.end(outgoing);
             const error = yield* classify();
             yield* failAllPending(error);
-            yield* Queue.end(outgoing);
             if (options.onTermination) {
               yield* options.onTermination(error);
             }
-          }),
+          }).pipe(
+            Effect.onExit((exit) => Deferred.done(terminationComplete, exit).pipe(Effect.asVoid)),
+          ),
           true,
         ] as const;
-      }).pipe(Effect.flatten);
+      }).pipe(Effect.flatten, Effect.uninterruptible);
 
     const offerOutgoing = (message: Record<string, unknown>) =>
       Effect.gen(function* () {
@@ -270,7 +274,7 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
     };
 
     const handleRequest = (request: CodexAppServerIncomingRequest) =>
-      Queue.offer(incomingRequests, request).pipe(
+      PubSub.publish(incomingRequests, request).pipe(
         Effect.andThen(
           options.onRequest
             ? options.onRequest(request).pipe(
@@ -292,7 +296,7 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
       );
 
     const handleNotification = (notification: CodexAppServerIncomingNotification) =>
-      Queue.offer(incomingNotifications, notification).pipe(
+      PubSub.publish(incomingNotifications, notification).pipe(
         Effect.andThen(options.onNotification ? options.onNotification(notification) : Effect.void),
         Effect.asVoid,
       );
@@ -385,6 +389,17 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
 
     yield* Stream.fromQueue(outgoing).pipe(Stream.run(options.stdio.stdout()), Effect.forkScoped);
 
+    yield* Effect.addFinalizer(() =>
+      handleTermination(
+        () =>
+          options.terminationError ??
+          Effect.succeed(new CodexError.CodexAppServerInputStreamEndedError({})),
+      ).pipe(
+        Effect.andThen(PubSub.shutdown(incomingNotifications)),
+        Effect.andThen(PubSub.shutdown(incomingRequests)),
+      ),
+    );
+
     const request = (method: string, payload?: unknown) =>
       Effect.gen(function* () {
         const requestId = yield* Ref.modify(
@@ -412,8 +427,8 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
       });
 
     return {
-      incomingNotifications: Stream.fromQueue(incomingNotifications),
-      incomingRequests: Stream.fromQueue(incomingRequests),
+      incomingNotifications: Stream.fromPubSub(incomingNotifications),
+      incomingRequests: Stream.fromPubSub(incomingRequests),
       request,
       notify,
       respond,

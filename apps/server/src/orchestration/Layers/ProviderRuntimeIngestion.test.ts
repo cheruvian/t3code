@@ -38,11 +38,13 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { it as effectIt } from "@effect/vitest";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
@@ -56,10 +58,16 @@ import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
-import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
+import { ProviderRuntimeIngestionLayer } from "./ProviderRuntimeIngestion.ts";
+import { RuntimeReceiptBusTest } from "./RuntimeReceiptBus.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
+import {
+  AssistantPreviewBus,
+  type AssistantPreviewPublication,
+} from "../Services/AssistantPreviewBus.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -109,6 +117,7 @@ function isLegacyTurnCompletedEvent(
 function createProviderServiceHarness(terminalDisposition: "interrupted" | null = null) {
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
   const runtimeSessions: ProviderSession[] = [];
+  let listSessionsCalls = 0;
 
   const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
   const service: ProviderServiceShape = {
@@ -118,7 +127,15 @@ function createProviderServiceHarness(terminalDisposition: "interrupted" | null 
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
-    listSessions: () => Effect.succeed([...runtimeSessions]),
+    getSession: (threadId) =>
+      Effect.succeed(
+        Option.fromUndefinedOr(runtimeSessions.find((session) => session.threadId === threadId)),
+      ),
+    listSessions: () =>
+      Effect.sync(() => {
+        listSessionsCalls += 1;
+        return [...runtimeSessions];
+      }),
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     getInstanceInfo: (instanceId) => {
       const driverKind = ProviderDriverKind.make(String(instanceId));
@@ -173,6 +190,9 @@ function createProviderServiceHarness(terminalDisposition: "interrupted" | null 
     service,
     emit,
     setSession,
+    get listSessionsCalls() {
+      return listSessionsCalls;
+    },
   };
 }
 
@@ -189,6 +209,7 @@ function providerServiceFromCodexAdapter(
     respondToUserInput: ({ threadId, requestId, answers }) =>
       adapter.respondToUserInput(threadId, requestId, answers),
     stopSession: ({ threadId }) => adapter.stopSession(threadId),
+    getSession: adapter.getSession,
     listSessions: adapter.listSessions,
     getCapabilities: () => Effect.succeed(adapter.capabilities),
     getInstanceInfo: (instanceId) =>
@@ -252,7 +273,10 @@ async function waitForThread(
 
 describe("ProviderRuntimeIngestion", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderRuntimeIngestionService | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderRuntimeIngestionService
+    | ProjectionSnapshotQuery
+    | RuntimeReceiptBus,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -286,32 +310,83 @@ describe("ProviderRuntimeIngestion", () => {
     serverSettings?: Partial<ServerSettings>;
     providerService?: ProviderServiceShape;
     terminalDisposition?: "interrupted" | null;
+    beforeThreadShellRead?: (threadId: ThreadId) => Effect.Effect<void>;
+    beforePendingTurnStartRead?: (threadId: ThreadId) => Effect.Effect<void>;
   }) {
     const workspaceRoot = makeTempDir("t3-provider-project-");
     NodeFS.mkdirSync(NodePath.join(workspaceRoot, ".git"));
     const provider = createProviderServiceHarness(options?.terminalDisposition);
+    const sqlitePersistence = SqlitePersistenceMemory;
+    const assistantPreviews: AssistantPreviewPublication[] = [];
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationProjectionPipelineLive),
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provide(RepositoryIdentityResolver.layer),
-      Layer.provide(SqlitePersistenceMemory),
+      Layer.provide(sqlitePersistence),
     );
-    const projectionSnapshotLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
+    const projectionSnapshotBaseLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
       Layer.provide(RepositoryIdentityResolver.layer),
-      Layer.provide(SqlitePersistenceMemory),
+      Layer.provide(sqlitePersistence),
     );
-    const layer = ProviderRuntimeIngestionLive.pipe(
+    const projectionSnapshotLayer = options?.beforeThreadShellRead
+      ? Layer.effect(
+          ProjectionSnapshotQuery,
+          Effect.gen(function* () {
+            const query = yield* ProjectionSnapshotQuery;
+            return ProjectionSnapshotQuery.of({
+              ...query,
+              getThreadShellById: (threadId) =>
+                options.beforeThreadShellRead!(threadId).pipe(
+                  Effect.andThen(query.getThreadShellById(threadId)),
+                ),
+            });
+          }),
+        ).pipe(Layer.provide(projectionSnapshotBaseLayer))
+      : projectionSnapshotBaseLayer;
+    const projectionTurnBaseLayer = ProjectionTurnRepositoryLive.pipe(
+      Layer.provide(sqlitePersistence),
+    );
+    const projectionTurnLayer = options?.beforePendingTurnStartRead
+      ? Layer.effect(
+          ProjectionTurnRepository,
+          Effect.gen(function* () {
+            const repository = yield* ProjectionTurnRepository;
+            return ProjectionTurnRepository.of({
+              ...repository,
+              getPendingTurnStartByThreadId: (input) =>
+                options.beforePendingTurnStartRead!(input.threadId).pipe(
+                  Effect.andThen(repository.getPendingTurnStartByThreadId(input)),
+                ),
+            });
+          }),
+        ).pipe(Layer.provide(projectionTurnBaseLayer))
+      : projectionTurnBaseLayer;
+    const layer = ProviderRuntimeIngestionLayer.pipe(
+      Layer.provide(projectionTurnLayer),
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       // Single shared liveness instance across ingestion (writer), the
       // engine, and the snapshot query (reader).
       Layer.provideMerge(ThreadBackgroundLiveness.layer),
       Layer.provideMerge(ThreadPlanProgress.layer),
-      Layer.provideMerge(SqlitePersistenceMemory),
+      Layer.provideMerge(sqlitePersistence),
+      Layer.provideMerge(RuntimeReceiptBusTest),
       Layer.provideMerge(
         Layer.succeed(ProviderService, options?.providerService ?? provider.service),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(
+          AssistantPreviewBus,
+          AssistantPreviewBus.of({
+            publish: (publication) =>
+              Effect.sync(() => {
+                assistantPreviews.push(publication);
+              }),
+            stream: Stream.empty,
+          }),
+        ),
       ),
       Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
@@ -321,6 +396,7 @@ describe("ProviderRuntimeIngestion", () => {
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const ingestion = await runtime.runPromise(Effect.service(ProviderRuntimeIngestionService));
+    const receiptBus = await runtime.runPromise(Effect.service(RuntimeReceiptBus));
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(ingestion.start().pipe(Scope.provide(scope)));
     const drain = () => Effect.runPromise(ingestion.drain);
@@ -384,12 +460,18 @@ describe("ProviderRuntimeIngestion", () => {
       dispatch,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       readShell: () => Effect.runPromise(snapshotQuery.getShellSnapshot()),
+      readShellModel: () => Effect.runPromise(snapshotQuery.getShellSnapshot()),
       readEvents: () =>
         Effect.runPromise(
           Stream.runCollect(engine.readEvents(0)).pipe(Effect.map((events) => Array.from(events))),
         ),
       emit: provider.emit,
       setProviderSession: provider.setSession,
+      get listSessionsCalls() {
+        return provider.listSessionsCalls;
+      },
+      assistantPreviews,
+      receiptBus,
       drain,
     };
   }
@@ -407,6 +489,216 @@ describe("ProviderRuntimeIngestion", () => {
     expect(shell).toBeDefined();
     return { detail: detail!, shell: shell! };
   }
+
+  effectIt.effect("ingests activity bursts without lifecycle context reads", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-1");
+      const barrierReached = yield* Deferred.make<void>();
+      let shellReadCount = 0;
+      let pendingTurnStartReadCount = 0;
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          beforeThreadShellRead: () =>
+            Effect.sync(() => {
+              shellReadCount += 1;
+            }).pipe(Effect.andThen(Deferred.succeed(barrierReached, undefined)), Effect.asVoid),
+          beforePendingTurnStartRead: () =>
+            Effect.sync(() => {
+              pendingTurnStartReadCount += 1;
+            }),
+        }),
+      );
+
+      for (let index = 0; index < 10; index += 1) {
+        harness.emit({
+          type: "task.progress",
+          eventId: asEventId(`evt-read-count-task-progress-${index}`),
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
+          threadId,
+          turnId: asTurnId("turn-read-count"),
+          payload: {
+            taskId: `task-read-count-${index}`,
+            description: "Indexing repository files",
+            summary: `Indexed batch ${index}`,
+          },
+        });
+      }
+      harness.emit({
+        type: "session.state.changed",
+        eventId: asEventId("evt-read-count-barrier"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:10.000Z",
+        threadId,
+        payload: { state: "running" },
+      });
+
+      yield* Deferred.await(barrierReached);
+      yield* Effect.promise(() => harness.drain());
+      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === threadId,
+      );
+      expect(
+        thread?.activities.filter((activity) =>
+          activity.id.startsWith("task-progress:thread-1:task-read-count-"),
+        ),
+      ).toHaveLength(10);
+      expect(shellReadCount).toBe(1);
+      expect(pendingTurnStartReadCount).toBe(0);
+    }),
+  );
+
+  effectIt.effect("uses ingestion capacity across independent threads", () =>
+    Effect.gen(function* () {
+      const firstThreadId = asThreadId("thread-1");
+      const secondThreadId = asThreadId("thread-concurrent-ingestion");
+      const firstShellRead = yield* Deferred.make<void>();
+      const secondShellRead = yield* Deferred.make<void>();
+      const releaseFirstShellRead = yield* Deferred.make<void>();
+      let shouldBlockFirstThread = true;
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          beforeThreadShellRead: (threadId) =>
+            Effect.gen(function* () {
+              if (threadId === firstThreadId && shouldBlockFirstThread) {
+                shouldBlockFirstThread = false;
+                yield* Deferred.succeed(firstShellRead, undefined).pipe(Effect.orDie);
+                yield* Deferred.await(releaseFirstShellRead);
+              }
+              if (threadId === secondThreadId) {
+                yield* Deferred.succeed(secondShellRead, undefined).pipe(Effect.orDie);
+              }
+            }),
+        }),
+      );
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      yield* harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-create-concurrent-ingestion-thread"),
+        threadId: secondThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Concurrent ingestion",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-seed-concurrent-ingestion-session"),
+        threadId: secondThreadId,
+        session: {
+          threadId: secondThreadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      });
+
+      yield* Effect.gen(function* () {
+        harness.emit({
+          type: "session.state.changed",
+          eventId: asEventId("evt-concurrent-ingestion-first"),
+          provider: ProviderDriverKind.make("codex"),
+          threadId: firstThreadId,
+          createdAt,
+          payload: { state: "running" },
+        });
+        yield* Deferred.await(firstShellRead);
+        harness.emit({
+          type: "session.state.changed",
+          eventId: asEventId("evt-concurrent-ingestion-second"),
+          provider: ProviderDriverKind.make("codex"),
+          threadId: secondThreadId,
+          createdAt,
+          payload: { state: "running" },
+        });
+
+        yield* Deferred.await(secondShellRead);
+        yield* Deferred.succeed(releaseFirstShellRead, undefined);
+        yield* Effect.promise(() => harness.drain());
+        const snapshot = yield* Effect.promise(() => harness.readModel());
+        expect(
+          snapshot.threads.find((thread) => thread.id === firstThreadId)?.session?.status,
+        ).toBe("running");
+        expect(
+          snapshot.threads.find((thread) => thread.id === secondThreadId)?.session?.status,
+        ).toBe("running");
+      }).pipe(
+        Effect.ensuring(Deferred.succeed(releaseFirstShellRead, undefined).pipe(Effect.asVoid)),
+      );
+    }),
+  );
+
+  effectIt.effect("serializes same-thread lifecycle reads", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-1");
+      const turnId = asTurnId("turn-serialized-ingestion");
+      const firstShellRead = yield* Deferred.make<void>();
+      const secondShellRead = yield* Deferred.make<void>();
+      const releaseFirstShellRead = yield* Deferred.make<void>();
+      let shellReadCount = 0;
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          beforeThreadShellRead: (readThreadId) =>
+            Effect.gen(function* () {
+              if (readThreadId !== threadId) return;
+              shellReadCount += 1;
+              if (shellReadCount === 1) {
+                yield* Deferred.succeed(firstShellRead, undefined).pipe(Effect.orDie);
+                yield* Deferred.await(releaseFirstShellRead);
+              } else if (shellReadCount === 2) {
+                yield* Deferred.succeed(secondShellRead, undefined).pipe(Effect.orDie);
+              }
+            }),
+        }),
+      );
+      yield* Effect.gen(function* () {
+        const startedAt = "2026-01-01T00:00:01.000Z";
+        harness.emit({
+          type: "turn.started",
+          eventId: asEventId("evt-serialized-ingestion-started"),
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          turnId,
+          createdAt: startedAt,
+        });
+        yield* Deferred.await(firstShellRead);
+        harness.emit({
+          type: "turn.completed",
+          eventId: asEventId("evt-serialized-ingestion-completed"),
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          turnId,
+          createdAt: "2026-01-01T00:00:02.000Z",
+          payload: { state: "completed" },
+        });
+        yield* Effect.yieldNow;
+        expect(yield* Deferred.isDone(secondShellRead)).toBe(false);
+
+        yield* Deferred.succeed(releaseFirstShellRead, undefined);
+        yield* Deferred.await(secondShellRead);
+        yield* Effect.promise(() => harness.drain());
+        const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+          (entry) => entry.id === threadId,
+        );
+        expect(thread?.session?.status).toBe("ready");
+        expect(thread?.session?.activeTurnId).toBeNull();
+        expect(thread?.latestTurn?.state).toBe("completed");
+      }).pipe(
+        Effect.ensuring(Deferred.succeed(releaseFirstShellRead, undefined).pipe(Effect.asVoid)),
+      );
+    }),
+  );
 
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();
@@ -448,6 +740,210 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("turn failed");
+  });
+
+  it("publishes one settled receipt after terminal turn projections are finalized", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-ingestion-settled");
+    const completedEventId = asEventId("evt-turn-ingestion-settled");
+    const settledAt = "2026-01-01T00:00:03.000Z";
+    let observed:
+      | {
+          readonly receipt: unknown;
+          readonly thread: ProviderRuntimeTestThread | undefined;
+        }
+      | undefined;
+    const publish = harness.receiptBus.publish;
+    vi.spyOn(harness.receiptBus, "publish").mockImplementation((receipt) =>
+      publish(receipt).pipe(
+        Effect.andThen(
+          (receipt as { readonly type: string }).type === "turn.ingestion-settled"
+            ? Effect.map(Effect.promise(harness.readModel), (snapshot) => {
+                observed = {
+                  receipt,
+                  thread: snapshot.threads.find((entry) => entry.id === threadId),
+                };
+              })
+            : Effect.void,
+        ),
+        Effect.asVoid,
+      ),
+    );
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-ingestion-settled-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-turn-ingestion-settled-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      itemId: asItemId("item-turn-ingestion-settled"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      payload: {
+        streamKind: "assistant_text",
+        delta: "final answer",
+      },
+    });
+    harness.emit({
+      type: "turn.proposed.delta",
+      eventId: asEventId("evt-turn-ingestion-settled-plan"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      createdAt: "2026-01-01T00:00:02.000Z",
+      payload: { delta: "# Final plan" },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: completedEventId,
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      turnId,
+      createdAt: settledAt,
+      payload: { state: "completed" },
+    });
+
+    await harness.drain();
+
+    expect(observed?.receipt).toEqual({
+      type: "turn.ingestion-settled",
+      sourceEventId: completedEventId,
+      threadId,
+      turnId,
+      outcome: "completed",
+      settledAt,
+    });
+    expect(observed?.thread?.session).toMatchObject({
+      status: "ready",
+      activeTurnId: null,
+    });
+    expect(observed?.thread?.messages).toContainEqual(
+      expect.objectContaining({
+        id: asMessageId("assistant:item-turn-ingestion-settled"),
+        text: "final answer",
+        streaming: false,
+      }),
+    );
+    expect(observed?.thread?.proposedPlans).toContainEqual(
+      expect.objectContaining({
+        id: "plan:thread-1:turn:turn-ingestion-settled",
+        planMarkdown: "# Final plan",
+      }),
+    );
+  });
+
+  it("suppresses settled receipts for stale, duplicate, and post-abort terminals", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const firstTurnId = asTurnId("turn-settled-receipt-first");
+    const secondTurnId = asTurnId("turn-settled-receipt-second");
+    const settledReceipts: Array<unknown> = [];
+    const publish = harness.receiptBus.publish;
+    vi.spyOn(harness.receiptBus, "publish").mockImplementation((receipt) =>
+      publish(receipt).pipe(
+        Effect.tap(() =>
+          receipt.type === "turn.ingestion-settled"
+            ? Effect.sync(() => settledReceipts.push(receipt))
+            : Effect.void,
+        ),
+        Effect.asVoid,
+      ),
+    );
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-settled-receipt-first-started"),
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      turnId: firstTurnId,
+      createdAt: "2026-01-01T00:00:01.000Z",
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-settled-receipt-stale-completion"),
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      turnId: secondTurnId,
+      createdAt: "2026-01-01T00:00:02.000Z",
+      payload: { state: "completed" },
+    });
+    const abort = {
+      type: "turn.aborted" as const,
+      eventId: asEventId("evt-settled-receipt-first-aborted"),
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      turnId: firstTurnId,
+      createdAt: "2026-01-01T00:00:03.000Z",
+      payload: { reason: "Interrupted by user." },
+    };
+    harness.emit(abort);
+    harness.emit(abort);
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-settled-receipt-late-after-abort"),
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      turnId: firstTurnId,
+      createdAt: "2026-01-01T00:00:04.000Z",
+      payload: { state: "completed" },
+    });
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-settled-receipt-second-started"),
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      turnId: secondTurnId,
+      createdAt: "2026-01-01T00:00:05.000Z",
+    });
+    const completion = {
+      type: "turn.completed" as const,
+      eventId: asEventId("evt-settled-receipt-second-completed"),
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      turnId: secondTurnId,
+      createdAt: "2026-01-01T00:00:06.000Z",
+      payload: { state: "failed" as const, errorMessage: "Turn failed" },
+    };
+    harness.emit(completion);
+    harness.emit(completion);
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-settled-receipt-stale-after-newer-terminal"),
+      provider: ProviderDriverKind.make("opencode"),
+      threadId,
+      turnId: firstTurnId,
+      createdAt: "2026-01-01T00:00:07.000Z",
+      payload: { state: "completed" },
+    });
+
+    await harness.drain();
+
+    expect(settledReceipts).toEqual([
+      {
+        type: "turn.ingestion-settled",
+        sourceEventId: abort.eventId,
+        threadId,
+        turnId: firstTurnId,
+        outcome: "interrupted",
+        settledAt: abort.createdAt,
+      },
+      {
+        type: "turn.ingestion-settled",
+        sourceEventId: completion.eventId,
+        threadId,
+        turnId: secondTurnId,
+        outcome: "failed",
+        settledAt: completion.createdAt,
+      },
+    ]);
   });
 
   it.each(["codex", "opencode"] as const)(
@@ -2093,6 +2589,7 @@ describe("ProviderRuntimeIngestion", () => {
     ).toMatchObject({
       implementationThreadId: "thread-implement",
     });
+    expect(harness.listSessionsCalls).toBe(0);
   });
 
   it("does not mark the source proposed plan implemented for a rejected turn.started event", async () => {
@@ -2564,6 +3061,119 @@ describe("ProviderRuntimeIngestion", () => {
         entry.id === "plan:thread-1:turn:turn-plan-buffer",
     );
     expect(proposedPlan?.planMarkdown).toBe("## Buffered plan\n\n- first\n- second");
+  });
+
+  it("publishes one first-non-empty assistant preview per buffered message segment", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-preview");
+    const startedAt = "2026-04-01T01:00:00.000Z";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-preview"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: startedAt,
+      threadId,
+      turnId,
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.status === "running" && thread.session.activeTurnId === turnId,
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-preview-whitespace"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: startedAt,
+      threadId,
+      turnId,
+      itemId: asItemId("item-preview"),
+      payload: { streamKind: "assistant_text", delta: "  " },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-preview-first-text"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-04-01T01:00:01.000Z",
+      threadId,
+      turnId,
+      itemId: asItemId("item-preview"),
+      payload: { streamKind: "assistant_text", delta: "First" },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-preview-later-text"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-04-01T01:00:02.000Z",
+      threadId,
+      turnId,
+      itemId: asItemId("item-preview"),
+      payload: { streamKind: "assistant_text", delta: " later" },
+    });
+    await harness.drain();
+
+    expect(harness.assistantPreviews).toEqual([
+      {
+        threadId,
+        preview: {
+          kind: "assistant-preview",
+          messageId: asMessageId("assistant:item-preview"),
+          turnId,
+          text: "  First",
+          createdAt: "2026-04-01T01:00:01.000Z",
+        },
+      },
+    ]);
+
+    harness.emit({
+      type: "request.opened",
+      eventId: asEventId("evt-preview-request-opened"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-04-01T01:00:03.000Z",
+      threadId,
+      turnId,
+      requestId: ApprovalRequestId.make("request-preview"),
+      payload: {
+        requestType: "command_execution_approval",
+        detail: "pwd",
+      },
+    });
+    await harness.drain();
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-preview-next-segment"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-04-01T01:00:04.000Z",
+      threadId,
+      turnId,
+      itemId: asItemId("item-preview"),
+      payload: { streamKind: "assistant_text", delta: "Second segment" },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-preview-next-segment-later"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-04-01T01:00:05.000Z",
+      threadId,
+      turnId,
+      itemId: asItemId("item-preview"),
+      payload: { streamKind: "assistant_text", delta: " later" },
+    });
+    await harness.drain();
+
+    expect(harness.assistantPreviews).toHaveLength(2);
+    expect(harness.assistantPreviews[1]).toEqual({
+      threadId,
+      preview: {
+        kind: "assistant-preview",
+        messageId: asMessageId("assistant:item-preview:segment:1"),
+        turnId,
+        text: "Second segment",
+        createdAt: "2026-04-01T01:00:04.000Z",
+      },
+    });
   });
 
   it("buffers assistant deltas by default until completion", async () => {
@@ -4121,6 +4731,101 @@ describe("ProviderRuntimeIngestion", () => {
         (entry: ProviderRuntimeTestProposedPlan) => entry.id === "plan:thread-1:turn:turn-task-1",
       )?.planMarkdown,
     ).toBe("# Plan title");
+  });
+
+  it("keeps mapped child items live through agent idle without late-progress resurrection", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const base = {
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-child-items"),
+    };
+
+    harness.emit({
+      ...base,
+      type: "task.started",
+      eventId: asEventId("evt-child-agent-started"),
+      payload: { taskId: "agent-1", description: "Reviewer" },
+    });
+    for (const itemId of ["child-item-a", "child-item-b"]) {
+      harness.emit({
+        ...base,
+        type: "task.progress",
+        eventId: asEventId(`evt-${itemId}-started`),
+        itemId,
+        payload: {
+          taskId: "agent-1",
+          description: "Reviewer",
+          summary: `Started ${itemId}`,
+          itemLifecycle: "started",
+        },
+      });
+    }
+    harness.emit({
+      ...base,
+      type: "task.updated",
+      eventId: asEventId("evt-child-agent-idle"),
+      payload: { taskId: "agent-1", status: "idle" },
+    });
+    await harness.drain();
+
+    let shell = (await harness.readShellModel()).threads.find((entry) => entry.id === "thread-1");
+    expect(shell?.backgroundLiveness).toBe("working");
+
+    harness.emit({
+      ...base,
+      type: "task.progress",
+      eventId: asEventId("evt-child-item-b-completed"),
+      itemId: "child-item-b",
+      payload: {
+        taskId: "agent-1",
+        description: "Reviewer",
+        summary: "Finished child-item-b",
+        itemLifecycle: "completed",
+      },
+    });
+    await harness.drain();
+    shell = (await harness.readShellModel()).threads.find((entry) => entry.id === "thread-1");
+    expect(shell?.backgroundLiveness).toBe("working");
+
+    harness.emit({
+      ...base,
+      type: "task.progress",
+      eventId: asEventId("evt-child-item-a-completed"),
+      itemId: "child-item-a",
+      payload: {
+        taskId: "agent-1",
+        description: "Reviewer",
+        summary: "Finished child-item-a",
+        itemLifecycle: "completed",
+      },
+    });
+    harness.emit({
+      ...base,
+      type: "task.progress",
+      eventId: asEventId("evt-child-agent-late-progress"),
+      payload: {
+        taskId: "agent-1",
+        description: "Reviewer",
+        summary: "Late activity remains visible",
+      },
+    });
+    await harness.drain();
+
+    shell = (await harness.readShellModel()).threads.find((entry) => entry.id === "thread-1");
+    expect(shell?.backgroundLiveness).toBeNull();
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity) =>
+          activity.id === "task-progress:thread-1:agent-1" &&
+          (activity.payload as { summary?: string }).summary === "Late activity remains visible",
+      ),
+    );
+    expect(thread.activities).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "task-progress:thread-1:agent-1" })]),
+    );
   });
 
   it("titles task activities with the task description, including on completion", async () => {

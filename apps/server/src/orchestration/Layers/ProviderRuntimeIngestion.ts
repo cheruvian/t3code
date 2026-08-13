@@ -26,17 +26,23 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { makeKeyedDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
-import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import {
+  type ProjectionPendingTurnStart,
+  ProjectionTurnRepository,
+} from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { isGitRepository } from "../../git/Utils.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
 import { ThreadPlanProgressService } from "../ThreadPlanProgress.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { AssistantPreviewBus } from "../Services/AssistantPreviewBus.ts";
+import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
 import {
   ProviderRuntimeIngestionService,
   type ProviderRuntimeIngestionShape,
@@ -86,6 +92,7 @@ interface AssistantSegmentState {
   baseKey: string;
   nextSegmentIndex: number;
   activeMessageId: MessageId | null;
+  previewPublished: boolean;
 }
 
 const TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY = 10_000;
@@ -97,6 +104,7 @@ const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
 const TASK_DESCRIPTION_BY_TASK_CACHE_CAPACITY = 10_000;
 const TASK_DESCRIPTION_BY_TASK_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
+const PROVIDER_RUNTIME_INGESTION_CONCURRENCY = 4;
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
 type TurnStartRequestedDomainEvent = Extract<
@@ -127,6 +135,18 @@ function sameId(left: string | null | undefined, right: string | null | undefine
     return false;
   }
   return left === right;
+}
+
+function sourceProposedPlanReference(pendingTurnStart: Option.Option<ProjectionPendingTurnStart>): {
+  readonly sourceThreadId: ThreadId;
+  readonly sourcePlanId: OrchestrationProposedPlanId;
+} | null {
+  if (Option.isNone(pendingTurnStart)) {
+    return null;
+  }
+  const sourceThreadId = pendingTurnStart.value.sourceProposedPlanThreadId;
+  const sourcePlanId = pendingTurnStart.value.sourceProposedPlanId;
+  return sourceThreadId === null || sourcePlanId === null ? null : { sourceThreadId, sourcePlanId };
 }
 
 function hasAssistantMessageForTurn(
@@ -873,8 +893,11 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const assistantPreviewBus = yield* AssistantPreviewBus;
+  const receiptBus = yield* RuntimeReceiptBus;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
+  const proposedPlanImplementationLock = yield* Semaphore.make(1);
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
     crypto.randomUUIDv4.pipe(
       Effect.map((uuid) => CommandId.make(`provider:${event.eventId}:${tag}:${uuid}`)),
@@ -1019,6 +1042,7 @@ const make = Effect.gen(function* () {
               baseKey: input.baseKey,
               nextSegmentIndex: 1,
               activeMessageId: assistantSegmentMessageId(input.baseKey, 0),
+              previewPublished: false,
             }),
             onSome: (state) => {
               const segmentIndex = state.baseKey === input.baseKey ? state.nextSegmentIndex : 0;
@@ -1027,6 +1051,7 @@ const make = Effect.gen(function* () {
                 baseKey: input.baseKey,
                 nextSegmentIndex: state.baseKey === input.baseKey ? state.nextSegmentIndex + 1 : 1,
                 activeMessageId: messageId,
+                previewPublished: false,
               } satisfies AssistantSegmentState;
             },
           });
@@ -1071,15 +1096,50 @@ const make = Effect.gen(function* () {
           });
           if (nextText.length <= MAX_BUFFERED_ASSISTANT_CHARS) {
             yield* Cache.set(bufferedAssistantTextByMessageId, messageId, nextText);
-            return "";
+            return { bufferedText: nextText, spillChunk: "" };
           }
 
           // Safety valve: flush full buffered text as an assistant delta to cap memory.
           yield* Cache.invalidate(bufferedAssistantTextByMessageId, messageId);
-          return nextText;
+          return { bufferedText: nextText, spillChunk: nextText };
         }),
       ),
     );
+
+  const publishAssistantPreviewOnce = Effect.fn("publishAssistantPreviewOnce")(function* (input: {
+    threadId: ThreadId;
+    turnId: TurnId;
+    messageId: MessageId;
+    text: string;
+    createdAt: string;
+  }) {
+    if (!hasRenderableAssistantText(input.text)) {
+      return;
+    }
+    const segment = yield* getAssistantSegmentStateForTurn(input.threadId, input.turnId);
+    if (
+      Option.isNone(segment) ||
+      segment.value.activeMessageId !== input.messageId ||
+      segment.value.previewPublished
+    ) {
+      return;
+    }
+
+    yield* setAssistantSegmentStateForTurn(input.threadId, input.turnId, {
+      ...segment.value,
+      previewPublished: true,
+    });
+    yield* assistantPreviewBus.publish({
+      threadId: input.threadId,
+      preview: {
+        kind: "assistant-preview",
+        messageId: input.messageId,
+        turnId: input.turnId,
+        text: input.text,
+        createdAt: input.createdAt,
+      },
+    });
+  });
 
   const takeBufferedAssistantText = (messageId: MessageId) =>
     Cache.getOption(bufferedAssistantTextByMessageId, messageId).pipe(
@@ -1270,12 +1330,6 @@ const make = Effect.gen(function* () {
   const upsertProposedPlan = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
-    threadProposedPlans: ReadonlyArray<{
-      id: string;
-      createdAt: string;
-      implementedAt: string | null;
-      implementationThreadId: ThreadId | null;
-    }>;
     planId: string;
     turnId?: TurnId;
     planMarkdown: string | undefined;
@@ -1288,33 +1342,35 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      const existingPlan = findProposedPlanById(input.threadProposedPlans, input.planId);
-      yield* orchestrationEngine.dispatch({
-        type: "thread.proposed-plan.upsert",
-        commandId: yield* providerCommandId(input.event, "proposed-plan-upsert"),
-        threadId: input.threadId,
-        proposedPlan: {
-          id: input.planId,
-          turnId: input.turnId ?? null,
-          planMarkdown,
-          implementedAt: existingPlan?.implementedAt ?? null,
-          implementationThreadId: existingPlan?.implementationThreadId ?? null,
-          createdAt: existingPlan?.createdAt ?? input.createdAt,
-          updatedAt: input.updatedAt,
-        },
-        createdAt: input.updatedAt,
-      });
+      yield* proposedPlanImplementationLock.withPermit(
+        Effect.gen(function* () {
+          const thread = yield* resolveThreadDetail(input.threadId);
+          if (!thread) {
+            return;
+          }
+          const existingPlan = findProposedPlanById(thread.proposedPlans, input.planId);
+          yield* orchestrationEngine.dispatch({
+            type: "thread.proposed-plan.upsert",
+            commandId: yield* providerCommandId(input.event, "proposed-plan-upsert"),
+            threadId: input.threadId,
+            proposedPlan: {
+              id: input.planId,
+              turnId: input.turnId ?? null,
+              planMarkdown,
+              implementedAt: existingPlan?.implementedAt ?? null,
+              implementationThreadId: existingPlan?.implementationThreadId ?? null,
+              createdAt: existingPlan?.createdAt ?? input.createdAt,
+              updatedAt: input.updatedAt,
+            },
+            createdAt: input.updatedAt,
+          });
+        }),
+      );
     });
 
   const finalizeBufferedProposedPlan = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
-    threadProposedPlans: ReadonlyArray<{
-      id: string;
-      createdAt: string;
-      implementedAt: string | null;
-      implementationThreadId: ThreadId | null;
-    }>;
     planId: string;
     turnId?: TurnId;
     fallbackMarkdown?: string;
@@ -1332,7 +1388,6 @@ const make = Effect.gen(function* () {
       yield* upsertProposedPlan({
         event: input.event,
         threadId: input.threadId,
-        threadProposedPlans: input.threadProposedPlans,
         planId: input.planId,
         ...(input.turnId ? { turnId: input.turnId } : {}),
         planMarkdown,
@@ -1396,50 +1451,12 @@ const make = Effect.gen(function* () {
       ).pipe(Effect.asVoid);
     });
 
-  const getSourceProposedPlanReferenceForPendingTurnStart = Effect.fn(
-    "getSourceProposedPlanReferenceForPendingTurnStart",
-  )(function* (threadId: ThreadId) {
-    const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
-      threadId,
-    });
-    if (Option.isNone(pendingTurnStart)) {
-      return null;
-    }
-
-    const sourceThreadId = pendingTurnStart.value.sourceProposedPlanThreadId;
-    const sourcePlanId = pendingTurnStart.value.sourceProposedPlanId;
-    if (sourceThreadId === null || sourcePlanId === null) {
-      return null;
-    }
-
-    return {
-      sourceThreadId,
-      sourcePlanId,
-    } as const;
-  });
-
   const getExpectedProviderTurnIdForThread = Effect.fn("getExpectedProviderTurnIdForThread")(
     function* (threadId: ThreadId) {
-      const sessions = yield* providerService.listSessions();
-      const session = sessions.find((entry) => entry.threadId === threadId);
-      return session?.activeTurnId;
+      const session = yield* providerService.getSession(threadId);
+      return Option.getOrUndefined(session)?.activeTurnId;
     },
   );
-
-  const getSourceProposedPlanReferenceForAcceptedTurnStart = Effect.fn(
-    "getSourceProposedPlanReferenceForAcceptedTurnStart",
-  )(function* (threadId: ThreadId, eventTurnId: TurnId | undefined) {
-    if (eventTurnId === undefined) {
-      return null;
-    }
-
-    const expectedTurnId = yield* getExpectedProviderTurnIdForThread(threadId);
-    if (!sameId(expectedTurnId, eventTurnId)) {
-      return null;
-    }
-
-    return yield* getSourceProposedPlanReferenceForPendingTurnStart(threadId);
-  });
 
   const markSourceProposedPlanImplemented = Effect.fn("markSourceProposedPlanImplemented")(
     function* (
@@ -1448,34 +1465,49 @@ const make = Effect.gen(function* () {
       implementationThreadId: ThreadId,
       implementedAt: string,
     ) {
-      const sourceThread = yield* resolveThreadDetail(sourceThreadId);
-      const sourcePlan = sourceThread?.proposedPlans.find((entry) => entry.id === sourcePlanId);
-      if (!sourceThread || !sourcePlan || sourcePlan.implementedAt !== null) {
-        return;
-      }
+      yield* proposedPlanImplementationLock.withPermit(
+        Effect.gen(function* () {
+          const sourceThread = yield* resolveThreadDetail(sourceThreadId);
+          const sourcePlan = sourceThread?.proposedPlans.find((entry) => entry.id === sourcePlanId);
+          if (!sourceThread || !sourcePlan || sourcePlan.implementedAt !== null) {
+            return;
+          }
 
-      const commandUuid = yield* crypto.randomUUIDv4;
-      yield* orchestrationEngine.dispatch({
-        type: "thread.proposed-plan.upsert",
-        commandId: CommandId.make(
-          `provider:source-proposed-plan-implemented:${implementationThreadId}:${commandUuid}`,
-        ),
-        threadId: sourceThread.id,
-        proposedPlan: {
-          ...sourcePlan,
-          implementedAt,
-          implementationThreadId,
-          updatedAt: implementedAt,
-        },
-        createdAt: implementedAt,
-      });
+          const commandUuid = yield* crypto.randomUUIDv4;
+          yield* orchestrationEngine.dispatch({
+            type: "thread.proposed-plan.upsert",
+            commandId: CommandId.make(
+              `provider:source-proposed-plan-implemented:${implementationThreadId}:${commandUuid}`,
+            ),
+            threadId: sourceThread.id,
+            proposedPlan: {
+              ...sourcePlan,
+              implementedAt,
+              implementationThreadId,
+              updatedAt: implementedAt,
+            },
+            createdAt: implementedAt,
+          });
+        }),
+      );
     },
   );
 
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
-      const thread = yield* resolveThreadShell(event.threadId);
-      if (!thread) return;
+      const threadId = event.threadId;
+      const needsThreadShell =
+        event.type === "session.started" ||
+        event.type === "session.state.changed" ||
+        event.type === "session.exited" ||
+        event.type === "thread.started" ||
+        event.type === "turn.started" ||
+        event.type === "turn.completed" ||
+        event.type === "turn.aborted" ||
+        event.type === "turn.plan.updated" ||
+        event.type === "runtime.error";
+      const thread = needsThreadShell ? yield* resolveThreadShell(threadId) : undefined;
+      if (needsThreadShell && !thread) return;
 
       let loadedThreadDetail: OrchestrationThread | null | undefined;
       const getLoadedThreadDetail = () =>
@@ -1483,22 +1515,42 @@ const make = Effect.gen(function* () {
           if (loadedThreadDetail !== undefined) {
             return loadedThreadDetail;
           }
-          loadedThreadDetail = (yield* resolveThreadDetail(thread.id)) ?? null;
+          loadedThreadDetail = (yield* resolveThreadDetail(threadId)) ?? null;
           return loadedThreadDetail;
         });
 
       const now = event.createdAt;
       const eventTurnId = toTurnId(event.turnId);
-      const activeTurnId = thread.session?.activeTurnId ?? null;
-      const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
-        threadId: thread.id,
-      });
+      const activeTurnId = thread?.session?.activeTurnId ?? null;
+      const needsPendingTurnStart =
+        event.type === "turn.started" ||
+        (event.type === "session.state.changed" && event.payload.state === "ready") ||
+        ((event.type === "session.started" || event.type === "thread.started") &&
+          activeTurnId === null);
+      const pendingTurnStart = needsPendingTurnStart
+        ? yield* projectionTurnRepository.getPendingTurnStartByThreadId({ threadId })
+        : Option.none<ProjectionPendingTurnStart>();
+      const pendingSourceProposedPlan = sourceProposedPlanReference(pendingTurnStart);
+      const projectedEventTurn =
+        eventTurnId === undefined ||
+        (event.type !== "turn.completed" && event.type !== "turn.aborted")
+          ? Option.none()
+          : yield* projectionTurnRepository.getByTurnId({
+              threadId,
+              turnId: eventTurnId,
+            });
       const hasPendingTurnStart =
-        Option.isSome(pendingTurnStart) && thread.session?.status === "starting";
+        Option.isSome(pendingTurnStart) && thread?.session?.status === "starting";
 
       const conflictsWithActiveTurn =
         activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
       const missingTurnForActiveTurn = activeTurnId !== null && eventTurnId === undefined;
+      const expectedProviderTurnId =
+        event.type === "turn.started" &&
+        Option.isSome(pendingTurnStart) &&
+        (conflictsWithActiveTurn || pendingSourceProposedPlan !== null)
+          ? yield* getExpectedProviderTurnIdForThread(threadId)
+          : undefined;
 
       // A turn.started that conflicts with the active turn is legitimate when
       // the server itself has a turn start pending for this thread AND the
@@ -1508,8 +1560,7 @@ const make = Effect.gen(function* () {
       // turn.started for some other turn id still gets rejected.
       const conflictingTurnStartIsPendingTurnStart =
         event.type === "turn.started" && conflictsWithActiveTurn
-          ? sameId(yield* getExpectedProviderTurnIdForThread(thread.id), eventTurnId) &&
-            Option.isSome(pendingTurnStart)
+          ? sameId(expectedProviderTurnId, eventTurnId) && Option.isSome(pendingTurnStart)
           : false;
 
       const shouldApplyThreadLifecycle = (() => {
@@ -1552,9 +1603,23 @@ const make = Effect.gen(function* () {
             return true;
         }
       })();
+      const acceptedTerminalTransition =
+        (event.type === "turn.completed" || event.type === "turn.aborted") &&
+        shouldApplyThreadLifecycle &&
+        eventTurnId !== undefined &&
+        !(
+          activeTurnId === null &&
+          Option.exists(
+            projectedEventTurn,
+            (turn) =>
+              turn.state === "completed" || turn.state === "error" || turn.state === "interrupted",
+          )
+        );
       const acceptedTurnStartedSourcePlan =
-        event.type === "turn.started" && shouldApplyThreadLifecycle
-          ? yield* getSourceProposedPlanReferenceForAcceptedTurnStart(thread.id, eventTurnId)
+        event.type === "turn.started" &&
+        shouldApplyThreadLifecycle &&
+        sameId(expectedProviderTurnId, eventTurnId)
+          ? pendingSourceProposedPlan
           : null;
 
       if (
@@ -1566,6 +1631,7 @@ const make = Effect.gen(function* () {
         event.type === "turn.completed" ||
         event.type === "turn.aborted"
       ) {
+        if (!thread) return;
         const preserveInterruptedExit =
           event.type === "session.exited"
             ? (yield* providerService.getTerminalDisposition(thread.id)) === "interrupted"
@@ -1621,7 +1687,7 @@ const make = Effect.gen(function* () {
             yield* markSourceProposedPlanImplemented(
               acceptedTurnStartedSourcePlan.sourceThreadId,
               acceptedTurnStartedSourcePlan.sourcePlanId,
-              thread.id,
+              threadId,
               now,
             ).pipe(
               Effect.catchCause((cause) =>
@@ -1640,9 +1706,9 @@ const make = Effect.gen(function* () {
           yield* orchestrationEngine.dispatch({
             type: "thread.session.set",
             commandId: yield* providerCommandId(event, "thread-session-set"),
-            threadId: thread.id,
+            threadId,
             session: {
-              threadId: thread.id,
+              threadId,
               status,
               providerName: event.provider,
               ...(event.providerInstanceId !== undefined
@@ -1668,12 +1734,12 @@ const make = Effect.gen(function* () {
       if (assistantDelta && assistantDelta.length > 0) {
         const turnId = toTurnId(event.turnId);
         const assistantMessageId = yield* getOrCreateAssistantMessageId({
-          threadId: thread.id,
+          threadId,
           event,
           ...(turnId ? { turnId } : {}),
         });
         if (turnId) {
-          yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
+          yield* rememberAssistantMessageId(threadId, turnId, assistantMessageId);
         }
 
         const assistantDeliveryMode: AssistantDeliveryMode = yield* Effect.map(
@@ -1681,14 +1747,23 @@ const make = Effect.gen(function* () {
           (settings) => (settings.enableLegacyTokenStreaming ? "streaming" : "buffered"),
         );
         if (assistantDeliveryMode === "buffered") {
-          const spillChunk = yield* appendBufferedAssistantText(assistantMessageId, assistantDelta);
-          if (spillChunk.length > 0) {
+          const buffered = yield* appendBufferedAssistantText(assistantMessageId, assistantDelta);
+          if (turnId) {
+            yield* publishAssistantPreviewOnce({
+              threadId,
+              turnId,
+              messageId: assistantMessageId,
+              text: buffered.bufferedText,
+              createdAt: now,
+            });
+          }
+          if (buffered.spillChunk.length > 0) {
             yield* orchestrationEngine.dispatch({
               type: "thread.message.assistant.delta",
               commandId: yield* providerCommandId(event, "assistant-delta-buffer-spill"),
-              threadId: thread.id,
+              threadId,
               messageId: assistantMessageId,
-              delta: spillChunk,
+              delta: buffered.spillChunk,
               ...(turnId ? { turnId } : {}),
               createdAt: now,
             });
@@ -1697,7 +1772,7 @@ const make = Effect.gen(function* () {
           yield* orchestrationEngine.dispatch({
             type: "thread.message.assistant.delta",
             commandId: yield* providerCommandId(event, "assistant-delta"),
-            threadId: thread.id,
+            threadId,
             messageId: assistantMessageId,
             delta: assistantDelta,
             ...(turnId ? { turnId } : {}),
@@ -1720,7 +1795,7 @@ const make = Effect.gen(function* () {
           assistantDeliveryMode === "buffered"
             ? yield* flushBufferedAssistantMessagesForTurn({
                 event,
-                threadId: thread.id,
+                threadId,
                 turnId: pauseForUserTurnId,
                 createdAt: now,
                 commandTag:
@@ -1731,7 +1806,7 @@ const make = Effect.gen(function* () {
             : new Set<MessageId>();
         yield* finalizeActiveAssistantSegmentForTurn({
           event,
-          threadId: thread.id,
+          threadId,
           turnId: pauseForUserTurnId,
           createdAt: now,
           commandTag:
@@ -1752,7 +1827,7 @@ const make = Effect.gen(function* () {
       }
 
       if (proposedPlanDelta && proposedPlanDelta.length > 0) {
-        const planId = proposedPlanIdFromEvent(event, thread.id);
+        const planId = proposedPlanIdFromEvent(event, threadId);
         yield* appendBufferedProposedPlan(planId, proposedPlanDelta, now);
       }
 
@@ -1768,7 +1843,7 @@ const make = Effect.gen(function* () {
       const proposedPlanCompletion =
         event.type === "turn.proposed.completed"
           ? {
-              planId: proposedPlanIdFromEvent(event, thread.id),
+              planId: proposedPlanIdFromEvent(event, threadId),
               turnId: toTurnId(event.turnId),
               planMarkdown: event.payload.planMarkdown,
             }
@@ -1779,7 +1854,7 @@ const make = Effect.gen(function* () {
         const messages = detailedThread?.messages ?? [];
         const turnId = toTurnId(event.turnId);
         const activeAssistantMessageId = turnId
-          ? yield* getActiveAssistantMessageIdForTurn(thread.id, turnId)
+          ? yield* getActiveAssistantMessageIdForTurn(threadId, turnId)
           : Option.none<MessageId>();
         const hasAssistantMessagesForTurn =
           turnId !== undefined ? hasAssistantMessageForTurn(messages, turnId) : false;
@@ -1799,12 +1874,12 @@ const make = Effect.gen(function* () {
 
         if (!shouldSkipRedundantCompletion) {
           if (turnId && Option.isNone(activeAssistantMessageId)) {
-            yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
+            yield* rememberAssistantMessageId(threadId, turnId, assistantMessageId);
           }
 
           yield* finalizeAssistantMessage({
             event,
-            threadId: thread.id,
+            threadId,
             messageId: assistantMessageId,
             ...(turnId ? { turnId } : {}),
             createdAt: now,
@@ -1817,21 +1892,19 @@ const make = Effect.gen(function* () {
           });
 
           if (turnId) {
-            yield* forgetAssistantMessageId(thread.id, turnId, assistantMessageId);
+            yield* forgetAssistantMessageId(threadId, turnId, assistantMessageId);
           }
         }
 
         if (turnId) {
-          yield* clearAssistantSegmentStateForTurn(thread.id, turnId);
+          yield* clearAssistantSegmentStateForTurn(threadId, turnId);
         }
       }
 
       if (proposedPlanCompletion) {
-        const detailedThread = yield* getLoadedThreadDetail();
         yield* finalizeBufferedProposedPlan({
           event,
-          threadId: thread.id,
-          threadProposedPlans: detailedThread?.proposedPlans ?? [],
+          threadId,
           planId: proposedPlanCompletion.planId,
           ...(proposedPlanCompletion.turnId ? { turnId: proposedPlanCompletion.turnId } : {}),
           fallbackMarkdown: proposedPlanCompletion.planMarkdown,
@@ -1842,16 +1915,15 @@ const make = Effect.gen(function* () {
       if (event.type === "turn.completed") {
         const detailedThread = yield* getLoadedThreadDetail();
         const messages = detailedThread?.messages ?? [];
-        const proposedPlans = detailedThread?.proposedPlans ?? [];
         const turnId = toTurnId(event.turnId);
         if (turnId) {
-          const assistantMessageIds = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
+          const assistantMessageIds = yield* getAssistantMessageIdsForTurn(threadId, turnId);
           yield* Effect.forEach(
             assistantMessageIds,
             (assistantMessageId) =>
               finalizeAssistantMessage({
                 event,
-                threadId: thread.id,
+                threadId,
                 messageId: assistantMessageId,
                 turnId,
                 createdAt: now,
@@ -1861,14 +1933,13 @@ const make = Effect.gen(function* () {
               }),
             { concurrency: 1 },
           ).pipe(Effect.asVoid);
-          yield* clearAssistantMessageIdsForTurn(thread.id, turnId);
-          yield* clearAssistantSegmentStateForTurn(thread.id, turnId);
+          yield* clearAssistantMessageIdsForTurn(threadId, turnId);
+          yield* clearAssistantSegmentStateForTurn(threadId, turnId);
 
           yield* finalizeBufferedProposedPlan({
             event,
-            threadId: thread.id,
-            threadProposedPlans: proposedPlans,
-            planId: proposedPlanIdForTurn(thread.id, turnId),
+            threadId,
+            planId: proposedPlanIdForTurn(threadId, turnId),
             turnId,
             updatedAt: now,
           });
@@ -1876,10 +1947,11 @@ const make = Effect.gen(function* () {
       }
 
       if (event.type === "session.exited") {
-        yield* clearTurnStateForSession(thread.id);
+        yield* clearTurnStateForSession(threadId);
       }
 
       if (event.type === "runtime.error") {
+        if (!thread) return;
         const runtimeErrorMessage = event.payload.message;
 
         const shouldApplyRuntimeError = !STRICT_PROVIDER_LIFECYCLE_GUARD
@@ -1890,9 +1962,9 @@ const make = Effect.gen(function* () {
           yield* orchestrationEngine.dispatch({
             type: "thread.session.set",
             commandId: yield* providerCommandId(event, "runtime-error-session-set"),
-            threadId: thread.id,
+            threadId,
             session: {
-              threadId: thread.id,
+              threadId,
               status: "error",
               providerName: event.provider,
               ...(event.providerInstanceId !== undefined
@@ -1912,7 +1984,7 @@ const make = Effect.gen(function* () {
         yield* orchestrationEngine.dispatch({
           type: "thread.meta.update",
           commandId: yield* providerCommandId(event, "thread-meta-update"),
-          threadId: thread.id,
+          threadId,
           title: event.payload.name,
         });
       }
@@ -1921,7 +1993,7 @@ const make = Effect.gen(function* () {
         const turnId = toTurnId(event.turnId);
         const checkpointContext = turnId
           ? yield* projectionSnapshotQuery
-              .getThreadCheckpointContext(thread.id)
+              .getThreadCheckpointContext(threadId)
               .pipe(Effect.map(Option.getOrUndefined))
           : undefined;
         const workspaceCwd =
@@ -1940,7 +2012,7 @@ const make = Effect.gen(function* () {
             yield* orchestrationEngine.dispatch({
               type: "thread.turn.diff.complete",
               commandId: yield* providerCommandId(event, "thread-turn-diff-complete"),
-              threadId: thread.id,
+              threadId,
               turnId,
               completedAt: now,
               checkpointRef: CheckpointRef.make(`provider-diff:${event.eventId}`),
@@ -1957,7 +2029,7 @@ const make = Effect.gen(function* () {
       if (event.type === "task.started" || event.type === "task.progress") {
         const description = event.payload.description?.trim();
         if (description) {
-          yield* rememberTaskDescription(thread.id, event.payload.taskId, description);
+          yield* rememberTaskDescription(threadId, event.payload.taskId, description);
         }
       }
       // Working-indicator plan progress: current step while the turn runs,
@@ -1966,15 +2038,15 @@ const make = Effect.gen(function* () {
       // stale (superseded turn) and must neither overwrite nor clear the
       // active turn's progress; session.exited always clears.
       if (event.type === "session.exited") {
-        threadPlanProgress.clearThreadPlanProgress(thread.id);
+        threadPlanProgress.clearThreadPlanProgress(threadId);
       } else if (!conflictsWithActiveTurn) {
         if (event.type === "turn.plan.updated") {
-          threadPlanProgress.recordPlanProgress(thread.id, event.payload.plan);
+          threadPlanProgress.recordPlanProgress(threadId, event.payload.plan);
         } else if (
           event.type === "turn.completed" ||
           (event.type === "turn.aborted" && shouldApplyThreadLifecycle)
         ) {
-          threadPlanProgress.clearThreadPlanProgress(thread.id);
+          threadPlanProgress.clearThreadPlanProgress(threadId);
         }
       }
 
@@ -1990,13 +2062,16 @@ const make = Effect.gen(function* () {
             taskType?: string;
             status?: string;
             agentId?: string;
+            itemLifecycle?: "started" | "completed";
           };
           threadBackgroundLiveness.recordTaskLiveness({
-            threadId: thread.id,
+            threadId,
             taskId: payload.taskId,
             taskType: payload.taskType,
             status: payload.status,
             agentId: payload.agentId,
+            itemId: event.itemId,
+            itemLifecycle: payload.itemLifecycle,
             kind:
               event.type === "task.started"
                 ? "started"
@@ -2009,7 +2084,7 @@ const make = Effect.gen(function* () {
           break;
         }
         case "session.exited":
-          threadBackgroundLiveness.clearThreadLiveness(thread.id);
+          threadBackgroundLiveness.clearThreadLiveness(threadId);
           break;
         default:
           break;
@@ -2017,7 +2092,7 @@ const make = Effect.gen(function* () {
 
       let taskTitle: string | undefined;
       if (event.type === "task.completed") {
-        taskTitle = yield* lookupTaskDescription(thread.id, event.payload.taskId);
+        taskTitle = yield* lookupTaskDescription(threadId, event.payload.taskId);
         if (!taskTitle) {
           const threadDetail = yield* getLoadedThreadDetail();
           taskTitle = findTaskTitleInActivities(threadDetail?.activities, event.payload.taskId);
@@ -2031,13 +2106,27 @@ const make = Effect.gen(function* () {
             orchestrationEngine.dispatch({
               type: "thread.activity.append",
               commandId,
-              threadId: thread.id,
+              threadId,
               activity,
               createdAt: activity.createdAt,
             }),
           ),
         ),
       ).pipe(Effect.asVoid);
+
+      if (acceptedTerminalTransition) {
+        yield* receiptBus.publish({
+          type: "turn.ingestion-settled",
+          sourceEventId: event.eventId,
+          threadId,
+          turnId: eventTurnId,
+          outcome:
+            event.type === "turn.completed"
+              ? normalizeRuntimeTurnState(event.payload.state)
+              : "interrupted",
+          settledAt: event.createdAt,
+        });
+      }
     });
 
   const processDomainEvent = (_event: TurnStartRequestedDomainEvent) => Effect.void;
@@ -2072,7 +2161,12 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processInputSafely);
+  const worker = yield* makeKeyedDrainableWorker({
+    concurrency: PROVIDER_RUNTIME_INGESTION_CONCURRENCY,
+    key: (input: RuntimeIngestionInput) =>
+      input.source === "runtime" ? input.event.threadId : input.event.payload.threadId,
+    process: processInputSafely,
+  });
 
   const start: ProviderRuntimeIngestionShape["start"] = () =>
     Effect.gen(function* () {
@@ -2097,7 +2191,8 @@ const make = Effect.gen(function* () {
   } satisfies ProviderRuntimeIngestionShape;
 });
 
-export const ProviderRuntimeIngestionLive = Layer.effect(
-  ProviderRuntimeIngestionService,
-  make,
-).pipe(Layer.provide(ProjectionTurnRepositoryLive));
+export const ProviderRuntimeIngestionLayer = Layer.effect(ProviderRuntimeIngestionService, make);
+
+export const ProviderRuntimeIngestionLive = ProviderRuntimeIngestionLayer.pipe(
+  Layer.provide(ProjectionTurnRepositoryLive),
+);

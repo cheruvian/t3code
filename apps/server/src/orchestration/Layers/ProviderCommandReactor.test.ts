@@ -254,6 +254,14 @@ describe("ProviderCommandReactor", () => {
         }
       }),
     );
+    const listSessions = vi.fn<ProviderServiceShape["listSessions"]>(() =>
+      Effect.succeed(runtimeSessions),
+    );
+    const getSession = vi.fn<ProviderServiceShape["getSession"]>((threadId) =>
+      Effect.succeed(
+        Option.fromUndefinedOr(runtimeSessions.find((session) => session.threadId === threadId)),
+      ),
+    );
     const renameBranch = vi.fn((input: unknown) =>
       Effect.succeed({
         branch:
@@ -316,7 +324,8 @@ describe("ProviderCommandReactor", () => {
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
-      listSessions: () => Effect.succeed(runtimeSessions),
+      getSession,
+      listSessions,
       getCapabilities: (_provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
@@ -501,6 +510,8 @@ describe("ProviderCommandReactor", () => {
       respondToRequest,
       respondToUserInput,
       stopSession,
+      getSession,
+      listSessions,
       renameBranch,
       refreshStatus,
       generateBranchName,
@@ -553,6 +564,52 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.status).toBe("starting");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("starts one known thread without enumerating unrelated provider sessions", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    await Effect.runPromise(Effect.yieldNow);
+    harness.runtimeSessions.push(
+      ...Array.from(
+        { length: 128 },
+        (_, index): ProviderSession => ({
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          status: "ready",
+          runtimeMode: "approval-required",
+          threadId: ThreadId.make(`unrelated-thread-${index}`),
+          cwd: `/tmp/unrelated-project-${index}`,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-targeted-session-lookup"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-targeted-session-lookup"),
+          role: "user",
+          text: "start without a global session scan",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(harness.getSession).toHaveBeenCalledTimes(1);
+    expect(harness.listSessions).not.toHaveBeenCalled();
   });
 
   effectIt.effect("projects starting before a slow provider session finishes", () =>

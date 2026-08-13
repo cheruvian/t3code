@@ -6,7 +6,7 @@ import {
   TurnId,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   deriveActiveWorkStartedAt,
@@ -1521,6 +1521,38 @@ describe("deriveWorkLogEntries", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.id).toBe("a-complete-same-timestamp");
   });
+
+  it("reuses canonical activity state without a full-history sort", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "activity-1",
+        sequence: 1,
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "file-edit",
+        summary: "Edited first.ts",
+      }),
+      makeActivity({
+        id: "activity-2",
+        sequence: 2,
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "command",
+        summary: "Ran tests",
+      }),
+    ];
+    const sort = vi.spyOn(Array.prototype, "sort");
+    const toSorted = vi.spyOn(Array.prototype, "toSorted");
+    try {
+      expect(deriveWorkLogEntries(activities).map((entry) => entry.id)).toEqual([
+        "activity-1",
+        "activity-2",
+      ]);
+      expect(sort).not.toHaveBeenCalled();
+      expect(toSorted).not.toHaveBeenCalled();
+    } finally {
+      sort.mockRestore();
+      toSorted.mockRestore();
+    }
+  });
 });
 
 describe("deriveTimelineEntries", () => {
@@ -1567,6 +1599,83 @@ describe("deriveTimelineEntries", () => {
         implementationThreadId: null,
       },
     });
+  });
+
+  it("linearly merges already ordered sources while preserving stable timestamp ties", () => {
+    const toSorted = vi.spyOn(Array.prototype, "toSorted");
+    try {
+      const entries = deriveTimelineEntries(
+        [
+          {
+            id: MessageId.make("message-1"),
+            role: "user",
+            text: "first",
+            createdAt: "2026-02-23T00:00:01.000Z",
+            turnId: TurnId.make("turn-1"),
+            updatedAt: "2026-02-23T00:00:01.000Z",
+            streaming: false,
+          },
+          {
+            id: MessageId.make("message-2"),
+            role: "assistant",
+            text: "second",
+            createdAt: "2026-02-23T00:00:04.000Z",
+            turnId: TurnId.make("turn-1"),
+            updatedAt: "2026-02-23T00:00:04.000Z",
+            streaming: false,
+          },
+        ],
+        [
+          {
+            id: "plan:thread-1:turn:turn-1",
+            turnId: TurnId.make("turn-1"),
+            planMarkdown: "# Plan",
+            implementedAt: null,
+            implementationThreadId: null,
+            createdAt: "2026-02-23T00:00:02.000Z",
+            updatedAt: "2026-02-23T00:00:02.000Z",
+          },
+        ],
+        [
+          {
+            id: "work-1",
+            createdAt: "2026-02-23T00:00:03.000Z",
+            label: "Ran tests",
+            tone: "tool",
+          },
+          {
+            id: "work-tied",
+            createdAt: "2026-02-23T00:00:04.000Z",
+            label: "Edited files",
+            tone: "tool",
+          },
+        ],
+        [
+          {
+            id: "turn-plan:turn-1",
+            createdAt: "2026-02-23T00:00:04.000Z",
+            turnId: TurnId.make("turn-1"),
+            plan: {
+              createdAt: "2026-02-23T00:00:04.000Z",
+              turnId: TurnId.make("turn-1"),
+              steps: [{ step: "Ship", status: "inProgress" }],
+            },
+          },
+        ],
+      );
+
+      expect(entries.map((entry) => entry.id)).toEqual([
+        "message-1",
+        "plan:thread-1:turn:turn-1",
+        "work-1",
+        "message-2",
+        "turn-plan:turn-1",
+        "work-tied",
+      ]);
+      expect(toSorted).not.toHaveBeenCalled();
+    } finally {
+      toSorted.mockRestore();
+    }
   });
 });
 

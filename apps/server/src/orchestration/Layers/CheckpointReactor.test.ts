@@ -9,8 +9,11 @@ import {
   ProviderRuntimeEvent,
   ProviderSession,
   ProviderInstanceId,
+  ServerOwnerGeneration,
+  VcsUnsupportedOperationError,
 } from "@t3tools/contracts";
 import {
+  CheckpointRef,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
@@ -21,6 +24,7 @@ import {
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -42,7 +46,7 @@ import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
-import { RuntimeReceiptBusLive } from "./RuntimeReceiptBus.ts";
+import { RuntimeReceiptBusTest } from "./RuntimeReceiptBus.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -53,9 +57,14 @@ import {
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
+  RuntimeReceiptBus,
+  type TurnIngestionSettledReceipt,
+} from "../Services/RuntimeReceiptBus.ts";
+import {
   ProviderService,
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
+import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
 import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
 import { ServerConfig } from "../../config.ts";
 import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
@@ -91,7 +100,7 @@ function createProviderServiceHarness(
 
   const unsupported = <A>() =>
     Effect.die(new Error("Unsupported provider call in test")) as Effect.Effect<A, never>;
-  const listSessions = () =>
+  const listSessions = vi.fn<ProviderServiceShape["listSessions"]>(() =>
     hasSession
       ? Effect.succeed([
           {
@@ -104,7 +113,8 @@ function createProviderServiceHarness(
             updatedAt: now,
           },
         ] satisfies ReadonlyArray<ProviderSession>)
-      : Effect.succeed([] as ReadonlyArray<ProviderSession>);
+      : Effect.succeed([] as ReadonlyArray<ProviderSession>),
+  );
   const service: ProviderServiceShape = {
     startSession: () => unsupported(),
     sendTurn: () => unsupported(),
@@ -112,6 +122,12 @@ function createProviderServiceHarness(
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
+    getSession: (threadId) =>
+      listSessions().pipe(
+        Effect.map((sessions) =>
+          Option.fromUndefinedOr(sessions.find((session) => session.threadId === threadId)),
+        ),
+      ),
     listSessions,
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     getInstanceInfo: (instanceId) =>
@@ -140,6 +156,7 @@ function createProviderServiceHarness(
   return {
     service,
     rollbackConversation,
+    listSessions,
     emit,
   };
 }
@@ -254,7 +271,8 @@ describe("CheckpointReactor", () => {
     | OrchestrationEngineService
     | CheckpointReactor
     | CheckpointStore.CheckpointStore
-    | ProjectionSnapshotQuery,
+    | ProjectionSnapshotQuery
+    | RuntimeReceiptBus,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -297,6 +315,29 @@ describe("CheckpointReactor", () => {
       options?.providerSessionCwd ?? cwd,
       options?.providerName ?? ProviderDriverKind.make("codex"),
     );
+    const providerName = options?.providerName ?? ProviderDriverKind.make("codex");
+    const sessionCwd = options?.providerSessionCwd ?? cwd;
+    const hasSession = options?.hasSession ?? true;
+    const providerSessionDirectoryLayer = Layer.succeed(ProviderSessionDirectory, {
+      ownerGeneration: ServerOwnerGeneration.make("checkpoint-reactor-test-owner"),
+      upsert: () => Effect.succeed(true),
+      getProvider: () => Effect.succeed(providerName),
+      getBinding: (threadId) =>
+        hasSession && threadId === ThreadId.make("thread-1")
+          ? Effect.succeed(
+              Option.some({
+                threadId,
+                provider: providerName,
+                providerInstanceId: ProviderInstanceId.make(String(providerName)),
+                adapterKey: String(providerName),
+                status: "running" as const,
+                runtimePayload: { cwd: sessionCwd },
+              }),
+            )
+          : Effect.succeed(Option.none()),
+      listThreadIds: () => Effect.succeed(hasSession ? [ThreadId.make("thread-1")] : []),
+      listBindings: () => Effect.succeed([]),
+    });
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(ThreadBackgroundLiveness.layer),
@@ -340,8 +381,9 @@ describe("CheckpointReactor", () => {
     const layer = CheckpointReactorLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
-      Layer.provideMerge(RuntimeReceiptBusLive),
+      Layer.provideMerge(RuntimeReceiptBusTest),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
+      Layer.provideMerge(providerSessionDirectoryLayer),
       Layer.provideMerge(vcsStatusBroadcasterLayer),
       Layer.provideMerge(CheckpointStore.layer.pipe(Layer.provide(VcsDriverRegistry.layer))),
       Layer.provideMerge(
@@ -363,9 +405,40 @@ describe("CheckpointReactor", () => {
     const checkpointStore = await runtime.runPromise(
       Effect.service(CheckpointStore.CheckpointStore),
     );
+    const receiptBus = await runtime.runPromise(Effect.service(RuntimeReceiptBus));
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
     const drain = () => Effect.runPromise(reactor.drain);
+    const publishSettledAndWait = async (input: Omit<TurnIngestionSettledReceipt, "type">) => {
+      const checkpointFinalized = await runtime!.runPromise(Deferred.make<void>());
+      const publish = receiptBus.publish;
+      const publishSpy = vi
+        .spyOn(receiptBus, "publish")
+        .mockImplementation((receipt) =>
+          publish(receipt).pipe(
+            Effect.andThen(
+              receipt.type === "checkpoint.diff.finalized" &&
+                receipt.threadId === input.threadId &&
+                receipt.turnId === input.turnId
+                ? Deferred.succeed(checkpointFinalized, undefined)
+                : Effect.void,
+            ),
+            Effect.asVoid,
+          ),
+        );
+      try {
+        await runtime!.runPromise(
+          receiptBus.publish({
+            type: "turn.ingestion-settled",
+            ...input,
+          }),
+        );
+        await runtime!.runPromise(Deferred.await(checkpointFinalized));
+        await drain();
+      } finally {
+        publishSpy.mockRestore();
+      }
+    };
 
     const createdAt = "2026-01-01T00:00:00.000Z";
     await Effect.runPromise(
@@ -451,10 +524,198 @@ describe("CheckpointReactor", () => {
       engine,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       provider,
+      checkpointStore,
+      receiptBus,
+      publishSettledAndWait,
+      runEffect: <A, E>(effect: Effect.Effect<A, E>) => runtime!.runPromise(effect),
       cwd,
       drain,
     };
   }
+
+  it("captures exactly once only after terminal turn ingestion settles", async () => {
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      secondThreadSharingWorktree: true,
+    });
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const threadId = ThreadId.make("thread-1");
+    const turnId = asTurnId("turn-settled");
+    const assistantMessageId = MessageId.make("assistant:turn-settled");
+    const targetCheckpointRef = checkpointRefForThreadTurn(threadId, 1);
+
+    await harness.runEffect(
+      harness.checkpointStore.captureCheckpoint({
+        cwd: harness.cwd,
+        checkpointRef: checkpointRefForThreadTurn(threadId, 0),
+      }),
+    );
+    NodeFS.writeFileSync(NodePath.join(harness.cwd, "README.md"), "v2\n", "utf8");
+
+    const captureCheckpoint = vi.spyOn(harness.checkpointStore, "captureCheckpoint");
+    const diffBurstProcessed = Effect.runSync(Deferred.make<void>());
+    const checkpointFinalizedAfterSettled = Effect.runSync(Deferred.make<void>());
+    const publishReceipt = harness.receiptBus.publish;
+    let settledPublished = false;
+    vi.spyOn(harness.receiptBus, "publish").mockImplementation((receipt) => {
+      const notify =
+        receipt.type === "checkpoint.baseline.captured" &&
+        receipt.threadId === ThreadId.make("thread-2")
+          ? Deferred.succeed(diffBurstProcessed, undefined)
+          : settledPublished &&
+              receipt.type === "checkpoint.diff.finalized" &&
+              receipt.threadId === threadId &&
+              receipt.turnId === turnId
+            ? Deferred.succeed(checkpointFinalizedAfterSettled, undefined)
+            : Effect.void;
+      return publishReceipt(receipt).pipe(Effect.andThen(notify), Effect.asVoid);
+    });
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-running-settled-checkpoint"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    for (let index = 1; index <= 3; index += 1) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.make(`cmd-provider-diff-placeholder-${index}`),
+          threadId,
+          turnId,
+          completedAt: createdAt,
+          checkpointRef: CheckpointRef.make(`provider-diff:evt-diff-updated-${index}`),
+          status: "missing",
+          files: [],
+          assistantMessageId,
+          checkpointTurnCount: 1,
+          createdAt,
+        }),
+      );
+    }
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-diff-burst-barrier"),
+        threadId: ThreadId.make("thread-2"),
+        message: {
+          messageId: MessageId.make("message-diff-burst-barrier"),
+          role: "user",
+          text: "establish the post-diff processing barrier",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(Deferred.await(diffBurstProcessed));
+    await harness.drain();
+
+    const targetCaptureCalls = () =>
+      captureCheckpoint.mock.calls.filter(([input]) => input.checkpointRef === targetCheckpointRef);
+    expect(targetCaptureCalls()).toHaveLength(0);
+    expect(gitRefExists(harness.cwd, targetCheckpointRef)).toBe(false);
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-terminal-settled-checkpoint"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.delta",
+        commandId: CommandId.make("cmd-assistant-final-delta-settled-checkpoint"),
+        threadId,
+        messageId: assistantMessageId,
+        delta: "final answer",
+        turnId,
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId: CommandId.make("cmd-assistant-finalize-settled-checkpoint"),
+        threadId,
+        messageId: assistantMessageId,
+        turnId,
+        createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-terminal-activity-settled-checkpoint"),
+        threadId,
+        activity: {
+          id: EventId.make("activity-turn-settled"),
+          tone: "info",
+          kind: "turn.completed",
+          summary: "Turn completed",
+          payload: {},
+          turnId,
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    const finalizedSnapshot = await harness.readModel();
+    const finalizedThread = finalizedSnapshot.threads.find((thread) => thread.id === threadId);
+    expect(finalizedThread?.session?.activeTurnId).toBeNull();
+    expect(
+      finalizedThread?.messages.find((message) => message.id === assistantMessageId),
+    ).toMatchObject({
+      text: "final answer",
+      streaming: false,
+    });
+    expect(targetCaptureCalls()).toHaveLength(0);
+
+    settledPublished = true;
+    await harness.runEffect(
+      harness.receiptBus.publish({
+        type: "turn.ingestion-settled",
+        sourceEventId: EventId.make("evt-turn-settled"),
+        threadId,
+        turnId,
+        outcome: "completed",
+        settledAt: createdAt,
+      }),
+    );
+    await Effect.runPromise(Deferred.await(checkpointFinalizedAfterSettled));
+    await harness.drain();
+
+    expect(targetCaptureCalls()).toHaveLength(1);
+    expect(gitRefExists(harness.cwd, targetCheckpointRef)).toBe(true);
+    expect(gitShowFileAtRef(harness.cwd, targetCheckpointRef, "README.md")).toBe("v2\n");
+  });
 
   it("captures pre-turn baseline on turn.started and post-turn checkpoint on turn.completed", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
@@ -503,12 +764,16 @@ describe("CheckpointReactor", () => {
       turnId: asTurnId("turn-1"),
       payload: { state: "completed" },
     });
-
-    await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
-    const thread = await waitForThread(
-      harness.readModel,
-      (entry) => entry.latestTurn?.turnId === "turn-1" && entry.checkpoints.length === 1,
-    );
+    await harness.publishSettledAndWait({
+      sourceEventId: EventId.make("evt-turn-completed-1"),
+      threadId: ThreadId.make("thread-1"),
+      turnId: asTurnId("turn-1"),
+      outcome: "completed",
+      settledAt: createdAt,
+    });
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === ThreadId.make("thread-1"),
+    )!;
     expect(thread.checkpoints[0]?.checkpointTurnCount).toBe(1);
     expect(
       gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.make("thread-1"), 0)),
@@ -552,6 +817,7 @@ describe("CheckpointReactor", () => {
     await harness.drain();
 
     expect(gitStatusRefreshCalls).toEqual([harness.cwd]);
+    expect(harness.provider.listSessions).not.toHaveBeenCalled();
   });
 
   it("adopts a drifted checkout as the thread branch on a dedicated worktree", async () => {
@@ -698,11 +964,16 @@ describe("CheckpointReactor", () => {
       turnId: asTurnId("turn-main"),
       payload: { state: "completed" },
     });
-
-    const thread = await waitForThread(
-      harness.readModel,
-      (entry) => entry.latestTurn?.turnId === "turn-main" && entry.checkpoints.length === 1,
-    );
+    await harness.publishSettledAndWait({
+      sourceEventId: EventId.make("evt-turn-completed-main"),
+      threadId: ThreadId.make("thread-1"),
+      turnId: asTurnId("turn-main"),
+      outcome: "completed",
+      settledAt: createdAt,
+    });
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === ThreadId.make("thread-1"),
+    )!;
     expect(thread.checkpoints[0]?.checkpointTurnCount).toBe(1);
   });
 
@@ -754,12 +1025,16 @@ describe("CheckpointReactor", () => {
       turnId: asTurnId("turn-claude-1"),
       payload: { state: "completed" },
     });
-
-    await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
-    const thread = await waitForThread(
-      harness.readModel,
-      (entry) => entry.latestTurn?.turnId === "turn-claude-1" && entry.checkpoints.length === 1,
-    );
+    await harness.publishSettledAndWait({
+      sourceEventId: EventId.make("evt-turn-completed-claude-1"),
+      threadId: ThreadId.make("thread-1"),
+      turnId: asTurnId("turn-claude-1"),
+      outcome: "completed",
+      settledAt: createdAt,
+    });
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === ThreadId.make("thread-1"),
+    )!;
 
     expect(thread.checkpoints[0]?.checkpointTurnCount).toBe(1);
     expect(
@@ -799,19 +1074,158 @@ describe("CheckpointReactor", () => {
       turnId: asTurnId("turn-missing-baseline"),
       payload: { state: "completed" },
     });
-
-    await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
-    const thread = await waitForThread(
-      harness.readModel,
-      (entry) =>
-        entry.checkpoints.length === 1 &&
-        entry.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
-    );
+    await harness.publishSettledAndWait({
+      sourceEventId: EventId.make("evt-turn-completed-missing-baseline"),
+      threadId: ThreadId.make("thread-1"),
+      turnId: asTurnId("turn-missing-baseline"),
+      outcome: "completed",
+      settledAt: createdAt,
+    });
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === ThreadId.make("thread-1"),
+    )!;
 
     expect(thread.checkpoints[0]?.checkpointTurnCount).toBe(1);
     expect(
       thread.activities.some((activity) => activity.kind === "checkpoint.capture.failed"),
     ).toBe(true);
+  });
+
+  it("records one unavailable checkpoint without replacing a failed turn outcome", async () => {
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      secondThreadSharingWorktree: true,
+    });
+    const threadId = ThreadId.make("thread-1");
+    const turnId = asTurnId("turn-capture-unavailable");
+    const settledAt = "2026-01-01T00:00:03.000Z";
+    const targetCheckpointRef = checkpointRefForThreadTurn(threadId, 1);
+
+    await Effect.runPromise(
+      harness.checkpointStore.captureCheckpoint({
+        cwd: harness.cwd,
+        checkpointRef: checkpointRefForThreadTurn(threadId, 0),
+      }),
+    );
+    NodeFS.writeFileSync(NodePath.join(harness.cwd, "README.md"), "v2\n", "utf8");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-capture-unavailable-running"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:01.000Z",
+        },
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.make("cmd-capture-unavailable-placeholder"),
+        threadId,
+        turnId,
+        completedAt: "2026-01-01T00:00:02.000Z",
+        checkpointRef: CheckpointRef.make("provider-diff:evt-capture-unavailable"),
+        status: "missing",
+        files: [],
+        assistantMessageId: MessageId.make("assistant:turn-capture-unavailable"),
+        checkpointTurnCount: 1,
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-capture-unavailable-failed"),
+        threadId,
+        session: {
+          threadId,
+          status: "error",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: "Turn failed",
+          updatedAt: settledAt,
+        },
+        createdAt: settledAt,
+      }),
+    );
+
+    const capture = harness.checkpointStore.captureCheckpoint;
+    const captureCheckpoint = vi
+      .spyOn(harness.checkpointStore, "captureCheckpoint")
+      .mockImplementation((input) =>
+        input.checkpointRef === targetCheckpointRef
+          ? Effect.fail(
+              new VcsUnsupportedOperationError({
+                operation: "CheckpointStore.captureCheckpoint",
+                kind: "git",
+                detail: "Injected capture failure",
+              }),
+            )
+          : capture(input),
+      );
+
+    const settledReceipt = {
+      sourceEventId: EventId.make("evt-capture-unavailable-failed"),
+      threadId,
+      turnId,
+      outcome: "failed" as const,
+      settledAt,
+    };
+    await harness.publishSettledAndWait(settledReceipt);
+
+    let thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId)!;
+    expect(thread.latestTurn).toMatchObject({
+      turnId,
+      state: "error",
+      completedAt: settledAt,
+    });
+    expect(thread.checkpoints).toContainEqual(
+      expect.objectContaining({
+        turnId,
+        checkpointRef: targetCheckpointRef,
+        status: "error",
+      }),
+    );
+    expect(
+      thread.activities.filter((activity) => activity.kind === "checkpoint.capture.failed"),
+    ).toEqual([
+      expect.objectContaining({
+        id: EventId.make(`checkpoint-capture-failure:${threadId}:${turnId}`),
+        turnId,
+      }),
+    ]);
+
+    await Effect.runPromise(
+      harness.receiptBus.publish({
+        type: "turn.ingestion-settled",
+        ...settledReceipt,
+      }),
+    );
+    await harness.publishSettledAndWait({
+      sourceEventId: EventId.make("evt-capture-unavailable-barrier"),
+      threadId: ThreadId.make("thread-2"),
+      turnId: asTurnId("turn-capture-unavailable-barrier"),
+      outcome: "completed",
+      settledAt: "2026-01-01T00:00:04.000Z",
+    });
+
+    thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId)!;
+    expect(
+      captureCheckpoint.mock.calls.filter(([input]) => input.checkpointRef === targetCheckpointRef),
+    ).toHaveLength(1);
+    expect(
+      thread.activities.filter((activity) => activity.kind === "checkpoint.capture.failed"),
+    ).toHaveLength(1);
   });
 
   it("captures pre-turn baseline from project workspace root when thread worktree is unset", async () => {
@@ -888,8 +1302,13 @@ describe("CheckpointReactor", () => {
       turnId: asTurnId("turn-missing-cwd"),
       payload: { state: "completed" },
     });
-
-    await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
+    await harness.publishSettledAndWait({
+      sourceEventId: EventId.make("evt-turn-completed-missing-provider-cwd"),
+      threadId: ThreadId.make("thread-1"),
+      turnId: asTurnId("turn-missing-cwd"),
+      outcome: "completed",
+      settledAt: createdAt,
+    });
     expect(
       gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.make("thread-1"), 1)),
     ).toBe(true);
@@ -1008,7 +1427,7 @@ describe("CheckpointReactor", () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.session.set",
         commandId: CommandId.make("cmd-session-set"),
@@ -1026,7 +1445,7 @@ describe("CheckpointReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.turn.diff.complete",
         commandId: CommandId.make("cmd-diff-1"),
@@ -1040,7 +1459,7 @@ describe("CheckpointReactor", () => {
         createdAt,
       }),
     );
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.turn.diff.complete",
         commandId: CommandId.make("cmd-diff-2"),
@@ -1055,7 +1474,7 @@ describe("CheckpointReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.checkpoint.revert",
         commandId: CommandId.make("cmd-revert-request"),
@@ -1089,7 +1508,7 @@ describe("CheckpointReactor", () => {
     const harness = await createHarness({ providerName: ProviderDriverKind.make("claudeAgent") });
     const createdAt = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.session.set",
         commandId: CommandId.make("cmd-session-set-claude"),
@@ -1107,7 +1526,7 @@ describe("CheckpointReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.turn.diff.complete",
         commandId: CommandId.make("cmd-diff-claude-1"),
@@ -1121,7 +1540,7 @@ describe("CheckpointReactor", () => {
         createdAt,
       }),
     );
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.turn.diff.complete",
         commandId: CommandId.make("cmd-diff-claude-2"),
@@ -1136,7 +1555,7 @@ describe("CheckpointReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.checkpoint.revert",
         commandId: CommandId.make("cmd-revert-request-claude"),
@@ -1158,7 +1577,7 @@ describe("CheckpointReactor", () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.session.set",
         commandId: CommandId.make("cmd-session-set-inline-revert"),
@@ -1176,7 +1595,7 @@ describe("CheckpointReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.turn.diff.complete",
         commandId: CommandId.make("cmd-inline-revert-diff-1"),
@@ -1190,7 +1609,7 @@ describe("CheckpointReactor", () => {
         createdAt,
       }),
     );
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.turn.diff.complete",
         commandId: CommandId.make("cmd-inline-revert-diff-2"),
@@ -1205,7 +1624,7 @@ describe("CheckpointReactor", () => {
       }),
     );
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.checkpoint.revert",
         commandId: CommandId.make("cmd-sequenced-revert-request-1"),
@@ -1214,7 +1633,7 @@ describe("CheckpointReactor", () => {
         createdAt,
       }),
     );
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.checkpoint.revert",
         commandId: CommandId.make("cmd-sequenced-revert-request-0"),
@@ -1241,7 +1660,7 @@ describe("CheckpointReactor", () => {
     const harness = await createHarness({ hasSession: false });
     const createdAt = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
+    await harness.runEffect(
       harness.engine.dispatch({
         type: "thread.checkpoint.revert",
         commandId: CommandId.make("cmd-revert-no-session"),

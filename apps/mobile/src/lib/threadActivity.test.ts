@@ -12,11 +12,106 @@ import {
 } from "@t3tools/contracts";
 
 import {
+  buildPendingUserInputAnswers,
   buildThreadFeed,
   deriveThreadFeedPresentation,
+  isPendingUserInputOptionSelected,
+  setPendingUserInputCustomAnswer,
+  togglePendingUserInputOptionSelection,
   type ThreadFeedActivity,
   type ThreadFeedEntry,
 } from "./threadActivity";
+
+const singleSelectQuestion = {
+  id: "runtime",
+  header: "Runtime",
+  question: "Which runtime should be used?",
+  options: [
+    { label: "Go", description: "One binary" },
+    { label: "Node.js", description: "Reuse TypeScript" },
+  ],
+  multiSelect: false,
+} as const;
+
+const multiSelectQuestion = {
+  id: "scope",
+  header: "Scope",
+  question: "Which data should be collected?",
+  options: [
+    { label: "Orders", description: "Receipts" },
+    { label: "Listings", description: "Inventory" },
+  ],
+  multiSelect: true,
+} as const;
+
+describe("pending user input answers", () => {
+  it("replaces single-select options and toggles multi-select options", () => {
+    expect(
+      togglePendingUserInputOptionSelection(
+        singleSelectQuestion,
+        { selectedOptionLabels: ["Go"] },
+        "Node.js",
+      ),
+    ).toEqual({ customAnswer: "", selectedOptionLabels: ["Node.js"] });
+
+    const orders = togglePendingUserInputOptionSelection(multiSelectQuestion, undefined, "Orders");
+    const ordersAndListings = togglePendingUserInputOptionSelection(
+      multiSelectQuestion,
+      orders,
+      "Listings",
+    );
+    expect(ordersAndListings).toEqual({
+      customAnswer: "",
+      selectedOptionLabels: ["Orders", "Listings"],
+    });
+    expect(
+      togglePendingUserInputOptionSelection(multiSelectQuestion, ordersAndListings, "Orders"),
+    ).toEqual({ customAnswer: "", selectedOptionLabels: ["Listings"] });
+
+    const paddedOrders = togglePendingUserInputOptionSelection(
+      multiSelectQuestion,
+      undefined,
+      "  Orders  ",
+    );
+    expect(paddedOrders).toEqual({ customAnswer: "", selectedOptionLabels: ["Orders"] });
+    expect(
+      togglePendingUserInputOptionSelection(multiSelectQuestion, paddedOrders, "  Orders  "),
+    ).toEqual({ customAnswer: "" });
+  });
+
+  it("builds array answers for multi-select questions", () => {
+    expect(
+      buildPendingUserInputAnswers([singleSelectQuestion, multiSelectQuestion], {
+        runtime: { selectedOptionLabels: ["Go"] },
+        scope: { selectedOptionLabels: ["Orders", "Listings"] },
+      }),
+    ).toEqual({
+      runtime: "Go",
+      scope: ["Orders", "Listings"],
+    });
+  });
+
+  it("clears selected options while a custom answer is active", () => {
+    expect(
+      setPendingUserInputCustomAnswer(
+        { selectedOptionLabels: ["Orders", "Listings"] },
+        "Orders first",
+      ),
+    ).toEqual({ customAnswer: "Orders first" });
+  });
+
+  it("matches selected chips against normalized option labels", () => {
+    expect(
+      isPendingUserInputOptionSelected({ selectedOptionLabels: ["Orders"] }, "  Orders  "),
+    ).toBe(true);
+    expect(
+      isPendingUserInputOptionSelected(
+        { selectedOptionLabels: ["Orders"], customAnswer: "Orders first" },
+        "  Orders  ",
+      ),
+    ).toBe(false);
+  });
+});
 
 function makeActivity(
   input: Partial<OrchestrationThreadActivity> &
@@ -56,6 +151,40 @@ function makeThread(
 }
 
 describe("buildThreadFeed", () => {
+  it("keeps sequence-less history before sequenced activity at the same timestamp", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-1"),
+      projectId: ProjectId.make("project-1"),
+      title: "Mixed activity history",
+      activities: [
+        makeActivity({
+          id: EventId.make("activity-sequenced"),
+          kind: "runtime.warning",
+          summary: "Sequenced warning",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          turnId: TurnId.make("turn-1"),
+          sequence: 1,
+        }),
+        makeActivity({
+          id: EventId.make("activity-legacy"),
+          kind: "runtime.warning",
+          summary: "Legacy warning",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          turnId: TurnId.make("turn-1"),
+        }),
+      ],
+    });
+
+    const group = buildThreadFeed(thread)[0];
+    expect(group?.type).toBe("activity-group");
+    if (group?.type === "activity-group") {
+      expect(group.activities.map((activity) => activity.id)).toEqual([
+        "activity-legacy",
+        "activity-sequenced",
+      ]);
+    }
+  });
+
   it("keeps historic work entries attributed to their turns", () => {
     const thread = makeThread({
       id: ThreadId.make("thread-1"),

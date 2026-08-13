@@ -1643,17 +1643,25 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           });
 
           if (Option.isSome(existingTurn)) {
+            const existingTurnIsTerminal =
+              existingTurn.value.state === "completed" ||
+              existingTurn.value.state === "error" ||
+              existingTurn.value.state === "interrupted";
             yield* projectionTurnRepository.upsertByTurnId({
               ...existingTurn.value,
               assistantMessageId: event.payload.assistantMessageId,
-              state: turnStillRunning ? existingTurn.value.state : nextState,
+              state:
+                turnStillRunning || existingTurnIsTerminal ? existingTurn.value.state : nextState,
               checkpointTurnCount: event.payload.checkpointTurnCount,
               checkpointRef: event.payload.checkpointRef,
               checkpointStatus: event.payload.status,
               checkpointFiles: event.payload.files,
               startedAt: existingTurn.value.startedAt ?? event.payload.completedAt,
               requestedAt: existingTurn.value.requestedAt ?? event.payload.completedAt,
-              completedAt: event.payload.completedAt,
+              completedAt:
+                existingTurnIsTerminal && existingTurn.value.completedAt !== null
+                  ? existingTurn.value.completedAt
+                  : event.payload.completedAt,
             });
             return;
           }
