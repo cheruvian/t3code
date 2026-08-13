@@ -37,7 +37,7 @@
 - [x] 5.3 Add repeated-reconciliation tests proving multiple passes are idempotent and replay-safe with no contradictory lifecycle events.
 - [x] 5.4 Add provider replacement tests proving late exit/state events cannot overwrite a new session, including the interleaving where old-event validation begins before replacement commits and durable dispatch resumes afterward; prove current-generation events still ingest.
 - [x] 5.5 Add preservation tests for valid shell `ready` plus runtime `running` and shell `ready` plus runtime `stopped` combinations.
-- [ ] 5.6 Add live-projection versus bootstrap/replay equivalence tests for reconciled session status, cleared active-turn linkage, and settled interrupted turn state.
+- [x] 5.6 Add live-projection versus bootstrap/replay equivalence tests for reconciled session status, cleared active-turn linkage, and settled interrupted turn state.
 - [x] 5.7 Add activation-order tests proving clients cannot receive a ready initial snapshot or start work while stale active shells remain unreconciled.
 - [ ] 5.8 Add drain tests for normal completion, intermediate tool completion, pending approval/input, cancellation, force, interactive expiry, requester disconnect, signal-driven automatic force, and typed server-draining admission errors.
 

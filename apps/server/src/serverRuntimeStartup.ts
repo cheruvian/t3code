@@ -8,6 +8,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Console from "effect/Console";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -51,6 +52,10 @@ export class ServerRuntimeStartupError extends Schema.TaggedErrorClass<ServerRun
     mode: ServerConfig.RuntimeMode,
     host: Schema.NullOr(Schema.String),
     port: Schema.Number,
+    phase: Schema.optionalKey(Schema.String),
+    operation: Schema.optionalKey(Schema.String),
+    failureKind: Schema.optionalKey(Schema.String),
+    affectedThreadIds: Schema.optionalKey(Schema.Array(ThreadId)),
     cause: Schema.Defect(),
   },
 ) {
@@ -58,6 +63,31 @@ export class ServerRuntimeStartupError extends Schema.TaggedErrorClass<ServerRun
     return "Server runtime startup failed before command readiness.";
   }
 }
+
+export const makeServerRuntimeStartupError = (input: {
+  readonly mode: ServerConfig.RuntimeMode;
+  readonly host: string | null;
+  readonly port: number;
+  readonly cause: Cause.Cause<unknown>;
+}) => {
+  const startupCause = Cause.squash(input.cause);
+  const reconciliationContext =
+    startupCause instanceof SessionReconciler.SessionReconciliationError
+      ? {
+          phase: startupCause.phase,
+          operation: startupCause.operation,
+          failureKind: startupCause.failureKind,
+          affectedThreadIds: startupCause.affectedThreadIds,
+        }
+      : {};
+  return new ServerRuntimeStartupError({
+    mode: input.mode,
+    host: input.host,
+    port: input.port,
+    ...reconciliationContext,
+    cause: input.cause,
+  });
+};
 
 export class ServerRuntimeStartup extends Context.Service<
   ServerRuntimeStartup,
@@ -312,8 +342,17 @@ export const completeSessionStartupBarrier = <E, R>(options: {
   Effect.gen(function* () {
     const reconciliation = yield* options.reconcile;
     if (reconciliation.remainingOrphans.length > 0) {
+      const affectedThreadIds = reconciliation.remainingOrphans.filter(
+        (threadId): threadId is ThreadId => typeof threadId === "string",
+      );
       return yield* new SessionReconciler.SessionReconciliationError({
-        cause: `Provider session reconciliation left ${reconciliation.remainingOrphans.length} orphaned sessions.`,
+        phase: SessionReconciler.SESSION_RECONCILIATION_PHASE,
+        operation: "reconcile-orphaned-sessions",
+        failureKind: "orphans-remain",
+        affectedThreadIds,
+        cause: new SessionReconciler.SessionReconciliationDidNotConverge({
+          affectedThreadIds,
+        }),
       });
     }
     yield* options.completePersistedDrain;
@@ -509,7 +548,7 @@ export const make = (options?: StartupOptions) =>
       Effect.exit(startup).pipe(
         Effect.flatMap((startupExit) => {
           if (Exit.isSuccess(startupExit)) return Effect.void;
-          const error = new ServerRuntimeStartupError({
+          const error = makeServerRuntimeStartupError({
             mode: serverConfig.mode,
             host: serverConfig.host ?? null,
             port: serverConfig.port,
@@ -517,6 +556,12 @@ export const make = (options?: StartupOptions) =>
           });
           return Effect.logError("server runtime startup failed", {
             cause: startupExit.cause,
+            ...(error.phase === undefined ? {} : { phase: error.phase }),
+            ...(error.operation === undefined ? {} : { operation: error.operation }),
+            ...(error.failureKind === undefined ? {} : { failureKind: error.failureKind }),
+            ...(error.affectedThreadIds === undefined
+              ? {}
+              : { affectedThreadIds: error.affectedThreadIds }),
           }).pipe(
             Effect.andThen(commandGate.failCommandReady(error)),
             Effect.andThen(options?.abort?.(error) ?? Effect.void),

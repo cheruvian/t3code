@@ -11,7 +11,25 @@ export interface SessionReconciliationResult {
   readonly remainingOrphans: ReadonlyArray<ThreadId>;
 }
 
+export const SESSION_RECONCILIATION_PHASE = "provider-sessions.reconcile" as const;
+
+export type SessionReconciliationOperation =
+  | "reconcile-orphaned-sessions"
+  | "interrupt-active-sessions";
+
+export type SessionReconciliationFailureKind = "operation-failed" | "orphans-remain";
+
+export class SessionReconciliationDidNotConverge extends Data.TaggedError(
+  "SessionReconciliationDidNotConverge",
+)<{
+  readonly affectedThreadIds: ReadonlyArray<ThreadId>;
+}> {}
+
 export class SessionReconciliationError extends Data.TaggedError("SessionReconciliationError")<{
+  readonly phase: typeof SESSION_RECONCILIATION_PHASE;
+  readonly operation: SessionReconciliationOperation;
+  readonly failureKind: SessionReconciliationFailureKind;
+  readonly affectedThreadIds: ReadonlyArray<ThreadId>;
   readonly cause: unknown;
 }> {}
 

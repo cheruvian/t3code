@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { DEFAULT_MODEL, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -15,6 +16,7 @@ import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngi
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import * as SessionReconciler from "./provider/Services/SessionReconciler.ts";
 
 it("uses the canonical Codex default for auto-bootstrapped model selection", () => {
   assert.deepStrictEqual(ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection(), {
@@ -65,6 +67,100 @@ it.effect("keeps activation work behind durable session reconciliation", () =>
     assert.deepStrictEqual(yield* Ref.get(calls), ["reconcile", "drain", "reaper"]);
   }),
 );
+
+it.effect("fails closed with structured startup evidence when reconciliation cannot converge", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const orphanedThreadId = ThreadId.make("thread-startup-orphan");
+      const commandGate = yield* ServerRuntimeStartup.makeCommandGate;
+      const queuedCommandRuns = yield* Ref.make(0);
+      const readyPublications = yield* Ref.make(0);
+      const initialSnapshotReads = yield* Ref.make(0);
+      const persistedDrainCompletions = yield* Ref.make(0);
+      const reaperStarts = yield* Ref.make(0);
+
+      const queuedCommand = yield* commandGate
+        .enqueueCommand(Ref.updateAndGet(queuedCommandRuns, (count) => count + 1))
+        .pipe(Effect.forkScoped);
+
+      const failure = yield* ServerRuntimeStartup.completeSessionStartupBarrier({
+        reconcile: Effect.succeed({ remainingOrphans: [orphanedThreadId] }),
+        completePersistedDrain: Ref.update(persistedDrainCompletions, (count) => count + 1),
+        startReaper: Ref.update(reaperStarts, (count) => count + 1),
+      }).pipe(
+        Effect.tap(() => Ref.update(initialSnapshotReads, (count) => count + 1)),
+        Effect.tap(() => Ref.update(readyPublications, (count) => count + 1)),
+        Effect.tap(() => commandGate.signalCommandReady),
+        Effect.flip,
+      );
+
+      yield* commandGate.failCommandReady(
+        new ServerRuntimeStartup.ServerRuntimeStartupError({
+          mode: "web",
+          host: "127.0.0.1",
+          port: 3773,
+          cause: failure,
+        }),
+      );
+      const queuedFailure = yield* Effect.flip(Fiber.join(queuedCommand));
+
+      assert.equal(yield* Ref.get(queuedCommandRuns), 0);
+      assert.equal(yield* Ref.get(readyPublications), 0);
+      assert.equal(yield* Ref.get(initialSnapshotReads), 0);
+      assert.equal(yield* Ref.get(persistedDrainCompletions), 0);
+      assert.equal(yield* Ref.get(reaperStarts), 0);
+      assert.equal(
+        queuedFailure.message,
+        "Server runtime startup failed before command readiness.",
+      );
+
+      const evidence = failure as unknown as {
+        readonly phase?: string;
+        readonly operation?: string;
+        readonly failureKind?: string;
+        readonly affectedThreadIds?: ReadonlyArray<ThreadId>;
+        readonly cause?: unknown;
+      };
+      assert.equal(evidence.phase, "provider-sessions.reconcile");
+      assert.equal(evidence.operation, "reconcile-orphaned-sessions");
+      assert.equal(evidence.failureKind, "orphans-remain");
+      assert.deepStrictEqual(evidence.affectedThreadIds, [orphanedThreadId]);
+      assert.equal(
+        typeof evidence.cause === "object" && evidence.cause !== null && "_tag" in evidence.cause,
+        true,
+      );
+    }),
+  ),
+);
+
+it("preserves reconciliation context on the outer startup error", () => {
+  const affectedThreadId = ThreadId.make("thread-startup-error-context");
+  const reconciliationCause = new SessionReconciler.SessionReconciliationDidNotConverge({
+    affectedThreadIds: [affectedThreadId],
+  });
+  const reconciliationError = new SessionReconciler.SessionReconciliationError({
+    phase: SessionReconciler.SESSION_RECONCILIATION_PHASE,
+    operation: "reconcile-orphaned-sessions",
+    failureKind: "orphans-remain",
+    affectedThreadIds: [affectedThreadId],
+    cause: reconciliationCause,
+  });
+  const startupCause = Cause.fail(reconciliationError);
+
+  const startupError = ServerRuntimeStartup.makeServerRuntimeStartupError({
+    mode: "web",
+    host: "127.0.0.1",
+    port: 3773,
+    cause: startupCause,
+  });
+
+  assert.equal(startupError.phase, "provider-sessions.reconcile");
+  assert.equal(startupError.operation, "reconcile-orphaned-sessions");
+  assert.equal(startupError.failureKind, "orphans-remain");
+  assert.deepStrictEqual(startupError.affectedThreadIds, [affectedThreadId]);
+  assert.strictEqual(startupError.cause, startupCause);
+  assert.strictEqual(Cause.squash(startupCause), reconciliationError);
+});
 
 it.effect("enqueueCommand fails queued work when readiness fails", () =>
   Effect.scoped(

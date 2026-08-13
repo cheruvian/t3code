@@ -3,6 +3,7 @@ import {
   type OrchestrationThreadShell,
   type ProviderSessionGeneration,
   type ServerOwnerGeneration,
+  type ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -18,6 +19,7 @@ import {
 } from "../Services/ProviderSessionDirectory.ts";
 import {
   SessionReconciler,
+  SESSION_RECONCILIATION_PHASE,
   SessionReconciliationError,
   type SessionReconcilerShape,
 } from "../Services/SessionReconciler.ts";
@@ -51,6 +53,17 @@ export const makeSessionReconciler = Effect.gen(function* () {
 
   const reconcile = (forceAll: boolean) =>
     Effect.gen(function* () {
+      const operation = forceAll ? "interrupt-active-sessions" : "reconcile-orphaned-sessions";
+      const wrapError = (cause: unknown, affectedThreadIds: ReadonlyArray<ThreadId>) =>
+        cause instanceof SessionReconciliationError
+          ? cause
+          : new SessionReconciliationError({
+              phase: SESSION_RECONCILIATION_PHASE,
+              operation,
+              failureKind: "operation-failed",
+              affectedThreadIds,
+              cause,
+            });
       const snapshot = yield* snapshots.getShellSnapshot();
       const active = snapshot.threads.filter(
         (thread) => isActiveShell(thread) || (forceAll && thread.session?.status === "ready"),
@@ -105,14 +118,14 @@ export const makeSessionReconciler = Effect.gen(function* () {
               threadId: thread.id,
             });
           }
-        }),
+        }).pipe(Effect.mapError((cause) => wrapError(cause, [thread.id]))),
       );
 
       const verification = yield* snapshots.getShellSnapshot();
       const remainingOrphans = yield* Effect.filter(
         verification.threads.filter(isActiveShell),
         (thread) =>
-          forceAll
+          (forceAll
             ? Effect.succeed(true)
             : directory
                 .getBinding(thread.id)
@@ -123,7 +136,8 @@ export const makeSessionReconciler = Effect.gen(function* () {
                       directory.ownerGeneration,
                     ),
                   ),
-                ),
+                )
+          ).pipe(Effect.mapError((cause) => wrapError(cause, [thread.id]))),
       );
       return {
         inspected: active.length,
@@ -132,7 +146,19 @@ export const makeSessionReconciler = Effect.gen(function* () {
         stopped,
         remainingOrphans: remainingOrphans.map((thread) => thread.id),
       };
-    }).pipe(Effect.mapError((cause) => new SessionReconciliationError({ cause })));
+    }).pipe(
+      Effect.mapError((cause) =>
+        cause instanceof SessionReconciliationError
+          ? cause
+          : new SessionReconciliationError({
+              phase: SESSION_RECONCILIATION_PHASE,
+              operation: forceAll ? "interrupt-active-sessions" : "reconcile-orphaned-sessions",
+              failureKind: "operation-failed",
+              affectedThreadIds: [],
+              cause,
+            }),
+      ),
+    );
 
   const reconcileOrphanedSessions: SessionReconcilerShape["reconcileOrphanedSessions"] =
     reconcile(false);
