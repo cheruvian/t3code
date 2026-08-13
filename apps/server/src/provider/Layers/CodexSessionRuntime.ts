@@ -18,12 +18,14 @@ import {
 } from "@t3tools/contracts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { normalizeModelSlug } from "@t3tools/shared/model";
+import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -52,6 +54,7 @@ const BENIGN_ERROR_LOG_SNIPPETS = [
   "state db record_discrepancy: find_thread_path_by_id_str_in_subdir, falling_back",
 ];
 const CODEX_APP_SERVER_FORCE_KILL_AFTER = "2 seconds" as const;
+const CODEX_MCP_CATALOG_RELOAD_TIMEOUT = "30 seconds" as const;
 const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "not found",
   "missing thread",
@@ -92,6 +95,16 @@ type CodexServiceTier = NonNullable<EffectCodexSchema.V2ThreadStartParams["servi
 type CodexThreadItem =
   | EffectCodexSchema.V2ThreadReadResponse["thread"]["turns"][number]["items"][number]
   | EffectCodexSchema.V2ThreadRollbackResponse["thread"]["turns"][number]["items"][number];
+
+type McpCatalogReloadState = {
+  readonly loadedGeneration: string | null;
+  readonly inFlight: Deferred.Deferred<void> | null;
+};
+
+type McpCatalogReloadDecision =
+  | { readonly _tag: "loaded" }
+  | { readonly _tag: "wait"; readonly deferred: Deferred.Deferred<void> }
+  | { readonly _tag: "reload" };
 
 export interface CodexSessionRuntimeOptions {
   readonly threadId: ThreadId;
@@ -869,6 +882,9 @@ export const makeCodexSessionRuntime = (
     };
     const extendEnv = options.environment === undefined;
     const appServerArgs = codexSessionAppServerArgs(options.appServerArgs, options.launchArgs);
+    const mcpConfigGeneration = hasConfiguredMcpServer(appServerArgs)
+      ? appServerArgs.join("\0")
+      : undefined;
     const spawnCommand = yield* resolveSpawnCommand(options.binaryPath, appServerArgs, {
       env,
       extendEnv,
@@ -900,6 +916,86 @@ export const makeCodexSessionRuntime = (
     );
     const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
       Effect.provide(clientContext),
+    );
+    const mcpCatalogReloadState = yield* Ref.make<McpCatalogReloadState>({
+      loadedGeneration: null,
+      inFlight: null,
+    });
+    const reloadConfiguredMcpCatalog = Effect.fn("CodexSessionRuntime.reloadConfiguredMcpCatalog")(
+      function* () {
+        if (mcpConfigGeneration === undefined) {
+          return;
+        }
+
+        const candidate = yield* Deferred.make<void>();
+        const decision = yield* Ref.modify(
+          mcpCatalogReloadState,
+          (state): readonly [McpCatalogReloadDecision, McpCatalogReloadState] => {
+            if (state.loadedGeneration === mcpConfigGeneration) {
+              return [{ _tag: "loaded" }, state];
+            }
+            if (state.inFlight !== null) {
+              return [{ _tag: "wait", deferred: state.inFlight }, state];
+            }
+            return [{ _tag: "reload" }, { ...state, inFlight: candidate }];
+          },
+        );
+
+        if (decision._tag === "loaded") {
+          return;
+        }
+        if (decision._tag === "wait") {
+          yield* Deferred.await(decision.deferred);
+          return;
+        }
+
+        const resetInFlight = Ref.update(mcpCatalogReloadState, (state) =>
+          state.inFlight === candidate ? { ...state, inFlight: null } : state,
+        );
+        yield* client.request("config/mcpServer/reload", undefined).pipe(
+          Effect.timeoutOption(CODEX_MCP_CATALOG_RELOAD_TIMEOUT),
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                Ref.set(mcpCatalogReloadState, {
+                  loadedGeneration: null,
+                  inFlight: null,
+                }).pipe(
+                  Effect.andThen(
+                    Effect.logWarning("Timed out refreshing Codex MCP tool catalog before turn.", {
+                      timeout: CODEX_MCP_CATALOG_RELOAD_TIMEOUT,
+                    }),
+                  ),
+                ),
+              onSome: () =>
+                Ref.set(mcpCatalogReloadState, {
+                  loadedGeneration: mcpConfigGeneration,
+                  inFlight: null,
+                }),
+            }),
+          ),
+          Effect.catchCause((cause) =>
+            Ref.set(mcpCatalogReloadState, {
+              loadedGeneration: null,
+              inFlight: null,
+            }).pipe(
+              Effect.andThen(
+                Cause.hasInterruptsOnly(cause)
+                  ? Effect.failCause(cause)
+                  : Effect.logWarning("Failed to refresh Codex MCP tool catalog before turn.", {
+                      cause,
+                    }),
+              ),
+            ),
+          ),
+          Effect.ensuring(
+            resetInFlight.pipe(
+              Effect.andThen(Deferred.succeed(candidate, undefined)),
+              Effect.asVoid,
+            ),
+          ),
+        );
+      },
     );
     const serverNotifications = yield* Queue.unbounded<CodexServerNotification>();
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -1753,15 +1849,7 @@ export const makeCodexSessionRuntime = (
       sendTurn: (input) =>
         Effect.gen(function* () {
           const providerThreadId = yield* readProviderThreadId;
-          if (hasConfiguredMcpServer(options.appServerArgs)) {
-            yield* client.request("config/mcpServer/reload", undefined).pipe(
-              Effect.catch((cause) =>
-                Effect.logWarning("Failed to refresh Codex MCP tool catalog before turn.", {
-                  cause,
-                }),
-              ),
-            );
-          }
+          yield* reloadConfiguredMcpCatalog();
           const normalizedModel = normalizeCodexModelSlug(
             input.model ?? (yield* Ref.get(sessionRef)).model,
           );

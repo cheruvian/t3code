@@ -38,6 +38,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import {
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
+  ProviderSessionDirectoryPersistenceError,
   ProviderUnsupportedError,
   ProviderValidationError,
   type ProviderAdapterError,
@@ -168,6 +169,10 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
       Effect.sync(() => Array.from(sessions.values())),
   );
 
+  const getSession = vi.fn((threadId: ThreadId) =>
+    Effect.sync(() => Option.fromUndefinedOr(sessions.get(threadId))),
+  );
+
   const hasSession = vi.fn(
     (threadId: ThreadId): Effect.Effect<boolean> => Effect.succeed(sessions.has(threadId)),
   );
@@ -214,6 +219,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     respondToRequest,
     respondToUserInput,
     stopSession,
+    getSession,
     listSessions,
     hasSession,
     readThread,
@@ -249,6 +255,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     respondToRequest,
     respondToUserInput,
     stopSession,
+    getSession,
     listSessions,
     hasSession,
     readThread,
@@ -854,6 +861,128 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("reads one bound session without enumerating adapter sessions", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-targeted-session");
+      const persistedResumeCursor = { opaque: "persisted-targeted-resume" };
+
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: "/tmp/project-targeted-session",
+        runtimeMode: "full-access",
+      });
+      routing.codex.updateSession(threadId, (session) => {
+        const { resumeCursor: _resumeCursor, ...withoutResumeCursor } = session;
+        return withoutResumeCursor;
+      });
+      yield* directory.upsert({
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        runtimeMode: "approval-required",
+        resumeCursor: persistedResumeCursor,
+      });
+
+      routing.codex.getSession.mockClear();
+      routing.claude.getSession.mockClear();
+      routing.cursor.getSession.mockClear();
+      routing.codex.listSessions.mockClear();
+      routing.claude.listSessions.mockClear();
+      routing.cursor.listSessions.mockClear();
+
+      const session = yield* provider.getSession(threadId);
+
+      assert.equal(Option.isSome(session), true);
+      if (Option.isSome(session)) {
+        assert.equal(session.value.threadId, threadId);
+        assert.equal(session.value.providerInstanceId, codexInstanceId);
+        assert.equal(session.value.runtimeMode, "approval-required");
+        assert.deepEqual(session.value.resumeCursor, persistedResumeCursor);
+      }
+      assert.equal(routing.codex.getSession.mock.calls.length, 1);
+      assert.equal(routing.claude.getSession.mock.calls.length, 0);
+      assert.equal(routing.cursor.getSession.mock.calls.length, 0);
+      assert.equal(routing.codex.listSessions.mock.calls.length, 0);
+      assert.equal(routing.claude.listSessions.mock.calls.length, 0);
+      assert.equal(routing.cursor.listSessions.mock.calls.length, 0);
+      yield* provider.stopSession({ threadId });
+      routing.codex.startSession.mockClear();
+    }),
+  );
+
+  it.effect("bulk-loads bindings once and preserves listing order when binding reads fail", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const codexThreadId = asThreadId("thread-list-order-codex");
+      const claudeThreadId = asThreadId("thread-list-order-claude");
+
+      yield* provider.startSession(codexThreadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId: codexThreadId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.startSession(claudeThreadId, {
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId: claudeThreadId,
+        runtimeMode: "full-access",
+      });
+
+      const listBindings = vi.spyOn(directory, "listBindings");
+      const listThreadIds = vi.spyOn(directory, "listThreadIds");
+      const getBinding = vi.spyOn(directory, "getBinding");
+      try {
+        const listed = yield* provider.listSessions();
+        assert.deepEqual(
+          listed
+            .map((session) => session.threadId)
+            .filter((threadId) => threadId === codexThreadId || threadId === claudeThreadId),
+          [codexThreadId, claudeThreadId],
+        );
+        assert.equal(listBindings.mock.calls.length, 1);
+        assert.equal(listThreadIds.mock.calls.length, 0);
+        assert.equal(getBinding.mock.calls.length, 0);
+
+        listBindings.mockClear();
+        listThreadIds.mockClear();
+        getBinding.mockClear();
+        listBindings.mockImplementationOnce(() =>
+          Effect.fail(
+            new ProviderSessionDirectoryPersistenceError({
+              operation: "ProviderSessionDirectory.listBindings:list",
+              detail: "simulated binding read failure",
+            }),
+          ),
+        );
+
+        const recovered = yield* provider.listSessions();
+        assert.deepEqual(
+          recovered
+            .map((session) => session.threadId)
+            .filter((threadId) => threadId === codexThreadId || threadId === claudeThreadId),
+          [codexThreadId, claudeThreadId],
+        );
+        assert.equal(listBindings.mock.calls.length, 1);
+        assert.equal(listThreadIds.mock.calls.length, 0);
+        assert.equal(getBinding.mock.calls.length, 0);
+      } finally {
+        listBindings.mockRestore();
+        listThreadIds.mockRestore();
+        getBinding.mockRestore();
+      }
+      yield* provider.stopSession({ threadId: codexThreadId });
+      yield* provider.stopSession({ threadId: claudeThreadId });
+      routing.codex.startSession.mockClear();
+      routing.claude.startSession.mockClear();
+    }),
+  );
+
   it.effect("routes provider operations and rollback conversation", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

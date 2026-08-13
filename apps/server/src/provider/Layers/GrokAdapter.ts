@@ -1423,6 +1423,14 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         }),
       );
 
+    const getSession: GrokAdapterShape["getSession"] = (threadId) =>
+      Effect.sync(() => {
+        const context = sessions.get(threadId);
+        return context === undefined || context.stopped
+          ? Option.none()
+          : Option.some({ ...context.session });
+      });
+
     const listSessions: GrokAdapterShape["listSessions"] = () =>
       Effect.sync(() => Array.from(sessions.values(), (c) => ({ ...c.session })));
 
@@ -1455,6 +1463,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
       respondToRequest,
       respondToUserInput,
       stopSession,
+      getSession,
       listSessions,
       hasSession,
       stopAll,

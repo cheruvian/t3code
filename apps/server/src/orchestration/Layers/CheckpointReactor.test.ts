@@ -25,6 +25,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -90,7 +91,7 @@ function createProviderServiceHarness(
 
   const unsupported = <A>() =>
     Effect.die(new Error("Unsupported provider call in test")) as Effect.Effect<A, never>;
-  const listSessions = () =>
+  const listSessions: ProviderServiceShape["listSessions"] = () =>
     hasSession
       ? Effect.succeed([
           {
@@ -111,6 +112,12 @@ function createProviderServiceHarness(
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
+    getSession: (threadId) =>
+      listSessions().pipe(
+        Effect.map((sessions) =>
+          Option.fromUndefinedOr(sessions.find((session) => session.threadId === threadId)),
+        ),
+      ),
     listSessions,
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     getInstanceInfo: (instanceId) =>

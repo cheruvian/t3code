@@ -31,6 +31,7 @@ import * as Crypto from "effect/Crypto";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -2083,6 +2084,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       yield* stopSessionInternal(session);
     });
 
+  const getSession: CodexAdapterShape["getSession"] = (threadId) => {
+    const session = sessions.get(threadId);
+    return session === undefined || session.stopped
+      ? Effect.succeed(Option.none())
+      : session.runtime.getSession.pipe(Effect.map(Option.some));
+  };
+
   const listSessions: CodexAdapterShape["listSessions"] = () =>
     Effect.forEach(
       Array.from(sessions.values()).filter((session) => !session.stopped),
@@ -2120,6 +2128,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     respondToRequest,
     respondToUserInput,
     stopSession,
+    getSession,
     listSessions,
     hasSession,
     stopAll,

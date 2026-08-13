@@ -26,6 +26,7 @@ import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -256,6 +257,11 @@ describe("ProviderCommandReactor", () => {
     const listSessions = vi.fn<ProviderServiceShape["listSessions"]>(() =>
       Effect.succeed(runtimeSessions),
     );
+    const getSession = vi.fn<ProviderServiceShape["getSession"]>((threadId) =>
+      Effect.succeed(
+        Option.fromUndefinedOr(runtimeSessions.find((session) => session.threadId === threadId)),
+      ),
+    );
     const renameBranch = vi.fn((input: unknown) =>
       Effect.succeed({
         branch:
@@ -318,6 +324,7 @@ describe("ProviderCommandReactor", () => {
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
+      getSession,
       listSessions,
       getCapabilities: (_provider) =>
         Effect.succeed({
@@ -501,6 +508,7 @@ describe("ProviderCommandReactor", () => {
       respondToRequest,
       respondToUserInput,
       stopSession,
+      getSession,
       listSessions,
       renameBranch,
       refreshStatus,
@@ -598,6 +606,7 @@ describe("ProviderCommandReactor", () => {
 
     expect(harness.startSession).toHaveBeenCalledTimes(1);
     expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(harness.getSession).toHaveBeenCalledTimes(1);
     expect(harness.listSessions).not.toHaveBeenCalled();
   });
 
