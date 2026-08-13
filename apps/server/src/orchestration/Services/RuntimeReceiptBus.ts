@@ -8,13 +8,19 @@
  * wait for those exact points without inferring them indirectly from persisted
  * state.
  *
- * Production code should only call `publish`. Test code may subscribe via
- * `streamEventsForTest`, which is intentionally named to make the intended
- * usage explicit.
+ * Live reactors subscribe through `streamReceipts`. Tests may independently
+ * subscribe via `streamEventsForTest` to await the same milestones.
  *
  * @module RuntimeReceiptBus
  */
-import { CheckpointRef, IsoDateTime, NonNegativeInt, ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  CheckpointRef,
+  EventId,
+  IsoDateTime,
+  NonNegativeInt,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -49,15 +55,27 @@ export const TurnProcessingQuiescedReceipt = Schema.Struct({
 });
 export type TurnProcessingQuiescedReceipt = typeof TurnProcessingQuiescedReceipt.Type;
 
+export const TurnIngestionSettledReceipt = Schema.Struct({
+  type: Schema.Literal("turn.ingestion-settled"),
+  sourceEventId: EventId,
+  threadId: ThreadId,
+  turnId: TurnId,
+  outcome: Schema.Literals(["completed", "failed", "interrupted", "cancelled"]),
+  settledAt: IsoDateTime,
+});
+export type TurnIngestionSettledReceipt = typeof TurnIngestionSettledReceipt.Type;
+
 export const OrchestrationRuntimeReceipt = Schema.Union([
   CheckpointBaselineCapturedReceipt,
   CheckpointDiffFinalizedReceipt,
   TurnProcessingQuiescedReceipt,
+  TurnIngestionSettledReceipt,
 ]);
 export type OrchestrationRuntimeReceipt = typeof OrchestrationRuntimeReceipt.Type;
 
 export interface RuntimeReceiptBusShape {
   readonly publish: (receipt: OrchestrationRuntimeReceipt) => Effect.Effect<void>;
+  readonly streamReceipts: Stream.Stream<OrchestrationRuntimeReceipt>;
   readonly streamEventsForTest: Stream.Stream<OrchestrationRuntimeReceipt>;
 }
 

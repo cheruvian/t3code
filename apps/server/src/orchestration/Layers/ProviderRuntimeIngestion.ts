@@ -42,6 +42,7 @@ import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts"
 import { ThreadPlanProgressService } from "../ThreadPlanProgress.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { AssistantPreviewBus } from "../Services/AssistantPreviewBus.ts";
+import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
 import {
   ProviderRuntimeIngestionService,
   type ProviderRuntimeIngestionShape,
@@ -893,6 +894,7 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const assistantPreviewBus = yield* AssistantPreviewBus;
+  const receiptBus = yield* RuntimeReceiptBus;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
   const proposedPlanImplementationLock = yield* Semaphore.make(1);
@@ -1530,6 +1532,14 @@ const make = Effect.gen(function* () {
         ? yield* projectionTurnRepository.getPendingTurnStartByThreadId({ threadId })
         : Option.none<ProjectionPendingTurnStart>();
       const pendingSourceProposedPlan = sourceProposedPlanReference(pendingTurnStart);
+      const projectedEventTurn =
+        eventTurnId === undefined ||
+        (event.type !== "turn.completed" && event.type !== "turn.aborted")
+          ? Option.none()
+          : yield* projectionTurnRepository.getByTurnId({
+              threadId,
+              turnId: eventTurnId,
+            });
       const hasPendingTurnStart =
         Option.isSome(pendingTurnStart) && thread?.session?.status === "starting";
 
@@ -1594,6 +1604,18 @@ const make = Effect.gen(function* () {
             return true;
         }
       })();
+      const acceptedTerminalTransition =
+        (event.type === "turn.completed" || event.type === "turn.aborted") &&
+        shouldApplyThreadLifecycle &&
+        eventTurnId !== undefined &&
+        !(
+          activeTurnId === null &&
+          Option.exists(
+            projectedEventTurn,
+            (turn) =>
+              turn.state === "completed" || turn.state === "error" || turn.state === "interrupted",
+          )
+        );
       const acceptedTurnStartedSourcePlan =
         event.type === "turn.started" &&
         shouldApplyThreadLifecycle &&
@@ -2088,6 +2110,20 @@ const make = Effect.gen(function* () {
           ),
         ),
       ).pipe(Effect.asVoid);
+
+      if (acceptedTerminalTransition) {
+        yield* receiptBus.publish({
+          type: "turn.ingestion-settled",
+          sourceEventId: event.eventId,
+          threadId: thread.id,
+          turnId: eventTurnId,
+          outcome:
+            event.type === "turn.completed"
+              ? normalizeRuntimeTurnState(event.payload.state)
+              : "interrupted",
+          settledAt: event.createdAt,
+        });
+      }
     });
 
   const processDomainEvent = (_event: TurnStartRequestedDomainEvent) => Effect.void;
