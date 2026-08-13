@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 
 import {
   defaultInstanceIdForDriver,
@@ -95,7 +95,7 @@ function toRuntimeBinding(
 
 const makeProviderSessionDirectory = Effect.gen(function* () {
   const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
-  const ownerGeneration = ServerOwnerGeneration.make(randomUUID());
+  const ownerGeneration = ServerOwnerGeneration.make(NodeCrypto.randomUUID());
   yield* repository
     .installOwnerGeneration(ownerGeneration)
     .pipe(Effect.mapError(toPersistenceError("ProviderSessionDirectory.installOwnerGeneration")));

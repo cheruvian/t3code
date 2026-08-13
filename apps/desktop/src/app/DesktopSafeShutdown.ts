@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 
 import type { DesktopSafeShutdownAction, DesktopSafeShutdownResolution } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -46,7 +46,7 @@ export const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const target = yield* windows.currentMainOrFirst;
         if (Option.isNone(target) || target.value.isDestroyed()) return "failed" as const;
-        const requestId = randomUUID();
+        const requestId = NodeCrypto.randomUUID();
         const deferred = yield* Deferred.make<DesktopSafeShutdownResolution>();
         yield* Ref.update(pending, (requests) => new Map(requests).set(requestId, deferred));
         target.value.webContents.send(SAFE_SHUTDOWN_REQUEST_CHANNEL, { requestId, action });

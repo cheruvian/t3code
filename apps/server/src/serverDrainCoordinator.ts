@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 
 import {
   ServerDrainControlError,
@@ -22,6 +22,9 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 const INTERACTIVE_DRAIN_DEADLINE = Duration.seconds(30);
 const PROCESS_EXIT_DRAIN_DEADLINE = Duration.seconds(5);
+const encodeServerDrainSnapshot = Schema.encodeEffect(
+  Schema.fromJsonString(ServerDrainSnapshotSchema),
+);
 
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
 import { CheckpointReactor } from "./orchestration/Services/CheckpointReactor.ts";
@@ -97,7 +100,7 @@ export const make = (options?: { readonly installProcessFinalizer?: boolean }) =
     const publish = (next: ServerDrainSnapshot | null) =>
       (next === null
         ? sql`DELETE FROM server_drain_state WHERE singleton_id = 1`
-        : Schema.encodeEffect(Schema.fromJsonString(ServerDrainSnapshotSchema))(next).pipe(
+        : encodeServerDrainSnapshot(next).pipe(
             Effect.flatMap(
               (snapshotJson) => sql`
             INSERT INTO server_drain_state (singleton_id, snapshot_json)
@@ -207,7 +210,7 @@ export const make = (options?: { readonly installProcessFinalizer?: boolean }) =
               ),
             );
             const next: ServerDrainSnapshot = {
-              id: randomUUID(),
+              id: NodeCrypto.randomUUID(),
               action: input.action,
               phase: work.activeWorkCount === 0 ? "committing" : "draining",
               ...work,
