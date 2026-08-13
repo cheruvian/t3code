@@ -98,11 +98,6 @@ export interface EventNdjsonLogger {
     event: unknown,
     threadId: ThreadId | null,
   ) => Effect.Effect<EventNdjsonAdmission>;
-  /**
-   * Schedules serialization and bounded admission on the store-owned FIFO.
-   * Provider delivery uses this path so it never waits for serialization or I/O.
-   */
-  readonly offer?: (event: unknown, threadId: ThreadId | null) => Effect.Effect<void>;
   readonly drain?: () => Effect.Effect<void>;
   readonly close: () => Effect.Effect<void>;
 }
@@ -1261,85 +1256,9 @@ export const makeEventNdjsonLogStore = Effect.fnUntraced(function* (
       });
     });
 
-    const offer = Effect.fnUntraced(function* (event: unknown, threadId: ThreadId | null) {
-      if (!shouldPersist(stream, event)) return;
-      const observedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
-      const threadSegment = resolveThreadSegment(threadId);
-      const category = eventCategory(event);
-      const priority = isLowValueEvent(stream, event) ? "low-value" : "protected";
-      type OfferAction = {
-        readonly accepted: boolean;
-        readonly diagnose: boolean;
-        readonly wakeSink: boolean;
-      };
-      const action = yield* SynchronizedRef.modify(
-        stateRef,
-        (current): readonly [OfferAction, StoreState] => {
-          if (current.closed)
-            return [{ accepted: false, diagnose: false, wakeSink: false }, current] as const;
-          let state = current.summaryPending
-            ? materializeLossSummary(current, observedAt, resolved)
-            : current;
-          if (state.summaryPending) {
-            state = recordLoss(state, priority, threadSegment, category);
-            return [
-              {
-                accepted: false,
-                diagnose: priority === "protected",
-                wakeSink: state.pending.length > 0,
-              },
-              state,
-            ] as const;
-          }
-          while (
-            pendingRecordCount(state) >= resolved.maxBufferedRecords &&
-            priority === "protected"
-          ) {
-            const evicted = evictOldestLowValue(state);
-            if (!evicted) break;
-            state = evicted;
-          }
-          if (pendingRecordCount(state) >= resolved.maxBufferedRecords) {
-            state = recordLoss(state, priority, threadSegment, category);
-            return [
-              {
-                accepted: false,
-                diagnose: priority === "protected",
-                wakeSink: state.pending.length > 0,
-              },
-              state,
-            ] as const;
-          }
-          const submission: PendingSubmission = {
-            id: state.nextId,
-            stream,
-            threadSegment,
-            event,
-            priority,
-            category,
-          };
-          return [
-            { accepted: true, diagnose: false, wakeSink: state.pending.length > 0 },
-            {
-              ...state,
-              submissions: [...state.submissions, submission],
-              nextId: state.nextId + 1,
-            },
-          ] as const;
-        },
-      );
-      if (action.wakeSink) yield* Queue.offer(sinkWake, undefined);
-      if (action.accepted) yield* Queue.offer(submissionWake, undefined);
-      if (action.diagnose) {
-        const state = yield* SynchronizedRef.get(stateRef);
-        yield* diagnoseProtectedRejection("protected-buffer-full", admissionCounts(state));
-      }
-    });
-
     const view = {
       filePath,
       write,
-      offer,
       drain,
       close: () => Effect.void,
     } satisfies EventNdjsonLogger;

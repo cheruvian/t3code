@@ -117,6 +117,7 @@ function isLegacyTurnCompletedEvent(
 function createProviderServiceHarness() {
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
   const runtimeSessions: ProviderSession[] = [];
+  let listSessionsCalls = 0;
 
   const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
   const service: ProviderServiceShape = {
@@ -130,7 +131,11 @@ function createProviderServiceHarness() {
       Effect.succeed(
         Option.fromUndefinedOr(runtimeSessions.find((session) => session.threadId === threadId)),
       ),
-    listSessions: () => Effect.succeed([...runtimeSessions]),
+    listSessions: () =>
+      Effect.sync(() => {
+        listSessionsCalls += 1;
+        return [...runtimeSessions];
+      }),
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     getInstanceInfo: (instanceId) => {
       const driverKind = ProviderDriverKind.make(String(instanceId));
@@ -183,6 +188,9 @@ function createProviderServiceHarness() {
     service,
     emit,
     setSession,
+    get listSessionsCalls() {
+      return listSessionsCalls;
+    },
   };
 }
 
@@ -454,6 +462,9 @@ describe("ProviderRuntimeIngestion", () => {
         ),
       emit: provider.emit,
       setProviderSession: provider.setSession,
+      get listSessionsCalls() {
+        return provider.listSessionsCalls;
+      },
       assistantPreviews,
       receiptBus,
       drain,
@@ -2536,6 +2547,7 @@ describe("ProviderRuntimeIngestion", () => {
     ).toMatchObject({
       implementationThreadId: "thread-implement",
     });
+    expect(harness.listSessionsCalls).toBe(0);
   });
 
   it("does not mark the source proposed plan implemented for a rejected turn.started event", async () => {
