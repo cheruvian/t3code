@@ -14,8 +14,10 @@ import {
   ProjectCreatedPayload,
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
+  OrchestrationSubscribeThreadInput,
   OrchestrationSession,
   OrchestrationThread,
+  OrchestrationThreadStreamItem,
   OrchestrationThreadShell,
   ProjectCreateCommand,
   ThreadMetaUpdatedPayload,
@@ -24,6 +26,7 @@ import {
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
 } from "./orchestration.ts";
+import { MessageId, ThreadId, TurnId } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffInput);
@@ -53,6 +56,43 @@ const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPaylo
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
+const decodeSubscribeThreadInput = Schema.decodeUnknownEffect(OrchestrationSubscribeThreadInput);
+const decodeThreadStreamItem = Schema.decodeUnknownEffect(OrchestrationThreadStreamItem);
+
+it.effect("preserves the explicit assistant preview subscription opt-in", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeSubscribeThreadInput({
+      threadId: "thread-1",
+      includeAssistantPreviews: true,
+    });
+
+    assert.deepStrictEqual(parsed, {
+      threadId: ThreadId.make("thread-1"),
+      includeAssistantPreviews: true,
+    });
+  }),
+);
+
+it.effect("decodes cumulative assistant previews without a durable sequence", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadStreamItem({
+      kind: "assistant-preview",
+      messageId: "assistant-message-1",
+      turnId: "turn-1",
+      text: "Cumulative preview",
+      createdAt: "2026-04-01T01:30:00.000Z",
+    });
+
+    assert.deepStrictEqual(parsed, {
+      kind: "assistant-preview",
+      messageId: MessageId.make("assistant-message-1"),
+      turnId: TurnId.make("turn-1"),
+      text: "Cumulative preview",
+      createdAt: "2026-04-01T01:30:00.000Z",
+    });
+    assert.strictEqual("sequence" in parsed, false);
+  }),
+);
 
 it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
   Effect.gen(function* () {

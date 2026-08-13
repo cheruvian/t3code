@@ -29,6 +29,7 @@ import {
   ProviderInstanceId,
   ResolvedKeybindingRule,
   ThreadId,
+  TurnId,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -108,6 +109,10 @@ import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import {
+  AssistantPreviewBus,
+  type AssistantPreviewPublication,
+} from "./orchestration/Services/AssistantPreviewBus.ts";
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
@@ -401,6 +406,7 @@ const buildAppUnderTest = (options?: {
     >;
     terminalManager?: Partial<TerminalManager.TerminalManager["Service"]>;
     orchestrationEngine?: Partial<OrchestrationEngine.OrchestrationEngineService["Service"]>;
+    assistantPreviewBus?: Partial<AssistantPreviewBus["Service"]>;
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"]>;
     checkpointDiffQuery?: Partial<CheckpointDiffQuery.CheckpointDiffQuery["Service"]>;
     browserTraceCollector?: Partial<BrowserTraceCollector.BrowserTraceCollector["Service"]>;
@@ -764,13 +770,20 @@ const buildAppUnderTest = (options?: {
         ),
       ),
       Layer.provide(
-        Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
-          readEvents: () => Stream.empty,
-          dispatch: () => Effect.succeed({ sequence: 0 }),
-          streamDomainEvents: Stream.empty,
-          latestSequence: Effect.succeed(0),
-          ...options?.layers?.orchestrationEngine,
-        }),
+        Layer.mergeAll(
+          Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
+            readEvents: () => Stream.empty,
+            dispatch: () => Effect.succeed({ sequence: 0 }),
+            streamDomainEvents: Stream.empty,
+            latestSequence: Effect.succeed(0),
+            ...options?.layers?.orchestrationEngine,
+          }),
+          Layer.mock(AssistantPreviewBus)({
+            publish: () => Effect.void,
+            stream: Stream.empty,
+            ...options?.layers?.assistantPreviewBus,
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
@@ -4008,6 +4021,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(response.auth.policy, "desktop-managed-local");
       assert.equal(response.shellResumeCompletionMarker, true);
       assert.equal(response.threadResumeCompletionMarker, true);
+      assert.equal(response.assistantPreviews, true);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -6141,6 +6155,135 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(items[1]?.kind, "event");
       assert.equal(items[1]?.kind === "event" ? items[1].event.sequence : null, 2);
     }).pipe(Effect.provide(NodeHttpServer.layerTest), TestClock.withLive),
+  );
+
+  it.effect("buffers opted-in assistant previews published while a thread snapshot loads", () =>
+    Effect.gen(function* () {
+      const thread = makeDefaultOrchestrationReadModel().threads[0]!;
+      const previews = yield* PubSub.unbounded<AssistantPreviewPublication>();
+      const publication = {
+        threadId: defaultThreadId,
+        preview: {
+          kind: "assistant-preview",
+          messageId: MessageId.make("assistant-message-preview"),
+          turnId: TurnId.make("turn-preview"),
+          text: "Preview while hydrating",
+          createdAt: "2026-04-01T01:30:00.000Z",
+        },
+      } satisfies AssistantPreviewPublication;
+
+      yield* buildAppUnderTest({
+        layers: {
+          assistantPreviewBus: {
+            stream: Stream.fromPubSub(previews),
+          },
+          projectionSnapshotQuery: {
+            getThreadDetailSnapshot: () =>
+              PubSub.publish(previews, publication).pipe(
+                Effect.as(Option.some({ snapshotSequence: 1, thread })),
+              ),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const items = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId: defaultThreadId,
+            includeAssistantPreviews: true,
+            requestCompletionMarker: true,
+          }).pipe(Stream.take(2), Stream.runCollect),
+        ),
+      );
+
+      assert.equal(items[0]?.kind, "snapshot");
+      assert.deepEqual(items[1], publication.preview);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("omits assistant previews when the thread subscription does not opt in", () =>
+    Effect.gen(function* () {
+      const thread = makeDefaultOrchestrationReadModel().threads[0]!;
+      const previews = yield* PubSub.unbounded<AssistantPreviewPublication>();
+      const publication = {
+        threadId: defaultThreadId,
+        preview: {
+          kind: "assistant-preview",
+          messageId: MessageId.make("assistant-message-not-requested"),
+          turnId: TurnId.make("turn-not-requested"),
+          text: "Must stay internal",
+          createdAt: "2026-04-01T01:30:00.000Z",
+        },
+      } satisfies AssistantPreviewPublication;
+
+      yield* buildAppUnderTest({
+        layers: {
+          assistantPreviewBus: { stream: Stream.fromPubSub(previews) },
+          projectionSnapshotQuery: {
+            getThreadDetailSnapshot: () =>
+              PubSub.publish(previews, publication).pipe(
+                Effect.as(Option.some({ snapshotSequence: 1, thread })),
+              ),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const items = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId: defaultThreadId,
+            requestCompletionMarker: true,
+          }).pipe(Stream.take(2), Stream.runCollect),
+        ),
+      );
+
+      assert.equal(items[0]?.kind, "snapshot");
+      assert.deepEqual(items[1], { kind: "synchronized" });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("does not replay assistant previews published before an opted-in subscription", () =>
+    Effect.gen(function* () {
+      const thread = makeDefaultOrchestrationReadModel().threads[0]!;
+      const previews = yield* PubSub.unbounded<AssistantPreviewPublication>();
+      const publication = {
+        threadId: defaultThreadId,
+        preview: {
+          kind: "assistant-preview",
+          messageId: MessageId.make("assistant-message-before-subscription"),
+          turnId: TurnId.make("turn-before-subscription"),
+          text: "Already gone",
+          createdAt: "2026-04-01T01:30:00.000Z",
+        },
+      } satisfies AssistantPreviewPublication;
+      yield* PubSub.publish(previews, publication);
+
+      yield* buildAppUnderTest({
+        layers: {
+          assistantPreviewBus: { stream: Stream.fromPubSub(previews) },
+          projectionSnapshotQuery: {
+            getThreadDetailSnapshot: () =>
+              Effect.succeed(Option.some({ snapshotSequence: 1, thread })),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const items = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId: defaultThreadId,
+            includeAssistantPreviews: true,
+            requestCompletionMarker: true,
+          }).pipe(Stream.take(2), Stream.runCollect),
+        ),
+      );
+
+      assert.equal(items[0]?.kind, "snapshot");
+      assert.deepEqual(items[1], { kind: "synchronized" });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("subscribeThread sends a fresh snapshot instead of replaying a large gap", () =>

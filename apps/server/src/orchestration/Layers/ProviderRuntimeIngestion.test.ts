@@ -61,6 +61,10 @@ import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import { ProviderRuntimeIngestionLayer } from "./ProviderRuntimeIngestion.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
+import {
+  AssistantPreviewBus,
+  type AssistantPreviewPublication,
+} from "../Services/AssistantPreviewBus.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -295,6 +299,7 @@ describe("ProviderRuntimeIngestion", () => {
     NodeFS.mkdirSync(NodePath.join(workspaceRoot, ".git"));
     const provider = createProviderServiceHarness();
     const sqlitePersistence = SqlitePersistenceMemory;
+    const assistantPreviews: AssistantPreviewPublication[] = [];
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationProjectionPipelineLive),
@@ -351,6 +356,18 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(sqlitePersistence),
       Layer.provideMerge(
         Layer.succeed(ProviderService, options?.providerService ?? provider.service),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(
+          AssistantPreviewBus,
+          AssistantPreviewBus.of({
+            publish: (publication) =>
+              Effect.sync(() => {
+                assistantPreviews.push(publication);
+              }),
+            stream: Stream.empty,
+          }),
+        ),
       ),
       Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
@@ -429,6 +446,7 @@ describe("ProviderRuntimeIngestion", () => {
         ),
       emit: provider.emit,
       setProviderSession: provider.setSession,
+      assistantPreviews,
       drain,
     };
   }
@@ -2776,6 +2794,119 @@ describe("ProviderRuntimeIngestion", () => {
         entry.id === "plan:thread-1:turn:turn-plan-buffer",
     );
     expect(proposedPlan?.planMarkdown).toBe("## Buffered plan\n\n- first\n- second");
+  });
+
+  it("publishes one first-non-empty assistant preview per buffered message segment", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-preview");
+    const startedAt = "2026-04-01T01:00:00.000Z";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-preview"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: startedAt,
+      threadId,
+      turnId,
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.status === "running" && thread.session.activeTurnId === turnId,
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-preview-whitespace"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: startedAt,
+      threadId,
+      turnId,
+      itemId: asItemId("item-preview"),
+      payload: { streamKind: "assistant_text", delta: "  " },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-preview-first-text"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-04-01T01:00:01.000Z",
+      threadId,
+      turnId,
+      itemId: asItemId("item-preview"),
+      payload: { streamKind: "assistant_text", delta: "First" },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-preview-later-text"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-04-01T01:00:02.000Z",
+      threadId,
+      turnId,
+      itemId: asItemId("item-preview"),
+      payload: { streamKind: "assistant_text", delta: " later" },
+    });
+    await harness.drain();
+
+    expect(harness.assistantPreviews).toEqual([
+      {
+        threadId,
+        preview: {
+          kind: "assistant-preview",
+          messageId: asMessageId("assistant:item-preview"),
+          turnId,
+          text: "  First",
+          createdAt: "2026-04-01T01:00:01.000Z",
+        },
+      },
+    ]);
+
+    harness.emit({
+      type: "request.opened",
+      eventId: asEventId("evt-preview-request-opened"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-04-01T01:00:03.000Z",
+      threadId,
+      turnId,
+      requestId: ApprovalRequestId.make("request-preview"),
+      payload: {
+        requestType: "command_execution_approval",
+        detail: "pwd",
+      },
+    });
+    await harness.drain();
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-preview-next-segment"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-04-01T01:00:04.000Z",
+      threadId,
+      turnId,
+      itemId: asItemId("item-preview"),
+      payload: { streamKind: "assistant_text", delta: "Second segment" },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-preview-next-segment-later"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-04-01T01:00:05.000Z",
+      threadId,
+      turnId,
+      itemId: asItemId("item-preview"),
+      payload: { streamKind: "assistant_text", delta: " later" },
+    });
+    await harness.drain();
+
+    expect(harness.assistantPreviews).toHaveLength(2);
+    expect(harness.assistantPreviews[1]).toEqual({
+      threadId,
+      preview: {
+        kind: "assistant-preview",
+        messageId: asMessageId("assistant:item-preview:segment:1"),
+        turnId,
+        text: "Second segment",
+        createdAt: "2026-04-01T01:00:04.000Z",
+      },
+    });
   });
 
   it("buffers assistant deltas by default until completion", async () => {
