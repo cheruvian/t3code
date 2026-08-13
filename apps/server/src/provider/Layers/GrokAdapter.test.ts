@@ -690,9 +690,17 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
         nativeEventLogger: {
           filePath: "memory://grok-cancelled-native-events",
           write: (record: unknown) =>
-            JSON.stringify(record).includes("late after cancel")
-              ? Deferred.succeed(lateNativeUpdate, undefined).pipe(Effect.asVoid)
-              : Effect.void,
+            (JSON.stringify(record).includes("late after cancel")
+              ? Deferred.succeed(lateNativeUpdate, undefined)
+              : Effect.void
+            ).pipe(
+              Effect.as({
+                _tag: "Accepted" as const,
+                pendingRecords: 0,
+                pendingBytes: 0,
+                lossCounts: { lowValue: 0, protected: 0 },
+              }),
+            ),
           close: () => Effect.void,
         },
       });
@@ -1175,7 +1183,12 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
             "kind" in record.event &&
             record.event.kind === "notification"
               ? Effect.die(new Error("native log write failed"))
-              : Effect.void,
+              : Effect.succeed({
+                  _tag: "Accepted" as const,
+                  pendingRecords: 0,
+                  pendingBytes: 0,
+                  lossCounts: { lowValue: 0, protected: 0 },
+                }),
           close: () => Effect.void,
         },
       });

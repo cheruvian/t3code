@@ -635,6 +635,7 @@ describe("EventNdjsonLogger", () => {
         const logger = store.logger("native");
 
         yield* logger.write({ id: "active-before-retention" }, ThreadId.make("active"));
+        yield* store.drain();
         assert.equal(NodeFS.existsSync(activePath), true);
 
         yield* TestClock.adjust("2 millis");
