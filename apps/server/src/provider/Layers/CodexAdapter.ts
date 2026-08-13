@@ -723,6 +723,11 @@ function mapCollabAgentEvent(
       if (!itemTypeRaw) {
         return [];
       }
+      const itemId = typeof item?.id === "string" && item.id.length > 0 ? item.id : undefined;
+      const itemLifecycle =
+        payload.itemLifecycle === "started" || payload.itemLifecycle === "completed"
+          ? payload.itemLifecycle
+          : undefined;
       // A loose summary from the raw item: the child stream is untyped at
       // this boundary (synthetic event payload), so read best-effort fields
       // rather than force a schema decode.
@@ -735,12 +740,14 @@ function mapCollabAgentEvent(
       return [
         {
           ...base,
+          ...(itemId ? { itemId: RuntimeItemId.make(itemId) } : {}),
           type: "task.progress",
           payload: {
             taskId,
             description: title,
             ...(knownName ? { title: knownName } : {}),
             summary,
+            ...(itemLifecycle ? { itemLifecycle } : {}),
             timelineBypass: true,
           },
         },

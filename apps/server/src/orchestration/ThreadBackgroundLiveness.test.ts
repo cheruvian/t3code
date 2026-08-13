@@ -147,6 +147,88 @@ describe("ThreadBackgroundLiveness", () => {
     expect(liveness.getThreadBackgroundLiveness(threadId)).toBeNull();
   });
 
+  it("tracks child items independently across agent idle and late progress", () => {
+    const liveness = ThreadBackgroundLiveness.make();
+    const threadId = "t-live-child-items";
+    type RecordInput = Parameters<typeof liveness.recordTaskLiveness>[0] & {
+      readonly itemId?: string;
+      readonly itemLifecycle?: "started" | "completed";
+    };
+    const record = (input: RecordInput) => liveness.recordTaskLiveness(input);
+
+    record({
+      threadId,
+      taskId: "agent-1",
+      taskType: undefined,
+      status: "running",
+      kind: "started",
+    });
+    record({
+      threadId,
+      taskId: "agent-1",
+      itemId: "item-a",
+      itemLifecycle: "started",
+      taskType: undefined,
+      status: undefined,
+      kind: "progress",
+    });
+    record({
+      threadId,
+      taskId: "agent-1",
+      itemId: "item-b",
+      itemLifecycle: "started",
+      taskType: undefined,
+      status: undefined,
+      kind: "progress",
+    });
+    record({
+      threadId,
+      taskId: "agent-1",
+      taskType: undefined,
+      status: "idle",
+      kind: "updated",
+    });
+    expect(liveness.getThreadBackgroundLiveness(threadId)).toBe("working");
+
+    record({
+      threadId,
+      taskId: "agent-1",
+      itemId: "item-b",
+      itemLifecycle: "completed",
+      taskType: undefined,
+      status: undefined,
+      kind: "progress",
+    });
+    expect(liveness.getThreadBackgroundLiveness(threadId)).toBe("working");
+    record({
+      threadId,
+      taskId: "agent-1",
+      itemId: "item-a",
+      itemLifecycle: "completed",
+      taskType: undefined,
+      status: undefined,
+      kind: "progress",
+    });
+    expect(liveness.getThreadBackgroundLiveness(threadId)).toBeNull();
+
+    record({
+      threadId,
+      taskId: "agent-1",
+      taskType: undefined,
+      status: undefined,
+      kind: "progress",
+    });
+    expect(liveness.getThreadBackgroundLiveness(threadId)).toBeNull();
+    record({
+      threadId,
+      taskId: "agent-1",
+      taskType: undefined,
+      status: "running",
+      kind: "updated",
+    });
+    expect(liveness.getThreadBackgroundLiveness(threadId)).toBe("working");
+  });
+
   it("plan tasks are inert; clear removes everything; instances are isolated", () => {
     const a = ThreadBackgroundLiveness.make();
     const b = ThreadBackgroundLiveness.make();

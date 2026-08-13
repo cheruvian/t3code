@@ -316,6 +316,7 @@ describe("ProviderRuntimeIngestion", () => {
       engine,
       dispatch,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
+      readShellModel: () => Effect.runPromise(snapshotQuery.getShellSnapshot()),
       emit: provider.emit,
       setProviderSession: provider.setSession,
       drain,
@@ -3252,6 +3253,101 @@ describe("ProviderRuntimeIngestion", () => {
         (entry: ProviderRuntimeTestProposedPlan) => entry.id === "plan:thread-1:turn:turn-task-1",
       )?.planMarkdown,
     ).toBe("# Plan title");
+  });
+
+  it("keeps mapped child items live through agent idle without late-progress resurrection", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const base = {
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-child-items"),
+    };
+
+    harness.emit({
+      ...base,
+      type: "task.started",
+      eventId: asEventId("evt-child-agent-started"),
+      payload: { taskId: "agent-1", description: "Reviewer" },
+    });
+    for (const itemId of ["child-item-a", "child-item-b"]) {
+      harness.emit({
+        ...base,
+        type: "task.progress",
+        eventId: asEventId(`evt-${itemId}-started`),
+        itemId,
+        payload: {
+          taskId: "agent-1",
+          description: "Reviewer",
+          summary: `Started ${itemId}`,
+          itemLifecycle: "started",
+        },
+      });
+    }
+    harness.emit({
+      ...base,
+      type: "task.updated",
+      eventId: asEventId("evt-child-agent-idle"),
+      payload: { taskId: "agent-1", status: "idle" },
+    });
+    await harness.drain();
+
+    let shell = (await harness.readShellModel()).threads.find((entry) => entry.id === "thread-1");
+    expect(shell?.backgroundLiveness).toBe("working");
+
+    harness.emit({
+      ...base,
+      type: "task.progress",
+      eventId: asEventId("evt-child-item-b-completed"),
+      itemId: "child-item-b",
+      payload: {
+        taskId: "agent-1",
+        description: "Reviewer",
+        summary: "Finished child-item-b",
+        itemLifecycle: "completed",
+      },
+    });
+    await harness.drain();
+    shell = (await harness.readShellModel()).threads.find((entry) => entry.id === "thread-1");
+    expect(shell?.backgroundLiveness).toBe("working");
+
+    harness.emit({
+      ...base,
+      type: "task.progress",
+      eventId: asEventId("evt-child-item-a-completed"),
+      itemId: "child-item-a",
+      payload: {
+        taskId: "agent-1",
+        description: "Reviewer",
+        summary: "Finished child-item-a",
+        itemLifecycle: "completed",
+      },
+    });
+    harness.emit({
+      ...base,
+      type: "task.progress",
+      eventId: asEventId("evt-child-agent-late-progress"),
+      payload: {
+        taskId: "agent-1",
+        description: "Reviewer",
+        summary: "Late activity remains visible",
+      },
+    });
+    await harness.drain();
+
+    shell = (await harness.readShellModel()).threads.find((entry) => entry.id === "thread-1");
+    expect(shell?.backgroundLiveness).toBeNull();
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity) =>
+          activity.id === "task-progress:thread-1:agent-1" &&
+          (activity.payload as { summary?: string }).summary === "Late activity remains visible",
+      ),
+    );
+    expect(thread.activities).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "task-progress:thread-1:agent-1" })]),
+    );
   });
 
   it("titles task activities with the task description, including on completion", async () => {

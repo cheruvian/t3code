@@ -36,6 +36,38 @@ function buildScript() {
   const captured = wireFixture.notifications;
   const extras = [
     {
+      method: "item/started",
+      params: {
+        threadId: CHILD_A,
+        turnId: `${CHILD_A}-turn-background`,
+        startedAtMs: 1_785_898_350_000,
+        item: {
+          type: "commandExecution",
+          id: "call_child_background_command",
+          command: "vp test run",
+          commandActions: [],
+          cwd: "/tmp",
+          status: "inProgress",
+        },
+      },
+    },
+    {
+      method: "item/completed",
+      params: {
+        threadId: CHILD_A,
+        turnId: `${CHILD_A}-turn-background`,
+        completedAtMs: 1_785_898_351_000,
+        item: {
+          type: "commandExecution",
+          id: "call_child_background_command",
+          command: "vp test run",
+          commandActions: [],
+          cwd: "/tmp",
+          status: "declined",
+        },
+      },
+    },
+    {
       method: "item/completed",
       params: {
         threadId: ROOT,
@@ -122,6 +154,24 @@ describe("CodexSessionRuntime collab integration", () => {
           (event.payload as { agentThreadId?: string }).agentThreadId === CHILD_B,
       );
       assert.isDefined(childClosed, "child B's close becomes an agent event");
+
+      const childItems = events.filter(
+        (event) =>
+          event.method === "collabAgent/item" &&
+          (event.payload as { item?: { id?: string } }).item?.id ===
+            "call_child_background_command",
+      );
+      assert.deepEqual(
+        childItems.map((event) => ({
+          itemLifecycle: (event.payload as { itemLifecycle?: string }).itemLifecycle,
+          itemId: (event.payload as { item?: { id?: string } }).item?.id,
+        })),
+        [
+          { itemLifecycle: "started", itemId: "call_child_background_command" },
+          { itemLifecycle: "completed", itemId: "call_child_background_command" },
+        ],
+        "child item source lifecycle and identity survive synthetic forwarding",
+      );
 
       // Parent-owned resolution passes through — not swallowed, not
       // re-labelled as an agent event.
