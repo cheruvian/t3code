@@ -728,6 +728,11 @@ function mapCollabAgentEvent(
       if (!itemTypeRaw) {
         return [];
       }
+      const itemId = typeof item?.id === "string" && item.id.length > 0 ? item.id : undefined;
+      const itemLifecycle =
+        payload.itemLifecycle === "started" || payload.itemLifecycle === "completed"
+          ? payload.itemLifecycle
+          : undefined;
       // A loose summary from the raw item: the child stream is untyped at
       // this boundary (synthetic event payload), so read best-effort fields
       // rather than force a schema decode.
@@ -740,12 +745,14 @@ function mapCollabAgentEvent(
       return [
         {
           ...base,
+          ...(itemId ? { itemId: RuntimeItemId.make(itemId) } : {}),
           type: "task.progress",
           payload: {
             taskId,
             description: title,
             ...(knownName ? { title: knownName } : {}),
             summary,
+            ...(itemLifecycle ? { itemLifecycle } : {}),
             timelineBypass: true,
           },
         },
@@ -812,6 +819,31 @@ function shouldFlushCollabProgress(event: ProviderEvent): boolean {
     default:
       return false;
   }
+}
+
+function collabItemLifecycle(event: ProviderEvent):
+  | {
+      readonly itemId: string;
+      readonly lifecycle: "started" | "completed";
+    }
+  | undefined {
+  if (event.method !== "collabAgent/item") {
+    return undefined;
+  }
+  const payload =
+    typeof event.payload === "object" && event.payload !== null
+      ? (event.payload as Record<string, unknown>)
+      : undefined;
+  const item =
+    typeof payload?.item === "object" && payload.item !== null
+      ? (payload.item as Record<string, unknown>)
+      : undefined;
+  const itemId = typeof item?.id === "string" && item.id.length > 0 ? item.id : undefined;
+  const lifecycle =
+    payload?.itemLifecycle === "started" || payload?.itemLifecycle === "completed"
+      ? payload.itemLifecycle
+      : undefined;
+  return itemId && lifecycle ? { itemId, lifecycle } : undefined;
 }
 
 function mapToRuntimeEvents(
@@ -1772,6 +1804,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         const progress = yield* makeCodexProgressCoalescer<string, ProviderRuntimeEvent>({
           emit: (events) => Queue.offerAll(runtimeEventQueue, events).pipe(Effect.asVoid),
         }).pipe(Effect.provideService(Scope.Scope, sessionScope));
+        const liveCollabItems = new Map<string, Set<string>>();
 
         const eventFiber = yield* Stream.runForEach(runtime.events, (event) =>
           Effect.gen(function* () {
@@ -1791,10 +1824,33 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               return;
             }
 
-            const progressLane = collabProgressLane(event);
             const latestProgress = runtimeEvents.findLast(
               (runtimeEvent) => runtimeEvent.type === "task.progress",
             );
+            const itemLifecycle = collabItemLifecycle(event);
+            const liveItems = childThreadId ? liveCollabItems.get(childThreadId) : undefined;
+            if (
+              childThreadId &&
+              latestProgress &&
+              itemLifecycle &&
+              (itemLifecycle.lifecycle === "started" || liveItems?.has(itemLifecycle.itemId))
+            ) {
+              yield* progress.flush(childThreadId);
+              if (itemLifecycle.lifecycle === "started") {
+                const nextLiveItems = liveItems ?? new Set<string>();
+                nextLiveItems.add(itemLifecycle.itemId);
+                liveCollabItems.set(childThreadId, nextLiveItems);
+              } else {
+                liveItems?.delete(itemLifecycle.itemId);
+                if (liveItems?.size === 0) {
+                  liveCollabItems.delete(childThreadId);
+                }
+              }
+              yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
+              return;
+            }
+
+            const progressLane = collabProgressLane(event);
             if (childThreadId && progressLane && latestProgress) {
               if (progressLane === "item") {
                 yield* progress.offerItem(childThreadId, latestProgress);
