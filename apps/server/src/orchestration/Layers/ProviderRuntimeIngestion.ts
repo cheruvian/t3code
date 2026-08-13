@@ -41,6 +41,7 @@ import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
 import { ThreadPlanProgressService } from "../ThreadPlanProgress.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { AssistantPreviewBus } from "../Services/AssistantPreviewBus.ts";
 import {
   ProviderRuntimeIngestionService,
   type ProviderRuntimeIngestionShape,
@@ -90,6 +91,7 @@ interface AssistantSegmentState {
   baseKey: string;
   nextSegmentIndex: number;
   activeMessageId: MessageId | null;
+  previewPublished: boolean;
 }
 
 const TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY = 10_000;
@@ -890,6 +892,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const assistantPreviewBus = yield* AssistantPreviewBus;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
   const proposedPlanImplementationLock = yield* Semaphore.make(1);
@@ -1037,6 +1040,7 @@ const make = Effect.gen(function* () {
               baseKey: input.baseKey,
               nextSegmentIndex: 1,
               activeMessageId: assistantSegmentMessageId(input.baseKey, 0),
+              previewPublished: false,
             }),
             onSome: (state) => {
               const segmentIndex = state.baseKey === input.baseKey ? state.nextSegmentIndex : 0;
@@ -1045,6 +1049,7 @@ const make = Effect.gen(function* () {
                 baseKey: input.baseKey,
                 nextSegmentIndex: state.baseKey === input.baseKey ? state.nextSegmentIndex + 1 : 1,
                 activeMessageId: messageId,
+                previewPublished: false,
               } satisfies AssistantSegmentState;
             },
           });
@@ -1089,15 +1094,50 @@ const make = Effect.gen(function* () {
           });
           if (nextText.length <= MAX_BUFFERED_ASSISTANT_CHARS) {
             yield* Cache.set(bufferedAssistantTextByMessageId, messageId, nextText);
-            return "";
+            return { bufferedText: nextText, spillChunk: "" };
           }
 
           // Safety valve: flush full buffered text as an assistant delta to cap memory.
           yield* Cache.invalidate(bufferedAssistantTextByMessageId, messageId);
-          return nextText;
+          return { bufferedText: nextText, spillChunk: nextText };
         }),
       ),
     );
+
+  const publishAssistantPreviewOnce = Effect.fn("publishAssistantPreviewOnce")(function* (input: {
+    threadId: ThreadId;
+    turnId: TurnId;
+    messageId: MessageId;
+    text: string;
+    createdAt: string;
+  }) {
+    if (!hasRenderableAssistantText(input.text)) {
+      return;
+    }
+    const segment = yield* getAssistantSegmentStateForTurn(input.threadId, input.turnId);
+    if (
+      Option.isNone(segment) ||
+      segment.value.activeMessageId !== input.messageId ||
+      segment.value.previewPublished
+    ) {
+      return;
+    }
+
+    yield* setAssistantSegmentStateForTurn(input.threadId, input.turnId, {
+      ...segment.value,
+      previewPublished: true,
+    });
+    yield* assistantPreviewBus.publish({
+      threadId: input.threadId,
+      preview: {
+        kind: "assistant-preview",
+        messageId: input.messageId,
+        turnId: input.turnId,
+        text: input.text,
+        createdAt: input.createdAt,
+      },
+    });
+  });
 
   const takeBufferedAssistantText = (messageId: MessageId) =>
     Cache.getOption(bufferedAssistantTextByMessageId, messageId).pipe(
@@ -1682,14 +1722,23 @@ const make = Effect.gen(function* () {
           (settings) => (settings.enableLegacyTokenStreaming ? "streaming" : "buffered"),
         );
         if (assistantDeliveryMode === "buffered") {
-          const spillChunk = yield* appendBufferedAssistantText(assistantMessageId, assistantDelta);
-          if (spillChunk.length > 0) {
+          const buffered = yield* appendBufferedAssistantText(assistantMessageId, assistantDelta);
+          if (turnId) {
+            yield* publishAssistantPreviewOnce({
+              threadId: thread.id,
+              turnId,
+              messageId: assistantMessageId,
+              text: buffered.bufferedText,
+              createdAt: now,
+            });
+          }
+          if (buffered.spillChunk.length > 0) {
             yield* orchestrationEngine.dispatch({
               type: "thread.message.assistant.delta",
               commandId: yield* providerCommandId(event, "assistant-delta-buffer-spill"),
               threadId,
               messageId: assistantMessageId,
-              delta: spillChunk,
+              delta: buffered.spillChunk,
               ...(turnId ? { turnId } : {}),
               createdAt: now,
             });

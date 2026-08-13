@@ -72,6 +72,7 @@ import {
 } from "./orchestration/ActivityPayloadProjection.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import * as AssistantPreviewBus from "./orchestration/Services/AssistantPreviewBus.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
@@ -358,6 +359,7 @@ const makeWsRpcLayer = (
       const crypto = yield* Crypto.Crypto;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+      const assistantPreviewBus = yield* AssistantPreviewBus.AssistantPreviewBus;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
@@ -1023,6 +1025,7 @@ const makeWsRpcLayer = (
           settings,
           shellResumeCompletionMarker: true,
           threadResumeCompletionMarker: true,
+          assistantPreviews: true as const,
           threadSnapshotPagination: true,
         };
       });
@@ -1323,7 +1326,19 @@ const makeWsRpcLayer = (
               const liveBuffer = yield* Queue.unbounded<OrchestrationThreadStreamItem>();
               yield* Effect.forkScoped(
                 liveStream.pipe(Stream.runForEach((item) => Queue.offer(liveBuffer, item))),
+                { startImmediately: true },
               );
+              if (input.includeAssistantPreviews === true) {
+                yield* Effect.forkScoped(
+                  assistantPreviewBus.stream.pipe(
+                    Stream.filter((publication) => publication.threadId === input.threadId),
+                    Stream.runForEach((publication) =>
+                      Queue.offer(liveBuffer, publication.preview),
+                    ),
+                  ),
+                  { startImmediately: true },
+                );
+              }
               const bufferedLiveStream = Stream.fromQueue(liveBuffer);
 
               // When the client already loaded the snapshot over HTTP it passes

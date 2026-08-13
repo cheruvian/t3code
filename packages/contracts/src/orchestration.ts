@@ -561,6 +561,12 @@ export const OrchestrationSubscribeThreadInput = Schema.Struct({
    */
   requestCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /**
+   * Requests transient assistant previews while buffered assistant text has not
+   * yet entered the durable event stream. Servers advertise support through
+   * `ServerConfig.assistantPreviews`; clients omit this field otherwise.
+   */
+  includeAssistantPreviews: Schema.optionalKey(Schema.Literal(true)),
+  /**
    * When provided, the fallback snapshot frame (sent when `afterSequence` is
    * missing or the catch-up gap is too large) is windowed to the last
    * `turnLimit` user-anchored turns and carries `page` metadata. Absent means
@@ -1475,6 +1481,15 @@ export const OrchestrationEvent = Schema.Union([
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;
 
+export const OrchestrationAssistantPreview = Schema.Struct({
+  kind: Schema.Literal("assistant-preview"),
+  messageId: MessageId,
+  turnId: TurnId,
+  text: Schema.String,
+  createdAt: IsoDateTime,
+});
+export type OrchestrationAssistantPreview = typeof OrchestrationAssistantPreview.Type;
+
 export const OrchestrationThreadStreamItem = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("synchronized"),
@@ -1487,6 +1502,7 @@ export const OrchestrationThreadStreamItem = Schema.Union([
     kind: Schema.Literal("event"),
     event: OrchestrationEvent,
   }),
+  OrchestrationAssistantPreview,
 ]);
 export type OrchestrationThreadStreamItem = typeof OrchestrationThreadStreamItem.Type;
 

@@ -1,11 +1,13 @@
 import {
   ORCHESTRATION_WS_METHODS,
   type EnvironmentId as EnvironmentIdType,
+  type OrchestrationAssistantPreview,
   type OrchestrationThread,
   type OrchestrationThreadDetailPage,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadStreamItem,
   type ThreadId as ThreadIdType,
+  type TurnId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -132,6 +134,34 @@ function shouldPersistThread(thread: OrchestrationThread): boolean {
   return status !== "starting" && status !== "running";
 }
 
+function threadWithAssistantPreview(
+  thread: OrchestrationThread,
+  preview: Option.Option<OrchestrationAssistantPreview>,
+): OrchestrationThread {
+  if (
+    Option.isNone(preview) ||
+    thread.messages.some((message) => message.id === preview.value.messageId)
+  ) {
+    return thread;
+  }
+
+  return {
+    ...thread,
+    messages: [
+      ...thread.messages,
+      {
+        id: preview.value.messageId,
+        role: "assistant",
+        text: preview.value.text,
+        turnId: preview.value.turnId,
+        streaming: true,
+        createdAt: preview.value.createdAt,
+        updatedAt: preview.value.createdAt,
+      },
+    ],
+  };
+}
+
 export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make")(function* (
   threadId: ThreadIdType,
 ) {
@@ -153,6 +183,14 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     ),
   );
   const cachedThread = Option.map(cached, (snapshot) => snapshot.thread);
+  // The durable thread remains preview-free for reducers, pagination, and
+  // persistence. `state` is the rendered projection that may temporarily add
+  // one live assistant preview on top.
+  const durableThread = yield* Ref.make(cachedThread);
+  const assistantPreview = yield* Ref.make<Option.Option<OrchestrationAssistantPreview>>(
+    Option.none(),
+  );
+  const blockedPreviewTurnIds = yield* Ref.make<ReadonlySet<TurnId>>(new Set());
   const state = yield* SubscriptionRef.make<EnvironmentThreadState>({
     data: cachedThread,
     status: statusWithoutLiveData(cachedThread),
@@ -210,6 +248,41 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Effect.forkScoped,
   );
 
+  const renderDurableData = Effect.fn("EnvironmentThreadState.renderDurableData")(function* () {
+    const [durable, preview] = yield* Effect.all([
+      Ref.get(durableThread),
+      Ref.get(assistantPreview),
+    ]);
+    const rendered = Option.map(durable, (thread) => threadWithAssistantPreview(thread, preview));
+    yield* SubscriptionRef.update(state, (current) => ({ ...current, data: rendered }));
+  });
+
+  const blockPreviewTurn = (turnId: TurnId) =>
+    Ref.update(blockedPreviewTurnIds, (current) => {
+      const next = new Set(current);
+      next.add(turnId);
+      return next;
+    });
+
+  const clearAssistantPreview = Effect.fn("EnvironmentThreadState.clearAssistantPreview")(
+    function* (options?: { readonly blockCurrentTurn?: boolean }) {
+      const current = yield* Ref.get(assistantPreview);
+      if (options?.blockCurrentTurn === true && Option.isSome(current)) {
+        yield* blockPreviewTurn(current.value.turnId);
+      }
+      yield* Ref.set(assistantPreview, Option.none());
+      yield* renderDurableData();
+    },
+  );
+
+  const resetAssistantPreviews = Effect.fn("EnvironmentThreadState.resetAssistantPreviews")(
+    function* () {
+      yield* Ref.set(blockedPreviewTurnIds, new Set());
+      yield* Ref.set(assistantPreview, Option.none());
+      yield* renderDurableData();
+    },
+  );
+
   const setSynchronizing = SubscriptionRef.update(state, (current) =>
     current.status === "deleted"
       ? current
@@ -230,6 +303,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   );
   const setDisconnected = Effect.gen(function* () {
     yield* Ref.set(awaitingCompletion, false);
+    yield* resetAssistantPreviews();
     // The capability belongs to the session that advertised it. During a
     // reconnect, a new prepared connection can exist before the new session's
     // config arrives; leaving the old value would let loadOlderTurns send
@@ -242,16 +316,15 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     }));
   });
   const setStreamError = (cause: Cause.Cause<unknown>) =>
-    Ref.set(awaitingCompletion, false).pipe(
-      Effect.andThen(
-        SubscriptionRef.update(state, (current) => ({
-          ...current,
-          status:
-            current.status === "deleted" ? current.status : statusWithoutLiveData(current.data),
-          error: Option.some(formatThreadError(cause)),
-        })),
-      ),
-    );
+    Effect.gen(function* () {
+      yield* Ref.set(awaitingCompletion, false);
+      yield* resetAssistantPreviews();
+      yield* SubscriptionRef.update(state, (current) => ({
+        ...current,
+        status: current.status === "deleted" ? current.status : statusWithoutLiveData(current.data),
+        error: Option.some(formatThreadError(cause)),
+      }));
+    });
 
   const setThread = Effect.fn("EnvironmentThreadState.setThread")(function* (
     thread: OrchestrationThread,
@@ -259,9 +332,18 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     // recent turns); a snapshot or merged page passes its own page state.
     page: Option.Option<EnvironmentThreadPageState> | "keep",
   ) {
+    yield* Ref.set(durableThread, Option.some(thread));
+    const currentPreview = yield* Ref.get(assistantPreview);
+    if (
+      Option.isSome(currentPreview) &&
+      thread.messages.some((message) => message.id === currentPreview.value.messageId)
+    ) {
+      yield* Ref.set(assistantPreview, Option.none());
+    }
+    const preview = yield* Ref.get(assistantPreview);
     const waiting = yield* Ref.get(awaitingCompletion);
     yield* SubscriptionRef.update(state, (current) => ({
-      data: Option.some(thread),
+      data: Option.some(threadWithAssistantPreview(thread, preview)),
       status: waiting ? ("synchronizing" as const) : ("live" as const),
       error: Option.none(),
       page: page === "keep" ? current.page : page,
@@ -295,6 +377,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const setDeleted = Effect.fn("EnvironmentThreadState.setDeleted")(function* () {
     yield* Ref.set(awaitingCompletion, false);
     yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
+    yield* Ref.set(durableThread, Option.none());
+    yield* Ref.set(assistantPreview, Option.none());
+    yield* Ref.set(blockedPreviewTurnIds, new Set());
     yield* SubscriptionRef.set(state, {
       data: Option.none(),
       status: "deleted",
@@ -314,10 +399,37 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     );
   });
 
+  const applyAssistantPreview = Effect.fn("EnvironmentThreadState.applyAssistantPreview")(
+    function* (preview: OrchestrationAssistantPreview) {
+      if (preview.text.trim().length === 0) {
+        return;
+      }
+      const [durable, blockedTurns] = yield* Effect.all([
+        Ref.get(durableThread),
+        Ref.get(blockedPreviewTurnIds),
+      ]);
+      if (
+        Option.isNone(durable) ||
+        blockedTurns.has(preview.turnId) ||
+        durable.value.messages.some((message) => message.id === preview.messageId)
+      ) {
+        return;
+      }
+
+      yield* Ref.set(assistantPreview, Option.some(preview));
+      yield* renderDurableData();
+    },
+  );
+
   // Body of applyItem, running under applyLock.
   const applyItemLocked = Effect.fn("EnvironmentThreadState.applyItemLocked")(function* (
     item: OrchestrationThreadStreamItem,
   ) {
+    if (item.kind === "assistant-preview") {
+      yield* applyAssistantPreview(item);
+      return;
+    }
+
     if (item.kind === "synchronized") {
       yield* Ref.set(awaitingCompletion, false);
       yield* SubscriptionRef.update(state, (current) =>
@@ -345,8 +457,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     }
     yield* SubscriptionRef.set(lastSequence, item.event.sequence);
 
-    const current = yield* SubscriptionRef.get(state);
-    if (Option.isNone(current.data)) {
+    const current = yield* Ref.get(durableThread);
+    if (Option.isNone(current)) {
       if (item.event.type === "thread.deleted") {
         yield* setDeleted();
       }
@@ -360,8 +472,31 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       // the revert projector's row rewrite, so no refresh is needed — the
       // revert reducer's turn filtering fully handles loaded history.
       yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
+      yield* clearAssistantPreview({ blockCurrentTurn: true });
     }
-    const result = applyThreadDetailEvent(current.data.value, item.event);
+    if (item.event.type === "thread.message-sent" && item.event.payload.role === "assistant") {
+      const preview = yield* Ref.get(assistantPreview);
+      if (Option.isSome(preview) && preview.value.messageId === item.event.payload.messageId) {
+        yield* Ref.set(assistantPreview, Option.none());
+      }
+    }
+    if (item.event.type === "thread.session-set") {
+      const preview = yield* Ref.get(assistantPreview);
+      const previousActiveTurnId = current.value.session?.activeTurnId;
+      const nextSession = item.event.payload.session;
+      const remainsActive = nextSession.status === "starting" || nextSession.status === "running";
+      if (!remainsActive && previousActiveTurnId !== null && previousActiveTurnId !== undefined) {
+        yield* blockPreviewTurn(previousActiveTurnId);
+      }
+      if (
+        Option.isSome(preview) &&
+        (!remainsActive || nextSession.activeTurnId !== preview.value.turnId)
+      ) {
+        yield* blockPreviewTurn(preview.value.turnId);
+        yield* Ref.set(assistantPreview, Option.none());
+      }
+    }
+    const result = applyThreadDetailEvent(current.value, item.event);
     if (result.kind === "updated") {
       yield* setThread(result.thread, "keep");
     } else if (result.kind === "deleted") {
@@ -412,47 +547,43 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const mergeOlderPage = Effect.fn("EnvironmentThreadState.mergeOlderPage")(function* (
     snapshot: OrchestrationThreadDetailSnapshot,
   ) {
-    // The merge is built inside the update callback so it composes with
-    // whatever thread value is current at commit time. The applyLock already
-    // serializes this against event application; the atomic build is defense
-    // in depth against future callers outside the lock.
-    let merged: OrchestrationThread | null = null;
-    yield* SubscriptionRef.update(state, (value) => {
-      if (Option.isNone(value.data)) {
-        return value;
-      }
-      const loaded = value.data.value;
-      const older = snapshot.thread;
-      const mergeById = <T extends { readonly id: string }>(
-        olderRows: ReadonlyArray<T>,
-        loadedRows: ReadonlyArray<T>,
-      ): ReadonlyArray<T> => {
-        const seen = new Set(loadedRows.map((row) => row.id));
-        return [...olderRows.filter((row) => !seen.has(row.id)), ...loadedRows];
-      };
-      const seenCheckpoints = new Set(loaded.checkpoints.map((row) => row.turnId));
-      merged = {
-        // Thread metadata stays the loaded (newer) snapshot's; only the
-        // windowed collections gain rows from the older page.
-        ...loaded,
-        messages: mergeById(older.messages, loaded.messages),
-        activities: orderThreadActivities(mergeById(older.activities, loaded.activities)),
-        proposedPlans: mergeById(older.proposedPlans, loaded.proposedPlans),
-        checkpoints: [
-          ...older.checkpoints.filter((row) => !seenCheckpoints.has(row.turnId)),
-          ...loaded.checkpoints,
-        ],
-      };
-      return {
-        ...value,
-        data: Option.some(merged),
-        page: pageStateFromSnapshot(snapshot.page),
-      };
-    });
+    const durable = yield* Ref.get(durableThread);
+    if (Option.isNone(durable)) {
+      return;
+    }
+    const loaded = durable.value;
+    const older = snapshot.thread;
+    const mergeById = <T extends { readonly id: string }>(
+      olderRows: ReadonlyArray<T>,
+      loadedRows: ReadonlyArray<T>,
+    ): ReadonlyArray<T> => {
+      const seen = new Set(loadedRows.map((row) => row.id));
+      return [...olderRows.filter((row) => !seen.has(row.id)), ...loadedRows];
+    };
+    const seenCheckpoints = new Set(loaded.checkpoints.map((row) => row.turnId));
+    const merged: OrchestrationThread = {
+      // Thread metadata stays the loaded (newer) snapshot's; only the
+      // windowed collections gain rows from the older page.
+      ...loaded,
+      messages: mergeById(older.messages, loaded.messages),
+      activities: orderThreadActivities(mergeById(older.activities, loaded.activities)),
+      proposedPlans: mergeById(older.proposedPlans, loaded.proposedPlans),
+      checkpoints: [
+        ...older.checkpoints.filter((row) => !seenCheckpoints.has(row.turnId)),
+        ...loaded.checkpoints,
+      ],
+    };
+    yield* Ref.set(durableThread, Option.some(merged));
+    const preview = yield* Ref.get(assistantPreview);
+    yield* SubscriptionRef.update(state, (value) => ({
+      ...value,
+      data: Option.some(threadWithAssistantPreview(merged, preview)),
+      page: pageStateFromSnapshot(snapshot.page),
+    }));
     // Persist the widened window under the *loaded* watermark: the merged
     // content is only known consistent with the state it merged into, not
     // with the page's own (possibly newer) sequence.
-    if (merged !== null && shouldPersistThread(merged)) {
+    if (shouldPersistThread(merged)) {
       const snapshotSequence = yield* SubscriptionRef.get(lastSequence);
       yield* Queue.offer(persistence, {
         snapshotSequence,
@@ -563,14 +694,17 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               ({}) as {
                 threadResumeCompletionMarker?: boolean;
                 threadSnapshotPagination?: boolean;
+                assistantPreviews?: true;
               },
           ),
         );
         const supportsCompletionMarker = config.threadResumeCompletionMarker === true;
+        const supportsAssistantPreviews = config.assistantPreviews === true;
         // Windowed loads are gated on the server capability: pre-pagination
         // servers reject unknown query params, and a windowed WS fallback to
         // such a server would silently hide history.
         const supportsPagination = config.threadSnapshotPagination === true;
+        yield* resetAssistantPreviews();
         yield* Ref.set(paginationSupported, supportsPagination);
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
         yield* setSynchronizing;
@@ -582,6 +716,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         // Drop the window marker and treat the data as needing a full reload.
         if (!supportsPagination && Option.isSome(current.page)) {
           yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
+          yield* Ref.set(durableThread, Option.none());
+          yield* Ref.set(assistantPreview, Option.none());
           yield* SubscriptionRef.update(state, (value) => ({
             ...value,
             data: Option.none(),
@@ -631,6 +767,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           threadId,
           ...(canResume ? { afterSequence: sequence } : {}),
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
+          ...(supportsAssistantPreviews ? { includeAssistantPreviews: true as const } : {}),
           // The WS fallback snapshot (sent when afterSequence is missing or
           // the gap is too large) should be windowed the same as the HTTP
           // path; without this a resume failure re-downloads the full thread.
@@ -664,9 +801,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   yield* Effect.addFinalizer(() => Effect.sync(deregister));
 
   yield* Effect.addFinalizer(() =>
-    Effect.all([SubscriptionRef.get(state), SubscriptionRef.get(lastSequence)]).pipe(
-      Effect.flatMap(([current, snapshotSequence]) =>
-        Option.match(current.data, {
+    Effect.all([
+      SubscriptionRef.get(state),
+      Ref.get(durableThread),
+      SubscriptionRef.get(lastSequence),
+    ]).pipe(
+      Effect.flatMap(([current, durable, snapshotSequence]) =>
+        Option.match(durable, {
           onNone: () => Effect.void,
           onSome: (thread) =>
             shouldPersistThread(thread)
