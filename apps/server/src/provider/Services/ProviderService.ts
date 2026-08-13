@@ -26,6 +26,7 @@ import type {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
+import type * as Option from "effect/Option";
 import type * as Stream from "effect/Stream";
 
 import type { ProviderServiceError } from "../Errors.ts";
@@ -78,6 +79,13 @@ export interface ProviderServiceShape {
   readonly stopSession: (
     input: ProviderStopSessionInput,
   ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Read one active provider session through its persisted thread binding.
+   */
+  readonly getSession: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<ProviderSession>, ProviderServiceError>;
 
   /**
    * List active provider sessions.

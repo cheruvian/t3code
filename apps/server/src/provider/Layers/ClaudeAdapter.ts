@@ -4532,6 +4532,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     },
   );
 
+  const getSession: ClaudeAdapterShape["getSession"] = (threadId) =>
+    Effect.sync(() => {
+      const context = sessions.get(threadId);
+      return context === undefined || context.stopped
+        ? Option.none()
+        : Option.some({ ...context.session });
+    });
+
   const listSessions: ClaudeAdapterShape["listSessions"] = () =>
     Effect.sync(() => Array.from(sessions.values(), ({ session }) => ({ ...session })));
 
@@ -4581,6 +4589,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     respondToRequest,
     respondToUserInput,
     stopSession,
+    getSession,
     listSessions,
     hasSession,
     stopAll,

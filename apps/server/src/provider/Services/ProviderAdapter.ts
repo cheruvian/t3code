@@ -21,6 +21,7 @@ import type {
   TurnId,
 } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
+import type * as Option from "effect/Option";
 import type * as Stream from "effect/Stream";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "unsupported";
@@ -90,6 +91,12 @@ export interface ProviderAdapterShape<TError> {
    * Stop one provider session.
    */
   readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, TError>;
+
+  /**
+   * Read one currently active provider session without enumerating the
+   * adapter's other sessions.
+   */
+  readonly getSession: (threadId: ThreadId) => Effect.Effect<Option.Option<ProviderSession>>;
 
   /**
    * List currently active provider sessions for this adapter.

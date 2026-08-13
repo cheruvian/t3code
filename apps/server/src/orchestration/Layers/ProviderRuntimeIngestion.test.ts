@@ -32,6 +32,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -117,6 +118,10 @@ function createProviderServiceHarness() {
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
+    getSession: (threadId) =>
+      Effect.succeed(
+        Option.fromUndefinedOr(runtimeSessions.find((session) => session.threadId === threadId)),
+      ),
     listSessions: () => Effect.succeed([...runtimeSessions]),
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     getInstanceInfo: (instanceId) => {
@@ -186,6 +191,7 @@ function providerServiceFromCodexAdapter(
     respondToUserInput: ({ threadId, requestId, answers }) =>
       adapter.respondToUserInput(threadId, requestId, answers),
     stopSession: ({ threadId }) => adapter.stopSession(threadId),
+    getSession: adapter.getSession,
     listSessions: adapter.listSessions,
     getCapabilities: () => Effect.succeed(adapter.capabilities),
     getInstanceInfo: (instanceId) =>

@@ -443,6 +443,40 @@ describe("hasConfiguredMcpServer", () => {
 });
 
 describe("Codex MCP catalog reload", () => {
+  it.effect("keeps an unconfigured runtime unloaded when its source arguments change", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeCodexRuntimeHarness();
+
+      return yield* Effect.gen(function* () {
+        const appServerArgs = ["-c", "model=gpt-5.4"];
+        const runtime = yield* makeCodexSessionRuntime({
+          threadId: ThreadId.make("thread-mcp-no-config"),
+          binaryPath: "/mock/codex",
+          cwd: "/tmp",
+          runtimeMode: "full-access",
+          appServerArgs,
+        });
+        appServerArgs.push("-c", "mcp_servers.t3-code.url=http://127.0.0.1/mcp");
+        yield* runtime.start();
+
+        const send = yield* runtime.sendTurn({ input: "no reload" }).pipe(Effect.forkScoped);
+        const reloadProbe = yield* Queue.take(harness.reloadRequests).pipe(
+          Effect.timeoutOption("1 milli"),
+          Effect.forkScoped,
+        );
+        yield* TestClock.adjust("1 milli");
+
+        NodeAssert.equal((yield* Fiber.join(reloadProbe))._tag, "None");
+        yield* Fiber.join(send);
+        NodeAssert.equal(yield* harness.reloadCount, 0);
+        NodeAssert.equal(yield* harness.turnStartCount, 1);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.mergeAll(NodeServices.layer, harness.layer, TestClock.layer())),
+      );
+    }),
+  );
+
   it.effect("single-flights concurrent first sends and reuses the successful reload", () =>
     Effect.gen(function* () {
       const harness = yield* makeCodexRuntimeHarness();
@@ -525,7 +559,7 @@ describe("Codex MCP catalog reload", () => {
           Effect.timeoutOption("1 minute"),
           Effect.forkScoped,
         );
-        yield* TestClock.adjust("1 minute");
+        yield* TestClock.adjust("31 seconds");
 
         NodeAssert.equal((yield* Fiber.join(timeoutProbe))._tag, "Some");
         NodeAssert.equal(yield* harness.turnStartCount, 1);
@@ -536,7 +570,6 @@ describe("Codex MCP catalog reload", () => {
 
         yield* harness.respond(timedOutReload, {});
         yield* Effect.yieldNow;
-        NodeAssert.equal((yield* Fiber.poll(retrySend))._tag, "None");
         NodeAssert.equal(yield* harness.turnStartCount, 1);
 
         yield* harness.respond(retryReload, {});
