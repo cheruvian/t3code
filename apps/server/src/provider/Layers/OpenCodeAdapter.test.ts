@@ -1306,7 +1306,12 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         write: (event: unknown, threadId: ThreadId | null) => {
           nativeEvents.push(event as (typeof nativeEvents)[number]);
           nativeThreadIds.push(threadId ?? null);
-          return Effect.void;
+          return Effect.succeed({
+            _tag: "Accepted" as const,
+            pendingRecords: 0,
+            pendingBytes: 0,
+            lossCounts: { lowValue: 0, protected: 0 },
+          });
         },
         close: () => Effect.void,
       };
