@@ -110,7 +110,7 @@ export function launchRelease(
   {
     spawnProcess = spawn,
     readBirthToken = readProcessBirthToken,
-    writeLauncherRecord = writeJsonAtomically,
+    writeLauncherRecord = writeJsonExclusively,
     terminateSpawnedRuntime = terminateSpawnedRuntimeAndWait,
   } = {},
 ) {
@@ -120,6 +120,9 @@ export function launchRelease(
   }
   const stageLabel = name === "staging" ? "candidate" : "production";
   mkdirSync(paths.base, { recursive: true });
+  if (existsSync(paths.pid)) {
+    throw new Error(`Refusing to launch ${name} while ownership marker ${paths.pid} exists.`);
+  }
   const logFd = openSync(paths.log, "a");
   const childEnv = {
     ...process.env,
@@ -158,38 +161,50 @@ export function launchRelease(
   }
 }
 
-function readPid(paths) {
-  if (!existsSync(paths.pid)) return undefined;
-  const serializedPid = readFileSync(paths.pid, "utf8").trim();
-  let candidate = serializedPid;
+function readLauncherMarker(paths) {
+  let serialized;
   try {
-    const parsed = JSON.parse(serializedPid);
-    if (parsed && typeof parsed === "object") candidate = parsed.pid;
-  } catch {
-    // Legacy records contained only the decimal PID.
+    serialized = readFileSync(paths.pid, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return { kind: "missing", pid: undefined };
+    throw error;
   }
-  if (typeof candidate === "string" && !/^[1-9]\d*$/.test(candidate)) return undefined;
-  const pid = Number(candidate);
-  return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+  const candidate = serialized.trim();
+  if (/^[1-9]\d*$/.test(candidate)) {
+    const pid = Number(candidate);
+    return Number.isSafeInteger(pid)
+      ? { kind: "legacy", pid, serialized }
+      : { kind: "invalid", pid: undefined, serialized };
+  }
+  try {
+    const record = JSON.parse(candidate);
+    if (
+      record?.version === 1 &&
+      Number.isSafeInteger(record.pid) &&
+      record.pid > 0 &&
+      typeof record.processBirthToken === "string" &&
+      record.processBirthToken.length > 0
+    ) {
+      return { kind: "versioned", pid: record.pid, record, serialized };
+    }
+    const pid = record && typeof record === "object" ? record.pid : undefined;
+    return {
+      kind: "invalid",
+      pid: Number.isSafeInteger(pid) && pid > 0 ? pid : undefined,
+      serialized,
+    };
+  } catch {
+    return { kind: "invalid", pid: undefined, serialized };
+  }
+}
+
+function readPid(paths) {
+  return readLauncherMarker(paths).pid;
 }
 
 function readLauncherRecord(paths) {
-  if (!existsSync(paths.pid)) return undefined;
-  try {
-    const record = JSON.parse(readFileSync(paths.pid, "utf8"));
-    if (
-      record?.version !== 1 ||
-      !Number.isInteger(record.pid) ||
-      record.pid <= 0 ||
-      typeof record.processBirthToken !== "string" ||
-      record.processBirthToken.length === 0
-    ) {
-      return undefined;
-    }
-    return record;
-  } catch {
-    return undefined;
-  }
+  const marker = readLauncherMarker(paths);
+  return marker.kind === "versioned" ? marker.record : undefined;
 }
 
 function readBackendRuntimeState(paths) {
@@ -438,6 +453,16 @@ function writeJsonAtomically(path, value) {
     renameSync(replacement, path);
   } finally {
     rmSync(replacement, { force: true });
+  }
+}
+
+function writeJsonExclusively(path, value) {
+  const prepared = `${path}.next-${process.pid}-${String(transactionWriteSequence++)}`;
+  try {
+    writeFileSync(prepared, `${JSON.stringify(value, null, 2)}\n`);
+    linkSync(prepared, path);
+  } finally {
+    rmSync(prepared, { force: true });
   }
 }
 
@@ -759,8 +784,13 @@ function captureManagedBackend(paths, release, processControl) {
   return { process: backend, state };
 }
 
-function captureManagedLauncher(paths, release, processControl) {
-  const record = readLauncherRecord(paths);
+function captureManagedLauncher(
+  paths,
+  release,
+  processControl,
+  marker = readLauncherMarker(paths),
+) {
+  const record = marker.kind === "versioned" ? marker.record : undefined;
   if (!record || !processControl.isAlive(record.pid)) return undefined;
   const launcher = processControl.inspectProcess(record.pid);
   if (
@@ -771,6 +801,45 @@ function captureManagedLauncher(paths, release, processControl) {
     return undefined;
   }
   return launcher;
+}
+
+function processDescendsFrom(processIdentity, ancestor, processControl) {
+  let selected = processIdentity;
+  const visited = new Set([selected.pid]);
+  for (let depth = 0; depth < 16; depth += 1) {
+    if (selected.ppid === ancestor.pid) {
+      return Date.parse(ancestor.birthToken) <= Date.parse(selected.birthToken);
+    }
+    if (!Number.isInteger(selected.ppid) || selected.ppid <= 1 || visited.has(selected.ppid)) {
+      return false;
+    }
+    visited.add(selected.ppid);
+    const parent = processControl.inspectProcess(selected.ppid);
+    if (Date.parse(parent.birthToken) > Date.parse(selected.birthToken)) return false;
+    selected = parent;
+  }
+  return false;
+}
+
+function captureManagedLegacyLauncher(paths, release, backend, processControl, marker) {
+  if (marker.kind !== "legacy" || !processControl.isAlive(marker.pid)) return undefined;
+  const launcher = processControl.inspectProcess(marker.pid);
+  if (launcher.cwd !== release || !launcherCommandMatches(launcher, release)) {
+    throw new Error(
+      `Refusing to stop legacy launcher pid ${String(marker.pid)} because its process identity does not match the selected runtime.`,
+    );
+  }
+  if (!backend) {
+    throw new Error(
+      `Refusing to stop legacy launcher pid ${String(marker.pid)} without an authenticated backend.`,
+    );
+  }
+  if (!processDescendsFrom(backend.process, launcher, processControl)) {
+    throw new Error(
+      `Refusing to stop legacy launcher pid ${String(marker.pid)} because it does not supervise the authenticated backend.`,
+    );
+  }
+  return { process: launcher, record: marker };
 }
 
 function assertBackendStillOwned(paths, release, captured, processControl, phase) {
@@ -821,13 +890,47 @@ function assertLauncherStillOwned(paths, release, captured, processControl, phas
   return selected;
 }
 
+function assertLegacyLauncherStillOwned(paths, release, captured, backend, processControl, phase) {
+  const launcher = processControl.inspectProcess(captured.process.pid);
+  let marker;
+  try {
+    marker = readFileSync(paths.pid, "utf8");
+  } catch {
+    marker = undefined;
+  }
+  if (
+    marker !== captured.record.serialized ||
+    !sameProcessIdentity(captured.process, launcher) ||
+    launcher.cwd !== release ||
+    !launcherCommandMatches(launcher, release)
+  ) {
+    throw new Error(`Refusing to ${phase} reused legacy launcher pid ${String(launcher.pid)}.`);
+  }
+  if (!processControl.isAlive(backend.process.pid)) {
+    if (phase !== "kill" || processControl.listenerPids(paths.port).length > 0) {
+      throw new Error(
+        `Refusing to ${phase} legacy launcher pid ${String(launcher.pid)} after its backend identity changed.`,
+      );
+    }
+    return launcher;
+  }
+  const selectedBackend = assertBackendStillOwned(paths, release, backend, processControl, phase);
+  if (!processDescendsFrom(selectedBackend, launcher, processControl)) {
+    throw new Error(
+      `Refusing to ${phase} legacy launcher pid ${String(launcher.pid)} because it no longer supervises the authenticated backend.`,
+    );
+  }
+  return launcher;
+}
+
 function stopUnlocked(
   name,
   paths = environmentPaths(name),
   processControl = defaultProcessControl,
 ) {
   const release = selectedRelease(paths);
-  const recordedPid = readPid(paths);
+  const launcherMarker = readLauncherMarker(paths);
+  const recordedPid = launcherMarker.pid;
   const initialListeners = processControl.listenerPids(paths.port);
   if (!release) {
     if (initialListeners.length > 0) {
@@ -840,31 +943,59 @@ function stopUnlocked(
   }
 
   const backend = captureManagedBackend(paths, release, processControl);
-  const launcher = captureManagedLauncher(paths, release, processControl);
+  const launcher = captureManagedLauncher(paths, release, processControl, launcherMarker);
+  const legacyLauncher = launcher
+    ? undefined
+    : captureManagedLegacyLauncher(paths, release, backend, processControl, launcherMarker);
   if (initialListeners.length > 0 && !backend) {
     throw new Error(
       `${nameForError(paths)} port ${String(paths.port)} is occupied by an unverified process.`,
     );
   }
 
-  if (launcher) {
-    assertLauncherStillOwned(paths, release, launcher, processControl, "terminate");
-    console.log(`[t3-pipeline] stopping ${name} launcher pid ${String(launcher.pid)}`);
-    processControl.signal(launcher.pid, "SIGTERM");
+  const launcherProcess = launcher ?? legacyLauncher?.process;
+  if (launcherProcess) {
+    if (legacyLauncher) {
+      assertLegacyLauncherStillOwned(
+        paths,
+        release,
+        legacyLauncher,
+        backend,
+        processControl,
+        "terminate",
+      );
+    } else {
+      assertLauncherStillOwned(paths, release, launcherProcess, processControl, "terminate");
+    }
+    console.log(`[t3-pipeline] stopping ${name} launcher pid ${String(launcherProcess.pid)}`);
+    processControl.signal(launcherProcess.pid, "SIGTERM");
     waitForCondition(
       () =>
-        !processControl.isAlive(launcher.pid) &&
+        !processControl.isAlive(launcherProcess.pid) &&
         (!backend || !processControl.isAlive(backend.process.pid)) &&
         processControl.listenerPids(paths.port).length === 0,
       15_000,
       processControl,
     );
-    if (processControl.isAlive(launcher.pid)) {
-      assertLauncherStillOwned(paths, release, launcher, processControl, "kill");
-      processControl.signal(launcher.pid, "SIGKILL");
-      if (!waitForCondition(() => !processControl.isAlive(launcher.pid), 5_000, processControl)) {
+    if (processControl.isAlive(launcherProcess.pid)) {
+      if (legacyLauncher) {
+        assertLegacyLauncherStillOwned(
+          paths,
+          release,
+          legacyLauncher,
+          backend,
+          processControl,
+          "kill",
+        );
+      } else {
+        assertLauncherStillOwned(paths, release, launcherProcess, processControl, "kill");
+      }
+      processControl.signal(launcherProcess.pid, "SIGKILL");
+      if (
+        !waitForCondition(() => !processControl.isAlive(launcherProcess.pid), 5_000, processControl)
+      ) {
         throw new Error(
-          `${nameForError(paths)} launcher pid ${String(launcher.pid)} survived SIGKILL.`,
+          `${nameForError(paths)} launcher pid ${String(launcherProcess.pid)} survived SIGKILL.`,
         );
       }
     }
@@ -894,7 +1025,7 @@ function stopUnlocked(
       `${nameForError(paths)} port ${String(paths.port)} remained occupied after shutdown.`,
     );
   }
-  if (launcher || recordedPid === undefined || !processControl.isAlive(recordedPid)) {
+  if (launcherProcess || recordedPid === undefined || !processControl.isAlive(recordedPid)) {
     rmSync(paths.pid, { force: true });
   }
 }

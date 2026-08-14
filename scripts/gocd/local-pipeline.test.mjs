@@ -218,6 +218,101 @@ it("launches the long-lived Electron runtime directly and records its pid", asyn
   }
 });
 
+it("does not overwrite an existing legacy launcher marker", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-launch-legacy-owner-"));
+  const release = join(sandbox, "release");
+  const runtimeRoot = join(sandbox, "runtime");
+  const launcherPath = join(runtimeRoot, "electron.pid");
+  const legacyMarker = "5151\n";
+  const sha = "a".repeat(40);
+
+  try {
+    createCompleteRelease(release, sha);
+    writeFixture(launcherPath, legacyMarker);
+    const { launchRelease } = await import("./local-pipeline.mjs?launch-legacy-owner-test");
+    const launches = [];
+    const cleanups = [];
+
+    expect(() =>
+      launchRelease(
+        "production",
+        {
+          base: runtimeRoot,
+          home: join(runtimeRoot, "home"),
+          pid: launcherPath,
+          log: join(runtimeRoot, "electron.log"),
+          port: 17774,
+        },
+        release,
+        sha,
+        {
+          spawnProcess: () => {
+            launches.push(5252);
+            return { pid: 5252, unref() {} };
+          },
+          terminateSpawnedRuntime: (child) => cleanups.push(child.pid),
+        },
+      ),
+    ).toThrow(/ownership marker/);
+
+    assert.deepStrictEqual(launches, []);
+    assert.deepStrictEqual(cleanups, []);
+    assert.equal(readFileSync(launcherPath, "utf8"), legacyMarker);
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+it("preserves a launcher marker created while a new runtime is spawning", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-launch-owner-race-"));
+  const release = join(sandbox, "release");
+  const runtimeRoot = join(sandbox, "runtime");
+  const launcherPath = join(runtimeRoot, "electron.pid");
+  const competingMarker = "5353\n";
+  const sha = "a".repeat(40);
+
+  try {
+    createCompleteRelease(release, sha);
+    const { launchRelease } = await import("./local-pipeline.mjs?launch-owner-race-test");
+    const cleanups = [];
+    let unrefCalled = false;
+
+    expect(() =>
+      launchRelease(
+        "production",
+        {
+          base: runtimeRoot,
+          home: join(runtimeRoot, "home"),
+          pid: launcherPath,
+          log: join(runtimeRoot, "electron.log"),
+          port: 17774,
+        },
+        release,
+        sha,
+        {
+          spawnProcess: () => {
+            writeFixture(launcherPath, competingMarker);
+            return {
+              pid: 5454,
+              unref: () => {
+                unrefCalled = true;
+              },
+            };
+          },
+          readBirthToken: () => "2026-08-14T11:59:00.000Z",
+          terminateSpawnedRuntime: (child) => cleanups.push(child.pid),
+        },
+      ),
+    ).toThrow();
+
+    assert.equal(readFileSync(launcherPath, "utf8"), competingMarker);
+    assert.deepStrictEqual(cleanups, [5454]);
+    assert.equal(unrefCalled, false);
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
 it("fails closed when listener inspection reports an error", async () => {
   const { parseListenerPids } = await import("./local-pipeline.mjs?listener-inspection-test");
 
@@ -699,6 +794,347 @@ it("stops an owned orphan backend after the tracked launcher exited", async () =
     else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
     if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
     else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+it("quiesces a legacy launcher before deploying past its respawning backend", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-legacy-launcher-deploy-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const artifactRoot = join(sandbox, "artifact");
+  const productionRoot = join(runtimeRoot, "production");
+  const shaA = "a".repeat(40);
+  const shaB = "b".repeat(40);
+  const shaC = "c".repeat(40);
+  const releaseA = join(productionRoot, "releases", shaA);
+  const releaseB = join(productionRoot, "releases", shaB);
+  const releaseC = join(productionRoot, "releases", shaC);
+  const launcherPath = join(productionRoot, "electron.pid");
+  const runtimeStatePath = join(productionRoot, "home/userdata/server-runtime.json");
+  const launcherPid = 4251;
+  const backendPid = 4252;
+  const respawnedBackendPid = 4253;
+  const legacyMarker = `${String(launcherPid)}\n`;
+  const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+  const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
+
+  try {
+    process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+    process.env.T3_PIPELINE_ARTIFACT_ROOT = artifactRoot;
+    for (const [release, sha] of [
+      [releaseA, shaA],
+      [releaseB, shaB],
+      [releaseC, shaC],
+    ]) {
+      createCompleteRelease(release, sha);
+    }
+    writeFixture(join(artifactRoot, "manifest.json"), `${JSON.stringify({ sha: shaC })}\n`);
+    symlinkSync(releaseA, join(productionRoot, "current"));
+    symlinkSync(releaseB, join(productionRoot, "previous"));
+    writeFixture(launcherPath, legacyMarker);
+    writeFixture(
+      runtimeStatePath,
+      `${JSON.stringify({
+        version: 1,
+        pid: backendPid,
+        port: 17774,
+        origin: "http://127.0.0.1:17774",
+        startedAt: "2026-08-14T11:59:00.000Z",
+      })}\n`,
+    );
+    const selectedReleaseA = realpathSync(releaseA);
+    const launcherCommand = `${electronExecutablePath(selectedReleaseA)} ${join(selectedReleaseA, "apps/desktop/dist-electron/main.cjs")}`;
+    const backendCommand = `${electronExecutablePath(selectedReleaseA)} ${join(selectedReleaseA, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`;
+    const markersAtLauncherSignals = [];
+    let backendRespawns = 0;
+    const processes = new Map();
+    const stopBackend = (selected) => {
+      selected.alive = false;
+      selected.listenerPort = undefined;
+    };
+    processes.set(launcherPid, {
+      alive: true,
+      ppid: 1,
+      birthToken: "2026-08-14T11:58:00.000Z",
+      command: launcherCommand,
+      cwd: selectedReleaseA,
+      onSignal: (signal, selected) => {
+        markersAtLauncherSignals.push(readFileSync(launcherPath, "utf8"));
+        if (signal === "SIGTERM") {
+          stopBackend(processes.get(backendPid));
+        } else if (signal === "SIGKILL") {
+          selected.alive = false;
+        }
+      },
+    });
+    processes.set(backendPid, {
+      alive: true,
+      ppid: launcherPid,
+      birthToken: "2026-08-14T11:58:59.000Z",
+      command: backendCommand,
+      cwd: selectedReleaseA,
+      listenerPort: 17774,
+      onSignal: (signal, selected) => {
+        if (signal !== "SIGTERM") return;
+        stopBackend(selected);
+        backendRespawns += 1;
+        processes.set(respawnedBackendPid, {
+          alive: true,
+          ppid: launcherPid,
+          birthToken: "2026-08-14T12:00:00.000Z",
+          command: backendCommand,
+          cwd: selectedReleaseA,
+          listenerPort: 17774,
+        });
+        writeFixture(
+          runtimeStatePath,
+          `${JSON.stringify({
+            version: 1,
+            pid: respawnedBackendPid,
+            port: 17774,
+            origin: "http://127.0.0.1:17774",
+            startedAt: "2026-08-14T12:00:00.000Z",
+          })}\n`,
+        );
+      },
+    });
+    const processControl = createProcessControl(processes);
+    const launches = [];
+    const { deploy } = await import("./local-pipeline.mjs?legacy-launcher-respawn-deploy-test");
+
+    await deploy("production", {
+      processControl,
+      resolveTrackedHead: () => shaC,
+      launch: (_name, _paths, release) => {
+        launches.push({
+          release: realpathSync(release),
+          launcherAlive: processes.get(launcherPid).alive,
+          backendAlive: processes.get(backendPid).alive,
+          listenerPids: processControl.listenerPids(17774),
+        });
+      },
+      waitUntilReady: () => undefined,
+      verify: () => undefined,
+    });
+
+    assert.deepStrictEqual(processControl.signals, [
+      [launcherPid, "SIGTERM"],
+      [launcherPid, "SIGKILL"],
+    ]);
+    assert.deepStrictEqual(
+      markersAtLauncherSignals,
+      [legacyMarker, legacyMarker],
+      "shutdown must not rewrite the legacy marker before either signal",
+    );
+    assert.equal(backendRespawns, 0, "the backend-only shutdown path must never run");
+    assert.deepStrictEqual(launches, [
+      {
+        release: realpathSync(releaseC),
+        launcherAlive: false,
+        backendAlive: false,
+        listenerPids: [],
+      },
+    ]);
+    assert.equal(realpathSync(join(productionRoot, "current")), realpathSync(releaseC));
+    assert.equal(existsSync(launcherPath), false);
+  } finally {
+    if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+    else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
+    if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
+    else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+it("fails closed when a legacy launcher cannot be tied to its backend", async () => {
+  const cases = [
+    {
+      name: "missing-backend",
+      launcherCommand: "managed",
+      backendAlive: false,
+      backendParent: 5551,
+      error: /without an authenticated backend/,
+      loadPipeline: () => import("./local-pipeline.mjs?legacy-launcher-missing-backend-test"),
+    },
+    {
+      name: "wrong-parent",
+      launcherCommand: "managed",
+      backendAlive: true,
+      backendParent: 1,
+      error: /does not supervise the authenticated backend/,
+      loadPipeline: () => import("./local-pipeline.mjs?legacy-launcher-wrong-parent-test"),
+    },
+    {
+      name: "foreign-launcher",
+      launcherCommand: "foreign",
+      backendAlive: true,
+      backendParent: 5551,
+      error: /process identity does not match/,
+      loadPipeline: () => import("./local-pipeline.mjs?legacy-launcher-foreign-test"),
+    },
+  ];
+
+  for (const selectedCase of cases) {
+    const sandbox = mkdtempSync(join(tmpdir(), `t3-gocd-legacy-${selectedCase.name}-`));
+    const runtimeRoot = join(sandbox, "runtime");
+    const artifactRoot = join(sandbox, "artifact");
+    const productionRoot = join(runtimeRoot, "production");
+    const shaA = "a".repeat(40);
+    const shaC = "c".repeat(40);
+    const releaseA = join(productionRoot, "releases", shaA);
+    const releaseC = join(productionRoot, "releases", shaC);
+    const launcherPath = join(productionRoot, "electron.pid");
+    const launcherPid = 5551;
+    const backendPid = 5552;
+    const legacyMarker = `${String(launcherPid)}\n`;
+    const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+    const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
+
+    try {
+      process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+      process.env.T3_PIPELINE_ARTIFACT_ROOT = artifactRoot;
+      createCompleteRelease(releaseA, shaA);
+      createCompleteRelease(releaseC, shaC);
+      writeFixture(join(artifactRoot, "manifest.json"), `${JSON.stringify({ sha: shaC })}\n`);
+      symlinkSync(releaseA, join(productionRoot, "current"));
+      writeFixture(launcherPath, legacyMarker);
+      writeFixture(
+        join(productionRoot, "home/userdata/server-runtime.json"),
+        `${JSON.stringify({
+          version: 1,
+          pid: backendPid,
+          port: 17774,
+          origin: "http://127.0.0.1:17774",
+          startedAt: "2026-08-14T11:59:00.000Z",
+        })}\n`,
+      );
+      const selectedReleaseA = realpathSync(releaseA);
+      const managedLauncherCommand = `${electronExecutablePath(selectedReleaseA)} ${join(selectedReleaseA, "apps/desktop/dist-electron/main.cjs")}`;
+      const processes = new Map([
+        [
+          launcherPid,
+          {
+            alive: true,
+            ppid: 1,
+            birthToken: "2026-08-14T11:58:00.000Z",
+            command:
+              selectedCase.launcherCommand === "managed"
+                ? managedLauncherCommand
+                : "/usr/bin/foreign --serve",
+            cwd: selectedReleaseA,
+          },
+        ],
+        [
+          backendPid,
+          {
+            alive: selectedCase.backendAlive,
+            ppid: selectedCase.backendParent,
+            birthToken: "2026-08-14T11:58:59.000Z",
+            command: `${electronExecutablePath(selectedReleaseA)} ${join(selectedReleaseA, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`,
+            cwd: selectedReleaseA,
+            listenerPort: selectedCase.backendAlive ? 17774 : undefined,
+          },
+        ],
+      ]);
+      const processControl = createProcessControl(processes);
+      const launches = [];
+      const { deploy } = await selectedCase.loadPipeline();
+
+      await expect(
+        deploy("production", {
+          processControl,
+          resolveTrackedHead: () => shaC,
+          launch: (...args) => launches.push(args),
+          waitUntilReady: () => undefined,
+          verify: () => undefined,
+        }),
+      ).rejects.toThrow(selectedCase.error);
+
+      assert.deepStrictEqual(processControl.signals, []);
+      assert.deepStrictEqual(launches, []);
+      assert.equal(readFileSync(launcherPath, "utf8"), legacyMarker);
+      assert.equal(realpathSync(join(productionRoot, "current")), selectedReleaseA);
+    } finally {
+      if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+      else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
+      if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
+      else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
+      rmSync(sandbox, { recursive: true, force: true });
+    }
+  }
+});
+
+it("does not signal a legacy launcher after its marker changes", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-legacy-marker-race-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const productionRoot = join(runtimeRoot, "production");
+  const sha = "a".repeat(40);
+  const release = join(productionRoot, "releases", sha);
+  const launcherPath = join(productionRoot, "electron.pid");
+  const launcherPid = 5651;
+  const backendPid = 5652;
+  const replacementMarker = "5751\n";
+  const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+
+  try {
+    process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+    createCompleteRelease(release, sha);
+    symlinkSync(release, join(productionRoot, "current"));
+    writeFixture(launcherPath, `${String(launcherPid)}\n`);
+    writeFixture(
+      join(productionRoot, "home/userdata/server-runtime.json"),
+      `${JSON.stringify({
+        version: 1,
+        pid: backendPid,
+        port: 17774,
+        origin: "http://127.0.0.1:17774",
+        startedAt: "2026-08-14T11:59:00.000Z",
+      })}\n`,
+    );
+    const selectedRelease = realpathSync(release);
+    const processes = new Map([
+      [
+        launcherPid,
+        {
+          alive: true,
+          ppid: 1,
+          birthToken: "2026-08-14T11:58:00.000Z",
+          command: `${electronExecutablePath(selectedRelease)} ${join(selectedRelease, "apps/desktop/dist-electron/main.cjs")}`,
+          cwd: selectedRelease,
+        },
+      ],
+      [
+        backendPid,
+        {
+          alive: true,
+          ppid: launcherPid,
+          birthToken: "2026-08-14T11:58:59.000Z",
+          command: `${electronExecutablePath(selectedRelease)} ${join(selectedRelease, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`,
+          cwd: selectedRelease,
+          listenerPort: 17774,
+        },
+      ],
+    ]);
+    const processControl = createProcessControl(processes);
+    const inspectProcess = processControl.inspectProcess;
+    let backendInspections = 0;
+    processControl.inspectProcess = (pid) => {
+      const identity = inspectProcess(pid);
+      if (pid === backendPid && (backendInspections += 1) === 1) {
+        writeFixture(launcherPath, replacementMarker);
+      }
+      return identity;
+    };
+    const { stop } = await import("./local-pipeline.mjs?legacy-launcher-marker-race-test");
+
+    await expect(stop("production", { processControl })).rejects.toThrow(/reused legacy launcher/);
+
+    assert.deepStrictEqual(processControl.signals, []);
+    assert.equal(readFileSync(launcherPath, "utf8"), replacementMarker);
+    assert.deepStrictEqual(processControl.listenerPids(17774), [backendPid]);
+  } finally {
+    if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+    else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
     rmSync(sandbox, { recursive: true, force: true });
   }
 });

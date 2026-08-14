@@ -53,10 +53,14 @@ verification runs inside the same locked deploy or rollback transaction rather t
 stage. The lock records its owner and can be reclaimed only after that process has exited.
 New launcher records include both the PID and an OS process-birth token. Before every signal, the
 pipeline revalidates that token, the exact command, working directory, selected release, backend
-runtime generation, and environment-port ownership as applicable. A stale, legacy, or reused
-launcher PID is never signaled. When the launcher has already exited, an independently verified
-backend is terminated directly, and replacement cannot start until that backend and every listener
-on the environment port are gone.
+runtime generation, and environment-port ownership as applicable. New records are created
+exclusively, so a failed launch cannot replace an existing ownership marker. A decimal marker from
+an older release has no birth token, so the pipeline additionally requires that its exact launcher
+process supervise the independently authenticated backend that exclusively owns the environment
+port. It revalidates that complete relationship and the unchanged marker immediately before
+signaling the legacy launcher. If any evidence is missing, the operation fails closed. When the
+launcher has already exited, an independently verified backend is terminated directly, and
+replacement cannot start until that backend and every listener on the environment port are gone.
 
 Before stopping the active production process or changing `current`, deployment resolves the fork's
 `main` head. It rejects an unavailable or malformed head and rejects any artifact whose manifest SHA
