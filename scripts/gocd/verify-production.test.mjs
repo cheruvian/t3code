@@ -6,7 +6,7 @@ import * as NodePath from "node:path";
 import { verifyProduction } from "./verify-production.mjs";
 
 const { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } = NodeFS;
-const { tmpdir } = NodeOS;
+const { platform, tmpdir } = NodeOS;
 const { dirname, join } = NodePath;
 
 function writeFixture(path, contents = "") {
@@ -23,6 +23,14 @@ function createCompleteRelease(release, sha) {
   writeFixture(join(release, "apps", "server", "dist", "bin.mjs"));
   writeFixture(join(release, "assets", "dev", "blueprint-macos-1024.png"));
   writeFixture(join(release, "assets", "prod", "black-macos-1024.png"));
+  writeFixture(electronExecutablePath(release));
+}
+
+function electronExecutablePath(release) {
+  const dist = join(release, "apps", "desktop", "node_modules", "electron", "dist");
+  return platform() === "darwin"
+    ? join(dist, "Electron.app", "Contents", "MacOS", "Electron")
+    : join(dist, platform() === "win32" ? "electron.exe" : "electron");
 }
 
 it("rejects a healthy response served by an old production release", async () => {
@@ -61,9 +69,15 @@ it("rejects a healthy response served by an old production release", async () =>
         inspectProcess: () => ({
           pid: oldPid,
           alive: true,
+          birthToken: "2026-08-09T19:59:59.000Z",
           cwd: selectedReleaseA,
-          command: [process.execPath, join(selectedReleaseA, "apps", "server", "dist", "bin.mjs")],
-          listenerPid: oldPid,
+          command: [
+            electronExecutablePath(selectedReleaseA),
+            join(selectedReleaseA, "apps", "server", "dist", "bin.mjs"),
+            "--bootstrap-fd",
+            "3",
+          ],
+          listenerPids: [oldPid],
         }),
       }),
     ).rejects.toThrow();
@@ -103,7 +117,10 @@ it("accepts a healthy backend bound to the selected production release", async (
       runtimeRoot,
       expectedRelease: selectedReleaseC,
       expectedSha: shaC,
-      previousRuntimePid: runtimePid - 1,
+      previousRuntimeIdentity: {
+        pid: runtimePid,
+        startedAt: "2026-08-09T19:58:00.000Z",
+      },
       launchedAfter: Date.parse("2026-08-09T19:59:59.000Z"),
       fetchImpl: async (url) => {
         requests.push(url);
@@ -114,18 +131,98 @@ it("accepts a healthy backend bound to the selected production release", async (
         return {
           pid: runtimePid,
           alive: true,
+          birthToken: "2026-08-09T19:59:59.000Z",
           cwd: selectedReleaseC,
-          command: [process.execPath, serverEntry],
-          listenerPid: runtimePid,
+          command: [electronExecutablePath(selectedReleaseC), serverEntry, "--bootstrap-fd", "3"],
+          listenerPids: [runtimePid],
         };
       },
     });
 
     expect({ result, inspections, requests }).toEqual({
       result: { release: selectedReleaseC, pid: runtimePid, sha: shaC },
-      inspections: [[runtimePid, 17774]],
+      inspections: [
+        [runtimePid, 17774],
+        [runtimePid, 17774],
+      ],
       requests: ["http://127.0.0.1:17774/"],
     });
+
+    await expect(
+      verifyProduction({
+        runtimeRoot,
+        expectedRelease: selectedReleaseC,
+        expectedSha: shaC,
+        launchedAfter: Date.parse("2026-08-09T19:59:59.000Z"),
+        fetchImpl: async () => ({ ok: true, status: 200 }),
+        inspectProcess: () => ({
+          pid: runtimePid,
+          alive: true,
+          birthToken: "2026-08-09T19:59:59.000Z",
+          cwd: selectedReleaseC,
+          command: [
+            electronExecutablePath(selectedReleaseC),
+            serverEntry,
+            "--bootstrap-fd",
+            "3",
+            "--unexpected",
+          ],
+          listenerPids: [runtimePid],
+        }),
+      }),
+    ).rejects.toThrow(/did not launch/);
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+it("rejects HTTP success when listener ownership changes during verification", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-production-verifier-handoff-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const productionRoot = join(runtimeRoot, "production");
+  const sha = "c".repeat(40);
+  const release = join(productionRoot, "releases", sha);
+  const runtimePid = 626_262;
+
+  try {
+    createCompleteRelease(release, sha);
+    symlinkSync(release, join(productionRoot, "current"));
+    writeFixture(
+      join(productionRoot, "home/userdata/server-runtime.json"),
+      `${JSON.stringify({
+        version: 1,
+        pid: runtimePid,
+        port: 17774,
+        origin: "http://127.0.0.1:17774",
+        startedAt: "2026-08-09T20:00:00.000Z",
+      })}\n`,
+    );
+    const selectedRelease = realpathSync(release);
+    const command = [
+      electronExecutablePath(selectedRelease),
+      join(selectedRelease, "apps/server/dist/bin.mjs"),
+      "--bootstrap-fd",
+      "3",
+    ];
+    let inspection = 0;
+
+    await expect(
+      verifyProduction({
+        runtimeRoot,
+        expectedRelease: selectedRelease,
+        expectedSha: sha,
+        launchedAfter: Date.parse("2026-08-09T19:59:59.000Z"),
+        fetchImpl: async () => ({ ok: true, status: 200 }),
+        inspectProcess: () => ({
+          pid: runtimePid,
+          alive: true,
+          birthToken: "2026-08-09T19:59:59.000Z",
+          cwd: selectedRelease,
+          command,
+          listenerPids: inspection++ === 0 ? [runtimePid] : [runtimePid + 1],
+        }),
+      }),
+    ).rejects.toThrow(/ownership changed during verification/);
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
   }

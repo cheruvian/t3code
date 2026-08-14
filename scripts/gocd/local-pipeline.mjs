@@ -102,7 +102,18 @@ function hasCompleteReleaseRuntime(release) {
   return Object.values(runtime).every(existsSync);
 }
 
-export function launchRelease(name, paths, release, commitHash, { spawnProcess = spawn } = {}) {
+export function launchRelease(
+  name,
+  paths,
+  release,
+  commitHash,
+  {
+    spawnProcess = spawn,
+    readBirthToken = readProcessBirthToken,
+    writeLauncherRecord = writeJsonAtomically,
+    terminateSpawnedRuntime = terminateSpawnedRuntimeAndWait,
+  } = {},
+) {
   const runtime = desktopRuntimePaths(release);
   if (!hasCompleteReleaseRuntime(release)) {
     throw new Error(`Release ${release} is missing its self-contained desktop runtime.`);
@@ -119,31 +130,100 @@ export function launchRelease(name, paths, release, commitHash, { spawnProcess =
     T3CODE_DESKTOP_STAGE_LABEL: stageLabel === "candidate" ? "Candidate" : "Production",
   };
   delete childEnv.ELECTRON_RUN_AS_NODE;
-  const child = spawnProcess(runtime.electronExecutable, [runtime.mainEntry], {
-    cwd: release,
-    detached: true,
-    stdio: ["ignore", logFd, logFd],
-    env: childEnv,
-  });
-  child.unref();
-  closeSync(logFd);
-  writeFileSync(paths.pid, `${child.pid}\n`);
+  let child;
+  try {
+    child = spawnProcess(runtime.electronExecutable, [runtime.mainEntry], {
+      cwd: release,
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+      env: childEnv,
+    });
+    const processBirthToken = readBirthToken(child.pid);
+    writeLauncherRecord(paths.pid, { version: 1, pid: child.pid, processBirthToken });
+    child.unref();
+  } catch (error) {
+    try {
+      if (child) terminateSpawnedRuntime(child, paths);
+    } catch (cleanupError) {
+      const failure = new AggregateError(
+        [error, cleanupError],
+        `Could not register or quiesce spawned ${name} runtime pid ${String(child?.pid)}.`,
+      );
+      failure.runtimeCleanupIncomplete = true;
+      throw failure;
+    }
+    throw error;
+  } finally {
+    closeSync(logFd);
+  }
 }
 
 function readPid(paths) {
   if (!existsSync(paths.pid)) return undefined;
   const serializedPid = readFileSync(paths.pid, "utf8").trim();
-  if (!/^[1-9]\d*$/.test(serializedPid)) return undefined;
-  const pid = Number(serializedPid);
+  let candidate = serializedPid;
+  try {
+    const parsed = JSON.parse(serializedPid);
+    if (parsed && typeof parsed === "object") candidate = parsed.pid;
+  } catch {
+    // Legacy records contained only the decimal PID.
+  }
+  if (typeof candidate === "string" && !/^[1-9]\d*$/.test(candidate)) return undefined;
+  const pid = Number(candidate);
   return Number.isInteger(pid) && pid > 0 ? pid : undefined;
 }
 
-function readBackendRuntimePid(paths) {
+function readLauncherRecord(paths) {
+  if (!existsSync(paths.pid)) return undefined;
+  try {
+    const record = JSON.parse(readFileSync(paths.pid, "utf8"));
+    if (
+      record?.version !== 1 ||
+      !Number.isInteger(record.pid) ||
+      record.pid <= 0 ||
+      typeof record.processBirthToken !== "string" ||
+      record.processBirthToken.length === 0
+    ) {
+      return undefined;
+    }
+    return record;
+  } catch {
+    return undefined;
+  }
+}
+
+function readBackendRuntimeState(paths) {
   const runtimeState = join(paths.home, "userdata", "server-runtime.json");
   if (!existsSync(runtimeState)) return undefined;
   try {
-    const pid = JSON.parse(readFileSync(runtimeState, "utf8")).pid;
-    return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+    const state = JSON.parse(readFileSync(runtimeState, "utf8"));
+    if (
+      state?.version !== 1 ||
+      !Number.isInteger(state.pid) ||
+      state.pid <= 0 ||
+      !Number.isInteger(state.port) ||
+      state.port !== paths.port ||
+      typeof state.origin !== "string" ||
+      typeof state.startedAt !== "string" ||
+      Number.isNaN(Date.parse(state.startedAt))
+    ) {
+      throw new Error(`Managed backend runtime state is malformed at ${runtimeState}.`);
+    }
+    return state;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Managed backend runtime state")) {
+      throw error;
+    }
+    throw new Error(`Managed backend runtime state is malformed at ${runtimeState}.`, {
+      cause: error,
+    });
+  }
+}
+
+function readBackendRuntimeIdentity(paths) {
+  try {
+    const state = readBackendRuntimeState(paths);
+    return state ? { pid: state.pid, startedAt: state.startedAt } : undefined;
   } catch {
     return undefined;
   }
@@ -153,8 +233,60 @@ function isAlive(pid) {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ESRCH") {
+      return false;
+    }
+    if (error && typeof error === "object" && "code" in error && error.code === "EPERM") {
+      return true;
+    }
+    throw error;
+  }
+}
+
+function isProcessGroupAlive(processGroupId) {
+  const result = spawnSync("/bin/ps", ["-axo", "pgid=,stat="], { encoding: "utf8" });
+  if (result.status !== 0) {
+    throw new Error(`Could not inspect spawned runtime process group ${String(processGroupId)}.`);
+  }
+  return result.stdout.split("\n").some((line) => {
+    const match = line.trim().match(/^(\d+)\s+(\S+)$/);
+    return match !== null && Number(match[1]) === processGroupId && !match[2].startsWith("Z");
+  });
+}
+
+function waitForProcessGroupExit(processGroupId, timeout) {
+  const deadline = Date.now() + timeout;
+  while (isProcessGroupAlive(processGroupId) && Date.now() < deadline) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  }
+  return !isProcessGroupAlive(processGroupId);
+}
+
+function signalProcessGroup(processGroupId, signal) {
+  try {
+    process.kill(-processGroupId, signal);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ESRCH") return;
+    throw error;
+  }
+}
+
+function terminateSpawnedRuntimeAndWait(child, paths) {
+  if (platform() !== "darwin") {
+    throw new Error("Local pipeline launch cleanup currently requires macOS process groups.");
+  }
+  const processGroupId = child.pid;
+  signalProcessGroup(processGroupId, "SIGTERM");
+  if (!waitForProcessGroupExit(processGroupId, 5_000)) {
+    signalProcessGroup(processGroupId, "SIGKILL");
+    if (!waitForProcessGroupExit(processGroupId, 5_000)) {
+      throw new Error(`Spawned runtime process group ${String(processGroupId)} survived SIGKILL.`);
+    }
+  }
+  const listeners = listenerPids(paths.port);
+  if (listeners.length > 0) {
+    throw new Error(`Port ${String(paths.port)} remained occupied after spawned runtime cleanup.`);
   }
 }
 
@@ -257,6 +389,16 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function assertRecoveryMayProceed(paths, operation, error) {
+  if (!error || typeof error !== "object" || error.runtimeCleanupIncomplete !== true) return;
+  throw compoundRecoveryFailure(
+    paths,
+    operation,
+    error,
+    new Error("Automatic recovery was withheld because spawned runtime cleanup was incomplete."),
+  );
+}
+
 function clearManualIntervention(paths) {
   rmSync(paths.manualIntervention, { force: true });
 }
@@ -299,15 +441,25 @@ function writeJsonAtomically(path, value) {
   }
 }
 
-function beginOperationTransaction(paths, operation, current, previous) {
-  const launcherPid = readPid(paths);
+function beginOperationTransaction(
+  paths,
+  operation,
+  current,
+  previous,
+  processControl = defaultProcessControl,
+) {
+  const release = selectedRelease(paths);
+  const wasRunning =
+    release !== undefined &&
+    (captureManagedLauncher(paths, release, processControl) !== undefined ||
+      captureManagedBackend(paths, release, processControl) !== undefined);
   writeJsonAtomically(paths.operationTransaction, {
     version: 1,
     operation,
     current: current ?? null,
     previous: previous ?? null,
     currentSha: releaseManifestSha(current),
-    wasRunning: launcherPid !== undefined && isAlive(launcherPid),
+    wasRunning,
     startedAt: new Date().toISOString(),
   });
 }
@@ -374,7 +526,12 @@ function nameForError(paths) {
 
 async function recoverInterruptedOperation(
   name,
-  { launch = launchRelease, waitUntilReady = waitForServer, verify } = {},
+  {
+    launch = launchRelease,
+    waitUntilReady = waitForServer,
+    verify,
+    processControl = defaultProcessControl,
+  } = {},
 ) {
   const paths = environmentPaths(name);
   const transaction = readOperationTransaction(paths);
@@ -382,9 +539,9 @@ async function recoverInterruptedOperation(
   const interruptionError = new Error(
     `Detected an interrupted ${name} ${transaction.operation} transaction.`,
   );
-  const rejectedRuntimePid = readBackendRuntimePid(paths);
+  const rejectedRuntimeIdentity = readBackendRuntimeIdentity(paths);
   try {
-    stopUnlocked(name, paths);
+    stopUnlocked(name, paths, processControl);
     restoreReleaseSnapshot(paths, transaction);
     if (transaction.wasRunning) {
       if (!transaction.current || !hasCompleteReleaseRuntime(transaction.current)) {
@@ -400,13 +557,16 @@ async function recoverInterruptedOperation(
         verify ?? (name === "production" ? verifyProduction : async () => undefined);
       const launchedAfter = Date.now();
       launch(name, paths, transaction.current, transaction.currentSha);
-      await waitUntilReady(paths.port);
+      await waitUntilReady(
+        { paths, expectedRelease: transaction.current, rejectedRuntimeIdentity, launchedAfter },
+        processControl,
+      );
       await verifySelectedRelease({
         runtimeRoot,
         port: paths.port,
         expectedRelease: transaction.current,
         expectedSha: transaction.currentSha,
-        previousRuntimePid: rejectedRuntimePid,
+        previousRuntimeIdentity: rejectedRuntimeIdentity,
         launchedAfter,
       });
     }
@@ -427,12 +587,20 @@ function inspectManagedProcess(pid) {
   if (platform() !== "darwin") {
     throw new Error("Local pipeline process ownership checks currently require macOS.");
   }
-  const processResult = spawnSync("/bin/ps", ["-ww", "-p", String(pid), "-o", "ppid=,command="], {
-    encoding: "utf8",
-  });
+  const processResult = spawnSync(
+    "/bin/ps",
+    ["-ww", "-p", String(pid), "-o", "ppid=,lstart=,command="],
+    { encoding: "utf8" },
+  );
   const match =
-    processResult.status === 0 ? processResult.stdout.trim().match(/^(\d+)\s+(.+)$/s) : null;
+    processResult.status === 0
+      ? processResult.stdout.trim().match(/^(\d+)\s+(.{24})\s+(.+)$/s)
+      : null;
   if (!match) throw new Error(`Could not inspect managed process ${String(pid)}.`);
+  const processBirthTime = Date.parse(match[2]);
+  if (Number.isNaN(processBirthTime)) {
+    throw new Error(`Could not inspect the birth time for process ${String(pid)}.`);
+  }
   const cwdResult = spawnSync("/usr/sbin/lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], {
     encoding: "utf8",
   });
@@ -444,132 +612,375 @@ function inspectManagedProcess(pid) {
           ?.slice(1)
       : undefined;
   if (!cwd) throw new Error(`Could not inspect the working directory for process ${String(pid)}.`);
-  return { pid, ppid: Number.parseInt(match[1], 10), command: match[2], cwd };
+  return {
+    pid,
+    ppid: Number.parseInt(match[1], 10),
+    birthToken: new Date(processBirthTime).toISOString(),
+    command: match[3],
+    cwd,
+  };
 }
 
-function processOwnsListener(pid, port) {
-  const result = spawnSync(
-    "/usr/sbin/lsof",
-    ["-nP", "-a", "-p", String(pid), `-iTCP:${String(port)}`, "-sTCP:LISTEN", "-Fp"],
-    { encoding: "utf8" },
-  );
-  return result.status === 0 && result.stdout.split("\n").includes(`p${String(pid)}`);
-}
-
-function processDescendsFrom(pid, ancestorPid) {
-  let inspected = inspectManagedProcess(pid);
-  for (let depth = 0; depth < 8 && inspected.ppid > 0; depth += 1) {
-    if (inspected.ppid === ancestorPid) return true;
-    inspected = inspectManagedProcess(inspected.ppid);
+function readProcessBirthToken(pid) {
+  if (platform() !== "darwin") {
+    throw new Error("Local pipeline process ownership checks currently require macOS.");
   }
-  return false;
+  const result = spawnSync("/bin/ps", ["-p", String(pid), "-o", "lstart="], {
+    encoding: "utf8",
+  });
+  const processBirthTime = result.status === 0 ? Date.parse(result.stdout.trim()) : Number.NaN;
+  if (Number.isNaN(processBirthTime)) {
+    throw new Error(`Could not inspect the birth time for process ${String(pid)}.`);
+  }
+  return new Date(processBirthTime).toISOString();
 }
 
-function assertManagedLauncher(name, paths, pid) {
-  const launcher = inspectManagedProcess(pid);
-  let selectedRelease;
+export function parseListenerPids(result, port) {
+  if (
+    result.status === 1 &&
+    String(result.stdout ?? "").trim() === "" &&
+    String(result.stderr ?? "").trim() === ""
+  ) {
+    return [];
+  }
+  if (result.status !== 0) {
+    throw new Error(`Could not inspect listeners on port ${String(port)}.`);
+  }
+  return [
+    ...new Set(
+      result.stdout
+        .split("\n")
+        .filter((line) => /^p[1-9]\d*$/.test(line))
+        .map((line) => Number(line.slice(1))),
+    ),
+  ];
+}
+
+function listenerPids(port) {
+  return parseListenerPids(
+    spawnSync("/usr/sbin/lsof", ["-nP", `-iTCP:${String(port)}`, "-sTCP:LISTEN", "-Fp"], {
+      encoding: "utf8",
+    }),
+    port,
+  );
+}
+
+function selectedRelease(paths) {
   try {
-    selectedRelease = existsSync(paths.current) ? realpathSync(paths.current) : undefined;
+    return existsSync(paths.current) ? realpathSync(paths.current) : undefined;
   } catch {
-    selectedRelease = undefined;
+    return undefined;
   }
-  if (selectedRelease) {
-    const runtime = desktopRuntimePaths(selectedRelease);
-    if (
-      launcher.cwd === selectedRelease &&
-      (launcher.command.includes(runtime.launcher) ||
-        (launcher.command.includes(runtime.electronExecutable) &&
-          launcher.command.includes(runtime.mainEntry)))
-    ) {
-      return launcher;
-    }
-  }
+}
 
-  const backendPid = readBackendRuntimePid(paths);
-  if (backendPid !== undefined) {
-    const backend = inspectManagedProcess(backendPid);
-    if (
-      backend.command.includes("/apps/server/dist/bin.mjs") &&
-      processOwnsListener(backendPid, paths.port) &&
-      processDescendsFrom(backendPid, pid)
-    ) {
-      return launcher;
-    }
+function allowedElectronExecutables(runtime) {
+  const executables = new Set([runtime.electronExecutable]);
+  try {
+    executables.add(realpathSync(runtime.electronExecutable));
+  } catch {
+    // A missing executable is rejected by the exact-command check below.
   }
-  throw new Error(
-    `Refusing to stop pid ${String(pid)} because it does not own the selected ${name} runtime.`,
+  return [...executables];
+}
+
+function launcherCommandMatches(processIdentity, release) {
+  const runtime = desktopRuntimePaths(release);
+  return allowedElectronExecutables(runtime).some(
+    (executable) => processIdentity.command === `${executable} ${runtime.mainEntry}`,
   );
 }
 
-function waitForProcessExit(pid, deadline) {
-  while (isAlive(pid) && Date.now() < deadline) {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-  }
-  return !isAlive(pid);
+function backendCommandMatches(processIdentity, release) {
+  const runtime = desktopRuntimePaths(release);
+  return allowedElectronExecutables(runtime).some((executable) => {
+    const prefix = `${executable} ${runtime.serverEntry} --bootstrap-fd `;
+    return (
+      processIdentity.command.startsWith(prefix) &&
+      /^\d+$/.test(processIdentity.command.slice(prefix.length))
+    );
+  });
 }
 
-function stopUnlocked(name, paths = environmentPaths(name)) {
-  const pid = readPid(paths);
-  const backendPid = readBackendRuntimePid(paths);
-  if (pid === undefined) {
-    if (backendPid !== undefined && isAlive(backendPid)) {
-      throw new Error(
-        `${nameForError(paths)} has no valid runtime pid while backend pid ${String(backendPid)} survived.`,
-      );
+const defaultProcessControl = {
+  now: Date.now,
+  pause: (milliseconds) =>
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds),
+  isAlive,
+  inspectProcess: inspectManagedProcess,
+  listenerPids,
+  signal: (pid, signal) => process.kill(pid, signal),
+  httpReady: (port) =>
+    spawnSync(
+      "curl",
+      ["--fail", "--silent", "--show-error", "--max-time", "2", `http://127.0.0.1:${port}/`],
+      { stdio: "ignore" },
+    ).status === 0,
+};
+
+function sameProcessIdentity(expected, actual) {
+  return (
+    actual.pid === expected.pid &&
+    actual.birthToken === expected.birthToken &&
+    actual.command === expected.command &&
+    actual.cwd === expected.cwd
+  );
+}
+
+function processBirthMatchesRuntime(processIdentity, runtimeState) {
+  const processBirthTime = Date.parse(processIdentity.birthToken);
+  return !Number.isNaN(processBirthTime) && processBirthTime <= Date.parse(runtimeState.startedAt);
+}
+
+function waitForCondition(predicate, timeout, processControl) {
+  const deadline = processControl.now() + timeout;
+  while (!predicate() && processControl.now() < deadline) processControl.pause(100);
+  return predicate();
+}
+
+function captureManagedBackend(paths, release, processControl) {
+  const state = readBackendRuntimeState(paths);
+  if (!state || !processControl.isAlive(state.pid)) return undefined;
+  const backend = processControl.inspectProcess(state.pid);
+  if (
+    backend.cwd !== release ||
+    !backendCommandMatches(backend, release) ||
+    !processBirthMatchesRuntime(backend, state)
+  ) {
+    throw new Error(
+      `Refusing to stop backend pid ${String(state.pid)} because its process identity does not match the selected runtime.`,
+    );
+  }
+  const listeners = processControl.listenerPids(paths.port);
+  if (listeners.length !== 1 || listeners[0] !== state.pid) {
+    throw new Error(
+      `Refusing to stop backend pid ${String(state.pid)} because it does not exclusively own port ${String(paths.port)}.`,
+    );
+  }
+  return { process: backend, state };
+}
+
+function captureManagedLauncher(paths, release, processControl) {
+  const record = readLauncherRecord(paths);
+  if (!record || !processControl.isAlive(record.pid)) return undefined;
+  const launcher = processControl.inspectProcess(record.pid);
+  if (
+    launcher.birthToken !== record.processBirthToken ||
+    launcher.cwd !== release ||
+    !launcherCommandMatches(launcher, release)
+  ) {
+    return undefined;
+  }
+  return launcher;
+}
+
+function assertBackendStillOwned(paths, release, captured, processControl, phase) {
+  const selected = processControl.inspectProcess(captured.process.pid);
+  if (
+    !sameProcessIdentity(captured.process, selected) ||
+    !backendCommandMatches(selected, release)
+  ) {
+    throw new Error(`Refusing to ${phase} reused backend pid ${String(captured.process.pid)}.`);
+  }
+  let state;
+  try {
+    state = readBackendRuntimeState(paths);
+  } catch (error) {
+    throw new Error(`Refusing to ${phase} backend with changed runtime state.`, { cause: error });
+  }
+  const stateChanged =
+    state &&
+    (state.pid !== captured.state.pid ||
+      state.startedAt !== captured.state.startedAt ||
+      state.port !== captured.state.port ||
+      state.origin !== captured.state.origin);
+  if ((phase === "terminate" && !state) || stateChanged) {
+    throw new Error(`Refusing to ${phase} backend with a different runtime generation.`);
+  }
+  const listeners = processControl.listenerPids(paths.port);
+  const validListeners =
+    phase === "terminate"
+      ? listeners.length === 1 && listeners[0] === captured.process.pid
+      : listeners.length === 0 || (listeners.length === 1 && listeners[0] === captured.process.pid);
+  if (!validListeners) {
+    throw new Error(`Refusing to ${phase} backend while port ownership is ambiguous.`);
+  }
+  return selected;
+}
+
+function assertLauncherStillOwned(paths, release, captured, processControl, phase) {
+  const record = readLauncherRecord(paths);
+  const selected = processControl.inspectProcess(captured.pid);
+  if (
+    record?.pid !== captured.pid ||
+    record.processBirthToken !== captured.birthToken ||
+    !sameProcessIdentity(captured, selected) ||
+    !launcherCommandMatches(selected, release)
+  ) {
+    throw new Error(`Refusing to ${phase} reused launcher pid ${String(captured.pid)}.`);
+  }
+  return selected;
+}
+
+function stopUnlocked(
+  name,
+  paths = environmentPaths(name),
+  processControl = defaultProcessControl,
+) {
+  const release = selectedRelease(paths);
+  const recordedPid = readPid(paths);
+  const initialListeners = processControl.listenerPids(paths.port);
+  if (!release) {
+    if (initialListeners.length > 0) {
+      throw new Error(`${nameForError(paths)} has no selected release while its port is occupied.`);
+    }
+    if (recordedPid === undefined || !processControl.isAlive(recordedPid)) {
+      rmSync(paths.pid, { force: true });
     }
     return;
   }
-  if (!isAlive(pid) && backendPid !== undefined && isAlive(backendPid)) {
+
+  const backend = captureManagedBackend(paths, release, processControl);
+  const launcher = captureManagedLauncher(paths, release, processControl);
+  if (initialListeners.length > 0 && !backend) {
     throw new Error(
-      `${nameForError(paths)} runtime pid ${String(pid)} exited while backend pid ${String(backendPid)} survived.`,
+      `${nameForError(paths)} port ${String(paths.port)} is occupied by an unverified process.`,
     );
   }
-  if (isAlive(pid)) {
-    const launcher = assertManagedLauncher(name, paths, pid);
-    console.log(`[t3-pipeline] stopping ${name} server pid ${pid}`);
-    process.kill(pid, "SIGTERM");
-    const deadline = Date.now() + 15_000;
-    if (!waitForProcessExit(pid, deadline)) {
-      const selectedLauncher = assertManagedLauncher(name, paths, pid);
-      if (selectedLauncher.command !== launcher.command || selectedLauncher.cwd !== launcher.cwd) {
-        throw new Error(`Refusing to kill reused ${name} launcher pid ${String(pid)}.`);
+
+  if (launcher) {
+    assertLauncherStillOwned(paths, release, launcher, processControl, "terminate");
+    console.log(`[t3-pipeline] stopping ${name} launcher pid ${String(launcher.pid)}`);
+    processControl.signal(launcher.pid, "SIGTERM");
+    waitForCondition(
+      () =>
+        !processControl.isAlive(launcher.pid) &&
+        (!backend || !processControl.isAlive(backend.process.pid)) &&
+        processControl.listenerPids(paths.port).length === 0,
+      15_000,
+      processControl,
+    );
+    if (processControl.isAlive(launcher.pid)) {
+      assertLauncherStillOwned(paths, release, launcher, processControl, "kill");
+      processControl.signal(launcher.pid, "SIGKILL");
+      if (!waitForCondition(() => !processControl.isAlive(launcher.pid), 5_000, processControl)) {
+        throw new Error(
+          `${nameForError(paths)} launcher pid ${String(launcher.pid)} survived SIGKILL.`,
+        );
       }
-      process.kill(pid, "SIGKILL");
-      if (!waitForProcessExit(pid, Date.now() + 5_000)) {
-        throw new Error(`${nameForError(paths)} runtime pid ${String(pid)} survived SIGKILL.`);
-      }
-    }
-    if (backendPid !== undefined && !waitForProcessExit(backendPid, Date.now() + 5_000)) {
-      throw new Error(
-        `${nameForError(paths)} backend pid ${String(backendPid)} survived runtime shutdown.`,
-      );
     }
   }
-  unlinkSync(paths.pid);
+
+  if (backend && processControl.isAlive(backend.process.pid)) {
+    assertBackendStillOwned(paths, release, backend, processControl, "terminate");
+    console.log(`[t3-pipeline] stopping ${name} backend pid ${String(backend.process.pid)}`);
+    processControl.signal(backend.process.pid, "SIGTERM");
+    if (
+      !waitForCondition(() => !processControl.isAlive(backend.process.pid), 5_000, processControl)
+    ) {
+      assertBackendStillOwned(paths, release, backend, processControl, "kill");
+      processControl.signal(backend.process.pid, "SIGKILL");
+      if (
+        !waitForCondition(() => !processControl.isAlive(backend.process.pid), 5_000, processControl)
+      ) {
+        throw new Error(
+          `${nameForError(paths)} backend pid ${String(backend.process.pid)} survived SIGKILL.`,
+        );
+      }
+    }
+  }
+
+  if (processControl.listenerPids(paths.port).length > 0) {
+    throw new Error(
+      `${nameForError(paths)} port ${String(paths.port)} remained occupied after shutdown.`,
+    );
+  }
+  if (launcher || recordedPid === undefined || !processControl.isAlive(recordedPid)) {
+    rmSync(paths.pid, { force: true });
+  }
 }
 
 export async function stop(name, options = {}) {
   const releaseLock = acquireOperationLock(name, "stop");
   try {
     await recoverInterruptedOperation(name, options);
-    stopUnlocked(name);
+    stopUnlocked(name, environmentPaths(name), options.processControl ?? defaultProcessControl);
   } finally {
     releaseLock();
   }
 }
 
-function waitForServer(port) {
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    const response = spawnSync(
-      "curl",
-      ["--fail", "--silent", "--show-error", "--max-time", "2", `http://127.0.0.1:${port}/`],
-      { stdio: "ignore" },
-    );
-    if (response.status === 0) return;
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+function runtimeStateMatches(left, right) {
+  return (
+    left.pid === right.pid &&
+    left.startedAt === right.startedAt &&
+    left.port === right.port &&
+    left.origin === right.origin
+  );
+}
+
+function isRejectedRuntime(state, rejectedRuntimeIdentity) {
+  return (
+    rejectedRuntimeIdentity !== undefined &&
+    state.pid === rejectedRuntimeIdentity.pid &&
+    state.startedAt === rejectedRuntimeIdentity.startedAt
+  );
+}
+
+export async function waitForServer(
+  { paths, expectedRelease, rejectedRuntimeIdentity, launchedAfter },
+  processControl = defaultProcessControl,
+) {
+  const selectedExpectedRelease = realpathSync(expectedRelease);
+  const deadline = processControl.now() + 30_000;
+  while (processControl.now() < deadline) {
+    try {
+      const state = readBackendRuntimeState(paths);
+      if (
+        !state ||
+        isRejectedRuntime(state, rejectedRuntimeIdentity) ||
+        Date.parse(state.startedAt) < launchedAfter
+      ) {
+        processControl.pause(250);
+        continue;
+      }
+      const backend = processControl.inspectProcess(state.pid);
+      const listeners = processControl.listenerPids(paths.port);
+      if (
+        backend.cwd !== selectedExpectedRelease ||
+        !backendCommandMatches(backend, selectedExpectedRelease) ||
+        !processBirthMatchesRuntime(backend, state) ||
+        listeners.length !== 1 ||
+        listeners[0] !== state.pid
+      ) {
+        processControl.pause(250);
+        continue;
+      }
+      if (!processControl.httpReady(paths.port)) {
+        processControl.pause(250);
+        continue;
+      }
+      const confirmedState = readBackendRuntimeState(paths);
+      if (!confirmedState || !runtimeStateMatches(state, confirmedState)) {
+        processControl.pause(250);
+        continue;
+      }
+      const confirmedBackend = processControl.inspectProcess(state.pid);
+      const confirmedListeners = processControl.listenerPids(paths.port);
+      if (
+        !sameProcessIdentity(backend, confirmedBackend) ||
+        !backendCommandMatches(confirmedBackend, selectedExpectedRelease) ||
+        confirmedListeners.length !== 1 ||
+        confirmedListeners[0] !== state.pid
+      ) {
+        processControl.pause(250);
+        continue;
+      }
+      return { pid: state.pid, startedAt: state.startedAt };
+    } catch {
+      processControl.pause(250);
+    }
   }
-  throw new Error(`T3 server did not become ready on port ${port}.`);
+  throw new Error(`T3 server did not become ready on port ${String(paths.port)}.`);
 }
 
 function resolveProductionHead() {
@@ -612,6 +1023,7 @@ async function deployUnlocked(
     waitUntilReady = waitForServer,
     resolveTrackedHead = resolveProductionHead,
     verify,
+    processControl = defaultProcessControl,
   } = {},
 ) {
   const paths = environmentPaths(name);
@@ -639,9 +1051,9 @@ async function deployUnlocked(
   let transactionStarted = false;
   if (!hasCompleteReleaseRuntime(release)) {
     if (current === release) {
-      beginOperationTransaction(paths, "deploy", current, previous);
+      beginOperationTransaction(paths, "deploy", current, previous, processControl);
       transactionStarted = true;
-      stopUnlocked(name);
+      stopUnlocked(name, paths, processControl);
     }
     rmSync(release, { recursive: true, force: true });
     run("pnpm", ["deploy", "--legacy", "--filter", "t3", "--prod", release]);
@@ -671,21 +1083,30 @@ async function deployUnlocked(
 
   const verifySelectedRelease =
     verify ?? (name === "production" ? verifyProduction : async () => undefined);
-  if (!transactionStarted) beginOperationTransaction(paths, "deploy", current, previous);
-  const previousRuntimePid = readBackendRuntimePid(paths);
-  stopUnlocked(name);
+  if (!transactionStarted)
+    beginOperationTransaction(paths, "deploy", current, previous, processControl);
+  const previousRuntimeIdentity = readBackendRuntimeIdentity(paths);
+  stopUnlocked(name, paths, processControl);
   replaceReleasePointer(paths.current, release);
 
   try {
     const launchedAfter = Date.now();
     launch(name, paths, release, manifest.sha);
-    await waitUntilReady(paths.port);
+    await waitUntilReady(
+      {
+        paths,
+        expectedRelease: release,
+        rejectedRuntimeIdentity: previousRuntimeIdentity,
+        launchedAfter,
+      },
+      processControl,
+    );
     await verifySelectedRelease({
       runtimeRoot,
       port: paths.port,
       expectedRelease: release,
       expectedSha: manifest.sha,
-      previousRuntimePid,
+      previousRuntimeIdentity,
       launchedAfter,
     });
     const selectedRelease = realpathSync(release);
@@ -697,9 +1118,10 @@ async function deployUnlocked(
     clearManualIntervention(paths);
     clearOperationTransaction(paths);
   } catch (error) {
-    const rejectedRuntimePid = readBackendRuntimePid(paths);
+    assertRecoveryMayProceed(paths, "deploy", error);
+    const rejectedRuntimeIdentity = readBackendRuntimeIdentity(paths);
     try {
-      stopUnlocked(name);
+      stopUnlocked(name, paths, processControl);
       clearReleasePointer(paths.current);
       if (previous) replaceReleasePointer(paths.previous, previous);
       else clearReleasePointer(paths.previous);
@@ -714,13 +1136,16 @@ async function deployUnlocked(
       const previousHash = JSON.parse(readFileSync(previousManifest, "utf8")).sha;
       const launchedAfter = Date.now();
       launch(name, paths, current, previousHash);
-      await waitUntilReady(paths.port);
+      await waitUntilReady(
+        { paths, expectedRelease: current, rejectedRuntimeIdentity, launchedAfter },
+        processControl,
+      );
       await verifySelectedRelease({
         runtimeRoot,
         port: paths.port,
         expectedRelease: current,
         expectedSha: previousHash,
-        previousRuntimePid: rejectedRuntimePid,
+        previousRuntimeIdentity: rejectedRuntimeIdentity,
         launchedAfter,
       });
       clearManualIntervention(paths);
@@ -774,7 +1199,12 @@ async function status(name) {
 
 async function startUnlocked(
   name,
-  { launch = launchRelease, waitUntilReady = waitForServer, verify } = {},
+  {
+    launch = launchRelease,
+    waitUntilReady = waitForServer,
+    verify,
+    processControl = defaultProcessControl,
+  } = {},
 ) {
   const paths = environmentPaths(name);
   if (!existsSync(paths.current)) fail(`No current ${name} release is available.`);
@@ -788,17 +1218,25 @@ async function startUnlocked(
   }
   const verifySelectedRelease =
     verify ?? (name === "production" ? verifyProduction : async () => undefined);
-  const previousRuntimePid = readBackendRuntimePid(paths);
-  stopUnlocked(name, paths);
+  const previousRuntimeIdentity = readBackendRuntimeIdentity(paths);
+  stopUnlocked(name, paths, processControl);
   const launchedAfter = Date.now();
   launch(name, paths, release, commitHash);
-  await waitUntilReady(paths.port);
+  await waitUntilReady(
+    {
+      paths,
+      expectedRelease: release,
+      rejectedRuntimeIdentity: previousRuntimeIdentity,
+      launchedAfter,
+    },
+    processControl,
+  );
   await verifySelectedRelease({
     runtimeRoot,
     port: paths.port,
     expectedRelease: release,
     expectedSha: commitHash,
-    previousRuntimePid,
+    previousRuntimeIdentity,
     launchedAfter,
   });
   clearManualIntervention(paths);
@@ -817,7 +1255,12 @@ export async function start(name, options = {}) {
 
 async function rollbackUnlocked(
   name,
-  { launch = launchRelease, waitUntilReady = waitForServer, verify } = {},
+  {
+    launch = launchRelease,
+    waitUntilReady = waitForServer,
+    verify,
+    processControl = defaultProcessControl,
+  } = {},
 ) {
   const paths = environmentPaths(name);
   if (!existsSync(paths.current)) fail(`No current ${name} release is available.`);
@@ -833,9 +1276,9 @@ async function rollbackUnlocked(
   }
   const verifySelectedRelease =
     verify ?? (name === "production" ? verifyProduction : async () => undefined);
-  beginOperationTransaction(paths, "rollback", current, previous);
-  const previousRuntimePid = readBackendRuntimePid(paths);
-  stopUnlocked(name, paths);
+  beginOperationTransaction(paths, "rollback", current, previous, processControl);
+  const previousRuntimeIdentity = readBackendRuntimeIdentity(paths);
+  stopUnlocked(name, paths, processControl);
   replaceReleasePointer(paths.current, previous);
   replaceReleasePointer(paths.previous, current);
   const rollbackHash = existsSync(join(previous, "manifest.json"))
@@ -844,34 +1287,46 @@ async function rollbackUnlocked(
   try {
     const launchedAfter = Date.now();
     launch(name, paths, previous, rollbackHash);
-    await waitUntilReady(paths.port);
+    await waitUntilReady(
+      {
+        paths,
+        expectedRelease: previous,
+        rejectedRuntimeIdentity: previousRuntimeIdentity,
+        launchedAfter,
+      },
+      processControl,
+    );
     await verifySelectedRelease({
       runtimeRoot,
       port: paths.port,
       expectedRelease: previous,
       expectedSha: rollbackHash,
-      previousRuntimePid,
+      previousRuntimeIdentity,
       launchedAfter,
     });
     clearManualIntervention(paths);
     clearOperationTransaction(paths);
   } catch (error) {
-    const rejectedRuntimePid = readBackendRuntimePid(paths);
+    assertRecoveryMayProceed(paths, "rollback", error);
+    const rejectedRuntimeIdentity = readBackendRuntimeIdentity(paths);
     try {
-      stopUnlocked(name, paths);
+      stopUnlocked(name, paths, processControl);
       replaceReleasePointer(paths.current, current);
       replaceReleasePointer(paths.previous, previous);
       const currentManifest = join(current, "manifest.json");
       const currentHash = JSON.parse(readFileSync(currentManifest, "utf8")).sha;
       const launchedAfter = Date.now();
       launch(name, paths, current, currentHash);
-      await waitUntilReady(paths.port);
+      await waitUntilReady(
+        { paths, expectedRelease: current, rejectedRuntimeIdentity, launchedAfter },
+        processControl,
+      );
       await verifySelectedRelease({
         runtimeRoot,
         port: paths.port,
         expectedRelease: current,
         expectedSha: currentHash,
-        previousRuntimePid: rejectedRuntimePid,
+        previousRuntimeIdentity: rejectedRuntimeIdentity,
         launchedAfter,
       });
       clearManualIntervention(paths);

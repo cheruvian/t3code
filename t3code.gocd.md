@@ -38,6 +38,8 @@ The candidate and production pipelines observe their Git materials automatically
 of `t3code-production-rollback` requires manual approval, so observing a new `main` revision never
 starts a rollback. Starting that pipeline deliberately swaps production's `current` and `previous`
 release pointers, launches the release that was one version back, and verifies it.
+The emergency job reuses its existing material checkout and runs the dependency-free Node rollback
+command directly, avoiding a clean clone and package install before an artifact-only rollback.
 
 GoCD promotes committed material, not uncommitted worktree changes. Keep the production material at
 `https://github.com/cheruvian/t3code.git` on `main`; the deployment command independently checks that
@@ -49,18 +51,23 @@ Production `deploy`, `start`, `stop`, and `rollback` operations share a filesyst
 Only one process can mutate the production runtime and its release pointers at a time. Production
 verification runs inside the same locked deploy or rollback transaction rather than in a later GoCD
 stage. The lock records its owner and can be reclaimed only after that process has exited.
-Before signaling a recorded launcher PID, the pipeline verifies that it owns either the selected
-release or the backend listening on that environment's port, so a stale reused PID is rejected.
+New launcher records include both the PID and an OS process-birth token. Before every signal, the
+pipeline revalidates that token, the exact command, working directory, selected release, backend
+runtime generation, and environment-port ownership as applicable. A stale, legacy, or reused
+launcher PID is never signaled. When the launcher has already exited, an independently verified
+backend is terminated directly, and replacement cannot start until that backend and every listener
+on the environment port are gone.
 
 Before stopping the active production process or changing `current`, deployment resolves the fork's
 `main` head. It rejects an unavailable or malformed head and rejects any artifact whose manifest SHA
 is no longer that head. This prevents an older queued build from replacing newer production code.
 
 The production verifier binds an exact 40-character SHA to the selected release and the live backend.
-It checks the `current` pointer and manifest, a newly launched runtime PID and start record, ownership
-of the production listener, the process working directory, the release's server entry in the process
-command, and HTTP readiness. It rereads runtime state before succeeding so a process replacement
-during verification also fails the transaction.
+It checks the `current` pointer and manifest, a newly launched runtime generation, exclusive
+ownership of the production listener, the process working directory, an exact release command, and
+HTTP readiness. Runtime state and the same process/listener identity are checked both before and
+after HTTP, so an orphan's response or a listener handoff cannot satisfy readiness or final
+verification.
 
 Deploy and rollback both snapshot the original `current` and `previous` pointers. If the selected
 release fails to launch or verify, the operation restores the complete pointer snapshot, relaunches

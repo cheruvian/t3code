@@ -105,4 +105,14 @@ it("keeps production rollback manual while tracking fork main", () => {
     "true",
     "fork main updates must be observed without automatically scheduling rollback",
   );
+  assert.equal(
+    readScalar(firstStage.block, "clean_workspace"),
+    "false",
+    "emergency rollback must reuse its material checkout",
+  );
+  assert.equal(
+    /\bpnpm\s*$|arguments:\s*\[install\b/m.test(firstStage.block),
+    false,
+    "the dependency-free rollback command must not wait for a package install",
+  );
 });

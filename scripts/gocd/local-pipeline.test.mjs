@@ -4,7 +4,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-const { spawn, spawnSync } = NodeChildProcess;
+const { spawnSync } = NodeChildProcess;
 const {
   chmodSync,
   existsSync,
@@ -47,6 +47,47 @@ function createCompleteRelease(release, sha) {
   if (platform() !== "win32") chmodSync(electronExecutable, 0o755);
 }
 
+function createProcessControl(
+  processes,
+  {
+    now = Date.parse("2026-08-14T12:00:00.000Z"),
+    onPause = () => undefined,
+    httpReady = () => true,
+  } = {},
+) {
+  const signals = [];
+  let currentTime = now;
+  return {
+    signals,
+    now: () => currentTime,
+    pause: (milliseconds) => {
+      currentTime += milliseconds;
+      onPause(milliseconds);
+    },
+    isAlive: (pid) => processes.get(pid)?.alive === true,
+    inspectProcess: (pid) => {
+      const selected = processes.get(pid);
+      if (!selected?.alive) throw new Error(`Could not inspect managed process ${String(pid)}.`);
+      return { pid, ...selected };
+    },
+    listenerPids: (port) =>
+      [...processes.entries()]
+        .filter(([, selected]) => selected.alive && selected.listenerPort === port)
+        .map(([pid]) => pid),
+    signal: (pid, signal) => {
+      signals.push([pid, signal]);
+      const selected = processes.get(pid);
+      if (!selected?.alive) throw new Error(`Process ${String(pid)} is not alive.`);
+      selected.onSignal?.(signal, selected);
+    },
+    httpReady,
+  };
+}
+
+function createQuiescentProcessControl() {
+  return createProcessControl(new Map());
+}
+
 it("launches the long-lived Electron runtime directly and records its pid", async () => {
   const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-launch-owner-"));
   const release = join(sandbox, "release");
@@ -73,6 +114,7 @@ it("launches the long-lived Electron runtime directly and records its pid", asyn
           launches.push({ command, args, options });
           return { pid: 4242, unref() {} };
         },
+        readBirthToken: () => "2026-08-14T11:59:00.000Z",
       },
     );
 
@@ -84,10 +126,105 @@ it("launches the long-lived Electron runtime directly and records its pid", asyn
     assert.equal(launches[0].options.cwd, release);
     assert.equal(launches[0].options.detached, true);
     assert.equal(launches[0].options.env.ELECTRON_RUN_AS_NODE, undefined);
-    assert.equal(readFileSync(join(runtimeRoot, "electron.pid"), "utf8"), "4242\n");
+    assert.deepStrictEqual(JSON.parse(readFileSync(join(runtimeRoot, "electron.pid"), "utf8")), {
+      version: 1,
+      pid: 4242,
+      processBirthToken: "2026-08-14T11:59:00.000Z",
+    });
+
+    rmSync(join(runtimeRoot, "electron.pid"), { force: true });
+    const terminationSignals = [];
+    expect(() =>
+      launchRelease(
+        "production",
+        {
+          base: runtimeRoot,
+          home: join(runtimeRoot, "home"),
+          pid: join(runtimeRoot, "electron.pid"),
+          log: join(runtimeRoot, "electron.log"),
+          port: 17774,
+        },
+        release,
+        sha,
+        {
+          spawnProcess: () => ({ pid: 4343, unref() {} }),
+          terminateSpawnedRuntime: (child) => terminationSignals.push([child.pid, "SIGTERM"]),
+          readBirthToken: () => {
+            throw new Error("simulated birth-token inspection failure");
+          },
+        },
+      ),
+    ).toThrow("simulated birth-token inspection failure");
+    assert.deepStrictEqual(terminationSignals, [[4343, "SIGTERM"]]);
+    assert.equal(existsSync(join(runtimeRoot, "electron.pid")), false);
+
+    expect(() =>
+      launchRelease(
+        "production",
+        {
+          base: runtimeRoot,
+          home: join(runtimeRoot, "home"),
+          pid: join(runtimeRoot, "electron.pid"),
+          log: join(runtimeRoot, "electron.log"),
+          port: 17774,
+        },
+        release,
+        sha,
+        {
+          spawnProcess: () => ({ pid: 4444, unref() {} }),
+          readBirthToken: () => "2026-08-14T11:59:00.000Z",
+          writeLauncherRecord: () => {
+            throw new Error("simulated launcher-record persistence failure");
+          },
+          terminateSpawnedRuntime: (child) => terminationSignals.push([child.pid, "SIGTERM"]),
+        },
+      ),
+    ).toThrow("simulated launcher-record persistence failure");
+    assert.deepStrictEqual(terminationSignals, [
+      [4343, "SIGTERM"],
+      [4444, "SIGTERM"],
+    ]);
+
+    let incompleteCleanupError;
+    try {
+      launchRelease(
+        "production",
+        {
+          base: runtimeRoot,
+          home: join(runtimeRoot, "home"),
+          pid: join(runtimeRoot, "electron.pid"),
+          log: join(runtimeRoot, "electron.log"),
+          port: 17774,
+        },
+        release,
+        sha,
+        {
+          spawnProcess: () => ({ pid: 4545, unref() {} }),
+          readBirthToken: () => {
+            throw new Error("simulated registration failure");
+          },
+          terminateSpawnedRuntime: () => {
+            throw new Error("simulated spawned runtime survivor");
+          },
+        },
+      );
+    } catch (error) {
+      incompleteCleanupError = error;
+    }
+    assert.equal(incompleteCleanupError instanceof AggregateError, true);
+    assert.equal(incompleteCleanupError?.runtimeCleanupIncomplete, true);
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
   }
+});
+
+it("fails closed when listener inspection reports an error", async () => {
+  const { parseListenerPids } = await import("./local-pipeline.mjs?listener-inspection-test");
+
+  expect(() =>
+    parseListenerPids({ status: 1, stdout: "", stderr: "permission denied\n" }, 17774),
+  ).toThrow("Could not inspect listeners on port 17774");
+  assert.deepStrictEqual(parseListenerPids({ status: 1, stdout: "", stderr: "" }, 17774), []);
 });
 
 it("restores the complete release snapshot when the replacement cannot launch", async () => {
@@ -120,6 +257,7 @@ it("restores the complete release snapshot when the replacement cannot launch", 
     const selectedReleaseB = realpathSync(releaseB);
     await expect(
       deploy("production", {
+        processControl: createQuiescentProcessControl(),
         resolveTrackedHead: () => shaC,
         verify: () => undefined,
         launch: (_name, _paths, release) => {
@@ -140,6 +278,34 @@ it("restores the complete release snapshot when the replacement cannot launch", 
     );
     assert.equal(readlinkSync(join(productionRoot, "current")), selectedReleaseA);
     assert.equal(readlinkSync(join(productionRoot, "previous")), selectedReleaseB);
+
+    launches.length = 0;
+    const incompleteCleanup = new Error("spawned runtime cleanup incomplete");
+    incompleteCleanup.runtimeCleanupIncomplete = true;
+    let withheldRecoveryError;
+    try {
+      await deploy("production", {
+        processControl: createQuiescentProcessControl(),
+        resolveTrackedHead: () => shaC,
+        verify: () => undefined,
+        launch: (_name, _paths, release) => {
+          launches.push(release);
+          throw incompleteCleanup;
+        },
+        waitUntilReady: () => undefined,
+      });
+    } catch (error) {
+      withheldRecoveryError = error;
+    }
+    assert.equal(withheldRecoveryError instanceof AggregateError, true);
+    assert.deepStrictEqual(
+      launches,
+      [releaseC],
+      "recovery must not launch while cleanup is unsafe",
+    );
+    assert.equal(realpathSync(join(productionRoot, "current")), realpathSync(releaseC));
+    assert.equal(existsSync(join(productionRoot, "operation-transaction.json")), true);
+    assert.equal(existsSync(join(productionRoot, "manual-intervention-required.json")), true);
   } finally {
     if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
     else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
@@ -179,6 +345,7 @@ it("rejects a stale production artifact before launch or pointer mutation", asyn
     let deployError;
     try {
       await deploy("production", {
+        processControl: createQuiescentProcessControl(),
         resolveTrackedHead: () => remoteHeadSha,
         launch: (_name, _paths, release) => launches.push(release),
         waitUntilReady: () => undefined,
@@ -242,6 +409,7 @@ it("rejects a stale same-SHA artifact before rebuilding an incomplete current re
     let deployError;
     try {
       await deploy("production", {
+        processControl: createQuiescentProcessControl(),
         resolveTrackedHead: () => remoteHeadSha,
         launch: () => undefined,
         waitUntilReady: () => undefined,
@@ -307,6 +475,7 @@ it("rejects a production artifact when fork main advances between preflight and 
     let deployError;
     try {
       await deploy("production", {
+        processControl: createQuiescentProcessControl(),
         resolveTrackedHead: () => resolvedHeads.shift(),
         launch: () => undefined,
         waitUntilReady: () => undefined,
@@ -374,6 +543,7 @@ it("rejects a production deploy while another operation holds the lock", async (
     let deployError;
     try {
       await deploy("production", {
+        processControl: createQuiescentProcessControl(),
         resolveTrackedHead: () => artifactSha,
         launch: (_name, _paths, release) => launches.push(release),
         waitUntilReady: () => undefined,
@@ -409,38 +579,51 @@ it("rejects a production deploy while another operation holds the lock", async (
   }
 });
 
-it("refuses to stop a live pid that does not own the production runtime", async () => {
+it("refuses to signal a foreign process occupying the production port", async () => {
   const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-unowned-launcher-"));
   const runtimeRoot = join(sandbox, "runtime");
   const artifactRoot = join(sandbox, "artifact");
   const productionRoot = join(runtimeRoot, "production");
   const launcherPid = join(productionRoot, "electron.pid");
   const operationLock = join(productionRoot, "operation.lock");
+  const release = join(productionRoot, "releases", "a".repeat(40));
+  const unrelatedPid = 4101;
   const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
   const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
-  const unrelatedProcess = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-    stdio: "ignore",
-  });
 
   try {
     process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
     process.env.T3_PIPELINE_ARTIFACT_ROOT = artifactRoot;
-    await new Promise((resolveSpawn, rejectSpawn) => {
-      unrelatedProcess.once("spawn", resolveSpawn);
-      unrelatedProcess.once("error", rejectSpawn);
-    });
-    assert.ok(unrelatedProcess.pid, "the unrelated fixture process must start");
-    writeFixture(launcherPid, `${String(unrelatedProcess.pid)}\n`);
+    createCompleteRelease(release, "a".repeat(40));
+    symlinkSync(release, join(productionRoot, "current"));
+    writeFixture(
+      launcherPid,
+      `${JSON.stringify({
+        version: 1,
+        pid: unrelatedPid,
+        processBirthToken: "2026-08-14T11:00:00.000Z",
+      })}\n`,
+    );
+    const processes = new Map([
+      [
+        unrelatedPid,
+        {
+          alive: true,
+          birthToken: "2026-08-14T11:00:00.000Z",
+          command: "/usr/bin/unrelated --serve",
+          cwd: realpathSync(release),
+          listenerPort: 17774,
+        },
+      ],
+    ]);
+    const processControl = createProcessControl(processes);
 
     const { stop } = await import("./local-pipeline.mjs?unowned-launcher-stop-test");
-    await expect(stop("production")).rejects.toThrow(
-      /does not own the selected production runtime/,
+    await expect(stop("production", { processControl })).rejects.toThrow(
+      /occupied by an unverified process/,
     );
 
-    assert.doesNotThrow(
-      () => process.kill(unrelatedProcess.pid, 0),
-      "an unrelated live process must not be signaled",
-    );
+    assert.deepStrictEqual(processControl.signals, []);
     assert.equal(
       existsSync(launcherPid),
       true,
@@ -448,7 +631,6 @@ it("refuses to stop a live pid that does not own the production runtime", async 
     );
     assert.equal(existsSync(operationLock), false, "the operation lock must still be released");
   } finally {
-    unrelatedProcess.kill("SIGTERM");
     if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
     else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
     if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
@@ -457,82 +639,621 @@ it("refuses to stop a live pid that does not own the production runtime", async 
   }
 });
 
-it("fails stop when the tracked runtime exited but its backend survived", async () => {
+it("stops an owned orphan backend after the tracked launcher exited", async () => {
   const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-orphaned-backend-"));
   const runtimeRoot = join(sandbox, "runtime");
   const artifactRoot = join(sandbox, "artifact");
   const productionRoot = join(runtimeRoot, "production");
+  const sha = "a".repeat(40);
+  const release = join(productionRoot, "releases", sha);
+  const backendPid = 4202;
   const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
   const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
-  const backend = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-    stdio: "ignore",
-  });
 
   try {
     process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
     process.env.T3_PIPELINE_ARTIFACT_ROOT = artifactRoot;
+    createCompleteRelease(release, sha);
+    symlinkSync(release, join(productionRoot, "current"));
     writeFixture(join(productionRoot, "electron.pid"), "2147483647\n");
     writeFixture(
       join(productionRoot, "home", "userdata", "server-runtime.json"),
-      `${JSON.stringify({ pid: backend.pid })}\n`,
+      `${JSON.stringify({
+        version: 1,
+        pid: backendPid,
+        port: 17774,
+        origin: "http://127.0.0.1:17774",
+        startedAt: "2026-08-14T11:59:00.000Z",
+      })}\n`,
     );
+    const selectedRelease = realpathSync(release);
+    const processes = new Map([
+      [
+        backendPid,
+        {
+          alive: true,
+          ppid: 1,
+          birthToken: "2026-08-14T11:58:59.000Z",
+          command: `${electronExecutablePath(selectedRelease)} ${join(selectedRelease, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`,
+          cwd: selectedRelease,
+          listenerPort: 17774,
+          onSignal: (signal, selected) => {
+            if (signal === "SIGTERM") {
+              selected.alive = false;
+              selected.listenerPort = undefined;
+            }
+          },
+        },
+      ],
+    ]);
+    const processControl = createProcessControl(processes);
 
     const { stop } = await import("./local-pipeline.mjs?orphaned-backend-test");
-    await expect(stop("production")).rejects.toThrow(
-      `runtime pid 2147483647 exited while backend pid ${String(backend.pid)} survived`,
-    );
-    assert.doesNotThrow(() => process.kill(backend.pid, 0));
-    assert.equal(existsSync(join(productionRoot, "electron.pid")), true);
+    await stop("production", { processControl });
+
+    assert.deepStrictEqual(processControl.signals, [[backendPid, "SIGTERM"]]);
+    assert.equal(processControl.listenerPids(17774).length, 0);
+    assert.equal(existsSync(join(productionRoot, "electron.pid")), false);
   } finally {
     if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
     else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
     if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
     else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
-    backend.kill("SIGKILL");
     rmSync(sandbox, { recursive: true, force: true });
   }
 });
 
-it("fails stop when runtime ownership is missing or invalid but its backend survived", async () => {
+it("ignores a stale launcher record while stopping its independently owned backend", async () => {
   const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-untracked-backend-"));
   const runtimeRoot = join(sandbox, "runtime");
   const artifactRoot = join(sandbox, "artifact");
   const productionRoot = join(runtimeRoot, "production");
   const runtimePidPath = join(productionRoot, "electron.pid");
+  const sha = "a".repeat(40);
+  const release = join(productionRoot, "releases", sha);
+  const staleLauncherPid = 4301;
+  const backendPid = 4302;
   const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
   const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
-  const backend = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-    stdio: "ignore",
-  });
 
   try {
     process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
     process.env.T3_PIPELINE_ARTIFACT_ROOT = artifactRoot;
+    createCompleteRelease(release, sha);
+    symlinkSync(release, join(productionRoot, "current"));
+    writeFixture(
+      runtimePidPath,
+      `${JSON.stringify({
+        version: 1,
+        pid: staleLauncherPid,
+        processBirthToken: "2026-08-14T11:00:00.000Z",
+      })}\n`,
+    );
     writeFixture(
       join(productionRoot, "home", "userdata", "server-runtime.json"),
-      `${JSON.stringify({ pid: backend.pid })}\n`,
+      `${JSON.stringify({
+        version: 1,
+        pid: backendPid,
+        port: 17774,
+        origin: "http://127.0.0.1:17774",
+        startedAt: "2026-08-14T11:59:00.000Z",
+      })}\n`,
     );
+    const selectedRelease = realpathSync(release);
+    const processes = new Map([
+      [
+        staleLauncherPid,
+        {
+          alive: true,
+          ppid: 1,
+          birthToken: "2026-08-14T11:30:00.000Z",
+          command: `${electronExecutablePath(selectedRelease)} ${join(selectedRelease, "apps/desktop/dist-electron/main.cjs")}`,
+          cwd: selectedRelease,
+        },
+      ],
+      [
+        backendPid,
+        {
+          alive: true,
+          ppid: 1,
+          birthToken: "2026-08-14T11:58:59.000Z",
+          command: `${electronExecutablePath(selectedRelease)} ${join(selectedRelease, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`,
+          cwd: selectedRelease,
+          listenerPort: 17774,
+          onSignal: (signal, selected) => {
+            if (signal === "SIGTERM") {
+              selected.alive = false;
+              selected.listenerPort = undefined;
+            }
+          },
+        },
+      ],
+    ]);
+    const processControl = createProcessControl(processes);
     const { stop } = await import("./local-pipeline.mjs?untracked-backend-test");
 
-    await expect(stop("production")).rejects.toThrow(
-      `has no valid runtime pid while backend pid ${String(backend.pid)} survived`,
-    );
-    writeFixture(runtimePidPath, "not-a-pid\n");
-    await expect(stop("production")).rejects.toThrow(
-      `has no valid runtime pid while backend pid ${String(backend.pid)} survived`,
-    );
-    writeFixture(runtimePidPath, `${String(backend.pid)}junk\n`);
-    await expect(stop("production")).rejects.toThrow(
-      `has no valid runtime pid while backend pid ${String(backend.pid)} survived`,
-    );
-    assert.doesNotThrow(() => process.kill(backend.pid, 0));
-    assert.equal(readFileSync(runtimePidPath, "utf8"), `${String(backend.pid)}junk\n`);
+    await stop("production", { processControl });
+
+    assert.deepStrictEqual(processControl.signals, [[backendPid, "SIGTERM"]]);
+    assert.equal(processes.get(staleLauncherPid).alive, true);
+    assert.equal(existsSync(runtimePidPath), true, "the stale live record remains diagnostic");
+    assert.equal(processControl.listenerPids(17774).length, 0);
   } finally {
     if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
     else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
     if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
     else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
-    backend.kill("SIGKILL");
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+it("does not signal a backend PID reused after the recorded runtime generation", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-reused-backend-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const artifactRoot = join(sandbox, "artifact");
+  const productionRoot = join(runtimeRoot, "production");
+  const release = join(productionRoot, "releases", "a".repeat(40));
+  const backendPid = 4402;
+  const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+  const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
+
+  try {
+    process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+    process.env.T3_PIPELINE_ARTIFACT_ROOT = artifactRoot;
+    createCompleteRelease(release, "a".repeat(40));
+    symlinkSync(release, join(productionRoot, "current"));
+    writeFixture(
+      join(productionRoot, "home/userdata/server-runtime.json"),
+      `${JSON.stringify({
+        version: 1,
+        pid: backendPid,
+        port: 17774,
+        origin: "http://127.0.0.1:17774",
+        startedAt: "2026-08-14T11:59:00.000Z",
+      })}\n`,
+    );
+    const selectedRelease = realpathSync(release);
+    const processes = new Map([
+      [
+        backendPid,
+        {
+          alive: true,
+          ppid: 1,
+          birthToken: "2026-08-14T11:59:30.000Z",
+          command: `${electronExecutablePath(selectedRelease)} ${join(selectedRelease, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`,
+          cwd: selectedRelease,
+          listenerPort: 17774,
+        },
+      ],
+    ]);
+    const processControl = createProcessControl(processes);
+    const { stop } = await import("./local-pipeline.mjs?reused-backend-test");
+
+    await expect(stop("production", { processControl })).rejects.toThrow(
+      /process identity does not match/,
+    );
+    assert.deepStrictEqual(processControl.signals, []);
+
+    processes.get(backendPid).birthToken = "2026-08-14T11:58:58.000Z";
+    const inspectStableProcess = processControl.inspectProcess;
+    let inspections = 0;
+    processControl.inspectProcess = (pid) => {
+      const inspected = inspectStableProcess(pid);
+      inspections += 1;
+      return inspections === 1
+        ? inspected
+        : { ...inspected, birthToken: "2026-08-14T11:58:59.000Z" };
+    };
+    await expect(stop("production", { processControl })).rejects.toThrow(/reused backend pid/);
+    assert.deepStrictEqual(processControl.signals, []);
+  } finally {
+    if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+    else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
+    if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
+    else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+it("kills the same orphan backend after TERM removes its state and listener", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-stubborn-backend-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const artifactRoot = join(sandbox, "artifact");
+  const productionRoot = join(runtimeRoot, "production");
+  const release = join(productionRoot, "releases", "a".repeat(40));
+  const runtimeStatePath = join(productionRoot, "home/userdata/server-runtime.json");
+  const backendPid = 4502;
+  const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+  const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
+
+  try {
+    process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+    process.env.T3_PIPELINE_ARTIFACT_ROOT = artifactRoot;
+    createCompleteRelease(release, "a".repeat(40));
+    symlinkSync(release, join(productionRoot, "current"));
+    writeFixture(
+      runtimeStatePath,
+      `${JSON.stringify({
+        version: 1,
+        pid: backendPid,
+        port: 17774,
+        origin: "http://127.0.0.1:17774",
+        startedAt: "2026-08-14T11:59:00.000Z",
+      })}\n`,
+    );
+    const selectedRelease = realpathSync(release);
+    const processes = new Map([
+      [
+        backendPid,
+        {
+          alive: true,
+          ppid: 1,
+          birthToken: "2026-08-14T11:58:59.000Z",
+          command: `${electronExecutablePath(selectedRelease)} ${join(selectedRelease, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`,
+          cwd: selectedRelease,
+          listenerPort: 17774,
+          onSignal: (signal, selected) => {
+            if (signal === "SIGTERM") {
+              selected.listenerPort = undefined;
+              rmSync(runtimeStatePath, { force: true });
+            }
+            if (signal === "SIGKILL") selected.alive = false;
+          },
+        },
+      ],
+    ]);
+    const processControl = createProcessControl(processes);
+    const { stop } = await import("./local-pipeline.mjs?stubborn-backend-test");
+
+    await stop("production", { processControl });
+
+    assert.deepStrictEqual(processControl.signals, [
+      [backendPid, "SIGTERM"],
+      [backendPid, "SIGKILL"],
+    ]);
+    assert.equal(processControl.listenerPids(17774).length, 0);
+  } finally {
+    if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+    else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
+    if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
+    else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+it("waits for a new expected-release runtime identity instead of an old HTTP responder", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-identity-readiness-"));
+  const productionRoot = join(sandbox, "production");
+  const release = join(productionRoot, "releases", "a".repeat(40));
+  const runtimeStatePath = join(productionRoot, "home/userdata/server-runtime.json");
+  const oldPid = 4601;
+  const newPid = 4602;
+
+  try {
+    createCompleteRelease(release, "a".repeat(40));
+    const selectedRelease = realpathSync(release);
+    const serverCommand = `${electronExecutablePath(selectedRelease)} ${join(selectedRelease, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`;
+    const writeRuntimeState = (pid, startedAt) =>
+      writeFixture(
+        runtimeStatePath,
+        `${JSON.stringify({
+          version: 1,
+          pid,
+          port: 17774,
+          origin: "http://127.0.0.1:17774",
+          startedAt,
+        })}\n`,
+      );
+    writeRuntimeState(oldPid, "2026-08-14T11:50:00.000Z");
+    const processes = new Map([
+      [
+        oldPid,
+        {
+          alive: true,
+          birthToken: "2026-08-14T11:49:59.000Z",
+          command: serverCommand,
+          cwd: selectedRelease,
+          listenerPort: 17774,
+        },
+      ],
+      [
+        newPid,
+        {
+          alive: true,
+          birthToken: "2026-08-14T12:00:00.000Z",
+          command: serverCommand,
+          cwd: selectedRelease,
+        },
+      ],
+    ]);
+    let swapped = false;
+    let httpRequests = 0;
+    const processControl = createProcessControl(processes, {
+      onPause: () => {
+        if (swapped) return;
+        swapped = true;
+        processes.get(oldPid).listenerPort = undefined;
+        processes.get(newPid).listenerPort = 17774;
+        writeRuntimeState(newPid, "2026-08-14T12:00:00.100Z");
+      },
+      httpReady: () => {
+        httpRequests += 1;
+        return true;
+      },
+    });
+    const { waitForServer } = await import("./local-pipeline.mjs?identity-readiness-test");
+
+    const identity = await waitForServer(
+      {
+        paths: {
+          home: join(productionRoot, "home"),
+          port: 17774,
+        },
+        expectedRelease: selectedRelease,
+        rejectedRuntimeIdentity: {
+          pid: oldPid,
+          startedAt: "2026-08-14T11:50:00.000Z",
+        },
+        launchedAfter: Date.parse("2026-08-14T12:00:00.000Z"),
+      },
+      processControl,
+    );
+
+    assert.deepStrictEqual(identity, {
+      pid: newPid,
+      startedAt: "2026-08-14T12:00:00.100Z",
+    });
+    assert.equal(httpRequests, 1, "the rejected old runtime must not be probed as ready");
+
+    const foreignPid = 4603;
+    let handoffRequests = 0;
+    const handoffControl = createProcessControl(processes, {
+      httpReady: () => {
+        handoffRequests += 1;
+        processes.get(newPid).listenerPort = undefined;
+        processes.set(foreignPid, {
+          alive: true,
+          birthToken: "2026-08-14T12:00:01.000Z",
+          command: "/usr/bin/foreign --serve",
+          cwd: sandbox,
+          listenerPort: 17774,
+        });
+        return true;
+      },
+    });
+    await expect(
+      waitForServer(
+        {
+          paths: { home: join(productionRoot, "home"), port: 17774 },
+          expectedRelease: selectedRelease,
+          launchedAfter: Date.parse("2026-08-14T12:00:00.000Z"),
+        },
+        handoffControl,
+      ),
+    ).rejects.toThrow(/did not become ready/);
+    assert.equal(handoffRequests, 1, "a foreign HTTP handoff must not be accepted");
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+it("does not launch a replacement while a foreign listener remains after shutdown", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-residual-listener-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const artifactRoot = join(sandbox, "artifact");
+  const productionRoot = join(runtimeRoot, "production");
+  const release = join(productionRoot, "releases", "a".repeat(40));
+  const backendPid = 4702;
+  const foreignPid = 4703;
+  const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+  const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
+
+  try {
+    process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+    process.env.T3_PIPELINE_ARTIFACT_ROOT = artifactRoot;
+    createCompleteRelease(release, "a".repeat(40));
+    symlinkSync(release, join(productionRoot, "current"));
+    writeFixture(
+      join(productionRoot, "home/userdata/server-runtime.json"),
+      `${JSON.stringify({
+        version: 1,
+        pid: backendPid,
+        port: 17774,
+        origin: "http://127.0.0.1:17774",
+        startedAt: "2026-08-14T11:59:00.000Z",
+      })}\n`,
+    );
+    const selectedRelease = realpathSync(release);
+    const processes = new Map([
+      [
+        backendPid,
+        {
+          alive: true,
+          birthToken: "2026-08-14T11:58:59.000Z",
+          command: `${electronExecutablePath(selectedRelease)} ${join(selectedRelease, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`,
+          cwd: selectedRelease,
+          listenerPort: 17774,
+          onSignal: (signal, selected) => {
+            if (signal !== "SIGTERM") return;
+            selected.alive = false;
+            selected.listenerPort = undefined;
+            processes.set(foreignPid, {
+              alive: true,
+              birthToken: "2026-08-14T12:00:00.000Z",
+              command: "/usr/bin/foreign --serve",
+              cwd: sandbox,
+              listenerPort: 17774,
+            });
+          },
+        },
+      ],
+    ]);
+    const processControl = createProcessControl(processes);
+    const launches = [];
+    const { start } = await import("./local-pipeline.mjs?residual-listener-test");
+
+    await expect(
+      start("production", {
+        processControl,
+        launch: (...args) => launches.push(args),
+        waitUntilReady: () => undefined,
+        verify: () => undefined,
+      }),
+    ).rejects.toThrow(/remained occupied after shutdown/);
+    assert.deepStrictEqual(launches, []);
+    assert.deepStrictEqual(processControl.signals, [[backendPid, "SIGTERM"]]);
+  } finally {
+    if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+    else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
+    if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
+    else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+it("automatically rolls back after a failed replacement leaves an orphan backend", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-orphan-rollback-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const artifactRoot = join(sandbox, "artifact");
+  const productionRoot = join(runtimeRoot, "production");
+  const shaA = "a".repeat(40);
+  const shaB = "b".repeat(40);
+  const shaC = "c".repeat(40);
+  const releaseA = join(productionRoot, "releases", shaA);
+  const releaseB = join(productionRoot, "releases", shaB);
+  const releaseC = join(productionRoot, "releases", shaC);
+  const runtimeStatePath = join(productionRoot, "home/userdata/server-runtime.json");
+  const launcherPath = join(productionRoot, "electron.pid");
+  const initialBackendPid = 4801;
+  const failedLauncherPid = 4802;
+  const failedBackendPid = 4803;
+  const restoredLauncherPid = 4804;
+  const restoredBackendPid = 4805;
+  const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+  const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
+
+  try {
+    process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+    process.env.T3_PIPELINE_ARTIFACT_ROOT = artifactRoot;
+    for (const [release, sha] of [
+      [releaseA, shaA],
+      [releaseB, shaB],
+      [releaseC, shaC],
+    ]) {
+      createCompleteRelease(release, sha);
+    }
+    writeFixture(join(artifactRoot, "manifest.json"), `${JSON.stringify({ sha: shaC })}\n`);
+    symlinkSync(releaseA, join(productionRoot, "current"));
+    symlinkSync(releaseB, join(productionRoot, "previous"));
+    const runtimeState = (pid, startedAt) => ({
+      version: 1,
+      pid,
+      port: 17774,
+      origin: "http://127.0.0.1:17774",
+      startedAt,
+    });
+    const writeState = (pid, startedAt) =>
+      writeFixture(runtimeStatePath, `${JSON.stringify(runtimeState(pid, startedAt))}\n`);
+    const commandFor = (release) =>
+      `${electronExecutablePath(realpathSync(release))} ${join(realpathSync(release), "apps/server/dist/bin.mjs")} --bootstrap-fd 3`;
+    const launcherCommandFor = (release) =>
+      `${electronExecutablePath(realpathSync(release))} ${join(realpathSync(release), "apps/desktop/dist-electron/main.cjs")}`;
+    const stopOnTerm = (signal, selected) => {
+      if (signal !== "SIGTERM") return;
+      selected.alive = false;
+      selected.listenerPort = undefined;
+    };
+    const initialStartedAt = new Date(Date.now() - 10_000).toISOString();
+    writeState(initialBackendPid, initialStartedAt);
+    const processes = new Map([
+      [
+        initialBackendPid,
+        {
+          alive: true,
+          birthToken: new Date(Date.now() - 11_000).toISOString(),
+          command: commandFor(releaseA),
+          cwd: realpathSync(releaseA),
+          listenerPort: 17774,
+          onSignal: stopOnTerm,
+        },
+      ],
+    ]);
+    const processControl = createProcessControl(processes);
+    const launches = [];
+    let transactionWasRunning;
+    const verificationFailure = new Error("replacement verification failed");
+    const { deploy } = await import("./local-pipeline.mjs?orphan-rollback-test");
+    const launch = (_name, _paths, release) => {
+      const isFailedReplacement = realpathSync(release) === realpathSync(releaseC);
+      const launcherPid = isFailedReplacement ? failedLauncherPid : restoredLauncherPid;
+      const backendPid = isFailedReplacement ? failedBackendPid : restoredBackendPid;
+      const startedAt = new Date(Date.now() + launches.length + 1_000).toISOString();
+      const birthToken = new Date(Date.parse(startedAt) - 1_000).toISOString();
+      launches.push(realpathSync(release));
+      writeFixture(
+        launcherPath,
+        `${JSON.stringify({ version: 1, pid: launcherPid, processBirthToken: birthToken })}\n`,
+      );
+      writeState(backendPid, startedAt);
+      processes.set(launcherPid, {
+        alive: true,
+        birthToken,
+        command: launcherCommandFor(release),
+        cwd: realpathSync(release),
+        onSignal: stopOnTerm,
+      });
+      processes.set(backendPid, {
+        alive: true,
+        birthToken,
+        command: commandFor(release),
+        cwd: realpathSync(release),
+        listenerPort: 17774,
+        onSignal: stopOnTerm,
+      });
+    };
+
+    await expect(
+      deploy("production", {
+        processControl,
+        resolveTrackedHead: () => shaC,
+        launch,
+        verify: ({ expectedRelease }) => {
+          if (realpathSync(expectedRelease) === realpathSync(releaseC)) {
+            transactionWasRunning = JSON.parse(
+              readFileSync(join(productionRoot, "operation-transaction.json"), "utf8"),
+            ).wasRunning;
+            throw verificationFailure;
+          }
+        },
+      }),
+    ).rejects.toBe(verificationFailure);
+
+    assert.deepStrictEqual(launches, [realpathSync(releaseC), realpathSync(releaseA)]);
+    assert.equal(
+      transactionWasRunning,
+      true,
+      "an independently verified backend keeps interrupted recovery restartable",
+    );
+    assert.deepStrictEqual(
+      processControl.signals.filter(
+        ([pid]) => pid === failedLauncherPid || pid === failedBackendPid,
+      ),
+      [
+        [failedLauncherPid, "SIGTERM"],
+        [failedBackendPid, "SIGTERM"],
+      ],
+    );
+    assert.equal(realpathSync(join(productionRoot, "current")), realpathSync(releaseA));
+    assert.equal(realpathSync(join(productionRoot, "previous")), realpathSync(releaseB));
+    assert.deepStrictEqual(
+      JSON.parse(readFileSync(runtimeStatePath, "utf8")).pid,
+      restoredBackendPid,
+    );
+  } finally {
+    if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+    else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
+    if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
+    else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
     rmSync(sandbox, { recursive: true, force: true });
   }
 });
@@ -550,6 +1271,7 @@ it("recovers an interrupted deploy transaction before starting the next deploy",
   const releaseC = join(productionRoot, "releases", shaC);
   const operationLock = join(productionRoot, "operation.lock");
   const operationTransaction = join(productionRoot, "operation-transaction.json");
+  const orphanBackendPid = 4901;
   const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
   const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
 
@@ -581,11 +1303,41 @@ it("recovers an interrupted deploy transaction before starting the next deploy",
         wasRunning: true,
       })}\n`,
     );
+    writeFixture(
+      join(productionRoot, "home/userdata/server-runtime.json"),
+      `${JSON.stringify({
+        version: 1,
+        pid: orphanBackendPid,
+        port: 17774,
+        origin: "http://127.0.0.1:17774",
+        startedAt: "2026-08-14T11:59:00.000Z",
+      })}\n`,
+    );
+    const selectedReleaseC = realpathSync(releaseC);
+    const processes = new Map([
+      [
+        orphanBackendPid,
+        {
+          alive: true,
+          birthToken: "2026-08-14T11:58:59.000Z",
+          command: `${electronExecutablePath(selectedReleaseC)} ${join(selectedReleaseC, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`,
+          cwd: selectedReleaseC,
+          listenerPort: 17774,
+          onSignal: (signal, selected) => {
+            if (signal !== "SIGTERM") return;
+            selected.alive = false;
+            selected.listenerPort = undefined;
+          },
+        },
+      ],
+    ]);
+    const processControl = createProcessControl(processes);
 
     const { deploy } = await import("./local-pipeline.mjs?interrupted-deploy-recovery-test");
     const launches = [];
     const verifications = [];
     await deploy("production", {
+      processControl,
       resolveTrackedHead: () => shaC,
       launch: (_name, _paths, release) => launches.push(realpathSync(release)),
       waitUntilReady: () => undefined,
@@ -601,6 +1353,7 @@ it("recovers an interrupted deploy transaction before starting the next deploy",
         previous: realpathSync(join(productionRoot, "previous")),
         operationLockExists: existsSync(operationLock),
         operationTransactionExists: existsSync(operationTransaction),
+        signals: processControl.signals,
       },
       {
         launches: [realpathSync(releaseA), realpathSync(releaseC)],
@@ -612,6 +1365,7 @@ it("recovers an interrupted deploy transaction before starting the next deploy",
         previous: realpathSync(releaseA),
         operationLockExists: false,
         operationTransactionExists: false,
+        signals: [[orphanBackendPid, "SIGTERM"]],
       },
       "the next deploy must recover the interrupted A/B snapshot before attempting C again",
     );
@@ -648,6 +1402,7 @@ it("swaps complete production releases after a successful operator rollback", as
     const transitions = [];
     let runningRelease;
     await rollback("production", {
+      processControl: createQuiescentProcessControl(),
       verify: () => undefined,
       launch: (_name, _paths, release) => {
         runningRelease = release;
@@ -707,6 +1462,7 @@ it("restores the release snapshot when operator rollback cannot launch", async (
     let rollbackError;
     try {
       await rollback("production", {
+        processControl: createQuiescentProcessControl(),
         verify: () => undefined,
         launch: (_name, _paths, release) => {
           launches.push(release);
@@ -775,6 +1531,7 @@ it("recovers when production verification rejects the replacement", async () => 
     let deployError;
     try {
       await deploy("production", {
+        processControl: createQuiescentProcessControl(),
         resolveTrackedHead: () => shaC,
         launch: (_name, _paths, release) => launches.push(realpathSync(release)),
         waitUntilReady: () => undefined,
@@ -849,6 +1606,7 @@ it("recovers when production verification rejects operator rollback", async () =
     let rollbackError;
     try {
       await rollback("production", {
+        processControl: createQuiescentProcessControl(),
         launch: (_name, _paths, release) => launches.push(realpathSync(release)),
         waitUntilReady: () => undefined,
         verify: ({ expectedRelease, expectedSha }) => {
@@ -928,6 +1686,7 @@ it("records both failures when production deploy recovery cannot verify", async 
     let deployError;
     try {
       await deploy("production", {
+        processControl: createQuiescentProcessControl(),
         resolveTrackedHead: () => shaC,
         launch: (_name, _paths, release) => launches.push(realpathSync(release)),
         waitUntilReady: () => undefined,
@@ -1018,6 +1777,7 @@ it("records both failures when operator rollback recovery cannot verify", async 
     let rollbackError;
     try {
       await rollback("production", {
+        processControl: createQuiescentProcessControl(),
         launch: (_name, _paths, release) => launches.push(realpathSync(release)),
         waitUntilReady: () => undefined,
         verify: ({ expectedRelease, expectedSha }) => {
@@ -1101,6 +1861,7 @@ it("preserves the rollback target across an explicit same-SHA deploy retry", asy
     const transitions = [];
     let runningRelease;
     const operationOptions = {
+      processControl: createQuiescentProcessControl(),
       launch: (_name, _paths, release) => {
         runningRelease = realpathSync(release);
         transitions.push(["launch", runningRelease]);
@@ -1243,6 +2004,7 @@ it("clears manual intervention only after a locked production start verifies", a
     const transitions = [];
     let runningRelease;
     await start("production", {
+      processControl: createQuiescentProcessControl(),
       launch: (_name, _paths, release, sha) => {
         runningRelease = realpathSync(release);
         transitions.push([
@@ -1327,6 +2089,7 @@ it("records an unrecoverable legacy fallback when bootstrap verification fails",
     let deployError;
     try {
       await deploy("production", {
+        processControl: createQuiescentProcessControl(),
         resolveTrackedHead: () => shaC,
         launch: (_name, _paths, release) => launches.push(realpathSync(release)),
         waitUntilReady: () => undefined,
@@ -1426,6 +2189,7 @@ it("rejects unavailable and malformed tracked heads before production mutation",
     ]) {
       try {
         await deploy("production", {
+          processControl: createQuiescentProcessControl(),
           resolveTrackedHead,
           launch: (_name, _paths, release) => launches.push(realpathSync(release)),
           waitUntilReady: () => undefined,
@@ -1491,6 +2255,7 @@ it("holds the production operation lock through injected deploy verification", a
     const { deploy } = await import("./local-pipeline.mjs?locked-deploy-verification-test");
     const verificationObservations = [];
     await deploy("production", {
+      processControl: createQuiescentProcessControl(),
       resolveTrackedHead: () => shaC,
       launch: () => undefined,
       waitUntilReady: () => undefined,
@@ -1551,6 +2316,7 @@ it("does not advertise an incomplete legacy release after successful bootstrap",
     const { deploy } = await import("./local-pipeline.mjs?legacy-bootstrap-success-test");
     const transitions = [];
     await deploy("production", {
+      processControl: createQuiescentProcessControl(),
       resolveTrackedHead: () => shaC,
       launch: (_name, _paths, release) => transitions.push(["launch", realpathSync(release)]),
       waitUntilReady: () => undefined,
@@ -1612,6 +2378,7 @@ it("rejects rollback when the previous release lacks its Electron executable", a
     let rollbackError;
     try {
       await rollback("production", {
+        processControl: createQuiescentProcessControl(),
         launch: (_name, _paths, release) => launches.push(realpathSync(release)),
         waitUntilReady: () => undefined,
         verify: (options) => verifications.push(options),

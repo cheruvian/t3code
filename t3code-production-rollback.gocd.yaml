@@ -15,14 +15,11 @@ pipelines:
       - rollback-production:
           approval:
             type: manual
-          clean_workspace: true
+          clean_workspace: false
           jobs:
             rollback:
               resources: [t3-local]
               tasks:
-                - exec:
-                    command: pnpm
-                    arguments: [install, --frozen-lockfile]
                 - exec:
                     command: node
                     arguments: [scripts/gocd/local-pipeline.mjs, rollback, production]

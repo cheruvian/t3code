@@ -18,28 +18,39 @@ function inspectProductionProcess(pid, port) {
   }
   const listener = spawnSync(
     "/usr/sbin/lsof",
-    ["-nP", "-a", "-p", String(pid), `-iTCP:${String(port)}`, "-sTCP:LISTEN", "-Fp"],
+    ["-nP", `-iTCP:${String(port)}`, "-sTCP:LISTEN", "-Fp"],
     { encoding: "utf8" },
   );
   const cwd = spawnSync("/usr/sbin/lsof", ["-nP", "-a", "-p", String(pid), "-d", "cwd", "-Fn"], {
     encoding: "utf8",
   });
-  const command = spawnSync("/bin/ps", ["-ww", "-p", String(pid), "-o", "command="], {
+  const command = spawnSync("/bin/ps", ["-ww", "-p", String(pid), "-o", "lstart=,command="], {
     encoding: "utf8",
   });
   const cwdPath = cwd.stdout
     .split("\n")
     .find((line) => line.startsWith("n"))
     ?.slice(1);
+  const commandMatch =
+    command.status === 0 ? command.stdout.trim().match(/^(.{24})\s+(.+)$/s) : null;
+  const birthTime = commandMatch ? Date.parse(commandMatch[1]) : Number.NaN;
   return {
     pid,
-    alive: command.status === 0,
+    alive: commandMatch !== null && !Number.isNaN(birthTime),
+    birthToken: Number.isNaN(birthTime) ? undefined : new Date(birthTime).toISOString(),
     cwd: cwd.status === 0 && cwdPath ? cwdPath : undefined,
-    command: command.status === 0 ? command.stdout.trim() : "",
-    listenerPid:
-      listener.status === 0 && listener.stdout.split("\n").includes(`p${String(pid)}`)
-        ? pid
-        : undefined,
+    command: commandMatch?.[2] ?? "",
+    listenerPids:
+      listener.status === 0
+        ? [
+            ...new Set(
+              listener.stdout
+                .split("\n")
+                .filter((line) => /^p[1-9]\d*$/.test(line))
+                .map((line) => Number(line.slice(1))),
+            ),
+          ]
+        : [],
   };
 }
 
@@ -71,7 +82,7 @@ export async function verifyProduction({
   runtimeRoot = resolve(process.env.T3_PIPELINE_RUNTIME_ROOT ?? join(homedir(), "t3-runtime")),
   expectedRelease,
   expectedSha = process.env.GO_TO_REVISION_T3CODE,
-  previousRuntimePid,
+  previousRuntimeIdentity,
   launchedAfter,
   fetchImpl = globalThis.fetch,
   inspectProcess = inspectProductionProcess,
@@ -89,11 +100,17 @@ export async function verifyProduction({
   if (release !== selectedRelease) {
     throw new Error(`Production current points to ${release}, expected ${selectedRelease}.`);
   }
+  const electronDist = join(release, "apps", "desktop", "node_modules", "electron", "dist");
+  const electronExecutable =
+    platform() === "darwin"
+      ? join(electronDist, "Electron.app", "Contents", "MacOS", "Electron")
+      : join(electronDist, platform() === "win32" ? "electron.exe" : "electron");
   for (const requiredPath of [
     join(release, "manifest.json"),
     join(release, "apps", "desktop", "scripts", "start-electron.mjs"),
     join(release, "apps", "desktop", "node_modules", "electron", "package.json"),
     join(release, "apps", "server", "dist", "bin.mjs"),
+    electronExecutable,
   ]) {
     if (!existsSync(requiredPath)) {
       throw new Error(`Production release is missing ${requiredPath}.`);
@@ -109,8 +126,12 @@ export async function verifyProduction({
       `Production runtime reports port ${runtimeState.port}, expected ${numericPort}.`,
     );
   }
-  if (runtimeState.pid === previousRuntimePid) {
-    throw new Error(`Production runtime PID ${runtimeState.pid} was not replaced.`);
+  if (
+    previousRuntimeIdentity !== undefined &&
+    runtimeState.pid === previousRuntimeIdentity.pid &&
+    runtimeState.startedAt === previousRuntimeIdentity.startedAt
+  ) {
+    throw new Error(`Production runtime generation was not replaced.`);
   }
   if (launchedAfter !== undefined && Date.parse(runtimeState.startedAt) < launchedAfter) {
     throw new Error(`Production runtime state predates the selected release launch.`);
@@ -119,17 +140,41 @@ export async function verifyProduction({
   if (inspected.pid !== runtimeState.pid || !inspected.alive) {
     throw new Error(`Production backend PID ${runtimeState.pid} is not alive.`);
   }
-  if (inspected.listenerPid !== runtimeState.pid) {
+  if (
+    typeof inspected.birthToken !== "string" ||
+    Number.isNaN(Date.parse(inspected.birthToken)) ||
+    Date.parse(inspected.birthToken) > Date.parse(runtimeState.startedAt)
+  ) {
+    throw new Error(
+      `Production backend PID ${runtimeState.pid} does not match runtime generation.`,
+    );
+  }
+  if (inspected.listenerPids?.length !== 1 || inspected.listenerPids[0] !== runtimeState.pid) {
     throw new Error(`Production backend PID ${runtimeState.pid} does not own port ${numericPort}.`);
   }
   if (!inspected.cwd || realpathSync(inspected.cwd) !== release) {
     throw new Error(`Production backend PID ${runtimeState.pid} is not running from ${release}.`);
   }
   const expectedServerEntry = join(release, "apps", "server", "dist", "bin.mjs");
-  const command = Array.isArray(inspected.command)
-    ? inspected.command.join("\0")
-    : String(inspected.command ?? "");
-  if (!command.includes(expectedServerEntry)) {
+  const executables = new Set([electronExecutable]);
+  try {
+    executables.add(realpathSync(electronExecutable));
+  } catch {
+    // The complete-release checks surface a missing runtime before this point.
+  }
+  const commandParts = Array.isArray(inspected.command) ? inspected.command : undefined;
+  const command = String(inspected.command ?? "");
+  const commandMatches = [...executables].some((executable) =>
+    commandParts
+      ? commandParts.length === 4 &&
+        commandParts[0] === executable &&
+        commandParts[1] === expectedServerEntry &&
+        commandParts[2] === "--bootstrap-fd" &&
+        /^\d+$/.test(commandParts[3])
+      : command.startsWith(`${executable} ${expectedServerEntry} --bootstrap-fd `) &&
+        /^\d+$/.test(command.slice(`${executable} ${expectedServerEntry} --bootstrap-fd `.length)),
+  );
+  if (!commandMatches) {
     throw new Error(
       `Production backend PID ${runtimeState.pid} did not launch ${expectedServerEntry}.`,
     );
@@ -141,9 +186,22 @@ export async function verifyProduction({
   const confirmedRuntimeState = readRuntimeState(runtimeRoot);
   if (
     confirmedRuntimeState.pid !== runtimeState.pid ||
-    confirmedRuntimeState.startedAt !== runtimeState.startedAt
+    confirmedRuntimeState.startedAt !== runtimeState.startedAt ||
+    confirmedRuntimeState.port !== runtimeState.port ||
+    confirmedRuntimeState.origin !== runtimeState.origin
   ) {
     throw new Error(`Production runtime changed during verification.`);
+  }
+  const confirmedProcess = await inspectProcess(runtimeState.pid, numericPort);
+  if (
+    confirmedProcess.pid !== inspected.pid ||
+    confirmedProcess.birthToken !== inspected.birthToken ||
+    JSON.stringify(confirmedProcess.command) !== JSON.stringify(inspected.command) ||
+    confirmedProcess.cwd !== inspected.cwd ||
+    confirmedProcess.listenerPids?.length !== 1 ||
+    confirmedProcess.listenerPids[0] !== runtimeState.pid
+  ) {
+    throw new Error(`Production backend ownership changed during verification.`);
   }
   console.log(`[t3-pipeline] production release ${expectedSha} passed on port ${numericPort}`);
   return { release, pid: runtimeState.pid, sha: expectedSha };
