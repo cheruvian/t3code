@@ -11,7 +11,9 @@ import {
   type CanonicalItemType,
   type CanonicalRequestType,
   type CodexSettings,
+  EventId,
   ProviderDriverKind,
+  ProviderItemId,
   type ProviderEvent,
   ProviderInstanceId,
   type ProviderRuntimeEvent,
@@ -526,6 +528,10 @@ function mapCollabAgentEvent(
   }
   const base = runtimeEventBase(event, canonicalThreadId);
   const taskId = RuntimeTaskId.make(agentThreadId);
+  const childTurnId =
+    typeof payload.childTurnId === "string" && payload.childTurnId.length > 0
+      ? payload.childTurnId
+      : undefined;
   const agentPath = typeof payload.agentPath === "string" ? payload.agentPath : undefined;
   const pathLeaf = agentPath?.split("/").findLast((segment) => segment.length > 0);
   const nickname = typeof payload.nickname === "string" ? payload.nickname : undefined;
@@ -732,6 +738,7 @@ function mapCollabAgentEvent(
         return [];
       }
       const itemId = typeof item?.id === "string" && item.id.length > 0 ? item.id : undefined;
+      const runtimeItemId = itemId ? collabRuntimeItemId(itemId, childTurnId) : undefined;
       const itemLifecycle =
         payload.itemLifecycle === "started" || payload.itemLifecycle === "completed"
           ? payload.itemLifecycle
@@ -748,7 +755,16 @@ function mapCollabAgentEvent(
       return [
         {
           ...base,
-          ...(itemId ? { itemId: RuntimeItemId.make(itemId) } : {}),
+          ...(runtimeItemId ? { itemId: runtimeItemId } : {}),
+          ...(itemId
+            ? {
+                providerRefs: {
+                  ...base.providerRefs,
+                  ...(childTurnId ? { providerTurnId: childTurnId } : {}),
+                  providerItemId: ProviderItemId.make(itemId),
+                },
+              }
+            : {}),
           type: "task.progress",
           payload: {
             taskId,
@@ -847,6 +863,30 @@ function collabItemLifecycle(event: ProviderEvent):
       ? payload.itemLifecycle
       : undefined;
   return itemId && lifecycle ? { itemId, lifecycle } : undefined;
+}
+
+function collabChildTurnId(event: ProviderEvent): string | undefined {
+  if (event.kind !== "notification" || !event.method.startsWith("collabAgent/")) {
+    return undefined;
+  }
+  const payload =
+    typeof event.payload === "object" && event.payload !== null
+      ? (event.payload as Record<string, unknown>)
+      : undefined;
+  if (typeof payload?.childTurnId === "string" && payload.childTurnId.length > 0) {
+    return payload.childTurnId;
+  }
+  const turn =
+    typeof payload?.turn === "object" && payload.turn !== null
+      ? (payload.turn as Record<string, unknown>)
+      : undefined;
+  return typeof turn?.id === "string" && turn.id.length > 0 ? turn.id : undefined;
+}
+
+function collabRuntimeItemId(itemId: string, childTurnId: string | undefined): RuntimeItemId {
+  return RuntimeItemId.make(
+    childTurnId === undefined ? itemId : `${childTurnId.length}:${childTurnId}${itemId}`,
+  );
 }
 
 function mapToRuntimeEvents(
@@ -1807,7 +1847,63 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         const progress = yield* makeCodexProgressCoalescer<string, ProviderRuntimeEvent>({
           emit: (events) => Queue.offerAll(runtimeEventQueue, events).pipe(Effect.asVoid),
         }).pipe(Effect.provideService(Scope.Scope, sessionScope));
-        const liveCollabItems = new Map<string, Set<string>>();
+        type CollabItemProgress = Extract<ProviderRuntimeEvent, { type: "task.progress" }>;
+        const liveCollabItems = new Map<
+          string,
+          Map<string | undefined, Map<string, CollabItemProgress>>
+        >();
+        const liveCollabTurns = new Map<string, string>();
+
+        const itemMapFor = (childThreadId: string, childTurnId: string | undefined) => {
+          const turns = liveCollabItems.get(childThreadId) ?? new Map();
+          const items = turns.get(childTurnId) ?? new Map();
+          turns.set(childTurnId, items);
+          liveCollabItems.set(childThreadId, turns);
+          return items;
+        };
+
+        const removeLiveItem = (
+          childThreadId: string,
+          childTurnId: string | undefined,
+          itemId: string,
+        ) => {
+          const turns = liveCollabItems.get(childThreadId);
+          const items = turns?.get(childTurnId);
+          items?.delete(itemId);
+          if (items?.size === 0) {
+            turns?.delete(childTurnId);
+          }
+          if (turns?.size === 0) {
+            liveCollabItems.delete(childThreadId);
+          }
+        };
+
+        const settleTurnItems = (
+          childThreadId: string,
+          childTurnId: string,
+          terminalEvent: ProviderRuntimeEvent,
+        ): ReadonlyArray<CollabItemProgress> => {
+          const turns = liveCollabItems.get(childThreadId);
+          const items = turns?.get(childTurnId);
+          if (!turns || !items) {
+            return [];
+          }
+          turns.delete(childTurnId);
+          if (turns.size === 0) {
+            liveCollabItems.delete(childThreadId);
+          }
+          return Array.from(items.values(), (startedEvent, index) => ({
+            ...startedEvent,
+            eventId: EventId.make(`${terminalEvent.eventId}:item-completed:${index}`),
+            createdAt: terminalEvent.createdAt,
+            ...(terminalEvent.turnId ? { turnId: terminalEvent.turnId } : {}),
+            raw: terminalEvent.raw,
+            payload: {
+              ...startedEvent.payload,
+              itemLifecycle: "completed" as const,
+            },
+          }));
+        };
 
         const eventFiber = yield* Stream.runForEach(runtime.events, (event) =>
           Effect.gen(function* () {
@@ -1835,7 +1931,41 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               (runtimeEvent) => runtimeEvent.type === "task.progress",
             );
             const itemLifecycle = collabItemLifecycle(event);
-            const liveItems = childThreadId ? liveCollabItems.get(childThreadId) : undefined;
+            const childTurnId = collabChildTurnId(event);
+            let isStaleChildTurnCompletion = false;
+            if (childThreadId && childTurnId) {
+              if (event.method === "collabAgent/turnStarted") {
+                liveCollabTurns.set(childThreadId, childTurnId);
+              } else if (event.method === "collabAgent/turnCompleted") {
+                const activeChildTurnId = liveCollabTurns.get(childThreadId);
+                isStaleChildTurnCompletion =
+                  activeChildTurnId !== undefined && activeChildTurnId !== childTurnId;
+                if (activeChildTurnId === childTurnId) {
+                  liveCollabTurns.delete(childThreadId);
+                }
+              }
+            }
+            if (childThreadId && event.method === "collabAgent/closed") {
+              liveCollabTurns.delete(childThreadId);
+            }
+            const liveItems = childThreadId
+              ? liveCollabItems.get(childThreadId)?.get(childTurnId)
+              : undefined;
+            const terminalEvent = stampedRuntimeEvents.find(
+              (runtimeEvent) =>
+                runtimeEvent.type === "task.updated" && runtimeEvent.payload.status === "idle",
+            );
+            if (
+              childThreadId &&
+              childTurnId &&
+              event.method === "collabAgent/turnCompleted" &&
+              terminalEvent
+            ) {
+              const itemCompletions = settleTurnItems(childThreadId, childTurnId, terminalEvent);
+              if (itemCompletions.length > 0) {
+                yield* Queue.offerAll(runtimeEventQueue, itemCompletions);
+              }
+            }
             if (
               childThreadId &&
               latestProgress &&
@@ -1844,14 +1974,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ) {
               yield* progress.flush(childThreadId);
               if (itemLifecycle.lifecycle === "started") {
-                const nextLiveItems = liveItems ?? new Set<string>();
-                nextLiveItems.add(itemLifecycle.itemId);
-                liveCollabItems.set(childThreadId, nextLiveItems);
+                itemMapFor(childThreadId, childTurnId).set(itemLifecycle.itemId, latestProgress);
               } else {
-                liveItems?.delete(itemLifecycle.itemId);
-                if (liveItems?.size === 0) {
-                  liveCollabItems.delete(childThreadId);
-                }
+                removeLiveItem(childThreadId, childTurnId, itemLifecycle.itemId);
               }
               yield* Queue.offerAll(runtimeEventQueue, stampedRuntimeEvents);
               return;
@@ -1872,7 +1997,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               }
               return;
             }
-            yield* Queue.offerAll(runtimeEventQueue, stampedRuntimeEvents);
+            const emittedRuntimeEvents = isStaleChildTurnCompletion
+              ? stampedRuntimeEvents.filter((runtimeEvent) => runtimeEvent.type !== "task.updated")
+              : stampedRuntimeEvents;
+            if (emittedRuntimeEvents.length > 0) {
+              yield* Queue.offerAll(runtimeEventQueue, emittedRuntimeEvents);
+            }
           }),
         ).pipe(Effect.forkChild);
 

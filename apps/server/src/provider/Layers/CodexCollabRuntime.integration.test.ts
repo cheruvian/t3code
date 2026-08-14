@@ -147,6 +147,29 @@ describe("CodexSessionRuntime collab integration", () => {
           (event.payload as { agentThreadId?: string }).agentThreadId === CHILD_A,
       );
       assert.isDefined(childTurnCompleted, "child A's turn completion becomes an agent event");
+      assert.equal(
+        (childTurnCompleted.payload as { childTurnId?: string }).childTurnId,
+        `${CHILD_A}-turn-1`,
+        "child turn completion keeps the provider child-turn identity",
+      );
+
+      const childTurnStarted = events.find(
+        (event) =>
+          event.method === "collabAgent/turnStarted" &&
+          (event.payload as { agentThreadId?: string }).agentThreadId === CHILD_A,
+      );
+      assert.isDefined(childTurnStarted, "child A's turn start becomes an agent event");
+      const nativeChildTurnStarted = wireFixture.notifications.find(
+        (entry) =>
+          entry.method === "turn/started" &&
+          (entry.params as { threadId?: string }).threadId === CHILD_A,
+      );
+      assert.isDefined(nativeChildTurnStarted);
+      assert.equal(
+        (childTurnStarted.payload as { childTurnId?: string }).childTurnId,
+        (nativeChildTurnStarted.params as { turn: { id: string } }).turn.id,
+        "child turn start keeps the provider child-turn identity",
+      );
 
       const childClosed = events.find(
         (event) =>
@@ -165,12 +188,21 @@ describe("CodexSessionRuntime collab integration", () => {
         childItems.map((event) => ({
           itemLifecycle: (event.payload as { itemLifecycle?: string }).itemLifecycle,
           itemId: (event.payload as { item?: { id?: string } }).item?.id,
+          childTurnId: (event.payload as { childTurnId?: string }).childTurnId,
         })),
         [
-          { itemLifecycle: "started", itemId: "call_child_background_command" },
-          { itemLifecycle: "completed", itemId: "call_child_background_command" },
+          {
+            itemLifecycle: "started",
+            itemId: "call_child_background_command",
+            childTurnId: `${CHILD_A}-turn-background`,
+          },
+          {
+            itemLifecycle: "completed",
+            itemId: "call_child_background_command",
+            childTurnId: `${CHILD_A}-turn-background`,
+          },
         ],
-        "child item source lifecycle and identity survive synthetic forwarding",
+        "child item source lifecycle, item identity, and child-turn identity survive forwarding",
       );
 
       // Parent-owned resolution passes through — not swallowed, not
@@ -291,6 +323,182 @@ describe("CodexSessionRuntime collab integration", () => {
       );
       assert.isTrue(interruptedThreads.has(CHILD_B), "registered child B must be interrupted");
       assert.isTrue(interruptedThreads.has(ROOT), "parent turn must be interrupted last");
+
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.live("a stale child completion cannot unregister the newer live turn", () =>
+    Effect.gen(function* () {
+      const captured = wireFixture.notifications;
+      const registrationA = captured.find((entry) => {
+        const item = (entry.params as { item?: { type?: string; agentThreadId?: string } }).item;
+        return item?.type === "subAgentActivity" && item.agentThreadId === CHILD_A;
+      });
+      const capturedTurnStartedA = captured.find(
+        (entry) =>
+          entry.method === "turn/started" &&
+          (entry.params as { threadId?: string }).threadId === CHILD_A,
+      );
+      assert.isDefined(registrationA);
+      assert.isDefined(capturedTurnStartedA);
+      const firstTurn = (capturedTurnStartedA.params as { turn: Record<string, unknown> }).turn;
+      const firstTurnId = firstTurn.id as string;
+      const newerTurnId = `${firstTurnId}-newer`;
+      const newerTurnStarted = {
+        ...capturedTurnStartedA,
+        params: {
+          ...capturedTurnStartedA.params,
+          turn: { ...firstTurn, id: newerTurnId },
+        },
+      };
+      const staleTurnCompleted = {
+        method: "turn/completed",
+        params: {
+          threadId: CHILD_A,
+          turn: { ...firstTurn, status: "completed" },
+        },
+      };
+      const script = {
+        rootThreadId: ROOT,
+        holdTurnOpen: true,
+        notifications: [registrationA, capturedTurnStartedA, newerTurnStarted, staleTurnCompleted],
+      };
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+      const interruptsPath = `${scriptPath}.interrupts`;
+      NodeFS.rmSync(interruptsPath, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(interruptsPath, { force: true });
+        }),
+      );
+
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-collab-stale-completion-stop"),
+        binaryPath: peerPath,
+        cwd: "/tmp",
+        runtimeMode: "full-access",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+      const staleCompletionFiber = yield* runtime.events.pipe(
+        Stream.filter(
+          (event) =>
+            event.method === "collabAgent/turnCompleted" &&
+            (event.payload as { childTurnId?: string }).childTurnId === firstTurnId,
+        ),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "replace a live child turn" });
+      const staleCompletion = yield* Fiber.join(staleCompletionFiber).pipe(
+        Effect.timeoutOption("15 seconds"),
+      );
+      assert.isTrue(staleCompletion._tag === "Some", "stale child completion never arrived");
+
+      yield* runtime.interruptTurn();
+
+      const interrupts = NodeFS.readFileSync(interruptsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { threadId?: string; turnId?: string });
+      assert.deepInclude(
+        interrupts,
+        { threadId: CHILD_A, turnId: newerTurnId },
+        "Stop must interrupt the newer child turn after an older completion arrives",
+      );
+
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.live("a pre-registration stale completion cannot unregister the newer live turn", () =>
+    Effect.gen(function* () {
+      const captured = wireFixture.notifications;
+      const registrationA = captured.find((entry) => {
+        const item = (entry.params as { item?: { type?: string; agentThreadId?: string } }).item;
+        return item?.type === "subAgentActivity" && item.agentThreadId === CHILD_A;
+      });
+      const capturedTurnStartedA = captured.find(
+        (entry) =>
+          entry.method === "turn/started" &&
+          (entry.params as { threadId?: string }).threadId === CHILD_A,
+      );
+      assert.isDefined(registrationA);
+      assert.isDefined(capturedTurnStartedA);
+      const firstTurn = (capturedTurnStartedA.params as { turn: Record<string, unknown> }).turn;
+      const firstTurnId = firstTurn.id as string;
+      const newerTurnId = `${firstTurnId}-newer-before-registration`;
+      const newerTurnStarted = {
+        ...capturedTurnStartedA,
+        params: {
+          ...capturedTurnStartedA.params,
+          turn: { ...firstTurn, id: newerTurnId },
+        },
+      };
+      const staleTurnCompleted = {
+        method: "turn/completed",
+        params: {
+          threadId: CHILD_A,
+          turn: { ...firstTurn, status: "completed" },
+        },
+      };
+      const script = {
+        rootThreadId: ROOT,
+        holdTurnOpen: true,
+        notifications: [capturedTurnStartedA, newerTurnStarted, staleTurnCompleted, registrationA],
+      };
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+      const interruptsPath = `${scriptPath}.interrupts`;
+      NodeFS.rmSync(interruptsPath, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(interruptsPath, { force: true });
+        }),
+      );
+
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-collab-pre-registration-stale-completion-stop"),
+        binaryPath: peerPath,
+        cwd: "/tmp",
+        runtimeMode: "full-access",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+      const registrationFiber = yield* runtime.events.pipe(
+        Stream.filter(
+          (event) =>
+            event.method === "collabAgent/activity" &&
+            (event.payload as { agentThreadId?: string }).agentThreadId === CHILD_A,
+        ),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "replace a child turn before registration" });
+      const registered = yield* Fiber.join(registrationFiber).pipe(
+        Effect.timeoutOption("15 seconds"),
+      );
+      assert.isTrue(registered._tag === "Some", "child registration never arrived");
+
+      yield* runtime.interruptTurn();
+
+      const interrupts = NodeFS.readFileSync(interruptsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { threadId?: string; turnId?: string });
+      assert.deepInclude(
+        interrupts,
+        { threadId: CHILD_A, turnId: newerTurnId },
+        "Stop must interrupt the newer pre-registration child turn after an older completion",
+      );
 
       yield* runtime.close;
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),

@@ -1229,12 +1229,19 @@ export const makeCodexSessionRuntime = (
               threadId: options.threadId,
               ...(child.spawnTurnId ? { turnId: child.spawnTurnId } : {}),
               method: "collabAgent/turnStarted",
-              payload: childIdentity,
+              payload: {
+                ...childIdentity,
+                ...(childTurnId ? { childTurnId } : {}),
+              },
             });
             return true;
           }
-          case "turn/completed":
+          case "turn/completed": {
+            const childTurnId = notification.params.turn.id;
             yield* Ref.update(collabChildLiveTurnsRef, (current) => {
+              if (current.get(child.agentThreadId) !== childTurnId) {
+                return current;
+              }
               const next = new Map(current);
               next.delete(child.agentThreadId);
               return next;
@@ -1246,10 +1253,12 @@ export const makeCodexSessionRuntime = (
               method: "collabAgent/turnCompleted",
               payload: {
                 ...childIdentity,
+                childTurnId,
                 turn: notification.params.turn,
               },
             });
             return true;
+          }
           case "thread/status/changed":
             yield* emitEvent({
               kind: "notification",
@@ -1283,6 +1292,7 @@ export const makeCodexSessionRuntime = (
               method: "collabAgent/item",
               payload: {
                 ...childIdentity,
+                childTurnId: notification.params.turnId,
                 itemLifecycle:
                   notification.method === "item/started"
                     ? ("started" as const)
@@ -1411,10 +1421,17 @@ export const makeCodexSessionRuntime = (
                   return next;
                 });
               }
-            } else if (
-              notification.method === "turn/completed" ||
-              notification.method === "thread/closed"
-            ) {
+            } else if (notification.method === "turn/completed") {
+              const foreignTurnId = notification.params.turn.id;
+              yield* Ref.update(collabChildLiveTurnsRef, (current) => {
+                if (current.get(foreignThreadId) !== foreignTurnId) {
+                  return current;
+                }
+                const next = new Map(current);
+                next.delete(foreignThreadId);
+                return next;
+              });
+            } else if (notification.method === "thread/closed") {
               yield* Ref.update(collabChildLiveTurnsRef, (current) => {
                 const next = new Map(current);
                 next.delete(foreignThreadId);

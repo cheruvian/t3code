@@ -611,6 +611,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           threadId: asThreadId("thread-1"),
           payload: {
             agentThreadId: "agent-thread-1",
+            childTurnId: "child-turn-1",
             nickname: "reviewer",
             itemLifecycle,
             item: {
@@ -625,19 +626,212 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
 
       const events = Array.from(yield* Fiber.join(eventsFiber));
       NodeAssert.equal(events.length, 2);
+      const runtimeItemIds = new Set<string>();
       for (const [index, expectedLifecycle] of ["started", "completed"].entries()) {
         const event = events[index];
         NodeAssert.equal(event?.type, "task.progress");
         if (event?.type !== "task.progress") {
           continue;
         }
-        NodeAssert.equal(event.itemId, "child-command-1");
+        const runtimeItemId = event.itemId;
+        NodeAssert.ok(runtimeItemId);
+        if (!runtimeItemId) {
+          return;
+        }
+        NodeAssert.notEqual(runtimeItemId, "child-command-1");
+        NodeAssert.ok(runtimeItemId.endsWith("child-command-1"));
+        runtimeItemIds.add(runtimeItemId);
+        NodeAssert.equal(event.providerRefs?.providerItemId, "child-command-1");
+        NodeAssert.equal(event.providerRefs?.providerTurnId, "child-turn-1");
         NodeAssert.equal(
           (event.payload as Record<string, unknown>).itemLifecycle,
           expectedLifecycle,
         );
         NodeAssert.equal(event.payload.status, undefined);
       }
+      NodeAssert.equal(runtimeItemIds.size, 1);
+    }),
+  );
+
+  it.effect("settles only orphaned items owned by the successfully completed child turn", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const childId = "agent-thread-turn-scoped-items";
+      const turnA = "child-turn-a";
+      const turnB = "child-turn-b";
+      const eventBase = {
+        kind: "notification" as const,
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "collabAgent/item",
+        threadId: asThreadId("thread-1"),
+      };
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            (event.type === "task.progress" || event.type === "task.updated") &&
+            event.payload.taskId === childId,
+        ),
+        Stream.takeUntil((event) => event.eventId === "evt-turn-b-complete"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* runtime.emit({
+        ...eventBase,
+        id: asEventId("evt-turn-a-start"),
+        method: "collabAgent/turnStarted",
+        payload: { agentThreadId: childId, childTurnId: turnA },
+      } satisfies ProviderEvent);
+      yield* runtime.emit({
+        ...eventBase,
+        id: asEventId("evt-native-item-start"),
+        payload: {
+          agentThreadId: childId,
+          childTurnId: turnA,
+          itemLifecycle: "started",
+          item: { id: "native-item", type: "reasoning" },
+        },
+      } satisfies ProviderEvent);
+      yield* runtime.emit({
+        ...eventBase,
+        id: asEventId("evt-native-item-complete"),
+        payload: {
+          agentThreadId: childId,
+          childTurnId: turnA,
+          itemLifecycle: "completed",
+          item: { id: "native-item", type: "reasoning" },
+        },
+      } satisfies ProviderEvent);
+      yield* runtime.emit({
+        ...eventBase,
+        id: asEventId("evt-turn-a-shared-start"),
+        payload: {
+          agentThreadId: childId,
+          childTurnId: turnA,
+          itemLifecycle: "started",
+          item: { id: "shared-item", type: "reasoning" },
+        },
+      } satisfies ProviderEvent);
+      yield* runtime.emit({
+        ...eventBase,
+        id: asEventId("evt-turn-b-start"),
+        method: "collabAgent/turnStarted",
+        payload: { agentThreadId: childId, childTurnId: turnB },
+      } satisfies ProviderEvent);
+      yield* runtime.emit({
+        ...eventBase,
+        id: asEventId("evt-turn-b-shared-start"),
+        payload: {
+          agentThreadId: childId,
+          childTurnId: turnB,
+          itemLifecycle: "started",
+          item: { id: "shared-item", type: "reasoning" },
+        },
+      } satisfies ProviderEvent);
+      yield* runtime.emit({
+        ...eventBase,
+        id: asEventId("evt-unknown-turn-start"),
+        payload: {
+          agentThreadId: childId,
+          itemLifecycle: "started",
+          item: { id: "unknown-turn-item", type: "reasoning" },
+        },
+      } satisfies ProviderEvent);
+      yield* runtime.emit({
+        ...eventBase,
+        id: asEventId("evt-turn-a-complete"),
+        method: "collabAgent/turnCompleted",
+        payload: {
+          agentThreadId: childId,
+          childTurnId: turnA,
+          turn: { id: turnA, status: "completed" },
+        },
+      } satisfies ProviderEvent);
+      yield* runtime.emit({
+        ...eventBase,
+        id: asEventId("evt-turn-a-shared-late-complete"),
+        payload: {
+          agentThreadId: childId,
+          childTurnId: turnA,
+          itemLifecycle: "completed",
+          item: { id: "shared-item", type: "reasoning" },
+        },
+      } satisfies ProviderEvent);
+      yield* runtime.emit({
+        ...eventBase,
+        id: asEventId("evt-turn-b-complete"),
+        method: "collabAgent/turnCompleted",
+        payload: {
+          agentThreadId: childId,
+          childTurnId: turnB,
+          turn: { id: turnB, status: "completed" },
+        },
+      } satisfies ProviderEvent);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const idleAIndex = events.findIndex((event) => event.eventId === "evt-turn-a-complete");
+      const idleBIndex = events.findIndex((event) => event.eventId === "evt-turn-b-complete");
+      NodeAssert.equal(idleAIndex, -1);
+      NodeAssert.ok(idleBIndex > 0);
+      const idleB = events[idleBIndex];
+      NodeAssert.equal(idleB?.type, "task.updated");
+      if (idleB?.type !== "task.updated") {
+        return;
+      }
+      NodeAssert.equal(idleB.payload.status, "idle");
+
+      const runtimeItemIdFor = (eventId: string) =>
+        events.find((event) => event.eventId === eventId)?.itemId;
+      const nativeItemRuntimeId = runtimeItemIdFor("evt-native-item-start");
+      const turnASharedRuntimeId = runtimeItemIdFor("evt-turn-a-shared-start");
+      const turnBSharedRuntimeId = runtimeItemIdFor("evt-turn-b-shared-start");
+      const unknownTurnRuntimeId = runtimeItemIdFor("evt-unknown-turn-start");
+      NodeAssert.ok(nativeItemRuntimeId);
+      NodeAssert.ok(turnASharedRuntimeId);
+      NodeAssert.ok(turnBSharedRuntimeId);
+      NodeAssert.ok(unknownTurnRuntimeId);
+      NodeAssert.notEqual(turnASharedRuntimeId, turnBSharedRuntimeId);
+
+      const completions = events
+        .map((event, index) => ({ event, index }))
+        .filter(
+          (entry) =>
+            entry.event.type === "task.progress" &&
+            entry.event.payload.itemLifecycle === "completed",
+        );
+      NodeAssert.equal(
+        completions.filter((entry) => entry.event.itemId === nativeItemRuntimeId).length,
+        1,
+      );
+      NodeAssert.equal(
+        completions.filter(
+          (entry) =>
+            entry.event.itemId === turnASharedRuntimeId &&
+            entry.event.eventId.startsWith("evt-turn-a-complete:item-completed:") &&
+            entry.index < idleBIndex,
+        ).length,
+        1,
+      );
+      NodeAssert.equal(
+        completions.filter(
+          (entry) =>
+            entry.event.itemId === turnASharedRuntimeId &&
+            entry.event.eventId === "evt-turn-a-shared-late-complete" &&
+            entry.index < idleBIndex,
+        ).length,
+        1,
+      );
+      NodeAssert.equal(
+        completions.filter(
+          (entry) => entry.event.itemId === turnBSharedRuntimeId && entry.index < idleBIndex,
+        ).length,
+        1,
+      );
+      NodeAssert.equal(
+        completions.filter((entry) => entry.event.itemId === unknownTurnRuntimeId).length,
+        0,
+      );
     }),
   );
 
