@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -49,6 +50,7 @@ const makeCodexRuntimeHarness = Effect.fn("makeCodexRuntimeHarness")(function* (
   const reloadRequests = yield* Queue.unbounded<Required<Pick<TestClientMessage, "id">>>();
   const reloadCount = yield* Ref.make(0);
   const turnStartCount = yield* Ref.make(0);
+  const exited = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
   let nextTurn = 1;
   let remainder = "";
 
@@ -124,9 +126,13 @@ const makeCodexRuntimeHarness = Effect.fn("makeCodexRuntimeHarness")(function* (
 
   const handle = ChildProcessSpawner.makeHandle({
     pid: ChildProcessSpawner.ProcessId(1),
-    exitCode: Effect.never,
+    exitCode: Deferred.await(exited),
     isRunning: Effect.succeed(true),
-    kill: () => Effect.void,
+    kill: () =>
+      Queue.shutdown(incoming).pipe(
+        Effect.andThen(Deferred.succeed(exited, ChildProcessSpawner.ExitCode(0))),
+        Effect.asVoid,
+      ),
     unref: Effect.succeed(Effect.void),
     stdin,
     stdout: Stream.fromQueue(incoming),
@@ -145,7 +151,16 @@ const makeCodexRuntimeHarness = Effect.fn("makeCodexRuntimeHarness")(function* (
     reloadCount: Ref.get(reloadCount),
     turnStartCount: Ref.get(turnStartCount),
     respond,
+    shutdown: Queue.shutdown(incoming),
   };
+});
+
+const makeScopedCodexSessionRuntime = Effect.fn("makeScopedCodexSessionRuntime")(function* (
+  options: Parameters<typeof makeCodexSessionRuntime>[0],
+) {
+  const runtimeScope = yield* Scope.make();
+  const runtime = yield* makeCodexSessionRuntime(options).pipe(Scope.provide(runtimeScope));
+  return runtime;
 });
 
 describe("CodexSessionRuntimeIdentifierGenerationError", () => {
@@ -477,7 +492,7 @@ describe("Codex MCP catalog reload", () => {
 
       return yield* Effect.gen(function* () {
         const appServerArgs = ["-c", "model=gpt-5.4"];
-        const runtime = yield* makeCodexSessionRuntime({
+        const runtime = yield* makeScopedCodexSessionRuntime({
           threadId: ThreadId.make("thread-mcp-no-config"),
           binaryPath: "/mock/codex",
           cwd: "/tmp",
@@ -498,6 +513,7 @@ describe("Codex MCP catalog reload", () => {
         yield* Fiber.join(send);
         NodeAssert.equal(yield* harness.reloadCount, 0);
         NodeAssert.equal(yield* harness.turnStartCount, 1);
+        yield* harness.shutdown;
       }).pipe(
         Effect.scoped,
         Effect.provide(Layer.mergeAll(NodeServices.layer, harness.layer, TestClock.layer())),
@@ -510,7 +526,7 @@ describe("Codex MCP catalog reload", () => {
       const harness = yield* makeCodexRuntimeHarness();
 
       return yield* Effect.gen(function* () {
-        const runtime = yield* makeCodexSessionRuntime({
+        const runtime = yield* makeScopedCodexSessionRuntime({
           threadId: ThreadId.make("thread-mcp-single-flight"),
           binaryPath: "/mock/codex",
           cwd: "/tmp",
@@ -560,6 +576,7 @@ describe("Codex MCP catalog reload", () => {
         yield* Fiber.join(laterSend);
         NodeAssert.equal(yield* harness.reloadCount, 1);
         NodeAssert.equal(yield* harness.turnStartCount, 3);
+        yield* harness.shutdown;
       }).pipe(
         Effect.scoped,
         Effect.provide(Layer.mergeAll(NodeServices.layer, harness.layer, TestClock.layer())),
@@ -572,7 +589,7 @@ describe("Codex MCP catalog reload", () => {
       const harness = yield* makeCodexRuntimeHarness();
 
       return yield* Effect.gen(function* () {
-        const runtime = yield* makeCodexSessionRuntime({
+        const runtime = yield* makeScopedCodexSessionRuntime({
           threadId: ThreadId.make("thread-mcp-reload-timeout"),
           binaryPath: "/mock/codex",
           cwd: "/tmp",
@@ -604,6 +621,7 @@ describe("Codex MCP catalog reload", () => {
         yield* Fiber.join(retrySend);
         NodeAssert.equal(yield* harness.reloadCount, 2);
         NodeAssert.equal(yield* harness.turnStartCount, 2);
+        yield* harness.shutdown;
       }).pipe(
         Effect.scoped,
         Effect.provide(Layer.mergeAll(NodeServices.layer, harness.layer, TestClock.layer())),
