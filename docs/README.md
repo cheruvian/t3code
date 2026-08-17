@@ -9,6 +9,7 @@
 - [Review usage](./user/usage.md)
 - [Customize a project icon](./user/project-settings.md)
 - [T3 Code agent project](./user/t3-code-project.md)
+- [Mobile appearance](./user/mobile-appearance.md)
 - [Remote access](./user/remote-access.md)
 - [Cloudflare Tunnel](./user/cloudflare-tunnel.md)
 - [Keeping app and server in sync](./user/updating.md)

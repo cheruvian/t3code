@@ -474,6 +474,35 @@ describe("buildThreadListV2Items", () => {
     ).toBe("slim");
   });
 
+  it("keeps a merged thread active when auto-settle on merge is off", () => {
+    const merged = makeThread({
+      id: ThreadId.make("merged"),
+      title: "Merged",
+      branch: "feature/merged",
+      worktreePath: "/workspace/merged",
+    });
+    const targetKey = threadListV2ChangeRequestTargetKey({
+      environmentId,
+      cwd: merged.worktreePath,
+    });
+    const layout = buildThreadListV2Items({
+      threads: [merged],
+      environmentId: null,
+      searchQuery: "",
+      changeRequestSnapshotByKey: new Map([
+        [
+          `${environmentId}:${merged.id}`,
+          { targetKey: targetKey!, refName: merged.branch, state: "merged" },
+        ],
+      ]),
+      autoSettleOnMerge: false,
+      now: NOW,
+    });
+
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["merged"]);
+    expect(layout.settledCount).toBe(0);
+  });
+
   it("hides snoozed threads and counts them — visibility parity with web", () => {
     const layout = buildThreadListV2Items({
       threads: [
