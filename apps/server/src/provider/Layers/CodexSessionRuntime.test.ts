@@ -4,6 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
@@ -151,15 +152,22 @@ const makeCodexRuntimeHarness = Effect.fn("makeCodexRuntimeHarness")(function* (
     reloadCount: Ref.get(reloadCount),
     turnStartCount: Ref.get(turnStartCount),
     respond,
-    shutdown: Queue.shutdown(incoming),
+    shutdown: Queue.shutdown(incoming).pipe(
+      Effect.andThen(Deferred.succeed(exited, ChildProcessSpawner.ExitCode(0))),
+      Effect.asVoid,
+    ),
   };
 });
 
 const makeScopedCodexSessionRuntime = Effect.fn("makeScopedCodexSessionRuntime")(function* (
   options: Parameters<typeof makeCodexSessionRuntime>[0],
+  shutdownHarness: Effect.Effect<void>,
 ) {
   const runtimeScope = yield* Scope.make();
   const runtime = yield* makeCodexSessionRuntime(options).pipe(Scope.provide(runtimeScope));
+  yield* Effect.addFinalizer(() =>
+    shutdownHarness.pipe(Effect.andThen(Scope.close(runtimeScope, Exit.void))),
+  );
   return runtime;
 });
 
@@ -492,13 +500,16 @@ describe("Codex MCP catalog reload", () => {
 
       return yield* Effect.gen(function* () {
         const appServerArgs = ["-c", "model=gpt-5.4"];
-        const runtime = yield* makeScopedCodexSessionRuntime({
-          threadId: ThreadId.make("thread-mcp-no-config"),
-          binaryPath: "/mock/codex",
-          cwd: "/tmp",
-          runtimeMode: "full-access",
-          appServerArgs,
-        });
+        const runtime = yield* makeScopedCodexSessionRuntime(
+          {
+            threadId: ThreadId.make("thread-mcp-no-config"),
+            binaryPath: "/mock/codex",
+            cwd: "/tmp",
+            runtimeMode: "full-access",
+            appServerArgs,
+          },
+          harness.shutdown,
+        );
         appServerArgs.push("-c", "mcp_servers.t3-code.url=http://127.0.0.1/mcp");
         yield* runtime.start();
 
@@ -513,7 +524,6 @@ describe("Codex MCP catalog reload", () => {
         yield* Fiber.join(send);
         NodeAssert.equal(yield* harness.reloadCount, 0);
         NodeAssert.equal(yield* harness.turnStartCount, 1);
-        yield* harness.shutdown;
       }).pipe(
         Effect.scoped,
         Effect.provide(Layer.mergeAll(NodeServices.layer, harness.layer, TestClock.layer())),
@@ -526,13 +536,16 @@ describe("Codex MCP catalog reload", () => {
       const harness = yield* makeCodexRuntimeHarness();
 
       return yield* Effect.gen(function* () {
-        const runtime = yield* makeScopedCodexSessionRuntime({
-          threadId: ThreadId.make("thread-mcp-single-flight"),
-          binaryPath: "/mock/codex",
-          cwd: "/tmp",
-          runtimeMode: "full-access",
-          appServerArgs: ["-c", "mcp_servers.t3-code.url=http://127.0.0.1/mcp"],
-        });
+        const runtime = yield* makeScopedCodexSessionRuntime(
+          {
+            threadId: ThreadId.make("thread-mcp-single-flight"),
+            binaryPath: "/mock/codex",
+            cwd: "/tmp",
+            runtimeMode: "full-access",
+            appServerArgs: ["-c", "mcp_servers.t3-code.url=http://127.0.0.1/mcp"],
+          },
+          harness.shutdown,
+        );
         yield* runtime.start();
 
         const releaseSends = yield* Deferred.make<void>();
@@ -576,7 +589,6 @@ describe("Codex MCP catalog reload", () => {
         yield* Fiber.join(laterSend);
         NodeAssert.equal(yield* harness.reloadCount, 1);
         NodeAssert.equal(yield* harness.turnStartCount, 3);
-        yield* harness.shutdown;
       }).pipe(
         Effect.scoped,
         Effect.provide(Layer.mergeAll(NodeServices.layer, harness.layer, TestClock.layer())),
@@ -589,13 +601,16 @@ describe("Codex MCP catalog reload", () => {
       const harness = yield* makeCodexRuntimeHarness();
 
       return yield* Effect.gen(function* () {
-        const runtime = yield* makeScopedCodexSessionRuntime({
-          threadId: ThreadId.make("thread-mcp-reload-timeout"),
-          binaryPath: "/mock/codex",
-          cwd: "/tmp",
-          runtimeMode: "full-access",
-          appServerArgs: ["-c", "mcp_servers.t3-code.url=http://127.0.0.1/mcp"],
-        });
+        const runtime = yield* makeScopedCodexSessionRuntime(
+          {
+            threadId: ThreadId.make("thread-mcp-reload-timeout"),
+            binaryPath: "/mock/codex",
+            cwd: "/tmp",
+            runtimeMode: "full-access",
+            appServerArgs: ["-c", "mcp_servers.t3-code.url=http://127.0.0.1/mcp"],
+          },
+          harness.shutdown,
+        );
         yield* runtime.start();
 
         const firstSend = yield* runtime.sendTurn({ input: "first" }).pipe(Effect.forkScoped);
@@ -621,7 +636,6 @@ describe("Codex MCP catalog reload", () => {
         yield* Fiber.join(retrySend);
         NodeAssert.equal(yield* harness.reloadCount, 2);
         NodeAssert.equal(yield* harness.turnStartCount, 2);
-        yield* harness.shutdown;
       }).pipe(
         Effect.scoped,
         Effect.provide(Layer.mergeAll(NodeServices.layer, harness.layer, TestClock.layer())),
