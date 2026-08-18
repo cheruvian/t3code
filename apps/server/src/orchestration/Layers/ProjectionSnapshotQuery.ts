@@ -33,7 +33,6 @@ import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 import {
@@ -43,6 +42,7 @@ import {
   type ProjectionRepositoryError,
 } from "../../persistence/Errors.ts";
 import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheckpoints.ts";
+import { ReadOnlySqlClient } from "../../persistence/Services/ReadOnlySqlClient.ts";
 import {
   ACTIVITY_PAYLOAD_SLIM_VERSION,
   markProjectedPayload,
@@ -359,7 +359,20 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
 const makeProjectionSnapshotQuery = Effect.gen(function* () {
   const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
   const threadPlanProgress = yield* ThreadPlanProgressService;
-  const sql = yield* SqlClient.SqlClient;
+  // Every statement in this service is a client-facing SELECT, so the whole
+  // service runs on the read-only connection. That keeps a heavy thread open —
+  // which holds a transaction across several queries and the decode work
+  // between them — off the write connection's single permit, so writes and
+  // live-event projection keep making progress while it runs. The read-only
+  // connection also makes the "no writes here" rule structural: a write added
+  // to this file would fail rather than silently take the write path.
+  //
+  // Reads can only ever observe committed state, and inside a transaction they
+  // observe the snapshot as of the transaction's first statement. Both are
+  // safe for the sequence-vs-rows invariant below: a client that resumes from
+  // an older sequence replays events, whereas one that resumed from a newer
+  // sequence would drop them.
+  const sql = yield* ReadOnlySqlClient;
   const repositoryIdentityResolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const repositoryIdentityResolutionConcurrency = 4;
   const resolveRepositoryIdentitiesForProjects = Effect.fn(
@@ -2727,6 +2740,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     // a sequence ahead of the thread detail, causing the client to resume from
     // too far and drop events. Window resolution runs inside the same
     // transaction so the page boundary is consistent with the returned rows.
+    //
+    // The transaction runs on the read connection, which holds one WAL snapshot
+    // for its whole duration. Writes committed while it is open are invisible
+    // to every statement in it — rows and sequence alike — so the pair stays
+    // consistent and can only lag, never lead. Lagging is what the resume
+    // protocol is built for: the client replays from the older sequence.
     sql
       .withTransaction(
         Effect.gen(function* () {
