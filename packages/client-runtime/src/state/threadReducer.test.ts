@@ -864,6 +864,111 @@ describe("applyThreadDetailEvent", () => {
         expect(ids).toEqual(["activity-cw-resolvable", "activity-cw-broken"]);
       }
     });
+
+    // Appends insert at a binary-searched position instead of re-sorting the
+    // whole list; these pin the orderings where that could diverge from a sort.
+    describe("ordering", () => {
+      const activityAt = (id: string, sequence: number | undefined, createdAt: string) => ({
+        id: EventId.make(id),
+        tone: "tool" as const,
+        kind: "command",
+        summary: id,
+        payload: {},
+        turnId: TurnId.make("turn-1"),
+        ...(sequence === undefined ? {} : { sequence }),
+        createdAt,
+      });
+
+      const appendAll = (
+        seed: ReadonlyArray<ReturnType<typeof activityAt>>,
+        arrivals: ReadonlyArray<ReturnType<typeof activityAt>>,
+      ) => {
+        let thread: OrchestrationThread = { ...baseThread, activities: seed };
+        for (const activity of arrivals) {
+          const result = applyThreadDetailEvent(thread, {
+            ...baseEventFields,
+            sequence: 1,
+            occurredAt: activity.createdAt,
+            aggregateKind: "thread",
+            aggregateId: ThreadId.make("thread-1"),
+            type: "thread.activity-appended",
+            payload: { threadId: ThreadId.make("thread-1"), activity },
+          });
+          if (result.kind === "updated") {
+            thread = result.thread;
+          }
+        }
+        return thread.activities.map((activity) => activity.id);
+      };
+
+      const at = (index: number) => `2026-04-01T11:00:0${index}.000Z`;
+
+      it("orders out-of-order arrivals by sequence", () => {
+        const arrivals = [3, 1, 4, 0, 2].map((n) => activityAt(`activity-${n}`, n, at(n)));
+        expect(appendAll([], arrivals)).toEqual([
+          "activity-0",
+          "activity-1",
+          "activity-2",
+          "activity-3",
+          "activity-4",
+        ]);
+      });
+
+      it("re-orders a seed list that was not already sorted", () => {
+        const seed = [2, 0, 1].map((n) => activityAt(`activity-${n}`, n, at(n)));
+        expect(appendAll(seed, [activityAt("activity-3", 3, at(3))])).toEqual([
+          "activity-0",
+          "activity-1",
+          "activity-2",
+          "activity-3",
+        ]);
+      });
+
+      it("replaces a duplicate id in place rather than keeping both", () => {
+        const seed = [0, 1, 2].map((n) => activityAt(`activity-${n}`, n, at(n)));
+        const thread: OrchestrationThread = { ...baseThread, activities: seed };
+        const result = applyThreadDetailEvent(thread, {
+          ...baseEventFields,
+          sequence: 1,
+          occurredAt: at(1),
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.activity-appended",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            activity: { ...activityAt("activity-1", 1, at(1)), summary: "resent" },
+          },
+        });
+
+        expect(result.kind).toBe("updated");
+        if (result.kind === "updated") {
+          expect(result.thread.activities.map((activity) => activity.id)).toEqual([
+            "activity-0",
+            "activity-1",
+            "activity-2",
+          ]);
+          expect(result.thread.activities[1]?.summary).toBe("resent");
+        }
+      });
+
+      it("keeps sequence-less rows after sequenced ones and orders them by createdAt", () => {
+        const arrivals = [
+          activityAt("activity-b", undefined, at(9)),
+          activityAt("activity-seq", 1, at(1)),
+          activityAt("activity-a", undefined, at(8)),
+        ];
+        expect(appendAll([], arrivals)).toEqual(["activity-seq", "activity-a", "activity-b"]);
+      });
+
+      it("breaks a sequence and createdAt tie by id", () => {
+        const seed = [activityAt("activity-b", 1, at(1)), activityAt("activity-c", 1, at(1))];
+        expect(appendAll(seed, [activityAt("activity-a", 1, at(1))])).toEqual([
+          "activity-a",
+          "activity-b",
+          "activity-c",
+        ]);
+      });
+    });
   });
 
   describe("thread.turn-diff-completed", () => {
