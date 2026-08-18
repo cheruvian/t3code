@@ -312,25 +312,56 @@ function projectAcpContent(value: unknown): Record<string, unknown> | undefined 
 }
 
 /**
- * Removes activity payload fields that no current client reads while retaining
- * the full payload in persistence and the event store.
+ * Version stamp for {@link projectPayload}'s rules, stored alongside every
+ * pre-slimmed payload in `projection_thread_activities.payload_slim_version`.
+ * Reads only trust a stored slim payload when its stamp equals this constant,
+ * so **bump it in the same commit as any change to the slimming rules** —
+ * anything the rules newly keep, drop, or reshape. Rows stamped with an older
+ * version fall back to re-slimming `payload_json`, which is always correct,
+ * just slower until they are rewritten.
  */
-export function projectActivityPayload(
-  activity: OrchestrationThreadActivity,
-): OrchestrationThreadActivity {
-  const payload = asRecord(activity.payload);
+export const ACTIVITY_PAYLOAD_SLIM_VERSION = 1;
+
+/**
+ * Payload objects that already went through {@link projectPayload} — either
+ * because a reader served them from `payload_slim_json` or because this module
+ * produced them. Keyed on the payload object itself, which schema decoding
+ * passes through by reference, so the slimming pass can be skipped instead of
+ * repeated on the read path. Re-running would be harmless (the projection is
+ * idempotent); skipping it is the point of storing the slim payload.
+ */
+const projectedPayloads = new WeakSet<object>();
+
+/**
+ * Marks a payload read from `payload_slim_json` as already slimmed so
+ * {@link projectActivityPayload} leaves it alone. Returns its argument so
+ * callers can mark inline.
+ */
+export function markProjectedPayload<A>(payload: A): A {
+  if (payload !== null && typeof payload === "object") {
+    projectedPayloads.add(payload);
+  }
+  return payload;
+}
+
+/**
+ * Removes activity payload fields that no current client reads. The single
+ * source of truth for slimming: the read path applies it to payloads loaded
+ * from `payload_json`, and the projector applies it at write time to fill
+ * `payload_slim_json`. Returns its argument unchanged when there is nothing to
+ * slim, so callers can detect a no-op by reference.
+ */
+export function projectPayload(rawPayload: unknown): unknown {
+  const payload = asRecord(rawPayload);
   const data = asRecord(payload?.data);
-  if (!payload || !data) {
-    return activity;
+  if (!payload || !data || projectedPayloads.has(payload)) {
+    return rawPayload;
   }
 
   if (payload.itemType === "mcp_tool_call") {
     return {
-      ...activity,
-      payload: {
-        ...payload,
-        data: projectMcpToolCallData(data),
-      },
+      ...payload,
+      data: projectMcpToolCallData(data),
     };
   }
 
@@ -363,12 +394,21 @@ export function projectActivityPayload(
   }
 
   return {
-    ...activity,
-    payload: {
-      ...payload,
-      data: projectedData,
-    },
+    ...payload,
+    data: projectedData,
   };
+}
+
+/**
+ * Applies {@link projectPayload} to one activity, leaving the activity object
+ * untouched when slimming is a no-op (nothing to slim, or the payload was
+ * already served pre-slimmed from `payload_slim_json`).
+ */
+export function projectActivityPayload(
+  activity: OrchestrationThreadActivity,
+): OrchestrationThreadActivity {
+  const payload = projectPayload(activity.payload);
+  return payload === activity.payload ? activity : { ...activity, payload };
 }
 
 /**

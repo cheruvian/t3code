@@ -43,6 +43,10 @@ import {
   type ProjectionRepositoryError,
 } from "../../persistence/Errors.ts";
 import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheckpoints.ts";
+import {
+  ACTIVITY_PAYLOAD_SLIM_VERSION,
+  markProjectedPayload,
+} from "../ActivityPayloadProjection.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
 import { ThreadPlanProgressService } from "../ThreadPlanProgress.ts";
 import { ProjectionProject } from "../../persistence/Services/ProjectionProjects.ts";
@@ -95,6 +99,9 @@ const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
   Struct.assign({
     payload: Schema.fromJsonString(Schema.Unknown),
     sequence: Schema.NullOr(NonNegativeInt),
+    // 1 when `payload` came from `payload_slim_json`, i.e. the projector
+    // already slimmed it at write time.
+    payloadIsSlim: Schema.Number,
   }),
 );
 const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession;
@@ -387,6 +394,47 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     );
   });
 
+  // Payload columns shared by every client-facing activity read. Serves the
+  // pre-slimmed payload the clients actually receive whenever the projector
+  // wrote one under the current slimming rules, so the bulk that
+  // `projectActivityPayload` would discard is never read off disk or parsed —
+  // the dominant cost of opening a long thread. Falling through to
+  // `payload_json` covers all three cases where there is no usable slim: rows
+  // written before the column existed, rows stamped with superseded rules, and
+  // rows the projector deliberately left NULL because slimming was a no-op.
+  // All three still slim on the way out exactly as before, which is why no
+  // backfill is required for correctness.
+  const activityPayloadColumns = sql`
+        CASE
+          WHEN payload_slim_version = ${ACTIVITY_PAYLOAD_SLIM_VERSION}
+            AND payload_slim_json IS NOT NULL
+          THEN payload_slim_json
+          ELSE payload_json
+        END AS "payload",
+        CASE
+          WHEN payload_slim_version = ${ACTIVITY_PAYLOAD_SLIM_VERSION}
+            AND payload_slim_json IS NOT NULL
+          THEN 1
+          ELSE 0
+        END AS "payloadIsSlim"`;
+
+  // Builds one snapshot activity, keeping a slim-column payload out of the
+  // slimming pass that runs later in `projectThreadDetailSnapshot`.
+  const mapActivityRow = (
+    row: Schema.Schema.Type<typeof ProjectionThreadActivityDbRowSchema>,
+  ): OrchestrationThreadActivity => {
+    const activity = {
+      id: row.activityId,
+      tone: row.tone,
+      kind: row.kind,
+      summary: row.summary,
+      payload: row.payloadIsSlim === 1 ? markProjectedPayload(row.payload) : row.payload,
+      turnId: row.turnId,
+      createdAt: row.createdAt,
+    };
+    return row.sequence !== null ? Object.assign(activity, { sequence: row.sequence }) : activity;
+  };
+
   const listProjectRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionProjectDbRowSchema,
@@ -571,7 +619,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           tone,
           kind,
           summary,
+          -- The whole-database read model is the oracle for what the projector
+          -- persisted, so it deliberately stays on the full payload; only the
+          -- client-facing thread reads below take the slim path.
           payload_json AS "payload",
+          0 AS "payloadIsSlim",
           sequence,
           created_at AS "createdAt"
         FROM projection_thread_activities
@@ -1016,7 +1068,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           tone,
           kind,
           summary,
-          payload_json AS "payload",
+          ${activityPayloadColumns},
           sequence,
           created_at AS "createdAt"
         FROM (
@@ -1332,7 +1384,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           activity.tone,
           activity.kind,
           activity.summary,
-          activity.payload_json AS "payload",
+          CASE
+            WHEN activity.payload_slim_version = ${ACTIVITY_PAYLOAD_SLIM_VERSION}
+              AND activity.payload_slim_json IS NOT NULL
+            THEN activity.payload_slim_json
+            ELSE activity.payload_json
+          END AS "payload",
+          CASE
+            WHEN activity.payload_slim_version = ${ACTIVITY_PAYLOAD_SLIM_VERSION}
+              AND activity.payload_slim_json IS NOT NULL
+            THEN 1
+            ELSE 0
+          END AS "payloadIsSlim",
           activity.sequence,
           activity.created_at AS "createdAt"
         FROM pinned_activity_ids AS pinned
@@ -1354,7 +1417,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           tone,
           kind,
           summary,
-          payload_json AS "payload",
+          ${activityPayloadColumns},
           sequence,
           created_at AS "createdAt"
         FROM (
@@ -1586,16 +1649,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               for (const row of activityRows) {
                 updatedAt = maxIso(updatedAt, row.createdAt);
                 const threadActivities = activitiesByThread.get(row.threadId) ?? [];
-                threadActivities.push({
-                  id: row.activityId,
-                  tone: row.tone,
-                  kind: row.kind,
-                  summary: row.summary,
-                  payload: row.payload,
-                  turnId: row.turnId,
-                  ...(row.sequence !== null ? { sequence: row.sequence } : {}),
-                  createdAt: row.createdAt,
-                });
+                threadActivities.push(mapActivityRow(row));
                 activitiesByThread.set(row.threadId, threadActivities);
               }
 
@@ -2630,21 +2684,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           return message;
         }),
         proposedPlans: proposedPlanRows.map(mapProposedPlanRow),
-        activities: selectedActivityRows.map((row) => {
-          const activity = {
-            id: row.activityId,
-            tone: row.tone,
-            kind: row.kind,
-            summary: row.summary,
-            payload: row.payload,
-            turnId: row.turnId,
-            createdAt: row.createdAt,
-          };
-          if (row.sequence !== null) {
-            return Object.assign(activity, { sequence: row.sequence });
-          }
-          return activity;
-        }),
+        activities: selectedActivityRows.map(mapActivityRow),
         checkpoints: checkpointRows.map((row) => ({
           turnId: row.turnId,
           checkpointTurnCount: row.checkpointTurnCount,

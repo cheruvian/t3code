@@ -6,6 +6,10 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 
+import {
+  ACTIVITY_PAYLOAD_SLIM_VERSION,
+  projectPayload,
+} from "../../orchestration/ActivityPayloadProjection.ts";
 import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
 
 import {
@@ -33,6 +37,20 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
 const makeProjectionThreadActivityRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
+  // Every row carries both the full payload and the pre-slimmed payload the
+  // clients actually receive, so a thread open never reads or parses the bulk
+  // it is about to discard. The version stamp lets a later change to the
+  // slimming rules invalidate stale slims without a migration.
+  //
+  // Payloads with nothing to slim (context-window updates, task lifecycle
+  // rows) store a NULL slim and let readers fall back to the identical
+  // `payload_json` rather than duplicating it — on a real database that is
+  // 60% of rows and more than half of what the column would otherwise cost.
+  const slimPayloadJson = (payload: unknown) => {
+    const slim = projectPayload(payload);
+    return slim === payload ? null : JSON.stringify(slim);
+  };
+
   const upsertProjectionThreadActivityRow = SqlSchema.void({
     Request: ProjectionThreadActivity,
     execute: (row) =>
@@ -45,6 +63,8 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
               kind,
               summary,
               payload_json,
+              payload_slim_json,
+              payload_slim_version,
               sequence,
               created_at
             )
@@ -56,6 +76,8 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
               ${row.kind},
               ${row.summary},
               ${JSON.stringify(row.payload)},
+              ${slimPayloadJson(row.payload)},
+              ${ACTIVITY_PAYLOAD_SLIM_VERSION},
               ${row.sequence ?? null},
               ${row.createdAt}
             )
@@ -67,12 +89,19 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
               kind = excluded.kind,
               summary = excluded.summary,
               payload_json = excluded.payload_json,
+              payload_slim_json = excluded.payload_slim_json,
+              payload_slim_version = excluded.payload_slim_version,
               sequence = excluded.sequence,
               created_at = excluded.created_at
               WHERE projection_thread_activities.thread_id = excluded.thread_id
           `,
   });
 
+  // Deliberately reads the full `payload_json`, not the slim column: the
+  // revert projector round-trips these rows back through `upsert`, so a slim
+  // payload here would overwrite the full one and lose it permanently. The
+  // client-facing reads in ProjectionSnapshotQuery are the ones that take the
+  // slim path.
   const listProjectionThreadActivityRows = SqlSchema.findAll({
     Request: ListProjectionThreadActivitiesInput,
     Result: ProjectionThreadActivityDbRowSchema,
