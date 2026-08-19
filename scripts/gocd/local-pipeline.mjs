@@ -860,10 +860,35 @@ function processDescendsFrom(processIdentity, ancestor, processControl) {
   return false;
 }
 
+/**
+ * Command shape of a launcher spawned by the pre-versioned pipeline:
+ * `node <release>/apps/desktop/scripts/start-electron.mjs`, which is what the
+ * original `launchRelease` ran (`spawn(process.execPath, [runtime.launcher])`).
+ * Current releases run Electron against `dist-electron/main.cjs` instead, but a
+ * long-lived host still carries one of these under a legacy pid marker, and
+ * `captureManagedLegacyLauncher` exists precisely to retire them — it could
+ * never authenticate one while this shape went unrecognised.
+ *
+ * The Node binary lives outside the release (Homebrew, nvm, a system install)
+ * so it cannot be pinned. Ownership rests on the release-rooted script path
+ * plus the caller's other checks: the launcher must run from `release`, and it
+ * must actually supervise the already-authenticated backend.
+ */
+function legacyLauncherCommandMatches(processIdentity, release) {
+  const { launcher } = desktopRuntimePaths(release);
+  const suffix = ` ${launcher}`;
+  if (!processIdentity.command.endsWith(suffix)) return false;
+  const executable = processIdentity.command.slice(0, -suffix.length);
+  return executable.startsWith("/") || /^[A-Za-z]:[\\/]/.test(executable);
+}
+
 function captureManagedLegacyLauncher(paths, release, backend, processControl, marker) {
   if (marker.kind !== "legacy" || !processControl.isAlive(marker.pid)) return undefined;
   const launcher = processControl.inspectProcess(marker.pid);
-  if (launcher.cwd !== release || !launcherCommandMatches(launcher, release)) {
+  if (
+    launcher.cwd !== release ||
+    !(launcherCommandMatches(launcher, release) || legacyLauncherCommandMatches(launcher, release))
+  ) {
     throw new Error(
       `Refusing to stop legacy launcher pid ${String(marker.pid)} because its process identity does not match the selected runtime.`,
     );

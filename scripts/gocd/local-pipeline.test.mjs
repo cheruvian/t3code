@@ -1119,6 +1119,27 @@ it("fails closed when a legacy launcher cannot be tied to its backend", async ()
       error: /process identity does not match/,
       loadPipeline: () => import("./local-pipeline.mjs?legacy-launcher-foreign-test"),
     },
+    // The pre-versioned pipeline launched `node <release>/…/start-electron.mjs`.
+    // Reaching the supervision check at all proves that shape authenticated;
+    // before it was recognised this failed on the identity check instead.
+    {
+      name: "legacy-shape-authenticates",
+      launcherCommand: "legacy-node",
+      backendAlive: true,
+      backendParent: 1,
+      error: /does not supervise the authenticated backend/,
+      loadPipeline: () => import("./local-pipeline.mjs?legacy-launcher-node-shape-test"),
+    },
+    // Same shape, script belonging to a different release: still refused, so
+    // recognising it does not widen ownership beyond the selected release.
+    {
+      name: "legacy-shape-foreign-release",
+      launcherCommand: "legacy-node-foreign",
+      backendAlive: true,
+      backendParent: 5551,
+      error: /process identity does not match/,
+      loadPipeline: () => import("./local-pipeline.mjs?legacy-launcher-node-foreign-test"),
+    },
   ];
 
   for (const selectedCase of cases) {
@@ -1165,9 +1186,11 @@ it("fails closed when a legacy launcher cannot be tied to its backend", async ()
             ppid: 1,
             birthToken: "2026-08-14T11:58:00.000Z",
             command:
-              selectedCase.launcherCommand === "managed"
-                ? managedLauncherCommand
-                : "/usr/bin/foreign --serve",
+              {
+                managed: managedLauncherCommand,
+                "legacy-node": `/opt/homebrew/bin/node ${join(selectedReleaseA, "apps/desktop/scripts/start-electron.mjs")}`,
+                "legacy-node-foreign": `/opt/homebrew/bin/node ${join(sandbox, "elsewhere", "apps/desktop/scripts/start-electron.mjs")}`,
+              }[selectedCase.launcherCommand] ?? "/usr/bin/foreign --serve",
             cwd: selectedReleaseA,
           },
         ],
