@@ -3102,3 +3102,20 @@ it("rejects rollback when the previous release lacks its Electron executable", a
     rmSync(sandbox, { recursive: true, force: true });
   }
 });
+
+// The pipeline spawns launchers detached and unref'd, so it stays their parent
+// without reaping them: a launcher it kills within the same run lingers as a
+// zombie and kill(pid, 0) keeps succeeding. Counting that as alive is what
+// produced "launcher pid N survived SIGKILL" against an already-exited process.
+it("treats an unreaped zombie as exited", async () => {
+  const { isAlive } = await import("./local-pipeline.mjs?zombie-liveness-test");
+
+  assert.equal(isAlive(process.pid, { probeState: () => "R" }), true);
+  assert.equal(isAlive(process.pid, { probeState: () => "S+" }), true);
+  assert.equal(isAlive(process.pid, { probeState: () => "Z" }), false);
+  assert.equal(isAlive(process.pid, { probeState: () => "Z+" }), false);
+  // An unreadable state must not turn a live process into a dead one.
+  assert.equal(isAlive(process.pid, { probeState: () => "" }), true);
+  // A pid that does not exist stays dead regardless of the probe.
+  assert.equal(isAlive(2_147_483_646, { probeState: () => "R" }), false);
+});

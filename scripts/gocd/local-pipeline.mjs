@@ -245,10 +245,26 @@ function readBackendRuntimeIdentity(paths) {
   }
 }
 
-function isAlive(pid) {
+function readProcessState(pid) {
+  const result = spawnSync("/bin/ps", ["-o", "state=", "-p", String(pid)], { encoding: "utf8" });
+  return result.status === 0 ? result.stdout.trim() : "";
+}
+
+/**
+ * True while the pid still names a process that can run.
+ *
+ * `kill(pid, 0)` also succeeds for a zombie — a process that has exited but
+ * whose parent has not reaped it. The pipeline spawns launchers detached and
+ * `unref()`s them, which stops it waiting on them but leaves it their parent,
+ * so a launcher it kills within the same run stays a zombie for as long as the
+ * pipeline itself lives. Counting that as alive is what produced "launcher pid
+ * N survived SIGKILL" for a process that had already exited. A zombie holds no
+ * port and runs no code, so treat it as gone.
+ */
+export function isAlive(pid, { probeState = readProcessState } = {}) {
   try {
     process.kill(pid, 0);
-    return true;
+    return !probeState(pid).startsWith("Z");
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ESRCH") {
       return false;
