@@ -1093,6 +1093,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             kind,
             summary,
             payload_json,
+            -- Carried through the newest-N subquery so the outer select's
+            -- slim-payload CASE can still see them.
+            payload_slim_json,
+            payload_slim_version,
             sequence,
             created_at
           FROM projection_thread_activities
@@ -1442,6 +1446,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             kind,
             summary,
             payload_json,
+            -- Carried through the window subquery so the outer select's
+            -- slim-payload CASE can still see them.
+            payload_slim_json,
+            payload_slim_version,
             sequence,
             created_at
           FROM projection_thread_activities

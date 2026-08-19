@@ -21,12 +21,12 @@ const passThroughPayload = { usedTokens: 1_234, maxTokens: 200_000 };
 const bulkyPayloadJson = JSON.stringify(bulkyPayload);
 const passThroughPayloadJson = JSON.stringify(passThroughPayload);
 
-layer("039_040_ProjectionThreadActivityPayloadSlim", (it) => {
+layer("043_044_ProjectionThreadActivityPayloadSlim", (it) => {
   it.effect("adds the slim payload columns and backfills pre-existing rows", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      yield* runMigrations({ toMigrationInclusive: 38 });
+      yield* runMigrations({ toMigrationInclusive: 42 });
       yield* sql`
         INSERT INTO projection_thread_activities (
           activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at
@@ -40,7 +40,7 @@ layer("039_040_ProjectionThreadActivityPayloadSlim", (it) => {
            'not json', '2026-08-17T00:00:02.000Z')
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 40 });
+      yield* runMigrations({ toMigrationInclusive: 44 });
 
       const columns = yield* sql<{ readonly name: string }>`
         PRAGMA table_info(projection_thread_activities)

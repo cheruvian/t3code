@@ -951,13 +951,17 @@ describe("applyThreadDetailEvent", () => {
         }
       });
 
-      it("keeps sequence-less rows after sequenced ones and orders them by createdAt", () => {
+      // Per `compareThreadActivities`: legacy rows without a sequence sort
+      // ahead of sequenced ones, so replaying newer events cannot move
+      // pre-sequence history to the end of the thread. Among themselves they
+      // order by createdAt.
+      it("keeps sequence-less rows ahead of sequenced ones and orders them by createdAt", () => {
         const arrivals = [
           activityAt("activity-b", undefined, at(9)),
           activityAt("activity-seq", 1, at(1)),
           activityAt("activity-a", undefined, at(8)),
         ];
-        expect(appendAll([], arrivals)).toEqual(["activity-seq", "activity-a", "activity-b"]);
+        expect(appendAll([], arrivals)).toEqual(["activity-a", "activity-b", "activity-seq"]);
       });
 
       it("breaks a sequence and createdAt tie by id", () => {
