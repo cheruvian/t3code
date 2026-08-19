@@ -882,13 +882,24 @@ function legacyLauncherCommandMatches(processIdentity, release) {
   return executable.startsWith("/") || /^[A-Za-z]:[\\/]/.test(executable);
 }
 
+/**
+ * Either launcher shape this pipeline can own: the Electron entry the current
+ * `launchRelease` spawns, or the pre-versioned Node script. Capture and the
+ * terminate-time re-validation must agree — authenticating a launcher and then
+ * refusing to terminate it strands the environment mid-transaction and demands
+ * manual intervention.
+ */
+function managedLauncherCommandMatches(processIdentity, release) {
+  return (
+    launcherCommandMatches(processIdentity, release) ||
+    legacyLauncherCommandMatches(processIdentity, release)
+  );
+}
+
 function captureManagedLegacyLauncher(paths, release, backend, processControl, marker) {
   if (marker.kind !== "legacy" || !processControl.isAlive(marker.pid)) return undefined;
   const launcher = processControl.inspectProcess(marker.pid);
-  if (
-    launcher.cwd !== release ||
-    !(launcherCommandMatches(launcher, release) || legacyLauncherCommandMatches(launcher, release))
-  ) {
+  if (launcher.cwd !== release || !managedLauncherCommandMatches(launcher, release)) {
     throw new Error(
       `Refusing to stop legacy launcher pid ${String(marker.pid)} because its process identity does not match the selected runtime.`,
     );
@@ -966,7 +977,7 @@ function assertLegacyLauncherStillOwned(paths, release, captured, backend, proce
     marker !== captured.record.serialized ||
     !sameProcessIdentity(captured.process, launcher) ||
     launcher.cwd !== release ||
-    !launcherCommandMatches(launcher, release)
+    !managedLauncherCommandMatches(launcher, release)
   ) {
     throw new Error(`Refusing to ${phase} reused legacy launcher pid ${String(launcher.pid)}.`);
   }

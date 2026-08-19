@@ -1234,6 +1234,90 @@ it("fails closed when a legacy launcher cannot be tied to its backend", async ()
   }
 });
 
+// Capture and the terminate-time re-validation must accept the same launcher
+// shapes. While only capture knew the pre-versioned Node shape, a deploy could
+// authenticate the launcher and then refuse to terminate it, stranding the
+// environment mid-transaction and demanding manual intervention.
+it("terminates a pre-versioned launcher it authenticated at capture", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-legacy-node-stop-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const artifactRoot = join(sandbox, "artifact");
+  const productionRoot = join(runtimeRoot, "production");
+  const sha = "a".repeat(40);
+  const release = join(productionRoot, "releases", sha);
+  const launcherPid = 5851;
+  const backendPid = 5852;
+  const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+  const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
+
+  try {
+    process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+    process.env.T3_PIPELINE_ARTIFACT_ROOT = artifactRoot;
+    createCompleteRelease(release, sha);
+    symlinkSync(release, join(productionRoot, "current"));
+    writeFixture(join(productionRoot, "electron.pid"), `${String(launcherPid)}\n`);
+    writeFixture(
+      join(productionRoot, "home", "userdata", "server-runtime.json"),
+      `${JSON.stringify({
+        version: 1,
+        pid: backendPid,
+        port: 17774,
+        origin: "http://127.0.0.1:17774",
+        startedAt: "2026-08-14T11:59:00.000Z",
+      })}\n`,
+    );
+    const selectedRelease = realpathSync(release);
+    const die = (signal, selected) => {
+      if (signal === "SIGTERM") {
+        selected.alive = false;
+        selected.listenerPort = undefined;
+      }
+    };
+    const processes = new Map([
+      [
+        launcherPid,
+        {
+          alive: true,
+          ppid: 1,
+          birthToken: "2026-08-14T11:58:00.000Z",
+          command: `/opt/homebrew/bin/node ${join(selectedRelease, "apps/desktop/scripts/start-electron.mjs")}`,
+          cwd: selectedRelease,
+          onSignal: die,
+        },
+      ],
+      [
+        backendPid,
+        {
+          alive: true,
+          ppid: launcherPid,
+          birthToken: "2026-08-14T11:58:59.000Z",
+          command: `${electronExecutablePath(selectedRelease)} ${join(selectedRelease, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`,
+          cwd: selectedRelease,
+          listenerPort: 17774,
+          onSignal: die,
+        },
+      ],
+    ]);
+    const processControl = createProcessControl(processes);
+
+    const { stop } = await import("./local-pipeline.mjs?legacy-node-stop-test");
+    await stop("production", { processControl });
+
+    assert.ok(
+      processControl.signals.some(([pid, signal]) => pid === launcherPid && signal === "SIGTERM"),
+      "the pre-versioned launcher must be terminated, not refused",
+    );
+    assert.equal(processControl.listenerPids(17774).length, 0);
+    assert.equal(existsSync(join(productionRoot, "electron.pid")), false);
+  } finally {
+    if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+    else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
+    if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
+    else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
 it("does not signal a legacy launcher after its marker changes", async () => {
   const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-legacy-marker-race-"));
   const runtimeRoot = join(sandbox, "runtime");
