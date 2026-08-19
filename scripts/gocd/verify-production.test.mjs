@@ -176,6 +176,79 @@ it("accepts a healthy backend bound to the selected production release", async (
   }
 });
 
+// macOS runs the backend from the branded bundle electron-launcher.mjs builds,
+// whose Electron is a copy of the packaged binary. Verifying only the packaged
+// path reported a healthy production backend as "did not launch <entry>".
+const itMac = platform() === "darwin" ? it : it.skip;
+
+itMac("accepts a backend launched from the release's branded runtime bundle", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-production-verifier-branded-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const productionRoot = join(runtimeRoot, "production");
+  const shaC = "c".repeat(40);
+  const releaseC = join(productionRoot, "releases", shaC);
+  const runtimePid = 636_363;
+
+  try {
+    createCompleteRelease(releaseC, shaC);
+    const brandedExecutable = join(
+      releaseC,
+      "apps",
+      "desktop",
+      ".electron-runtime",
+      "T3 Code (Alpha).app",
+      "Contents",
+      "MacOS",
+      "Electron",
+    );
+    writeFixture(brandedExecutable);
+    symlinkSync(releaseC, join(productionRoot, "current"));
+    writeFixture(
+      join(productionRoot, "home", "userdata", "server-runtime.json"),
+      `${JSON.stringify({
+        version: 1,
+        pid: runtimePid,
+        port: 17774,
+        origin: "http://127.0.0.1:17774",
+        startedAt: "2026-08-09T20:00:00.000Z",
+      })}\n`,
+    );
+
+    const selectedReleaseC = realpathSync(releaseC);
+    const serverEntry = join(selectedReleaseC, "apps", "server", "dist", "bin.mjs");
+    const brandedForSelected = join(
+      selectedReleaseC,
+      "apps",
+      "desktop",
+      ".electron-runtime",
+      "T3 Code (Alpha).app",
+      "Contents",
+      "MacOS",
+      "Electron",
+    );
+
+    const result = await verifyProduction({
+      runtimeRoot,
+      expectedRelease: selectedReleaseC,
+      expectedSha: shaC,
+      launchedAfter: Date.parse("2026-08-09T19:59:59.000Z"),
+      fetchImpl: async () => ({ ok: true, status: 200 }),
+      inspectProcess: () => ({
+        pid: runtimePid,
+        alive: true,
+        birthToken: "2026-08-09T19:59:59.000Z",
+        cwd: selectedReleaseC,
+        command: [brandedForSelected, serverEntry, "--bootstrap-fd", "3"],
+        listenerPids: [runtimePid],
+      }),
+    });
+
+    expect(result).toEqual({ release: selectedReleaseC, pid: runtimePid, sha: shaC });
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
 it("rejects HTTP success when listener ownership changes during verification", async () => {
   const sandbox = mkdtempSync(join(tmpdir(), "t3-production-verifier-handoff-"));
   const runtimeRoot = join(sandbox, "runtime");

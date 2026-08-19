@@ -7,7 +7,7 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
 const { spawnSync } = NodeChildProcess;
-const { existsSync, readFileSync, realpathSync } = NodeFS;
+const { existsSync, readFileSync, readdirSync, realpathSync } = NodeFS;
 const { homedir, platform } = NodeOS;
 const { join, resolve } = NodePath;
 const { pathToFileURL } = NodeURL;
@@ -94,6 +94,22 @@ export async function verifyProduction({
   const current = join(runtimeRoot, "production", "current");
   if (!existsSync(current)) throw new Error("Production has no current release.");
   const release = realpathSync(current);
+  // Mirrors `brandedRuntimeExecutables` in local-pipeline.mjs; kept local so
+  // this verifier stays runnable on its own.
+  function brandedRuntimeExecutables(selected) {
+    if (platform() !== "darwin") return [];
+    const brandedRuntimeDir = join(selected, "apps", "desktop", ".electron-runtime");
+    let entries;
+    try {
+      entries = readdirSync(brandedRuntimeDir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    return entries
+      .filter((entry) => entry.isDirectory() && entry.name.endsWith(".app"))
+      .map((entry) => join(brandedRuntimeDir, entry.name, "Contents", "MacOS", "Electron"))
+      .filter((executable) => existsSync(executable));
+  }
   const selectedRelease = realpathSync(
     expectedRelease ?? join(runtimeRoot, "production", "releases", expectedSha),
   );
@@ -156,7 +172,21 @@ export async function verifyProduction({
     throw new Error(`Production backend PID ${runtimeState.pid} is not running from ${release}.`);
   }
   const expectedServerEntry = join(release, "apps", "server", "dist", "bin.mjs");
+  // On macOS the backend runs from the branded bundle that
+  // `apps/desktop/scripts/electron-launcher.mjs` builds at
+  // `.electron-runtime/<Product>.app`, whose Electron is a copy of the
+  // packaged binary rather than a symlink to it. Accept those too, or a
+  // healthy production backend reads as "did not launch <entry>". Paths stay
+  // rooted at this release, so the check does not accept a foreign process.
   const executables = new Set([electronExecutable]);
+  for (const candidate of [electronExecutable, ...brandedRuntimeExecutables(release)]) {
+    executables.add(candidate);
+    try {
+      executables.add(realpathSync(candidate));
+    } catch {
+      // The complete-release checks surface a missing runtime before this point.
+    }
+  }
   try {
     executables.add(realpathSync(electronExecutable));
   } catch {
