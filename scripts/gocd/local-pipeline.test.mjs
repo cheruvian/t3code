@@ -798,6 +798,153 @@ it("stops an owned orphan backend after the tracked launcher exited", async () =
   }
 });
 
+// macOS runs the desktop app from a branded bundle whose Electron binary is a
+// copy of the packaged one, so these cases only exist there.
+const itMac = platform() === "darwin" ? it : it.skip;
+
+function brandedElectronExecutablePath(release, product = "T3 Code (Alpha)") {
+  return join(
+    release,
+    "apps",
+    "desktop",
+    ".electron-runtime",
+    `${product}.app`,
+    "Contents",
+    "MacOS",
+    "Electron",
+  );
+}
+
+itMac("stops a backend launched from the release's branded runtime bundle", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-branded-backend-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const artifactRoot = join(sandbox, "artifact");
+  const productionRoot = join(runtimeRoot, "production");
+  const sha = "a".repeat(40);
+  const release = join(productionRoot, "releases", sha);
+  const backendPid = 4242;
+  const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+  const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
+
+  try {
+    process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+    process.env.T3_PIPELINE_ARTIFACT_ROOT = artifactRoot;
+    createCompleteRelease(release, sha);
+    // The branded bundle is a separate copy, never a symlink to node_modules.
+    const brandedExecutable = brandedElectronExecutablePath(release);
+    writeFixture(brandedExecutable);
+    chmodSync(brandedExecutable, 0o755);
+    symlinkSync(release, join(productionRoot, "current"));
+    writeFixture(join(productionRoot, "electron.pid"), "2147483647\n");
+    writeFixture(
+      join(productionRoot, "home", "userdata", "server-runtime.json"),
+      `${JSON.stringify({
+        version: 1,
+        pid: backendPid,
+        port: 17774,
+        origin: "http://127.0.0.1:17774",
+        startedAt: "2026-08-14T11:59:00.000Z",
+      })}\n`,
+    );
+    const selectedRelease = realpathSync(release);
+    const processes = new Map([
+      [
+        backendPid,
+        {
+          alive: true,
+          ppid: 1,
+          birthToken: "2026-08-14T11:58:59.000Z",
+          command: `${brandedElectronExecutablePath(selectedRelease)} ${join(selectedRelease, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`,
+          cwd: selectedRelease,
+          listenerPort: 17774,
+          onSignal: (signal, selected) => {
+            if (signal === "SIGTERM") {
+              selected.alive = false;
+              selected.listenerPort = undefined;
+            }
+          },
+        },
+      ],
+    ]);
+    const processControl = createProcessControl(processes);
+
+    const { stop } = await import("./local-pipeline.mjs?branded-backend-test");
+    await stop("production", { processControl });
+
+    assert.deepStrictEqual(processControl.signals, [[backendPid, "SIGTERM"]]);
+    assert.equal(processControl.listenerPids(17774).length, 0);
+  } finally {
+    if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+    else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
+    if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
+    else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+itMac("refuses a backend running a branded bundle from outside the release", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-foreign-branded-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const artifactRoot = join(sandbox, "artifact");
+  const productionRoot = join(runtimeRoot, "production");
+  const sha = "a".repeat(40);
+  const release = join(productionRoot, "releases", sha);
+  // A different checkout's branded bundle: same shape, wrong root.
+  const foreignRelease = join(sandbox, "elsewhere");
+  const backendPid = 4243;
+  const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+  const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
+
+  try {
+    process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+    process.env.T3_PIPELINE_ARTIFACT_ROOT = artifactRoot;
+    createCompleteRelease(release, sha);
+    const brandedExecutable = brandedElectronExecutablePath(release);
+    writeFixture(brandedExecutable);
+    chmodSync(brandedExecutable, 0o755);
+    writeFixture(brandedElectronExecutablePath(foreignRelease));
+    symlinkSync(release, join(productionRoot, "current"));
+    writeFixture(join(productionRoot, "electron.pid"), "2147483647\n");
+    writeFixture(
+      join(productionRoot, "home", "userdata", "server-runtime.json"),
+      `${JSON.stringify({
+        version: 1,
+        pid: backendPid,
+        port: 17774,
+        origin: "http://127.0.0.1:17774",
+        startedAt: "2026-08-14T11:59:00.000Z",
+      })}\n`,
+    );
+    const selectedRelease = realpathSync(release);
+    const processes = new Map([
+      [
+        backendPid,
+        {
+          alive: true,
+          ppid: 1,
+          birthToken: "2026-08-14T11:58:59.000Z",
+          command: `${brandedElectronExecutablePath(foreignRelease)} ${join(selectedRelease, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`,
+          cwd: selectedRelease,
+          listenerPort: 17774,
+        },
+      ],
+    ]);
+    const processControl = createProcessControl(processes);
+
+    const { stop } = await import("./local-pipeline.mjs?foreign-branded-test");
+    await expect(stop("production", { processControl })).rejects.toThrow(
+      /process identity does not match/,
+    );
+    assert.deepStrictEqual(processControl.signals, []);
+  } finally {
+    if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+    else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
+    if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
+    else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
 it("quiesces a legacy launcher before deploying past its respawning backend", async () => {
   const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-legacy-launcher-deploy-"));
   const runtimeRoot = join(sandbox, "runtime");

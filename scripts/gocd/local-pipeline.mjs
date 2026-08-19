@@ -19,6 +19,7 @@ const {
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -698,12 +699,50 @@ function selectedRelease(paths) {
   }
 }
 
+/**
+ * Electron binaries inside the release's branded runtime bundles.
+ *
+ * On macOS the desktop app does not run the packaged Electron directly: it
+ * runs a branded bundle that `apps/desktop/scripts/electron-launcher.mjs`
+ * builds at `<desktop>/.electron-runtime/<Product>.app`, whose
+ * `Contents/MacOS/Electron` is a *copy* of the packaged binary, not a symlink
+ * to it. A backend launched that way is legitimately ours, so the identity
+ * allowlist has to name it — otherwise the pipeline can never prove it owns a
+ * running desktop backend and every deploy that must replace one fails.
+ *
+ * Only bundles inside the selected release count. Every path stays rooted at
+ * the release's own `.electron-runtime`, so this cannot widen ownership to a
+ * process from another release, another checkout, or a developer's dev server.
+ * Non-darwin hosts launch the packaged binary directly and have no bundles.
+ *
+ * Derived here rather than added to `desktopRuntimePaths`, because
+ * `hasCompleteReleaseRuntime` requires every path in that struct to exist and
+ * the bundle is built lazily on first launch, not by the deploy.
+ */
+function brandedRuntimeExecutables(runtime) {
+  if (platform() !== "darwin") return [];
+  const brandedRuntimeDir = join(runtime.root, ".electron-runtime");
+  let entries;
+  try {
+    entries = readdirSync(brandedRuntimeDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isDirectory() && entry.name.endsWith(".app"))
+    .map((entry) => join(brandedRuntimeDir, entry.name, "Contents", "MacOS", "Electron"))
+    .filter((executable) => existsSync(executable));
+}
+
 function allowedElectronExecutables(runtime) {
   const executables = new Set([runtime.electronExecutable]);
-  try {
-    executables.add(realpathSync(runtime.electronExecutable));
-  } catch {
-    // A missing executable is rejected by the exact-command check below.
+  for (const executable of [runtime.electronExecutable, ...brandedRuntimeExecutables(runtime)]) {
+    executables.add(executable);
+    try {
+      executables.add(realpathSync(executable));
+    } catch {
+      // A missing executable is rejected by the exact-command check below.
+    }
   }
   return [...executables];
 }
