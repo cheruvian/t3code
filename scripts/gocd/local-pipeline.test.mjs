@@ -1478,6 +1478,89 @@ it("ignores a stale launcher record while stopping its independently owned backe
   }
 });
 
+it("stops a relaunched Electron supervisor discovered through its managed backend", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-relaunched-supervisor-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const productionRoot = join(runtimeRoot, "production");
+  const release = join(productionRoot, "releases", "a".repeat(40));
+  const markerPath = join(productionRoot, "electron.pid");
+  const staleLauncherPid = 4351;
+  const supervisorPid = 4352;
+  const backendPid = 4353;
+  const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+
+  try {
+    process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+    createCompleteRelease(release, "a".repeat(40));
+    symlinkSync(release, join(productionRoot, "current"));
+    writeFixture(
+      markerPath,
+      `${JSON.stringify({
+        version: 1,
+        pid: staleLauncherPid,
+        processBirthToken: "2026-08-14T11:00:00.000Z",
+      })}\n`,
+    );
+    writeFixture(
+      join(productionRoot, "home/userdata/server-runtime.json"),
+      `${JSON.stringify({
+        version: 1,
+        pid: backendPid,
+        port: 17774,
+        origin: "http://127.0.0.1:17774",
+        startedAt: "2026-08-14T12:00:00.000Z",
+      })}\n`,
+    );
+    const selectedRelease = realpathSync(release);
+    const processes = new Map();
+    processes.set(supervisorPid, {
+      alive: true,
+      ppid: 1,
+      birthToken: "2026-08-14T11:30:00.000Z",
+      command: `${electronExecutablePath(selectedRelease)} ${join(selectedRelease, "apps/desktop/dist-electron/main.cjs")}`,
+      cwd: selectedRelease,
+      onSignal: (signal, selected) => {
+        if (signal === "SIGTERM") {
+          const backend = processes.get(backendPid);
+          backend.alive = false;
+          backend.listenerPort = undefined;
+        } else if (signal === "SIGKILL") {
+          selected.alive = false;
+        }
+      },
+    });
+    processes.set(backendPid, {
+      alive: true,
+      ppid: supervisorPid,
+      birthToken: "2026-08-14T11:59:59.000Z",
+      command: `${electronExecutablePath(selectedRelease)} ${join(selectedRelease, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`,
+      cwd: selectedRelease,
+      listenerPort: 17774,
+      onSignal: (_signal, selected) => {
+        selected.alive = false;
+        selected.listenerPort = undefined;
+      },
+    });
+    const processControl = createProcessControl(processes);
+    const { stop } = await import("./local-pipeline.mjs?relaunched-supervisor-test");
+
+    await stop("production", { processControl });
+
+    assert.deepStrictEqual(processControl.signals, [
+      [supervisorPid, "SIGTERM"],
+      [supervisorPid, "SIGKILL"],
+    ]);
+    assert.equal(processes.get(supervisorPid).alive, false);
+    assert.equal(processes.get(backendPid).alive, false);
+    assert.equal(processControl.listenerPids(17774).length, 0);
+    assert.equal(existsSync(markerPath), false);
+  } finally {
+    if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+    else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
 it("does not signal a backend PID reused after the recorded runtime generation", async () => {
   const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-reused-backend-"));
   const runtimeRoot = join(sandbox, "runtime");

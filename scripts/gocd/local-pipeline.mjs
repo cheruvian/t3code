@@ -989,6 +989,23 @@ function captureManagedLegacyLauncher(paths, release, backend, processControl, m
   return { process: launcher, record: marker };
 }
 
+function captureSupervisorFromBackendAncestry(release, backend, processControl) {
+  if (!backend) return undefined;
+  let child = backend.process;
+  const visited = new Set([child.pid]);
+  for (let depth = 0; depth < 16; depth += 1) {
+    if (!Number.isInteger(child.ppid) || child.ppid <= 1 || visited.has(child.ppid)) {
+      return undefined;
+    }
+    visited.add(child.ppid);
+    const parent = processControl.inspectProcess(child.ppid);
+    if (Date.parse(parent.birthToken) > Date.parse(child.birthToken)) return undefined;
+    if (parent.cwd === release && launcherCommandMatches(parent, release)) return parent;
+    child = parent;
+  }
+  return undefined;
+}
+
 function assertBackendStillOwned(paths, release, captured, processControl, phase) {
   const selected = processControl.inspectProcess(captured.process.pid);
   if (
@@ -1070,6 +1087,32 @@ function assertLegacyLauncherStillOwned(paths, release, captured, backend, proce
   return launcher;
 }
 
+function assertSupervisorStillOwned(paths, release, captured, backend, processControl, phase) {
+  const supervisor = processControl.inspectProcess(captured.pid);
+  if (
+    !sameProcessIdentity(captured, supervisor) ||
+    supervisor.cwd !== release ||
+    !launcherCommandMatches(supervisor, release)
+  ) {
+    throw new Error(`Refusing to ${phase} reused supervisor pid ${String(supervisor.pid)}.`);
+  }
+  if (!processControl.isAlive(backend.process.pid)) {
+    if (phase !== "kill" || processControl.listenerPids(paths.port).length > 0) {
+      throw new Error(
+        `Refusing to ${phase} supervisor pid ${String(supervisor.pid)} after its backend identity changed.`,
+      );
+    }
+    return supervisor;
+  }
+  const selectedBackend = assertBackendStillOwned(paths, release, backend, processControl, phase);
+  if (!processDescendsFrom(selectedBackend, supervisor, processControl)) {
+    throw new Error(
+      `Refusing to ${phase} supervisor pid ${String(supervisor.pid)} because it no longer supervises the authenticated backend.`,
+    );
+  }
+  return supervisor;
+}
+
 function stopUnlocked(
   name,
   paths = environmentPaths(name),
@@ -1094,13 +1137,17 @@ function stopUnlocked(
   const legacyLauncher = launcher
     ? undefined
     : captureManagedLegacyLauncher(paths, release, backend, processControl, launcherMarker);
+  const supervisor =
+    launcher || legacyLauncher
+      ? undefined
+      : captureSupervisorFromBackendAncestry(release, backend, processControl);
   if (initialListeners.length > 0 && !backend) {
     throw new Error(
       `${nameForError(paths)} port ${String(paths.port)} is occupied by an unverified process.`,
     );
   }
 
-  const launcherProcess = launcher ?? legacyLauncher?.process;
+  const launcherProcess = launcher ?? legacyLauncher?.process ?? supervisor;
   if (launcherProcess) {
     if (legacyLauncher) {
       assertLegacyLauncherStillOwned(
@@ -1111,8 +1158,17 @@ function stopUnlocked(
         processControl,
         "terminate",
       );
-    } else {
+    } else if (launcher) {
       assertLauncherStillOwned(paths, release, launcherProcess, processControl, "terminate");
+    } else {
+      assertSupervisorStillOwned(
+        paths,
+        release,
+        launcherProcess,
+        backend,
+        processControl,
+        "terminate",
+      );
     }
     console.log(`[t3-pipeline] stopping ${name} launcher pid ${String(launcherProcess.pid)}`);
     processControl.signal(launcherProcess.pid, "SIGTERM");
@@ -1134,8 +1190,17 @@ function stopUnlocked(
           processControl,
           "kill",
         );
-      } else {
+      } else if (launcher) {
         assertLauncherStillOwned(paths, release, launcherProcess, processControl, "kill");
+      } else {
+        assertSupervisorStillOwned(
+          paths,
+          release,
+          launcherProcess,
+          backend,
+          processControl,
+          "kill",
+        );
       }
       processControl.signal(launcherProcess.pid, "SIGKILL");
       if (
