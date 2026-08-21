@@ -186,10 +186,17 @@ export function make(): ThreadBackgroundLivenessService["Service"] {
         return;
       }
 
-      // Progress and telemetry without an explicit lifecycle update preserve
-      // current state. In particular, they must not resurrect an idle task.
-      if (input.kind !== "started" && input.status === undefined) {
-        return;
+      // Status-free progress is a description tick, not a restart. A delayed
+      // progress event after idle must not put the task back in the live set
+      // (#7128).
+      if (input.kind === "progress" && input.status === undefined) {
+        const existing = stateByThreadId.get(input.threadId);
+        const stillLive =
+          existing !== undefined &&
+          (existing.agents.has(input.taskId) || existing.monitors.has(input.taskId));
+        if (!stillLive) {
+          return;
+        }
       }
 
       dropTask(input.threadId, input.taskId);

@@ -7,6 +7,7 @@ import {
   DEFAULT_RUNTIME_MODE,
   ModelSelection,
   OrchestrationCommand,
+  OrchestrationDispatchCommandError,
   OrchestrationEvent,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetTurnDiffInput,
@@ -92,6 +93,20 @@ it.effect("decodes cumulative assistant previews without a durable sequence", ()
       createdAt: "2026-04-01T01:30:00.000Z",
     });
     assert.strictEqual("sequence" in parsed, false);
+  }),
+);
+
+const decodeDispatchCommandError = Schema.decodeUnknownEffect(OrchestrationDispatchCommandError);
+
+it.effect("decodes a dispatch error after its bootstrap thread was deleted", () =>
+  Effect.gen(function* () {
+    const error = yield* decodeDispatchCommandError({
+      _tag: "OrchestrationDispatchCommandError",
+      message: "Failed to create worktree.",
+      bootstrapThreadDisposition: "deleted",
+    });
+
+    assert.strictEqual(error.bootstrapThreadDisposition, "deleted");
   }),
 );
 

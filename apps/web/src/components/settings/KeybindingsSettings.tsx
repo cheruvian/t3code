@@ -1196,7 +1196,7 @@ export function KeybindingsSettingsPanel() {
   );
 
   return (
-    <SettingsPageContainer className="max-w-5xl">
+    <SettingsPageContainer width="wide">
       <SettingsSection
         {...searchableSetting("keybindings")}
         headerAction={
