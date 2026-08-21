@@ -2905,3 +2905,62 @@ it("prunes superseded releases after a deploy while retaining pointer targets", 
     rmSync(sandbox, { recursive: true, force: true });
   }
 });
+
+it("attaches a desktop debugging port to the launch only when configured", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-debug-port-"));
+  const release = join(sandbox, "release");
+  const runtimeRoot = join(sandbox, "runtime");
+  const sha = "a".repeat(40);
+  const previousDebugPort = process.env.T3_PIPELINE_DESKTOP_DEBUG_PORT;
+  const paths = {
+    base: runtimeRoot,
+    home: join(runtimeRoot, "home"),
+    pid: join(runtimeRoot, "electron.pid"),
+    log: join(runtimeRoot, "electron.log"),
+    port: 17774,
+  };
+
+  try {
+    createCompleteRelease(release, sha);
+    const { launchRelease } = await import("./local-pipeline.mjs?desktop-debug-port-test");
+    const launch = () => {
+      const launches = [];
+      launchRelease("production", paths, release, sha, {
+        spawnProcess: (_command, args) => {
+          launches.push(args);
+          return { pid: 4242, unref() {} };
+        },
+        readBirthToken: () => "2026-08-14T11:59:00.000Z",
+      });
+      rmSync(paths.pid, { force: true });
+      return launches[0];
+    };
+
+    delete process.env.T3_PIPELINE_DESKTOP_DEBUG_PORT;
+    const withoutPort = launch();
+
+    process.env.T3_PIPELINE_DESKTOP_DEBUG_PORT = "9222";
+    const withPort = launch();
+
+    assert.deepStrictEqual(
+      { withoutPort, withPort },
+      {
+        withoutPort: [join(release, "apps/desktop/dist-electron/main.cjs")],
+        withPort: [
+          join(release, "apps/desktop/dist-electron/main.cjs"),
+          "--remote-debugging-port=9222",
+        ],
+      },
+      "the debugging endpoint must be opt-in so ordinary deploys are unchanged",
+    );
+
+    process.env.T3_PIPELINE_DESKTOP_DEBUG_PORT = "not-a-port";
+    expect(launch).toThrow("T3_PIPELINE_DESKTOP_DEBUG_PORT");
+    process.env.T3_PIPELINE_DESKTOP_DEBUG_PORT = "80";
+    expect(launch).toThrow("between 1024 and 65535");
+  } finally {
+    if (previousDebugPort === undefined) delete process.env.T3_PIPELINE_DESKTOP_DEBUG_PORT;
+    else process.env.T3_PIPELINE_DESKTOP_DEBUG_PORT = previousDebugPort;
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});

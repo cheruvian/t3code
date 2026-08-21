@@ -135,6 +135,25 @@ function pruneReleases(paths, retain = releaseRetention) {
   return removed;
 }
 
+/**
+ * Chrome DevTools endpoint for the deployed desktop renderer, opt-in per
+ * deployment via `T3_PIPELINE_DESKTOP_DEBUG_PORT`. Profiling a real deployment
+ * (heap, GC, WebSocket frames) otherwise means rebuilding the release by hand.
+ * Unset leaves the launch argv untouched, so ordinary deploys expose nothing.
+ * Electron binds this to loopback only.
+ */
+function resolveDesktopDebugPort(environment) {
+  const configured = environment.T3_PIPELINE_DESKTOP_DEBUG_PORT;
+  if (configured === undefined || configured.trim() === "") return undefined;
+  const port = Number(configured);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    fail(
+      `T3_PIPELINE_DESKTOP_DEBUG_PORT must be an integer between 1024 and 65535; received '${configured}'.`,
+    );
+  }
+  return port;
+}
+
 export function launchRelease(
   name,
   paths,
@@ -166,9 +185,14 @@ export function launchRelease(
     T3CODE_DESKTOP_STAGE_LABEL: stageLabel === "candidate" ? "Candidate" : "Production",
   };
   delete childEnv.ELECTRON_RUN_AS_NODE;
+  const debugPort = resolveDesktopDebugPort(childEnv);
+  const launchArgs =
+    debugPort === undefined
+      ? [runtime.mainEntry]
+      : [runtime.mainEntry, `--remote-debugging-port=${String(debugPort)}`];
   let child;
   try {
-    child = spawnProcess(runtime.electronExecutable, [runtime.mainEntry], {
+    child = spawnProcess(runtime.electronExecutable, launchArgs, {
       cwd: release,
       detached: true,
       stdio: ["ignore", logFd, logFd],
