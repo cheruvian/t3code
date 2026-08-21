@@ -14,8 +14,10 @@ import { buildThreadFeed, type ThreadFeedActivity } from "../../mobile/src/lib/t
 import { deriveLatestContextWindowSnapshot } from "../../web/src/lib/contextWindow.ts";
 import { deriveWorkLogEntries } from "../../web/src/session-logic.ts";
 import {
+  markProjectedPayload,
   projectActivityEvent,
   projectActivityPayload,
+  projectPayload,
   projectThreadDetailSnapshot,
 } from "../src/orchestration/ActivityPayloadProjection.ts";
 
@@ -556,5 +558,158 @@ describe("context-window snapshot dedup", () => {
     expect(
       projected.type === "thread.activity-appended" ? projected.payload.activity : undefined,
     ).toEqual(activity);
+  });
+});
+
+/**
+ * Rows served from `projection_thread_activities.payload_slim_json` reach
+ * `projectThreadDetailSnapshot` already slimmed. Both row-drop passes run
+ * *before* slimming, so they now see slim payloads where they used to see full
+ * ones — every field they read has to survive the projection, or a thread open
+ * would drop a different set of rows depending on which column served it.
+ */
+describe("pre-slimmed payload equivalence", () => {
+  /** What the projector wrote at upsert time, round-tripped through SQLite. */
+  function asStoredSlim(activity: OrchestrationThreadActivity): OrchestrationThreadActivity {
+    const slim: unknown = JSON.parse(JSON.stringify(projectPayload(activity.payload)));
+    return { ...activity, payload: markProjectedPayload(slim) };
+  }
+
+  function makeContextWindow(
+    id: string,
+    usedTokens: number,
+    turn: string,
+    extra: Record<string, unknown> = {},
+  ): OrchestrationThreadActivity {
+    return {
+      id: EventId.make(id),
+      tone: "info",
+      kind: "context-window.updated",
+      summary: "Context window updated",
+      payload: { usedTokens, maxTokens: 200_000, ...extra },
+      turnId: TurnId.make(turn),
+      createdAt: "2026-07-27T00:00:00.000Z",
+    };
+  }
+
+  function makeLifecycle(
+    id: string,
+    kind: "tool.updated" | "tool.completed",
+    options: {
+      readonly turn?: string;
+      readonly title?: string;
+      readonly detail?: string;
+      readonly itemType?: string;
+      readonly toolCallId?: string;
+    } = {},
+  ): OrchestrationThreadActivity {
+    const {
+      turn = "turn-a",
+      title = "Edit src/app.ts",
+      detail = "writing",
+      itemType = "file_change",
+      toolCallId,
+    } = options;
+    return {
+      id: EventId.make(id),
+      tone: "tool",
+      kind,
+      summary: title,
+      payload: {
+        itemType,
+        title,
+        detail,
+        data: {
+          ...(toolCallId ? { toolCallId } : {}),
+          toolName: "Edit",
+          input: { file_path: "src/app.ts" },
+          // Bulk the projection strips; it must not carry the row identity.
+          rawOutput: { stdout: "noisy output\n".repeat(500) },
+          transcript: "x".repeat(20_000),
+        },
+      },
+      turnId: TurnId.make(turn),
+      createdAt: "2026-07-27T00:00:00.000Z",
+    };
+  }
+
+  // Every identity shape the drop passes distinguish, mixed with the slimming
+  // fixtures above so both passes have something to chew on.
+  const mixedHistory: ReadonlyArray<OrchestrationThreadActivity> = [
+    makeContextWindow("ctx-stale", 1_000, "turn-a"),
+    makeLifecycle("upd-id", "tool.updated", { toolCallId: "call-a" }),
+    makeLifecycle("upd-label", "tool.updated", { title: "Read src/lib.ts", detail: "reading" }),
+    makeLifecycle("upd-parallel", "tool.updated", { toolCallId: "call-b" }),
+    makeLifecycle("done-id", "tool.completed", { toolCallId: "call-a" }),
+    makeLifecycle("done-label", "tool.completed", {
+      title: "Read src/lib.ts complete",
+      detail: "reading",
+    }),
+    makeLifecycle("upd-inflight", "tool.updated", { title: "Still running", detail: "running" }),
+    makeLifecycle("upd-other-turn", "tool.updated", { turn: "turn-b", toolCallId: "call-c" }),
+    makeLifecycle("done-other-turn", "tool.completed", { turn: "turn-c", toolCallId: "call-c" }),
+    makeContextWindow("ctx-latest", 2_000, "turn-a"),
+    // Defensive: a context-window row that also carries `data`, so slimming
+    // rewrites it. `usedTokens` is top-level and must still survive.
+    makeContextWindow("ctx-with-data", 3_000, "turn-b", {
+      data: { toolCallId: "ctx-call", rawOutput: { stdout: "z".repeat(5_000) } },
+    }),
+    ...fixtures,
+  ];
+
+  it("drops and slims identically whether rows arrive slim or full", () => {
+    const fromFull = projectThreadDetailSnapshot({
+      snapshotSequence: 7,
+      thread: makeThread(mixedHistory),
+    });
+    const fromSlim = projectThreadDetailSnapshot({
+      snapshotSequence: 7,
+      thread: makeThread(mixedHistory.map(asStoredSlim)),
+    });
+
+    // Same rows survive both drop passes...
+    expect(fromSlim.thread.activities.map((activity) => activity.id)).toEqual(
+      fromFull.thread.activities.map((activity) => activity.id),
+    );
+    // ...and each surviving row ships the same payload.
+    expect(fromSlim).toEqual(fromFull);
+    // The drop passes are load-bearing here, not vacuously satisfied.
+    expect(fromFull.thread.activities.length).toBeLessThan(mixedHistory.length);
+  });
+
+  it("keeps every field the drop passes read intact through slimming", () => {
+    for (const activity of mixedHistory) {
+      const slim = asStoredSlim(activity).payload as Record<string, unknown>;
+      const full = activity.payload as Record<string, unknown>;
+      // dropStaleContextWindowActivities.
+      expect(slim.usedTokens).toEqual(full.usedTokens);
+      // toolLifecycleIdentity.
+      expect(slim.itemType).toEqual(full.itemType);
+      expect(slim.title).toEqual(full.title);
+      expect(slim.detail).toEqual(full.detail);
+      expect((slim.data as Record<string, unknown> | undefined)?.toolCallId).toEqual(
+        (full.data as Record<string, unknown> | undefined)?.toolCallId,
+      );
+    }
+  });
+
+  it("leaves a payload served from the slim column untouched", () => {
+    const slim = asStoredSlim(fixtures[0]!);
+    const projected = projectThreadDetailSnapshot({
+      snapshotSequence: 7,
+      thread: makeThread([slim]),
+    });
+
+    expect(projected.thread.activities[0]).toBe(slim);
+    expect(projected.thread.activities[0]?.payload).toBe(slim.payload);
+  });
+
+  it("stays idempotent, so losing the slim marker cannot change the wire payload", () => {
+    for (const activity of mixedHistory) {
+      const once = projectPayload(activity.payload);
+      // A clone is not in the marker set, so this re-runs the full projection.
+      const twice = projectPayload(JSON.parse(JSON.stringify(once)));
+      expect(twice).toEqual(once);
+    }
   });
 });

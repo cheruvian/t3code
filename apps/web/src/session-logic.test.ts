@@ -2038,3 +2038,175 @@ describe("rerun workflows", () => {
     expect(spawnRows.map((row) => row.turnId)).toEqual(["turn-1", "turn-2"]);
   });
 });
+
+// Every derivation below memoizes per-activity work on the activity object
+// (activities are immutable and identity-stable across reducer rebuilds), so
+// a streaming append only pays for the row that arrived. These pin that the
+// warm result is indistinguishable from a cold one.
+describe("derivation memoization", () => {
+  /** Structurally identical activities that share no object identity: a cold cache. */
+  const cold = (activities: ReadonlyArray<OrchestrationThreadActivity>) =>
+    activities.map((activity) => structuredClone(activity) as OrchestrationThreadActivity);
+
+  function expectMatchesColdDerivation(activities: ReadonlyArray<OrchestrationThreadActivity>) {
+    const fresh = cold(activities);
+    expect(deriveWorkLogEntries(activities)).toEqual(deriveWorkLogEntries(fresh));
+    expect(deriveTurnPlans(activities)).toEqual(deriveTurnPlans(fresh));
+    expect(derivePendingApprovals(activities)).toEqual(derivePendingApprovals(fresh));
+    expect(derivePendingUserInputs(activities)).toEqual(derivePendingUserInputs(fresh));
+    expect(deriveActivePlanState(activities, TurnId.make("turn-2"))).toEqual(
+      deriveActivePlanState(fresh, TurnId.make("turn-2")),
+    );
+  }
+
+  function streamFixture(): OrchestrationThreadActivity[] {
+    let sequence = 0;
+    const nextSequence = () => (sequence += 1);
+    const activities: OrchestrationThreadActivity[] = [];
+    for (const turn of ["turn-1", "turn-2"]) {
+      activities.push(
+        makeActivity({
+          kind: "turn.plan.updated",
+          summary: "Plan",
+          tone: "info",
+          payload: { plan: [{ step: `${turn} step`, status: "inProgress" }] },
+          turnId: turn,
+          sequence: nextSequence(),
+        }),
+        makeActivity({
+          kind: "tool.started",
+          summary: "Ran command",
+          payload: { data: { toolCallId: `${turn}-call` } },
+          turnId: turn,
+          sequence: nextSequence(),
+        }),
+        makeActivity({
+          kind: "tool.updated",
+          summary: "Ran command",
+          payload: {
+            itemType: "command_execution",
+            status: "inProgress",
+            data: { toolCallId: `${turn}-call`, command: "pnpm test" },
+          },
+          turnId: turn,
+          sequence: nextSequence(),
+        }),
+        makeActivity({
+          kind: "tool.completed",
+          summary: "Ran command",
+          payload: {
+            itemType: "command_execution",
+            status: "completed",
+            data: { toolCallId: `${turn}-call`, command: "pnpm test" },
+          },
+          turnId: turn,
+          sequence: nextSequence(),
+        }),
+        makeActivity({
+          kind: "task.started",
+          summary: "Kicked off agent",
+          tone: "info",
+          payload: { taskId: `${turn}-agent`, role: "reviewer" },
+          turnId: turn,
+          sequence: nextSequence(),
+        }),
+        makeActivity({
+          kind: "task.completed",
+          summary: "Agent done",
+          tone: "info",
+          payload: { taskId: `${turn}-agent`, status: "completed" },
+          turnId: turn,
+          sequence: nextSequence(),
+        }),
+        makeActivity({
+          kind: "context-window.updated",
+          summary: "Context window updated",
+          tone: "info",
+          payload: { usedTokens: 100 },
+          turnId: turn,
+          sequence: nextSequence(),
+        }),
+        makeActivity({
+          kind: "approval.requested",
+          summary: "Approve command",
+          tone: "approval",
+          payload: { requestId: `${turn}-approval`, requestKind: "command", detail: "rm -rf" },
+          turnId: turn,
+          sequence: nextSequence(),
+        }),
+        makeActivity({
+          kind: "user-input.requested",
+          summary: "Question",
+          tone: "info",
+          payload: {
+            requestId: `${turn}-input`,
+            questions: [
+              {
+                id: "q1",
+                header: "Pick",
+                question: "Which?",
+                options: [{ label: "A", description: "first" }],
+              },
+            ],
+          },
+          turnId: turn,
+          sequence: nextSequence(),
+        }),
+      );
+    }
+    return activities;
+  }
+
+  it("matches cold derivation for every prefix as activities stream in", () => {
+    const stream = streamFixture();
+    const appended: OrchestrationThreadActivity[] = [];
+    for (const activity of stream) {
+      // Each delta rebuilds the array while reusing the activity objects,
+      // exactly like the thread reducer.
+      appended.push(activity);
+      expectMatchesColdDerivation([...appended]);
+    }
+  });
+
+  it("matches cold derivation when activities arrive out of order", () => {
+    const stream = streamFixture();
+    const scrambled = [...stream.slice(9), ...stream.slice(0, 9)];
+    const appended: OrchestrationThreadActivity[] = [];
+    for (const activity of scrambled) {
+      appended.push(activity);
+      expectMatchesColdDerivation([...appended]);
+    }
+  });
+
+  it("matches cold derivation after a revert drops a turn", () => {
+    const stream = streamFixture();
+    expectMatchesColdDerivation(stream);
+    const reverted = stream.filter((activity) => activity.turnId !== TurnId.make("turn-2"));
+    expectMatchesColdDerivation(reverted);
+    // Re-appending after the revert must not resurrect anything cached.
+    expectMatchesColdDerivation([
+      ...reverted,
+      makeActivity({
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: { itemType: "command_execution", data: { toolCallId: "post-revert" } },
+        turnId: "turn-3",
+        sequence: 99,
+      }),
+    ]);
+  });
+
+  it("re-derives a mutated activity list without stale rows", () => {
+    const stream = streamFixture();
+    const before = deriveWorkLogEntries(stream);
+    // A resent row carries the same id but a fresh object identity.
+    const resent = stream.map((activity) =>
+      activity.kind === "tool.completed"
+        ? ({ ...activity, summary: "Ran command (resent)" } as OrchestrationThreadActivity)
+        : activity,
+    );
+    const after = deriveWorkLogEntries(resent);
+    expect(after).toEqual(deriveWorkLogEntries(cold(resent)));
+    expect(after).not.toEqual(before);
+  });
+});

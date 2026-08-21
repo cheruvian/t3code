@@ -301,10 +301,26 @@ function readBackendRuntimeIdentity(paths) {
   }
 }
 
-function isAlive(pid) {
+function readProcessState(pid) {
+  const result = spawnSync("/bin/ps", ["-o", "state=", "-p", String(pid)], { encoding: "utf8" });
+  return result.status === 0 ? result.stdout.trim() : "";
+}
+
+/**
+ * True while the pid still names a process that can run.
+ *
+ * `kill(pid, 0)` also succeeds for a zombie — a process that has exited but
+ * whose parent has not reaped it. The pipeline spawns launchers detached and
+ * `unref()`s them, which stops it waiting on them but leaves it their parent,
+ * so a launcher it kills within the same run stays a zombie for as long as the
+ * pipeline itself lives. Counting that as alive is what produced "launcher pid
+ * N survived SIGKILL" for a process that had already exited. A zombie holds no
+ * port and runs no code, so treat it as gone.
+ */
+export function isAlive(pid, { probeState = readProcessState } = {}) {
   try {
     process.kill(pid, 0);
-    return true;
+    return !probeState(pid).startsWith("Z");
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ESRCH") {
       return false;
@@ -755,12 +771,50 @@ function selectedRelease(paths) {
   }
 }
 
+/**
+ * Electron binaries inside the release's branded runtime bundles.
+ *
+ * On macOS the desktop app does not run the packaged Electron directly: it
+ * runs a branded bundle that `apps/desktop/scripts/electron-launcher.mjs`
+ * builds at `<desktop>/.electron-runtime/<Product>.app`, whose
+ * `Contents/MacOS/Electron` is a *copy* of the packaged binary, not a symlink
+ * to it. A backend launched that way is legitimately ours, so the identity
+ * allowlist has to name it — otherwise the pipeline can never prove it owns a
+ * running desktop backend and every deploy that must replace one fails.
+ *
+ * Only bundles inside the selected release count. Every path stays rooted at
+ * the release's own `.electron-runtime`, so this cannot widen ownership to a
+ * process from another release, another checkout, or a developer's dev server.
+ * Non-darwin hosts launch the packaged binary directly and have no bundles.
+ *
+ * Derived here rather than added to `desktopRuntimePaths`, because
+ * `hasCompleteReleaseRuntime` requires every path in that struct to exist and
+ * the bundle is built lazily on first launch, not by the deploy.
+ */
+function brandedRuntimeExecutables(runtime) {
+  if (platform() !== "darwin") return [];
+  const brandedRuntimeDir = join(runtime.root, ".electron-runtime");
+  let entries;
+  try {
+    entries = readdirSync(brandedRuntimeDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isDirectory() && entry.name.endsWith(".app"))
+    .map((entry) => join(brandedRuntimeDir, entry.name, "Contents", "MacOS", "Electron"))
+    .filter((executable) => existsSync(executable));
+}
+
 function allowedElectronExecutables(runtime) {
   const executables = new Set([runtime.electronExecutable]);
-  try {
-    executables.add(realpathSync(runtime.electronExecutable));
-  } catch {
-    // A missing executable is rejected by the exact-command check below.
+  for (const executable of [runtime.electronExecutable, ...brandedRuntimeExecutables(runtime)]) {
+    executables.add(executable);
+    try {
+      executables.add(realpathSync(executable));
+    } catch {
+      // A missing executable is rejected by the exact-command check below.
+    }
   }
   return [...executables];
 }
@@ -878,10 +932,46 @@ function processDescendsFrom(processIdentity, ancestor, processControl) {
   return false;
 }
 
+/**
+ * Command shape of a launcher spawned by the pre-versioned pipeline:
+ * `node <release>/apps/desktop/scripts/start-electron.mjs`, which is what the
+ * original `launchRelease` ran (`spawn(process.execPath, [runtime.launcher])`).
+ * Current releases run Electron against `dist-electron/main.cjs` instead, but a
+ * long-lived host still carries one of these under a legacy pid marker, and
+ * `captureManagedLegacyLauncher` exists precisely to retire them — it could
+ * never authenticate one while this shape went unrecognised.
+ *
+ * The Node binary lives outside the release (Homebrew, nvm, a system install)
+ * so it cannot be pinned. Ownership rests on the release-rooted script path
+ * plus the caller's other checks: the launcher must run from `release`, and it
+ * must actually supervise the already-authenticated backend.
+ */
+function legacyLauncherCommandMatches(processIdentity, release) {
+  const { launcher } = desktopRuntimePaths(release);
+  const suffix = ` ${launcher}`;
+  if (!processIdentity.command.endsWith(suffix)) return false;
+  const executable = processIdentity.command.slice(0, -suffix.length);
+  return executable.startsWith("/") || /^[A-Za-z]:[\\/]/.test(executable);
+}
+
+/**
+ * Either launcher shape this pipeline can own: the Electron entry the current
+ * `launchRelease` spawns, or the pre-versioned Node script. Capture and the
+ * terminate-time re-validation must agree — authenticating a launcher and then
+ * refusing to terminate it strands the environment mid-transaction and demands
+ * manual intervention.
+ */
+function managedLauncherCommandMatches(processIdentity, release) {
+  return (
+    launcherCommandMatches(processIdentity, release) ||
+    legacyLauncherCommandMatches(processIdentity, release)
+  );
+}
+
 function captureManagedLegacyLauncher(paths, release, backend, processControl, marker) {
   if (marker.kind !== "legacy" || !processControl.isAlive(marker.pid)) return undefined;
   const launcher = processControl.inspectProcess(marker.pid);
-  if (launcher.cwd !== release || !launcherCommandMatches(launcher, release)) {
+  if (launcher.cwd !== release || !managedLauncherCommandMatches(launcher, release)) {
     throw new Error(
       `Refusing to stop legacy launcher pid ${String(marker.pid)} because its process identity does not match the selected runtime.`,
     );
@@ -959,7 +1049,7 @@ function assertLegacyLauncherStillOwned(paths, release, captured, backend, proce
     marker !== captured.record.serialized ||
     !sameProcessIdentity(captured.process, launcher) ||
     launcher.cwd !== release ||
-    !launcherCommandMatches(launcher, release)
+    !managedLauncherCommandMatches(launcher, release)
   ) {
     throw new Error(`Refusing to ${phase} reused legacy launcher pid ${String(launcher.pid)}.`);
   }

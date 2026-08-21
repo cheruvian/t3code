@@ -391,6 +391,16 @@ export function derivePendingApprovals(
   const ordered = orderThreadActivities(activities);
 
   for (const activity of ordered) {
+    // Kind gate first: the payload walk below is pure, so skipping it for the
+    // ~99% of rows no branch can act on is output-identical and turns the
+    // scan into a string compare per activity.
+    if (
+      activity.kind !== "approval.requested" &&
+      activity.kind !== "approval.resolved" &&
+      activity.kind !== "provider.approval.respond.failed"
+    ) {
+      continue;
+    }
     const payload =
       activity.payload && typeof activity.payload === "object"
         ? (activity.payload as Record<string, unknown>)
@@ -497,6 +507,14 @@ export function derivePendingUserInputs(
   const ordered = orderThreadActivities(activities);
 
   for (const activity of ordered) {
+    // See derivePendingApprovals: gate on kind before the pure payload walk.
+    if (
+      activity.kind !== "user-input.requested" &&
+      activity.kind !== "user-input.resolved" &&
+      activity.kind !== "provider.user-input.respond.failed"
+    ) {
+      continue;
+    }
     const payload =
       activity.payload && typeof activity.payload === "object"
         ? (activity.payload as Record<string, unknown>)
@@ -539,7 +557,23 @@ export function derivePendingUserInputs(
   );
 }
 
+const planStateCache = new WeakMap<OrchestrationThreadActivity, ActivePlanState | null>();
+
+/**
+ * Activities are immutable, so a plan snapshot only has to be parsed once per
+ * row no matter how many deltas re-derive the thread around it.
+ */
 function planStateFromActivity(activity: OrchestrationThreadActivity): ActivePlanState | null {
+  const cached = planStateCache.get(activity);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const planState = parsePlanStateFromActivity(activity);
+  planStateCache.set(activity, planState);
+  return planState;
+}
+
+function parsePlanStateFromActivity(activity: OrchestrationThreadActivity): ActivePlanState | null {
   const payload =
     activity.payload && typeof activity.payload === "object"
       ? (activity.payload as Record<string, unknown>)
@@ -749,24 +783,67 @@ export function deriveWorkLogEntries(
   const ordered = orderThreadActivities(activities);
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of ordered) {
-    if (activity.kind === "tool.started") continue;
-    // Agent task.started rows are CTA seeds: they carry the true spawn turn,
-    // which is the batch key (completions of background subagents arrive
-    // under later synthetic turns and must not start new batches). They
-    // collapse into the batch's single CTA row, never render standalone.
-    if (activity.kind === "task.started" && !isAgentTaskStartedActivity(activity)) continue;
-    if (activity.kind === "task.updated") continue;
-    if (activity.kind === "tool.progress") continue;
-    if (activity.kind === "context-window.updated") continue;
-    if (activity.summary === "Checkpoint captured") continue;
-    if (isPlanBoundaryToolActivity(activity)) continue;
-    if (isAgentInternalActivity(activity)) continue;
-    entries.push(toDerivedWorkLogEntry(activity));
+    const entry = derivedWorkLogEntryFor(activity);
+    if (entry !== null) {
+      entries.push(entry);
+    }
   }
-  return collapseDerivedWorkLogEntries(entries).map((entry) => {
-    const { activityKind, collapseKey: _collapseKey, ...rest } = entry;
-    return Object.assign(rest, { sourceActivityKind: activityKind });
-  });
+  return collapseDerivedWorkLogEntries(entries).map(toWorkLogEntry);
+}
+
+function includeActivityInWorkLog(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind === "tool.started") return false;
+  // Agent task.started rows are CTA seeds: they carry the true spawn turn,
+  // which is the batch key (completions of background subagents arrive
+  // under later synthetic turns and must not start new batches). They
+  // collapse into the batch's single CTA row, never render standalone.
+  if (activity.kind === "task.started" && !isAgentTaskStartedActivity(activity)) return false;
+  if (activity.kind === "task.updated") return false;
+  if (activity.kind === "tool.progress") return false;
+  if (activity.kind === "context-window.updated") return false;
+  if (activity.summary === "Checkpoint captured") return false;
+  if (isPlanBoundaryToolActivity(activity)) return false;
+  if (isAgentInternalActivity(activity)) return false;
+  return true;
+}
+
+const derivedWorkLogEntryCache = new WeakMap<
+  OrchestrationThreadActivity,
+  DerivedWorkLogEntry | null
+>();
+
+/**
+ * Per-activity work log row, or null when the activity never renders.
+ *
+ * Activities are immutable and identity-stable across reducer rebuilds (the
+ * reducer copies the array but reuses the activity objects), and this row is a
+ * pure function of one activity, so a `WeakMap` keyed on the activity leaves
+ * only the row that just arrived cold on each delta. Collapsing is
+ * deliberately not cached here: it folds ADJACENT rows, so its output depends
+ * on neighbours the next delta can change.
+ */
+function derivedWorkLogEntryFor(activity: OrchestrationThreadActivity): DerivedWorkLogEntry | null {
+  const cached = derivedWorkLogEntryCache.get(activity);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const derived = includeActivityInWorkLog(activity) ? toDerivedWorkLogEntry(activity) : null;
+  derivedWorkLogEntryCache.set(activity, derived);
+  return derived;
+}
+
+const workLogEntryCache = new WeakMap<DerivedWorkLogEntry, WorkLogEntry>();
+
+/** Strip the derivation-only fields. Uncollapsed rows keep their cached row identity. */
+function toWorkLogEntry(entry: DerivedWorkLogEntry): WorkLogEntry {
+  const cached = workLogEntryCache.get(entry);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const { activityKind, collapseKey: _collapseKey, ...rest } = entry;
+  const projected = Object.assign(rest, { sourceActivityKind: activityKind });
+  workLogEntryCache.set(entry, projected);
+  return projected;
 }
 
 function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): boolean {
@@ -1029,7 +1106,37 @@ function shouldCollapseToolLifecycleEntries(
   );
 }
 
+const mergedWorkLogEntryCache = new WeakMap<
+  DerivedWorkLogEntry,
+  WeakMap<DerivedWorkLogEntry, DerivedWorkLogEntry>
+>();
+
+/**
+ * Memoized on the operand pair. A lifecycle chain (`tool.updated`* →
+ * `tool.completed`) folds left, so the result of one merge is the left operand
+ * of the next: caching keeps a whole settled chain identity-stable across
+ * deltas, which is what makes re-collapsing an unchanged prefix nearly free.
+ */
 function mergeDerivedWorkLogEntries(
+  previous: DerivedWorkLogEntry,
+  next: DerivedWorkLogEntry,
+): DerivedWorkLogEntry {
+  let byNext = mergedWorkLogEntryCache.get(previous);
+  if (byNext === undefined) {
+    byNext = new WeakMap();
+    mergedWorkLogEntryCache.set(previous, byNext);
+  } else {
+    const cached = byNext.get(next);
+    if (cached !== undefined) {
+      return cached;
+    }
+  }
+  const merged = mergeDerivedWorkLogEntriesUncached(previous, next);
+  byNext.set(next, merged);
+  return merged;
+}
+
+function mergeDerivedWorkLogEntriesUncached(
   previous: DerivedWorkLogEntry,
   next: DerivedWorkLogEntry,
 ): DerivedWorkLogEntry {
