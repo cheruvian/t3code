@@ -15,6 +15,7 @@ const {
   realpathSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } = NodeFS;
 const { platform, tmpdir } = NodeOS;
@@ -2839,6 +2840,62 @@ it("rejects rollback when the previous release lacks its Electron executable", a
         previous: selectedReleaseB,
       },
       "rollback must reject an incomplete Electron runtime before production mutation",
+    );
+  } finally {
+    if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+    else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
+    if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
+    else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+it("prunes superseded releases after a deploy while retaining pointer targets", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-prune-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const artifactRoot = join(sandbox, "artifact");
+  const productionRoot = join(runtimeRoot, "production");
+  const shas = ["a", "b", "c", "d", "e", "f"].map((letter) => letter.repeat(40));
+  const releases = shas.map((sha) => join(productionRoot, "releases", sha));
+  const [releaseA, releaseB, , releaseD, releaseE, releaseF] = releases;
+  const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+  const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
+
+  try {
+    process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+    process.env.T3_PIPELINE_ARTIFACT_ROOT = artifactRoot;
+    releases.forEach((release, index) => {
+      createCompleteRelease(release, shas[index]);
+      // Age the directories so retention sees a deterministic newest-first order.
+      const modifiedAt = new Date(Date.UTC(2026, 0, index + 1));
+      utimesSync(release, modifiedAt, modifiedAt);
+    });
+    writeFixture(join(artifactRoot, "manifest.json"), `${JSON.stringify({ sha: shas[5] })}\n`);
+    // The oldest release is live, so pruning must keep it despite its age.
+    symlinkSync(releaseA, join(productionRoot, "current"));
+    symlinkSync(releaseB, join(productionRoot, "previous"));
+
+    const { deploy } = await import("./local-pipeline.mjs?release-retention-test");
+    await deploy("production", {
+      processControl: createQuiescentProcessControl(),
+      resolveTrackedHead: () => shas[5],
+      verify: () => undefined,
+      launch: () => undefined,
+      waitUntilReady: () => undefined,
+    });
+
+    assert.deepStrictEqual(
+      {
+        current: realpathSync(join(productionRoot, "current")),
+        previous: realpathSync(join(productionRoot, "previous")),
+        surviving: releases.filter(existsSync).sort(),
+      },
+      {
+        current: realpathSync(releaseF),
+        previous: realpathSync(releaseA),
+        surviving: [releaseA, releaseD, releaseE, releaseF].sort(),
+      },
+      "retention keeps the three newest releases plus whatever the pointers resolve to",
     );
   } finally {
     if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;

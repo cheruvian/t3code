@@ -19,6 +19,7 @@ const {
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -28,12 +29,13 @@ const {
   writeFileSync,
 } = NodeFS;
 const { homedir, platform } = NodeOS;
-const { join, resolve } = NodePath;
+const { basename, join, resolve } = NodePath;
 const { pathToFileURL } = NodeURL;
 
 const [command, environment = ""] = process.argv.slice(2);
 const root = resolve(import.meta.dirname, "../..");
 const runtimeRoot = resolve(process.env.T3_PIPELINE_RUNTIME_ROOT ?? join(homedir(), "t3-runtime"));
+const releaseRetention = Math.max(2, Number(process.env.T3_PIPELINE_RELEASE_RETENTION ?? 3));
 const artifactRoot = resolve(
   process.env.T3_PIPELINE_ARTIFACT_ROOT ?? join(root, "build", "pipeline-artifact"),
 );
@@ -100,6 +102,37 @@ function desktopRuntimePaths(release) {
 function hasCompleteReleaseRuntime(release) {
   const runtime = desktopRuntimePaths(release);
   return Object.values(runtime).every(existsSync);
+}
+
+/**
+ * Deletes superseded release directories once a deploy has settled, keeping the
+ * newest `retain` releases plus whatever `current` and `previous` still resolve
+ * to. Rollback only ever reaches for those two pointers, so anything older is
+ * unreferenced disk. Call this after the release pointers are final.
+ */
+function pruneReleases(paths, retain = releaseRetention) {
+  if (!existsSync(paths.releases)) return [];
+  const pinned = new Set(
+    [paths.current, paths.previous]
+      .filter((pointer) => existsSync(pointer))
+      .map((pointer) => realpathSync(pointer)),
+  );
+  const releases = readdirSync(paths.releases, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /^[0-9a-f]{40}$/.test(entry.name))
+    .map((entry) => {
+      const path = join(paths.releases, entry.name);
+      // Pointers are compared as realpaths, so candidates must be resolved too.
+      return { path, resolved: realpathSync(path), modifiedAt: statSync(path).mtimeMs };
+    })
+    .sort((left, right) => right.modifiedAt - left.modifiedAt);
+
+  const removed = [];
+  for (const [index, release] of releases.entries()) {
+    if (index < retain || pinned.has(release.resolved)) continue;
+    rmSync(release.path, { recursive: true, force: true });
+    removed.push(release.path);
+  }
+  return removed;
 }
 
 export function launchRelease(
@@ -1248,6 +1281,9 @@ async function deployUnlocked(
     }
     clearManualIntervention(paths);
     clearOperationTransaction(paths);
+    for (const pruned of pruneReleases(paths)) {
+      console.log(`[t3-pipeline] pruned superseded ${name} release ${basename(pruned)}`);
+    }
   } catch (error) {
     assertRecoveryMayProceed(paths, "deploy", error);
     const rejectedRuntimeIdentity = readBackendRuntimeIdentity(paths);
