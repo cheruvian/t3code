@@ -1561,6 +1561,98 @@ it("stops a relaunched Electron supervisor discovered through its managed backen
   }
 });
 
+it("stops the Electron supervisor when a newer recorded launcher does not own the backend", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-shadow-launcher-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const productionRoot = join(runtimeRoot, "production");
+  const release = join(productionRoot, "releases", "a".repeat(40));
+  const markerPath = join(productionRoot, "electron.pid");
+  const supervisorPid = 4361;
+  const recordedLauncherPid = 4362;
+  const backendPid = 4363;
+  const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+
+  try {
+    process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+    createCompleteRelease(release, "a".repeat(40));
+    symlinkSync(release, join(productionRoot, "current"));
+    writeFixture(
+      markerPath,
+      `${JSON.stringify({
+        version: 1,
+        pid: recordedLauncherPid,
+        processBirthToken: "2026-08-14T11:45:00.000Z",
+      })}\n`,
+    );
+    writeFixture(
+      join(productionRoot, "home/userdata/server-runtime.json"),
+      `${JSON.stringify({
+        version: 1,
+        pid: backendPid,
+        port: 17774,
+        origin: "http://127.0.0.1:17774",
+        startedAt: "2026-08-14T12:00:00.000Z",
+      })}\n`,
+    );
+    const selectedRelease = realpathSync(release);
+    const launcherCommand = `${electronExecutablePath(selectedRelease)} ${join(selectedRelease, "apps/desktop/dist-electron/main.cjs")}`;
+    const processes = new Map([
+      [
+        supervisorPid,
+        {
+          alive: true,
+          ppid: 1,
+          birthToken: "2026-08-14T11:30:00.000Z",
+          command: launcherCommand,
+          cwd: selectedRelease,
+          onSignal: (_signal, selected) => {
+            selected.alive = false;
+            const backend = processes.get(backendPid);
+            backend.alive = false;
+            backend.listenerPort = undefined;
+          },
+        },
+      ],
+      [
+        recordedLauncherPid,
+        {
+          alive: true,
+          ppid: 1,
+          birthToken: "2026-08-14T11:45:00.000Z",
+          command: launcherCommand,
+          cwd: selectedRelease,
+        },
+      ],
+      [
+        backendPid,
+        {
+          alive: true,
+          ppid: supervisorPid,
+          birthToken: "2026-08-14T11:59:59.000Z",
+          command: `${electronExecutablePath(selectedRelease)} ${join(selectedRelease, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`,
+          cwd: selectedRelease,
+          listenerPort: 17774,
+        },
+      ],
+    ]);
+    const processControl = createProcessControl(processes);
+    const { stop } = await import("./local-pipeline.mjs?shadow-launcher-test");
+
+    await stop("production", { processControl });
+
+    assert.deepStrictEqual(processControl.signals, [[supervisorPid, "SIGTERM"]]);
+    assert.equal(processes.get(supervisorPid).alive, false);
+    assert.equal(processes.get(recordedLauncherPid).alive, true);
+    assert.equal(processes.get(backendPid).alive, false);
+    assert.equal(processControl.listenerPids(17774).length, 0);
+    assert.equal(existsSync(markerPath), false);
+  } finally {
+    if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+    else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
 it("does not signal a backend PID reused after the recorded runtime generation", async () => {
   const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-reused-backend-"));
   const runtimeRoot = join(sandbox, "runtime");
@@ -1978,6 +2070,7 @@ it("automatically rolls back after a failed replacement leaves an orphan backend
       });
       processes.set(backendPid, {
         alive: true,
+        ppid: launcherPid,
         birthToken,
         command: commandFor(release),
         cwd: realpathSync(release),

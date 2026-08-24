@@ -1133,7 +1133,12 @@ function stopUnlocked(
   }
 
   const backend = captureManagedBackend(paths, release, processControl);
-  const launcher = captureManagedLauncher(paths, release, processControl, launcherMarker);
+  const recordedLauncher = captureManagedLauncher(paths, release, processControl, launcherMarker);
+  const launcher =
+    recordedLauncher &&
+    (!backend || processDescendsFrom(backend.process, recordedLauncher, processControl))
+      ? recordedLauncher
+      : undefined;
   const legacyLauncher = launcher
     ? undefined
     : captureManagedLegacyLauncher(paths, release, backend, processControl, launcherMarker);
