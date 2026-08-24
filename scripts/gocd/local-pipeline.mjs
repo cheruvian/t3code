@@ -826,6 +826,14 @@ function launcherCommandMatches(processIdentity, release) {
   );
 }
 
+function relativeLauncherCommandMatches(processIdentity, release) {
+  const runtime = desktopRuntimePaths(release);
+  const relativeMainEntry = join("dist-electron", "main.cjs");
+  return allowedElectronExecutables(runtime).some(
+    (executable) => processIdentity.command === `${executable} ${relativeMainEntry}`,
+  );
+}
+
 function backendCommandMatches(processIdentity, release) {
   const runtime = desktopRuntimePaths(release);
   return allowedElectronExecutables(runtime).some((executable) => {
@@ -964,6 +972,7 @@ function legacyLauncherCommandMatches(processIdentity, release) {
 function managedLauncherCommandMatches(processIdentity, release) {
   return (
     launcherCommandMatches(processIdentity, release) ||
+    relativeLauncherCommandMatches(processIdentity, release) ||
     legacyLauncherCommandMatches(processIdentity, release)
   );
 }
@@ -1000,7 +1009,7 @@ function captureSupervisorFromBackendAncestry(release, backend, processControl) 
     visited.add(child.ppid);
     const parent = processControl.inspectProcess(child.ppid);
     if (Date.parse(parent.birthToken) > Date.parse(child.birthToken)) return undefined;
-    if (parent.cwd === release && launcherCommandMatches(parent, release)) return parent;
+    if (parent.cwd === release && managedLauncherCommandMatches(parent, release)) return parent;
     child = parent;
   }
   return undefined;
@@ -1092,7 +1101,7 @@ function assertSupervisorStillOwned(paths, release, captured, backend, processCo
   if (
     !sameProcessIdentity(captured, supervisor) ||
     supervisor.cwd !== release ||
-    !launcherCommandMatches(supervisor, release)
+    !managedLauncherCommandMatches(supervisor, release)
   ) {
     throw new Error(`Refusing to ${phase} reused supervisor pid ${String(supervisor.pid)}.`);
   }

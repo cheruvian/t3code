@@ -1596,6 +1596,7 @@ it("stops the Electron supervisor when a newer recorded launcher does not own th
     );
     const selectedRelease = realpathSync(release);
     const launcherCommand = `${electronExecutablePath(selectedRelease)} ${join(selectedRelease, "apps/desktop/dist-electron/main.cjs")}`;
+    const relativeLauncherCommand = `${electronExecutablePath(selectedRelease)} dist-electron/main.cjs`;
     const processes = new Map([
       [
         supervisorPid,
@@ -1603,7 +1604,7 @@ it("stops the Electron supervisor when a newer recorded launcher does not own th
           alive: true,
           ppid: 1,
           birthToken: "2026-08-14T11:30:00.000Z",
-          command: launcherCommand,
+          command: relativeLauncherCommand,
           cwd: selectedRelease,
           onSignal: (_signal, selected) => {
             selected.alive = false;
