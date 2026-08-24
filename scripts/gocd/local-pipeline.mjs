@@ -639,6 +639,20 @@ async function recoverInterruptedOperation(
   );
   const rejectedRuntimeIdentity = readBackendRuntimeIdentity(paths);
   try {
+    const attemptedRelease = selectedRelease(paths);
+    if (attemptedRelease && attemptedRelease !== transaction.current) {
+      try {
+        stopUnlocked(name, paths, processControl);
+      } catch (error) {
+        if (
+          !(error instanceof Error && error.message.includes("process identity does not match"))
+        ) {
+          throw error;
+        }
+        stopRecordedLauncher(paths, attemptedRelease, processControl);
+      }
+      restoreReleaseSnapshot(paths, transaction);
+    }
     stopUnlocked(name, paths, processControl);
     restoreReleaseSnapshot(paths, transaction);
     if (transaction.wasRunning) {
@@ -834,6 +848,12 @@ function relativeLauncherCommandMatches(processIdentity, release) {
   );
 }
 
+function supervisorCwdMatches(processIdentity, release) {
+  if (processIdentity.cwd === release) return true;
+  const { root } = desktopRuntimePaths(release);
+  return processIdentity.cwd === root && relativeLauncherCommandMatches(processIdentity, release);
+}
+
 function backendCommandMatches(processIdentity, release) {
   const runtime = desktopRuntimePaths(release);
   return allowedElectronExecutables(runtime).some((executable) => {
@@ -1009,7 +1029,9 @@ function captureSupervisorFromBackendAncestry(release, backend, processControl) 
     visited.add(child.ppid);
     const parent = processControl.inspectProcess(child.ppid);
     if (Date.parse(parent.birthToken) > Date.parse(child.birthToken)) return undefined;
-    if (parent.cwd === release && managedLauncherCommandMatches(parent, release)) return parent;
+    if (supervisorCwdMatches(parent, release) && managedLauncherCommandMatches(parent, release)) {
+      return parent;
+    }
     child = parent;
   }
   return undefined;
@@ -1100,7 +1122,7 @@ function assertSupervisorStillOwned(paths, release, captured, backend, processCo
   const supervisor = processControl.inspectProcess(captured.pid);
   if (
     !sameProcessIdentity(captured, supervisor) ||
-    supervisor.cwd !== release ||
+    !supervisorCwdMatches(supervisor, release) ||
     !managedLauncherCommandMatches(supervisor, release)
   ) {
     throw new Error(`Refusing to ${phase} reused supervisor pid ${String(supervisor.pid)}.`);
@@ -1274,6 +1296,23 @@ function stopUnlocked(
   }
   if (launcherProcess || recordedPid === undefined || !processControl.isAlive(recordedPid)) {
     rmSync(paths.pid, { force: true });
+  }
+}
+
+function stopRecordedLauncher(paths, release, processControl) {
+  const launcher = captureManagedLauncher(paths, release, processControl);
+  if (!launcher) return;
+  assertLauncherStillOwned(paths, release, launcher, processControl, "terminate");
+  console.log(`[t3-pipeline] stopping ${nameForError(paths)} launcher pid ${String(launcher.pid)}`);
+  processControl.signal(launcher.pid, "SIGTERM");
+  if (!waitForCondition(() => !processControl.isAlive(launcher.pid), 15_000, processControl)) {
+    assertLauncherStillOwned(paths, release, launcher, processControl, "kill");
+    processControl.signal(launcher.pid, "SIGKILL");
+    if (!waitForCondition(() => !processControl.isAlive(launcher.pid), 5_000, processControl)) {
+      throw new Error(
+        `${nameForError(paths)} launcher pid ${String(launcher.pid)} survived SIGKILL.`,
+      );
+    }
   }
 }
 

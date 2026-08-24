@@ -1605,7 +1605,7 @@ it("stops the Electron supervisor when a newer recorded launcher does not own th
           ppid: 1,
           birthToken: "2026-08-14T11:30:00.000Z",
           command: relativeLauncherCommand,
-          cwd: selectedRelease,
+          cwd: join(selectedRelease, "apps/desktop"),
           onSignal: (_signal, selected) => {
             selected.alive = false;
             const backend = processes.get(backendPid);
@@ -1701,7 +1701,7 @@ it("stops an older Electron supervisor that reclaims the port during shutdown", 
       ppid: 1,
       birthToken: "2026-08-14T11:30:00.000Z",
       command: `${executable} dist-electron/main.cjs`,
-      cwd: selectedRelease,
+      cwd: join(selectedRelease, "apps/desktop"),
       onSignal: (_signal, selected) => {
         selected.alive = false;
         processes.get(initialBackendPid).alive = false;
@@ -2236,7 +2236,7 @@ it("automatically rolls back after a failed replacement leaves an orphan backend
   }
 });
 
-it("recovers an interrupted deploy transaction before starting the next deploy", async () => {
+it("recovers an interrupted deploy when the attempted launcher and prior backend coexist", async () => {
   const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-interrupted-deploy-"));
   const runtimeRoot = join(sandbox, "runtime");
   const artifactRoot = join(sandbox, "artifact");
@@ -2249,7 +2249,9 @@ it("recovers an interrupted deploy transaction before starting the next deploy",
   const releaseC = join(productionRoot, "releases", shaC);
   const operationLock = join(productionRoot, "operation.lock");
   const operationTransaction = join(productionRoot, "operation-transaction.json");
-  const orphanBackendPid = 4901;
+  const attemptedLauncherPid = 4901;
+  const priorSupervisorPid = 4902;
+  const priorBackendPid = 4903;
   const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
   const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
 
@@ -2282,30 +2284,64 @@ it("recovers an interrupted deploy transaction before starting the next deploy",
       })}\n`,
     );
     writeFixture(
+      join(productionRoot, "electron.pid"),
+      `${JSON.stringify({
+        version: 1,
+        pid: attemptedLauncherPid,
+        processBirthToken: "2026-08-14T12:00:00.000Z",
+      })}\n`,
+    );
+    writeFixture(
       join(productionRoot, "home/userdata/server-runtime.json"),
       `${JSON.stringify({
         version: 1,
-        pid: orphanBackendPid,
+        pid: priorBackendPid,
         port: 17774,
         origin: "http://127.0.0.1:17774",
         startedAt: "2026-08-14T11:59:00.000Z",
       })}\n`,
     );
+    const selectedReleaseA = realpathSync(releaseA);
     const selectedReleaseC = realpathSync(releaseC);
     const processes = new Map([
       [
-        orphanBackendPid,
+        attemptedLauncherPid,
         {
           alive: true,
-          birthToken: "2026-08-14T11:58:59.000Z",
-          command: `${electronExecutablePath(selectedReleaseC)} ${join(selectedReleaseC, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`,
+          ppid: 1,
+          birthToken: "2026-08-14T12:00:00.000Z",
+          command: `${electronExecutablePath(selectedReleaseC)} ${join(selectedReleaseC, "apps/desktop/dist-electron/main.cjs")}`,
           cwd: selectedReleaseC,
-          listenerPort: 17774,
-          onSignal: (signal, selected) => {
-            if (signal !== "SIGTERM") return;
+          onSignal: (_signal, selected) => {
             selected.alive = false;
-            selected.listenerPort = undefined;
           },
+        },
+      ],
+      [
+        priorSupervisorPid,
+        {
+          alive: true,
+          ppid: 1,
+          birthToken: "2026-08-14T11:30:00.000Z",
+          command: `${electronExecutablePath(selectedReleaseA)} dist-electron/main.cjs`,
+          cwd: join(selectedReleaseA, "apps/desktop"),
+          onSignal: (_signal, selected) => {
+            selected.alive = false;
+            const backend = processes.get(priorBackendPid);
+            backend.alive = false;
+            backend.listenerPort = undefined;
+          },
+        },
+      ],
+      [
+        priorBackendPid,
+        {
+          alive: true,
+          ppid: priorSupervisorPid,
+          birthToken: "2026-08-14T11:58:59.000Z",
+          command: `${electronExecutablePath(selectedReleaseA)} ${join(selectedReleaseA, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`,
+          cwd: selectedReleaseA,
+          listenerPort: 17774,
         },
       ],
     ]);
@@ -2343,7 +2379,10 @@ it("recovers an interrupted deploy transaction before starting the next deploy",
         previous: realpathSync(releaseA),
         operationLockExists: false,
         operationTransactionExists: false,
-        signals: [[orphanBackendPid, "SIGTERM"]],
+        signals: [
+          [attemptedLauncherPid, "SIGTERM"],
+          [priorSupervisorPid, "SIGTERM"],
+        ],
       },
       "the next deploy must recover the interrupted A/B snapshot before attempting C again",
     );
