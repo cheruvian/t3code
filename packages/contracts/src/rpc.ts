@@ -18,7 +18,15 @@ import {
   FilesystemBrowseResult,
   FilesystemBrowseError,
 } from "./filesystem.ts";
-import { AssetAccessError, AssetCreateUrlInput, AssetCreateUrlResult } from "./assets.ts";
+import {
+  AssetAccessError,
+  AssetCreateUrlInput,
+  AssetCreateUrlResult,
+  AttachmentCreateUploadUrlInput,
+  AttachmentCreateUploadUrlResult,
+  AttachmentDeleteInput,
+  AttachmentUploadSigningKeyError,
+} from "./assets.ts";
 import {
   GitActionProgressEvent,
   VcsSwitchRefInput,
@@ -67,6 +75,11 @@ import {
   OrchestrationRpcSchemas,
   OrchestrationGetWorkflowScriptError,
 } from "./orchestration.ts";
+import {
+  ProviderUploadFeedbackError,
+  ProviderUploadFeedbackInput,
+  ProviderUploadFeedbackResult,
+} from "./provider.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   PullRequestActionInput,
@@ -215,6 +228,11 @@ export const WS_METHODS = {
   // Filesystem methods
   filesystemBrowse: "filesystem.browse",
   assetsCreateUrl: "assets.createUrl",
+  attachmentsCreateUploadUrl: "attachments.createUploadUrl",
+  attachmentsDelete: "attachments.delete",
+
+  // Provider methods
+  providerUploadFeedback: "provider.uploadFeedback",
 
   // VCS methods
   vcsPull: "vcs.pull",
@@ -677,6 +695,23 @@ export const WsAssetsCreateUrlRpc = Rpc.make(WS_METHODS.assetsCreateUrl, {
   error: Schema.Union([AssetAccessError, EnvironmentAuthorizationError]),
 });
 
+export const WsAttachmentsCreateUploadUrlRpc = Rpc.make(WS_METHODS.attachmentsCreateUploadUrl, {
+  payload: AttachmentCreateUploadUrlInput,
+  success: AttachmentCreateUploadUrlResult,
+  error: Schema.Union([AttachmentUploadSigningKeyError, EnvironmentAuthorizationError]),
+});
+
+export const WsAttachmentsDeleteRpc = Rpc.make(WS_METHODS.attachmentsDelete, {
+  payload: AttachmentDeleteInput,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsProviderUploadFeedbackRpc = Rpc.make(WS_METHODS.providerUploadFeedback, {
+  payload: ProviderUploadFeedbackInput,
+  success: ProviderUploadFeedbackResult,
+  error: Schema.Union([ProviderUploadFeedbackError, EnvironmentAuthorizationError]),
+});
+
 export const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
   payload: VcsStatusSubscriptionInput,
   success: VcsStatusStreamEvent,
@@ -1051,6 +1086,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
   WsAssetsCreateUrlRpc,
+  WsAttachmentsCreateUploadUrlRpc,
+  WsAttachmentsDeleteRpc,
+  WsProviderUploadFeedbackRpc,
   WsSubscribeVcsStatusRpc,
   WsVcsPullRpc,
   WsVcsRefreshStatusRpc,

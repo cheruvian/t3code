@@ -3,6 +3,7 @@ import {
   type OrchestrationCommand,
   ProviderDriverKind,
   ProviderInstanceId,
+  ServerOwnerGeneration,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -20,6 +21,7 @@ import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDi
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 
 const providerInstanceId = ProviderInstanceId.make("codex");
+const ownerGeneration = ServerOwnerGeneration.make("server-runtime-startup-test");
 const updatedAt = "2026-08-20T12:00:00.000Z";
 
 const makeThread = (
@@ -51,10 +53,14 @@ const makeProviderService = (liveThreadIds: ReadonlyArray<ThreadId> = []) =>
     respondToRequest: () => Effect.die("unused"),
     respondToUserInput: () => Effect.die("unused"),
     stopSession: () => Effect.die("unused"),
+    getSession: () => Effect.succeed(Option.none()),
     listSessions: () => Effect.succeed(liveThreadIds.map((threadId) => ({ threadId }) as never)),
     getCapabilities: () => Effect.die("unused"),
     getInstanceInfo: () => Effect.die("unused"),
     rollbackConversation: () => Effect.die("unused"),
+    runIfCurrentGeneration: (_input, effect) => Effect.map(effect, Option.some),
+    getTerminalDisposition: () => Effect.succeed(null),
+    uploadFeedback: () => Effect.die("unused"),
     streamEvents: Stream.empty,
   }) satisfies ProviderService.ProviderService["Service"];
 
@@ -112,6 +118,7 @@ it.effect("reconciles multiple active and archived orphans but skips live sessio
     threads: [starting, running, staleActiveTurn, archived, live, settled],
     liveThreadIds: [live.id],
     directory: {
+      ownerGeneration,
       getBinding: (candidate) =>
         Effect.sync(() => bindingReads.push(candidate)).pipe(
           Effect.as(
@@ -125,7 +132,7 @@ it.effect("reconciles multiple active and archived orphans but skips live sessio
             }),
           ),
         ),
-      upsert: (binding) => Effect.sync(() => upserts.push(binding)),
+      upsert: (binding) => Effect.sync(() => (upserts.push(binding), true)),
       getProvider: () => Effect.die("unused"),
       listThreadIds: () => Effect.die("unused"),
       listBindings: () => Effect.die("unused"),
@@ -182,6 +189,7 @@ it.effect(
     return runReconciliation({
       threads: [absent, corrupt, upsertFailure],
       directory: {
+        ownerGeneration,
         getBinding: (candidate) =>
           candidate === absent.id
             ? Effect.succeed(Option.none())
@@ -230,8 +238,9 @@ it.effect("retries failed projections and continues after a persistent failure",
   return runReconciliation({
     threads: [transient, persistent, later],
     directory: {
+      ownerGeneration,
       getBinding: () => Effect.succeed(Option.none()),
-      upsert: () => Effect.void,
+      upsert: () => Effect.succeed(true),
       getProvider: () => Effect.die("unused"),
       listThreadIds: () => Effect.die("unused"),
       listBindings: () => Effect.die("unused"),
@@ -278,6 +287,7 @@ it.effect("does not fail startup when the live provider session inventory cannot
       listSessions: () => Effect.die("provider inventory unavailable"),
     }),
     Effect.provideService(ProviderSessionDirectory.ProviderSessionDirectory, {
+      ownerGeneration,
       getBinding: () => Effect.die("unused"),
       upsert: () => Effect.die("unused"),
       getProvider: () => Effect.die("unused"),

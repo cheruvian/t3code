@@ -144,6 +144,7 @@ function createProviderServiceHarness(
     rollbackConversation,
     runIfCurrentGeneration: (_input, effect) => Effect.map(effect, Option.some),
     getTerminalDisposition: () => Effect.succeed(null),
+    uploadFeedback: () => unsupported(),
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
     },

@@ -464,12 +464,6 @@ export function buildThreadListV2Items(input: {
       }
       continue;
     }
-    // A pin otherwise overrides the lifecycle: pinned threads render above
-    // the inbox and never auto-settle out of sight.
-    if (thread.pinnedAt != null) {
-      pinned.push(thread);
-      continue;
-    }
     if (
       supportsSettlement &&
       effectiveSettled(thread, {
@@ -479,10 +473,16 @@ export function buildThreadListV2Items(input: {
         // the passive row waits for a same-ref cached result.
         autoSettleAfterDays: changeRequestState === undefined ? null : autoSettleAfterDays,
         autoSettleOnMerge,
-        changeRequestState: changeRequestState ?? null,
+        ...(changeRequestState === undefined
+          ? {}
+          : {
+              changeRequest: changeRequestState === null ? null : { state: changeRequestState },
+            }),
       })
     ) {
       settled.push(thread);
+    } else if (thread.pinnedAt != null) {
+      pinned.push(thread);
     } else {
       active.push(thread);
     }

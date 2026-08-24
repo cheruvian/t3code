@@ -57,6 +57,7 @@ import Migration0041 from "./Migrations/041_ProviderSessionGenerations.ts";
 import Migration0042 from "./Migrations/042_ServerDrainState.ts";
 import Migration0043 from "./Migrations/043_ProjectionThreadActivityPayloadSlim.ts";
 import Migration0044 from "./Migrations/044_BackfillProjectionThreadActivityPayloadSlim.ts";
+import Migration0045 from "./Migrations/045_AuthSessionClientConnection.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -113,6 +114,7 @@ export const migrationEntries = [
   [42, "ServerDrainState", Migration0042],
   [43, "ProjectionThreadActivityPayloadSlim", Migration0043],
   [44, "BackfillProjectionThreadActivityPayloadSlim", Migration0044],
+  [45, "AuthSessionClientConnection", Migration0045],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

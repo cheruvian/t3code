@@ -376,9 +376,15 @@ export function projectPayload(rawPayload: unknown): unknown {
     return rawPayload;
   }
 
+  const itemStatus = asRecord(data.item)?.status;
+  const projectedPayload =
+    payload.status === "completed" && (itemStatus === "failed" || itemStatus === "declined")
+      ? { ...payload, status: itemStatus }
+      : payload;
+
   if (payload.itemType === "mcp_tool_call") {
     return {
-      ...payload,
+      ...projectedPayload,
       data: projectMcpToolCallData(data),
     };
   }
@@ -413,7 +419,7 @@ export function projectPayload(rawPayload: unknown): unknown {
   }
 
   return {
-    ...payload,
+    ...projectedPayload,
     data: projectedData,
   };
 }

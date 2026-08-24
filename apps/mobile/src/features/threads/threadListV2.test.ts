@@ -532,7 +532,7 @@ describe("buildThreadListV2Items", () => {
     expect(layout.snoozedCount).toBe(1);
   });
 
-  it("renders pinned threads first and exempts them from auto-settle — parity with web", () => {
+  it("places settled pinned threads in the settled shelf", () => {
     const layout = buildThreadListV2Items({
       threads: [
         makeThread({ id: ThreadId.make("active"), title: "Active" }),
@@ -540,7 +540,6 @@ describe("buildThreadListV2Items", () => {
           id: ThreadId.make("pinned-settled"),
           title: "Pinned while settled",
           pinnedAt: "2026-06-01T12:00:00.000Z",
-          // Stale settled state (the decider clears it on pin): the pin wins.
           settledOverride: "settled",
           settledAt: "2026-06-01T12:00:00.000Z",
         }),
@@ -550,8 +549,97 @@ describe("buildThreadListV2Items", () => {
       now: NOW,
     });
 
-    expect(layout.items.map((item) => item.thread.id)).toEqual(["pinned-settled", "active"]);
-    expect(layout.items.map((item) => item.pinned)).toEqual([true, false]);
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["active", "pinned-settled"]);
+    expect(layout.items.map((item) => item.pinned)).toEqual([false, false]);
+    expect(layout.settledCount).toBe(1);
+  });
+
+  it("moves pinned threads to the settled shelf when their pull request merges", () => {
+    const merged = makeThread({
+      id: ThreadId.make("pinned-merged"),
+      title: "Pinned merged pull request",
+      pinnedAt: "2026-06-01T12:00:00.000Z",
+      branch: "feature/pinned-merged",
+      worktreePath: "/worktree/pinned-merged",
+    });
+    const targetKey = threadListV2ChangeRequestTargetKey({
+      environmentId,
+      cwd: merged.worktreePath,
+    })!;
+    const layout = buildThreadListV2Items({
+      threads: [makeThread({ id: ThreadId.make("active"), title: "Active" }), merged],
+      environmentId: null,
+      searchQuery: "",
+      changeRequestSnapshotByKey: new Map([
+        [`${environmentId}:${merged.id}`, { targetKey, refName: merged.branch, state: "merged" }],
+      ]),
+      now: NOW,
+    });
+
+    expect(layout.items.map((item) => item.thread.id)).toEqual(["active", "pinned-merged"]);
+    expect(layout.items.map((item) => item.variant)).toEqual(["card", "slim"]);
+    expect(layout.items[1]?.thread.pinnedAt).toBe("2026-06-01T12:00:00.000Z");
+    expect(layout.settledCount).toBe(1);
+  });
+
+  it("moves inactive pinned threads to the settled shelf", () => {
+    const inactive = makeThread({
+      id: ThreadId.make("pinned-inactive"),
+      title: "Pinned inactive thread",
+      createdAt: "2026-05-20T00:00:00.000Z",
+      pinnedAt: "2026-05-21T00:00:00.000Z",
+      latestTurn: {
+        turnId: TurnId.make("turn-inactive"),
+        state: "completed",
+        requestedAt: "2026-05-21T00:00:00.000Z",
+        startedAt: "2026-05-21T00:00:01.000Z",
+        completedAt: "2026-05-21T00:00:02.000Z",
+        assistantMessageId: null,
+      },
+    });
+    const layout = buildThreadListV2Items({
+      threads: [inactive],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(layout.items[0]).toMatchObject({
+      thread: { id: "pinned-inactive" },
+      variant: "slim",
+      pinned: false,
+    });
+    expect(layout.settledCount).toBe(1);
+  });
+
+  it("keeps pinned merged threads pinned when auto-settle on merge is off", () => {
+    const merged = makeThread({
+      id: ThreadId.make("pinned-merged"),
+      title: "Pinned merged pull request",
+      pinnedAt: "2026-06-01T12:00:00.000Z",
+      branch: "feature/pinned-merged",
+      worktreePath: "/worktree/pinned-merged",
+    });
+    const targetKey = threadListV2ChangeRequestTargetKey({
+      environmentId,
+      cwd: merged.worktreePath,
+    })!;
+    const layout = buildThreadListV2Items({
+      threads: [merged],
+      environmentId: null,
+      searchQuery: "",
+      changeRequestSnapshotByKey: new Map([
+        [`${environmentId}:${merged.id}`, { targetKey, refName: merged.branch, state: "merged" }],
+      ]),
+      autoSettleOnMerge: false,
+      now: NOW,
+    });
+
+    expect(layout.items[0]).toMatchObject({
+      thread: { id: "pinned-merged" },
+      variant: "card",
+      pinned: true,
+    });
     expect(layout.settledCount).toBe(0);
   });
 

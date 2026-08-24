@@ -187,6 +187,7 @@ describe("ProviderSessionReaper", () => {
       rollbackConversation: () => unsupported(),
       runIfCurrentGeneration: (_input, effect) => Effect.map(effect, Option.some),
       getTerminalDisposition: () => Effect.succeed(null),
+      uploadFeedback: () => unsupported(),
       streamEvents: Stream.empty,
     };
 

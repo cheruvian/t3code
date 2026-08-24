@@ -154,6 +154,7 @@ function createProviderServiceHarness(terminalDisposition: "interrupted" | null 
     rollbackConversation: () => unsupported(),
     runIfCurrentGeneration: (_input, effect) => Effect.map(effect, Option.some),
     getTerminalDisposition: () => Effect.succeed(terminalDisposition),
+    uploadFeedback: () => unsupported(),
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
     },
@@ -228,6 +229,7 @@ function providerServiceFromCodexAdapter(
       adapter.rollbackThread(threadId, numTurns).pipe(Effect.asVoid),
     runIfCurrentGeneration: (_input, effect) => Effect.map(effect, Option.some),
     getTerminalDisposition: () => Effect.succeed(null),
+    uploadFeedback: () => Effect.die("unused"),
     get streamEvents() {
       if (!receiptAfterTurnCompletion) {
         return adapter.streamEvents;

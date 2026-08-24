@@ -269,6 +269,9 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
           status: "ready",
           runtimeMode: input.runtimeMode,
           threadId,
+          ...(input.sessionGeneration !== undefined
+            ? { sessionGeneration: input.sessionGeneration }
+            : {}),
           cwd: input.cwd,
           resumeCursor: input.resumeCursor ?? { threadId: String(threadId), seed: sessionCount },
           createdAt,
@@ -317,6 +320,9 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
             eventId: nextEventId(input.threadId),
             provider,
             sessionId: RuntimeSessionId.make(String(input.threadId)),
+            ...(state.session.sessionGeneration !== undefined
+              ? { sessionGeneration: state.session.sessionGeneration }
+              : {}),
           };
           rawEvent.threadId = state.snapshot.threadId;
           if (Object.hasOwn(rawEvent, "turnId")) {

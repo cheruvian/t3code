@@ -32,6 +32,7 @@ import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../src/persistence/ProviderSessionRuntime.ts";
 import * as ExternalLauncher from "../src/process/externalLauncher.ts";
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
+import { SessionReconcilerLive } from "../src/provider/Layers/SessionReconciler.ts";
 import * as ProviderService from "../src/provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../src/provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderSessionReaper from "../src/provider/Services/ProviderSessionReaper.ts";
@@ -112,10 +113,14 @@ const startupDependencies = Layer.mergeAll(
     respondToRequest: () => Effect.die("unused"),
     respondToUserInput: () => Effect.die("unused"),
     stopSession: () => Effect.die("unused"),
+    getSession: () => Effect.succeed(Option.none()),
     listSessions: () => Effect.succeed([]),
     getCapabilities: () => Effect.die("unused"),
     getInstanceInfo: () => Effect.die("unused"),
     rollbackConversation: () => Effect.die("unused"),
+    runIfCurrentGeneration: (_input, effect) => Effect.map(effect, Option.some),
+    getTerminalDisposition: () => Effect.succeed(null),
+    uploadFeedback: () => Effect.die("unused"),
     streamEvents: Stream.empty,
   }),
 );
@@ -250,6 +255,7 @@ it.effect(
 
       const secondRuntime = makePersistedRuntimeLayer(config.dbPath);
       const startupLayer = ServerRuntimeStartup.layer.pipe(
+        Layer.provideMerge(SessionReconcilerLive),
         Layer.provideMerge(secondRuntime),
         Layer.provideMerge(startupDependencies),
       );
@@ -330,7 +336,7 @@ it.effect(
       }).pipe(Effect.provide(startupLayer));
 
       assert.deepStrictEqual(result, {
-        sessionStatus: "error",
+        sessionStatus: "stopped",
         activeTurnId: null,
         latestTurn: null,
         pendingTurnCount: 0,
@@ -340,11 +346,11 @@ it.effect(
         bindingStatus: "stopped",
         resumeCursor,
         runtimePayload: { activeTurnId: null, unrelated: "preserve-me" },
-        stoppedBindingSessionStatus: "error",
+        stoppedBindingSessionStatus: "stopped",
         stoppedBindingStatus: "stopped",
         stoppedBindingResumeCursor,
         stoppedBindingRuntimePayload: {
-          activeTurnId: null,
+          activeTurnId: "stale",
           unrelated: "also-preserve-me",
         },
       });
