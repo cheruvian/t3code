@@ -1126,6 +1126,7 @@ function stopUnlocked(
   name,
   paths = environmentPaths(name),
   processControl = defaultProcessControl,
+  runtimeHandoffsRemaining = 2,
 ) {
   const release = selectedRelease(paths);
   const launcherMarker = readLauncherMarker(paths);
@@ -1234,7 +1235,18 @@ function stopUnlocked(
     if (
       !waitForCondition(() => !processControl.isAlive(backend.process.pid), 5_000, processControl)
     ) {
-      assertBackendStillOwned(paths, release, backend, processControl, "kill");
+      try {
+        assertBackendStillOwned(paths, release, backend, processControl, "kill");
+      } catch (error) {
+        const runtimeChanged =
+          error instanceof Error &&
+          (error.message.includes("different runtime generation") ||
+            error.message.includes("port ownership is ambiguous"));
+        if (runtimeChanged && runtimeHandoffsRemaining > 0) {
+          return stopUnlocked(name, paths, processControl, runtimeHandoffsRemaining - 1);
+        }
+        throw error;
+      }
       processControl.signal(backend.process.pid, "SIGKILL");
       if (
         !waitForCondition(() => !processControl.isAlive(backend.process.pid), 5_000, processControl)
@@ -1246,7 +1258,16 @@ function stopUnlocked(
     }
   }
 
-  if (processControl.listenerPids(paths.port).length > 0) {
+  const remainingListeners = processControl.listenerPids(paths.port);
+  if (remainingListeners.length > 0) {
+    const replacementState = readBackendRuntimeState(paths);
+    if (
+      runtimeHandoffsRemaining > 0 &&
+      replacementState &&
+      remainingListeners.includes(replacementState.pid)
+    ) {
+      return stopUnlocked(name, paths, processControl, runtimeHandoffsRemaining - 1);
+    }
     throw new Error(
       `${nameForError(paths)} port ${String(paths.port)} remained occupied after shutdown.`,
     );

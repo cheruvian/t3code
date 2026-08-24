@@ -1654,6 +1654,116 @@ it("stops the Electron supervisor when a newer recorded launcher does not own th
   }
 });
 
+it("stops an older Electron supervisor that reclaims the port during shutdown", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-runtime-handoff-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const productionRoot = join(runtimeRoot, "production");
+  const release = join(productionRoot, "releases", "a".repeat(40));
+  const markerPath = join(productionRoot, "electron.pid");
+  const olderSupervisorPid = 4371;
+  const recordedLauncherPid = 4372;
+  const initialBackendPid = 4373;
+  const replacementBackendPid = 4374;
+  const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+
+  try {
+    process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+    createCompleteRelease(release, "a".repeat(40));
+    symlinkSync(release, join(productionRoot, "current"));
+    writeFixture(
+      markerPath,
+      `${JSON.stringify({
+        version: 1,
+        pid: recordedLauncherPid,
+        processBirthToken: "2026-08-14T11:45:00.000Z",
+      })}\n`,
+    );
+    const runtimeStatePath = join(productionRoot, "home/userdata/server-runtime.json");
+    const writeRuntimeState = (pid, startedAt) =>
+      writeFixture(
+        runtimeStatePath,
+        `${JSON.stringify({
+          version: 1,
+          pid,
+          port: 17774,
+          origin: "http://127.0.0.1:17774",
+          startedAt,
+        })}\n`,
+      );
+    writeRuntimeState(initialBackendPid, "2026-08-14T12:00:00.000Z");
+    const selectedRelease = realpathSync(release);
+    const executable = electronExecutablePath(selectedRelease);
+    const launcherCommand = `${executable} ${join(selectedRelease, "apps/desktop/dist-electron/main.cjs")}`;
+    const backendCommand = `${executable} ${join(selectedRelease, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`;
+    const processes = new Map();
+    processes.set(olderSupervisorPid, {
+      alive: true,
+      ppid: 1,
+      birthToken: "2026-08-14T11:30:00.000Z",
+      command: `${executable} dist-electron/main.cjs`,
+      cwd: selectedRelease,
+      onSignal: (_signal, selected) => {
+        selected.alive = false;
+        processes.get(initialBackendPid).alive = false;
+        const replacement = processes.get(replacementBackendPid);
+        replacement.alive = false;
+        replacement.listenerPort = undefined;
+      },
+    });
+    processes.set(recordedLauncherPid, {
+      alive: true,
+      ppid: 1,
+      birthToken: "2026-08-14T11:45:00.000Z",
+      command: launcherCommand,
+      cwd: selectedRelease,
+      onSignal: (signal, selected) => {
+        if (signal === "SIGKILL") selected.alive = false;
+      },
+    });
+    processes.set(initialBackendPid, {
+      alive: true,
+      ppid: recordedLauncherPid,
+      birthToken: "2026-08-14T11:59:59.000Z",
+      command: backendCommand,
+      cwd: selectedRelease,
+      listenerPort: 17774,
+      onSignal: (signal, selected) => {
+        if (signal !== "SIGTERM") return;
+        selected.listenerPort = undefined;
+        processes.set(replacementBackendPid, {
+          alive: true,
+          ppid: olderSupervisorPid,
+          birthToken: "2026-08-14T12:00:01.000Z",
+          command: backendCommand,
+          cwd: selectedRelease,
+          listenerPort: 17774,
+        });
+        writeRuntimeState(replacementBackendPid, "2026-08-14T12:00:02.000Z");
+      },
+    });
+    const processControl = createProcessControl(processes);
+    const { stop } = await import("./local-pipeline.mjs?runtime-handoff-test");
+
+    await stop("production", { processControl });
+
+    assert.deepStrictEqual(processControl.signals, [
+      [recordedLauncherPid, "SIGTERM"],
+      [recordedLauncherPid, "SIGKILL"],
+      [initialBackendPid, "SIGTERM"],
+      [olderSupervisorPid, "SIGTERM"],
+    ]);
+    assert.equal(processes.get(olderSupervisorPid).alive, false);
+    assert.equal(processes.get(recordedLauncherPid).alive, false);
+    assert.equal(processes.get(replacementBackendPid).alive, false);
+    assert.equal(processControl.listenerPids(17774).length, 0);
+    assert.equal(existsSync(markerPath), false);
+  } finally {
+    if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+    else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
 it("does not signal a backend PID reused after the recorded runtime generation", async () => {
   const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-reused-backend-"));
   const runtimeRoot = join(sandbox, "runtime");
