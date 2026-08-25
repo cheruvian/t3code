@@ -285,6 +285,27 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
   } as const;
 });
 
+export const ensureT3CodeMetaprojectRegistered = Effect.fn("ensureT3CodeMetaprojectRegistered")(
+  function* (workspaceRoot: string) {
+    const crypto = yield* Crypto.Crypto;
+    const projectionReadModelQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+    const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+    const existingProject =
+      yield* projectionReadModelQuery.getActiveProjectByWorkspaceRoot(workspaceRoot);
+    if (Option.isSome(existingProject)) return;
+
+    yield* orchestrationEngine.dispatch({
+      type: "project.create",
+      commandId: CommandId.make(yield* crypto.randomUUIDv4),
+      projectId: ProjectId.make(yield* crypto.randomUUIDv4),
+      title: "T3 Code",
+      workspaceRoot,
+      defaultModelSelection: null,
+      createdAt: DateTime.formatIso(yield* DateTime.now),
+    });
+  },
+);
+
 const resolveStartupBrowserTarget = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -519,6 +540,18 @@ export const make = (options?: StartupOptions) =>
       const welcomeBase = yield* resolveWelcomeBase;
       const environment = yield* serverEnvironment.getDescriptor;
       yield* Effect.logDebug("startup phase: preparing welcome payload");
+
+      if (environment.t3CodeProjectRoot !== undefined) {
+        yield* runStartupPhase(
+          "metaproject.register",
+          ensureT3CodeMetaprojectRegistered(environment.t3CodeProjectRoot).pipe(
+            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.catch((cause) =>
+              Effect.logWarning("failed to register T3 Code metaproject", { cause }),
+            ),
+          ),
+        );
+      }
 
       if (serverConfig.autoBootstrapProjectFromCwd) {
         yield* forkParked(

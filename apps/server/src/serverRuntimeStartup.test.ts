@@ -1,5 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { DEFAULT_MODEL, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_MODEL,
+  type OrchestrationCommand,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as Cause from "effect/Cause";
@@ -340,6 +346,101 @@ it.effect("resolveAutoBootstrapWelcomeTargets creates a project and thread when 
     assert.equal(typeof targets.bootstrapProjectId, "string");
     assert.equal(typeof targets.bootstrapThreadId, "string");
     assert.deepStrictEqual(yield* Ref.get(dispatchCalls), ["project.create", "thread.create"]);
+  }),
+);
+
+it.effect("registers the T3 Code metaproject when it is missing", () =>
+  Effect.gen(function* () {
+    const dispatchCalls = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+
+    yield* ServerRuntimeStartup.ensureT3CodeMetaprojectRegistered("/tmp/t3-code-project").pipe(
+      Effect.provideService(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
+        getCommandReadModel: () => Effect.die("unused"),
+        getSnapshot: () => Effect.die("unused"),
+        getShellSnapshot: () => Effect.die("unused"),
+        getArchivedShellSnapshot: () => Effect.die("unused"),
+        getSnapshotSequence: () => Effect.die("unused"),
+        getCounts: () => Effect.die("unused"),
+        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+        getProjectShellById: () => Effect.die("unused"),
+        getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
+        getThreadCheckpointContext: () => Effect.die("unused"),
+        getFullThreadDiffContext: () => Effect.die("unused"),
+        getThreadShellById: () => Effect.die("unused"),
+        getThreadDetailById: () => Effect.die("unused"),
+        getThreadDetailSnapshot: () => Effect.die("unused"),
+        searchThreads: () => Effect.die("unused"),
+      }),
+      Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        dispatch: (command) =>
+          Ref.update(dispatchCalls, (calls) => [...calls, command]).pipe(
+            Effect.as({ sequence: 1 }),
+          ),
+        streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
+      } satisfies OrchestrationEngine.OrchestrationEngineService["Service"]),
+      Effect.provide(NodeServices.layer),
+    );
+
+    const commands = yield* Ref.get(dispatchCalls);
+    assert.equal(commands.length, 1);
+    const command = commands[0];
+    assert.equal(command?.type, "project.create");
+    if (command?.type !== "project.create") return;
+    assert.equal(command.title, "T3 Code");
+    assert.equal(command.workspaceRoot, "/tmp/t3-code-project");
+    assert.equal(command.defaultModelSelection, null);
+  }),
+);
+
+it.effect("does not register a duplicate T3 Code metaproject", () =>
+  Effect.gen(function* () {
+    const dispatchCalls = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+
+    yield* ServerRuntimeStartup.ensureT3CodeMetaprojectRegistered("/tmp/t3-code-project").pipe(
+      Effect.provideService(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
+        getCommandReadModel: () => Effect.die("unused"),
+        getSnapshot: () => Effect.die("unused"),
+        getShellSnapshot: () => Effect.die("unused"),
+        getArchivedShellSnapshot: () => Effect.die("unused"),
+        getSnapshotSequence: () => Effect.die("unused"),
+        getCounts: () => Effect.die("unused"),
+        getActiveProjectByWorkspaceRoot: () =>
+          Effect.succeed(
+            Option.some({
+              id: ProjectId.make("project-t3-code"),
+              title: "T3 Code",
+              workspaceRoot: "/tmp/t3-code-project",
+              defaultModelSelection: null,
+              scripts: [],
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+              deletedAt: null,
+            }),
+          ),
+        getProjectShellById: () => Effect.die("unused"),
+        getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
+        getThreadCheckpointContext: () => Effect.die("unused"),
+        getFullThreadDiffContext: () => Effect.die("unused"),
+        getThreadShellById: () => Effect.die("unused"),
+        getThreadDetailById: () => Effect.die("unused"),
+        getThreadDetailSnapshot: () => Effect.die("unused"),
+        searchThreads: () => Effect.die("unused"),
+      }),
+      Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        dispatch: (command) =>
+          Ref.update(dispatchCalls, (calls) => [...calls, command]).pipe(
+            Effect.as({ sequence: 1 }),
+          ),
+        streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
+      } satisfies OrchestrationEngine.OrchestrationEngineService["Service"]),
+      Effect.provide(NodeServices.layer),
+    );
+
+    assert.deepStrictEqual(yield* Ref.get(dispatchCalls), []);
   }),
 );
 
