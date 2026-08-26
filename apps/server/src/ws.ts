@@ -1030,12 +1030,20 @@ const makeWsRpcLayer = (
                   cwd: bootstrap.prepareWorktree.projectCwd,
                   remoteName: "origin",
                 });
-                const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+                const baseBranch = bootstrap.prepareWorktree.baseBranch;
+                const hasRemoteBase = yield* gitWorkflow.remoteBranchExists({
                   cwd: bootstrap.prepareWorktree.projectCwd,
-                  refName: bootstrap.prepareWorktree.baseBranch,
-                  fallbackRemoteName: "origin",
+                  remoteName: "origin",
+                  refName: baseBranch,
                 });
-                worktreeBaseRef = resolvedRemoteBase.commitSha;
+                if (hasRemoteBase) {
+                  const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+                    cwd: bootstrap.prepareWorktree.projectCwd,
+                    refName: baseBranch,
+                    fallbackRemoteName: "origin",
+                  });
+                  worktreeBaseRef = resolvedRemoteBase.commitSha;
+                }
               }
               const worktree = yield* gitWorkflow.createWorktree({
                 cwd: bootstrap.prepareWorktree.projectCwd,
