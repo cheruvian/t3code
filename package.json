@@ -56,7 +56,8 @@
     "pipeline:rollback:staging": "node scripts/gocd/local-pipeline.mjs rollback staging",
     "pipeline:rollback:production": "node scripts/gocd/local-pipeline.mjs rollback production",
     "connect:announce-ga": "node scripts/announce-connect-ga.ts",
-    "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules apps/*/dist apps/*/dist-electron packages/*/dist .vite-plus apps/*/.vite-plus packages/*/.vite-plus",
+    "clean:outputs": "rm -rf apps/*/dist apps/*/dist-electron packages/*/dist .vite-plus apps/*/.vite-plus packages/*/.vite-plus",
+    "clean": "pnpm clean:outputs && rm -rf node_modules apps/*/node_modules packages/*/node_modules",
     "sync:repos": "node scripts/sync-reference-repos.ts"
   },
   "devDependencies": {
