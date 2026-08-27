@@ -2,16 +2,16 @@
 
 This repository defines three GoCD pipelines for two immutable T3 server environments:
 
-`candidate branch -> build -> deploy candidate -> verify candidate`
+`candidate branch -> build and activate candidate -> verify candidate`
 
-`fork main -> build -> deploy and verify production`
+`fork main -> build, activate, and verify production`
 
 `manual production rollback -> swap to the previous release -> verify production`
 
 The candidate pipeline tracks `candidate` and runs automatically. The production pipeline tracks
 `main` on `https://github.com/cheruvian/t3code.git` and also runs automatically. A commit reaching
-that fork's `main` branch is the production approval boundary: GoCD builds it once, deploys that
-artifact, and verifies the running production backend. Production does not require a second push, a
+that fork's `main` branch is the production approval boundary: GoCD builds its complete local
+release once, activates it, and verifies the running production backend. Production does not require a second push, a
 second production branch, or a manual approval stage after `main`.
 
 The two runtime environments remain isolated. Their databases live at:
@@ -19,8 +19,12 @@ The two runtime environments remain isolated. Their databases live at:
 - Candidate: `~/t3-runtime/staging/home/userdata/state.sqlite`, port `17773`
 - Production: `~/t3-runtime/production/home/userdata/state.sqlite`, port `17774`
 
-Candidate can therefore run long, stateful workflows without changing production. Each deployment
-uses one build artifact throughout; later work does not rebuild a different revision.
+Candidate can therefore run long, stateful workflows without changing production. The build job
+assembles a complete immutable runtime directly at
+`~/t3-runtime/<environment>/releases/<commit-sha>`. Its deploy command reads the small SHA manifest
+under `~/t3-runtime/artifacts/<environment>`, validates that completed release, and activates it
+without a second material checkout, GoCD artifact transfer, package install, or dependency
+assembly. Later work does not rebuild a different revision.
 
 ## One-time GoCD setup
 
@@ -44,6 +48,11 @@ command directly, avoiding a clean clone and package install before an artifact-
 GoCD promotes committed material, not uncommitted worktree changes. Keep the production material at
 `https://github.com/cheruvian/t3code.git` on `main`; the deployment command independently checks that
 the artifact SHA is still the current head of that exact ref.
+
+Build writes each release through a unique temporary sibling directory and renames it into its
+SHA-addressed location only after every required runtime file and manifest exists. Deploy never
+uses a mutable latest directory and fails before stopping the running process if the selected local
+release is absent, incomplete, or has a mismatched manifest.
 
 ## Production transaction and recovery
 

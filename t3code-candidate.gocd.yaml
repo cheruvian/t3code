@@ -12,7 +12,7 @@ pipelines:
         shallow_clone: false
         auto_update: true
     stages:
-      - build:
+      - build-and-deploy:
           clean_workspace: true
           jobs:
             package:
@@ -23,24 +23,7 @@ pipelines:
                     arguments: [install, --frozen-lockfile]
                 - exec:
                     command: node
-                    arguments: [scripts/gocd/local-pipeline.mjs, build]
-              artifacts:
-                - build:
-                    source: build/pipeline-artifact
-                    destination: release
-      - deploy-candidate:
-          jobs:
-            deploy:
-              resources: [t3-local]
-              tasks:
-                - fetch:
-                    stage: build
-                    job: package
-                    source: release/pipeline-artifact
-                    destination: build
-                - exec:
-                    command: pnpm
-                    arguments: [install, --frozen-lockfile]
+                    arguments: [scripts/gocd/local-pipeline.mjs, build, staging]
                 - exec:
                     command: node
                     arguments: [scripts/gocd/local-pipeline.mjs, deploy, staging]

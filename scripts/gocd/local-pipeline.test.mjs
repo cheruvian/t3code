@@ -323,6 +323,106 @@ it("fails closed when listener inspection reports an error", async () => {
   assert.deepStrictEqual(parseListenerPids({ status: 1, stdout: "", stderr: "" }, 17774), []);
 });
 
+it("publishes complete releases atomically and reuses an existing SHA", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-atomic-build-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const artifactRoot = join(sandbox, "artifact");
+  const sha = "a".repeat(40);
+  const release = join(runtimeRoot, "production", "releases", sha);
+  const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+  const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
+
+  try {
+    process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+    process.env.T3_PIPELINE_ARTIFACT_ROOT = artifactRoot;
+    const { build } = await import("./local-pipeline.mjs?atomic-build-test");
+    const pendingReleases = [];
+    const assembleRelease = (pendingRelease) => {
+      pendingReleases.push(pendingRelease);
+      assert.equal(existsSync(release), false, "an incomplete release must not be visible");
+      createCompleteRelease(pendingRelease, sha);
+    };
+
+    await build("production", { assembleRelease, resolveCommit: () => sha });
+
+    assert.equal(existsSync(release), true);
+    assert.equal(existsSync(pendingReleases[0]), false);
+    assert.deepStrictEqual(JSON.parse(readFileSync(join(release, "manifest.json"), "utf8")), {
+      sha,
+    });
+    assert.deepStrictEqual(JSON.parse(readFileSync(join(artifactRoot, "manifest.json"), "utf8")), {
+      sha,
+    });
+
+    await build("production", {
+      assembleRelease: () => {
+        throw new Error("a completed SHA must not be rebuilt");
+      },
+      resolveCommit: () => sha,
+    });
+    assert.equal(pendingReleases.length, 1);
+  } finally {
+    if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+    else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
+    if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
+    else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+it("cleans failed builds and rejects incomplete releases before deployment", async () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-incomplete-build-"));
+  const runtimeRoot = join(sandbox, "runtime");
+  const artifactRoot = join(sandbox, "artifact");
+  const sha = "b".repeat(40);
+  const release = join(runtimeRoot, "production", "releases", sha);
+  const previousRuntimeRoot = process.env.T3_PIPELINE_RUNTIME_ROOT;
+  const previousArtifactRoot = process.env.T3_PIPELINE_ARTIFACT_ROOT;
+
+  try {
+    process.env.T3_PIPELINE_RUNTIME_ROOT = runtimeRoot;
+    process.env.T3_PIPELINE_ARTIFACT_ROOT = artifactRoot;
+    const { build, deploy } = await import("./local-pipeline.mjs?failed-build-test");
+    let pendingRelease;
+
+    await expect(
+      build("production", {
+        assembleRelease: (pending) => {
+          pendingRelease = pending;
+          writeFixture(join(pending, "partial"));
+          throw new Error("simulated packaging failure");
+        },
+        resolveCommit: () => sha,
+      }),
+    ).rejects.toThrow("simulated packaging failure");
+
+    assert.equal(existsSync(pendingRelease), false);
+    assert.equal(existsSync(release), false);
+    assert.equal(existsSync(join(artifactRoot, "manifest.json")), false);
+
+    writeFixture(join(release, "manifest.json"), `${JSON.stringify({ sha })}\n`);
+    writeFixture(join(artifactRoot, "manifest.json"), `${JSON.stringify({ sha })}\n`);
+    const launches = [];
+    await expect(
+      deploy("production", {
+        processControl: createQuiescentProcessControl(),
+        resolveTrackedHead: () => sha,
+        launch: (...args) => launches.push(args),
+        waitUntilReady: () => undefined,
+      }),
+    ).rejects.toThrow("is incomplete; run the build stage first");
+    assert.deepStrictEqual(launches, []);
+    assert.equal(existsSync(join(runtimeRoot, "production", "current")), false);
+    assert.equal(existsSync(join(release, "partial")), false);
+  } finally {
+    if (previousRuntimeRoot === undefined) delete process.env.T3_PIPELINE_RUNTIME_ROOT;
+    else process.env.T3_PIPELINE_RUNTIME_ROOT = previousRuntimeRoot;
+    if (previousArtifactRoot === undefined) delete process.env.T3_PIPELINE_ARTIFACT_ROOT;
+    else process.env.T3_PIPELINE_ARTIFACT_ROOT = previousArtifactRoot;
+    rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
 it("restores the complete release snapshot when the replacement cannot launch", async () => {
   const sandbox = mkdtempSync(join(tmpdir(), "t3-gocd-deploy-"));
   const runtimeRoot = join(sandbox, "runtime");

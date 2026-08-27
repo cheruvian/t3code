@@ -36,9 +36,6 @@ const [command, environment = ""] = process.argv.slice(2);
 const root = resolve(import.meta.dirname, "../..");
 const runtimeRoot = resolve(process.env.T3_PIPELINE_RUNTIME_ROOT ?? join(homedir(), "t3-runtime"));
 const releaseRetention = Math.max(2, Number(process.env.T3_PIPELINE_RELEASE_RETENTION ?? 3));
-const artifactRoot = resolve(
-  process.env.T3_PIPELINE_ARTIFACT_ROOT ?? join(root, "build", "pipeline-artifact"),
-);
 const productionRepository = "https://github.com/cheruvian/t3code.git";
 const productionBranch = "main";
 const environmentConfig = {
@@ -78,6 +75,10 @@ function environmentPaths(name) {
     log: join(base, "electron.log"),
     port: config.port,
   };
+}
+
+function artifactRootFor(name) {
+  return resolve(process.env.T3_PIPELINE_ARTIFACT_ROOT ?? join(runtimeRoot, "artifacts", name));
 }
 
 function desktopRuntimePaths(release) {
@@ -1416,20 +1417,75 @@ function resolveProductionHead() {
   return sha;
 }
 
-async function build() {
-  rmSync(artifactRoot, { recursive: true, force: true });
-  mkdirSync(artifactRoot, { recursive: true });
-  run("vp", ["run", "build"]);
-  run("vp", ["run", "build:desktop"]);
-  cpSync(join(root, "apps/server/dist"), join(artifactRoot, "dist"), { recursive: true });
-  cpSync(join(root, "apps/desktop/dist-electron"), join(artifactRoot, "desktop-dist-electron"), {
-    recursive: true,
-  });
-  const sha = spawnSync("git", ["rev-parse", "HEAD"], {
+function resolveBuildCommit() {
+  return spawnSync("git", ["rev-parse", "HEAD"], {
     cwd: root,
     encoding: "utf8",
   }).stdout.trim();
-  writeFileSync(join(artifactRoot, "manifest.json"), `${JSON.stringify({ sha }, null, 2)}\n`);
+}
+
+function assembleReleaseRuntime(pendingRelease) {
+  run("vp", ["run", "build"]);
+  run("vp", ["run", "build:desktop"]);
+  run("pnpm", ["deploy", "--legacy", "--filter", "t3", "--prod", pendingRelease]);
+  mkdirSync(join(pendingRelease, "apps", "server"), { recursive: true });
+  symlinkSync("../../dist", join(pendingRelease, "apps", "server", "dist"));
+  cpSync(join(root, "assets"), join(pendingRelease, "assets"), { recursive: true });
+  run("pnpm", [
+    "deploy",
+    "--legacy",
+    "--filter",
+    "@t3tools/desktop",
+    "--prod",
+    join(pendingRelease, "apps", "desktop"),
+  ]);
+  cpSync(join(root, "apps", "server", "dist"), join(pendingRelease, "dist"), {
+    recursive: true,
+  });
+  cpSync(
+    join(root, "apps", "desktop", "dist-electron"),
+    join(pendingRelease, "apps", "desktop", "dist-electron"),
+    { recursive: true },
+  );
+}
+
+export async function build(
+  name,
+  { assembleRelease = assembleReleaseRuntime, resolveCommit = resolveBuildCommit } = {},
+) {
+  const paths = environmentPaths(name);
+  const sha = resolveCommit();
+  if (!/^[0-9a-f]{40}$/.test(sha)) fail("Could not resolve the build commit SHA.");
+
+  const release = join(paths.releases, sha);
+  const artifactRoot = artifactRootFor(name);
+  const manifest = { sha };
+  mkdirSync(paths.releases, { recursive: true });
+  mkdirSync(artifactRoot, { recursive: true });
+
+  if (hasCompleteReleaseRuntime(release) && releaseManifestSha(release) !== sha) {
+    fail(`Existing release ${release} does not match build commit ${sha}.`);
+  }
+  if (!hasCompleteReleaseRuntime(release)) {
+    const pendingRelease = `${release}.building-${randomUUID()}`;
+    rmSync(pendingRelease, { recursive: true, force: true });
+    try {
+      await assembleRelease(pendingRelease);
+      writeFileSync(
+        join(pendingRelease, "manifest.json"),
+        `${JSON.stringify(manifest, null, 2)}\n`,
+      );
+      if (!hasCompleteReleaseRuntime(pendingRelease)) {
+        fail(`Build did not produce a complete release at ${pendingRelease}.`);
+      }
+      rmSync(release, { recursive: true, force: true });
+      renameSync(pendingRelease, release);
+    } finally {
+      rmSync(pendingRelease, { recursive: true, force: true });
+    }
+  }
+
+  writeJsonAtomically(join(artifactRoot, "manifest.json"), manifest);
   console.log(`[t3-pipeline] built ${sha}`);
 }
 
@@ -1444,6 +1500,7 @@ async function deployUnlocked(
   } = {},
 ) {
   const paths = environmentPaths(name);
+  const artifactRoot = artifactRootFor(name);
   const manifestPath = join(artifactRoot, "manifest.json");
   if (!existsSync(manifestPath)) fail(`Missing ${manifestPath}; run the build stage first.`);
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -1463,45 +1520,20 @@ async function deployUnlocked(
   const release = join(paths.releases, manifest.sha);
   mkdirSync(paths.home, { recursive: true });
   mkdirSync(paths.releases, { recursive: true });
+  if (!hasCompleteReleaseRuntime(release)) {
+    fail(`Built release ${release} is incomplete; run the build stage first.`);
+  }
+  if (releaseManifestSha(release) !== manifest.sha) {
+    fail(`Built release ${release} does not match artifact ${manifest.sha}.`);
+  }
   const current = existsSync(paths.current) ? realpathSync(paths.current) : undefined;
   const previous = existsSync(paths.previous) ? realpathSync(paths.previous) : undefined;
-  let transactionStarted = false;
-  if (!hasCompleteReleaseRuntime(release)) {
-    if (current === release) {
-      beginOperationTransaction(paths, "deploy", current, previous, processControl);
-      transactionStarted = true;
-      stopUnlocked(name, paths, processControl);
-    }
-    rmSync(release, { recursive: true, force: true });
-    run("pnpm", ["deploy", "--legacy", "--filter", "t3", "--prod", release]);
-    mkdirSync(join(release, "apps", "server"), { recursive: true });
-    symlinkSync("../../dist", join(release, "apps", "server", "dist"));
-    cpSync(join(root, "assets"), join(release, "assets"), { recursive: true });
-    run("pnpm", [
-      "deploy",
-      "--legacy",
-      "--filter",
-      "@t3tools/desktop",
-      "--prod",
-      join(release, "apps", "desktop"),
-    ]);
-    cpSync(join(artifactRoot, "dist"), join(release, "dist"), { recursive: true });
-    cpSync(
-      join(artifactRoot, "desktop-dist-electron"),
-      join(release, "apps", "desktop", "dist-electron"),
-      {
-        recursive: true,
-      },
-    );
-    cpSync(manifestPath, join(release, "manifest.json"));
-  }
 
   await assertTrackedProductionHead();
 
   const verifySelectedRelease =
     verify ?? (name === "production" ? verifyProduction : async () => undefined);
-  if (!transactionStarted)
-    beginOperationTransaction(paths, "deploy", current, previous, processControl);
+  beginOperationTransaction(paths, "deploy", current, previous, processControl);
   const previousRuntimeIdentity = readBackendRuntimeIdentity(paths);
   stopUnlocked(name, paths, processControl);
   replaceReleasePointer(paths.current, release);
@@ -1772,7 +1804,7 @@ export async function rollback(name, options = {}) {
 const entrypoint = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : undefined;
 if (import.meta.url === entrypoint) {
   try {
-    if (command === "build") await build();
+    if (command === "build") await build(environment || "staging");
     else if (command === "deploy") await deploy(environment);
     else if (command === "start") await start(environment);
     else if (command === "rollback") await rollback(environment);

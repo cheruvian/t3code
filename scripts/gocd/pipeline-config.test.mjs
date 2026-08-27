@@ -23,36 +23,64 @@ function readScalar(config, key) {
   return config.match(new RegExp(`^\\s+${key}:\\s*([^#\\r\\n]+?)\\s*$`, "m"))?.[1];
 }
 
-it("automatically deploys production after a successful main build", () => {
+it("automatically deploys production in the build workspace", () => {
   const config = readFileSync(new URL("../../t3code-main.gocd.yaml", import.meta.url), "utf8");
   const stages = extractStages(config);
-  const buildStageIndex = stages.findIndex((stage) => stage.name === "build");
-  const deployStage = stages[buildStageIndex + 1];
+  const buildStage = stages.find((stage) => stage.name === "build-and-deploy");
 
-  assert.notEqual(buildStageIndex, -1, "the main pipeline must include its build stage");
+  assert.ok(buildStage, "the main pipeline must include its build-and-deploy stage");
   assert.equal(
-    deployStage?.name,
-    "deploy-main",
-    "deploy-main must immediately follow the main build stage",
-  );
-  assert.equal(
-    readApprovalType(deployStage),
+    readApprovalType(buildStage),
     "success",
-    "deploy-main must start automatically when the build succeeds",
+    "production activation must run automatically in the successful build job",
   );
+  assert.match(
+    buildStage.block,
+    /arguments:\s*\[scripts\/gocd\/local-pipeline\.mjs,\s*build,\s*production\][\s\S]*arguments:\s*\[scripts\/gocd\/local-pipeline\.mjs,\s*deploy,\s*production\]/,
+    "production must activate the release produced in the same material workspace",
+  );
+});
+
+it("packages releases during build and keeps deployment dependency-free", () => {
+  for (const [configName, environment] of [
+    ["t3code-main.gocd.yaml", "production"],
+    ["t3code-candidate.gocd.yaml", "staging"],
+  ]) {
+    const config = readFileSync(new URL(`../../${configName}`, import.meta.url), "utf8");
+    const stages = extractStages(config);
+    const buildStage = stages.find((stage) => stage.name === "build-and-deploy");
+
+    assert.match(
+      buildStage?.block ?? "",
+      new RegExp(
+        `arguments:\\s*\\[scripts/gocd/local-pipeline\\.mjs,\\s*build,\\s*${environment}\\]`,
+      ),
+      `${configName} must assemble the environment release during build`,
+    );
+    assert.equal(
+      /(?:^|\n)\s*- fetch:|(?:source|destination):\s*(?:release|build)/m.test(config),
+      false,
+      `${configName} must not upload or fetch a GoCD artifact`,
+    );
+    assert.equal(
+      (buildStage?.block.match(/arguments:\s*\[install,\s*--frozen-lockfile\]/g) ?? []).length,
+      1,
+      `${configName} must install dependencies exactly once`,
+    );
+  }
 });
 
 it("keeps production verification inside the locked deploy transaction", () => {
   const config = readFileSync(new URL("../../t3code-main.gocd.yaml", import.meta.url), "utf8");
   const stages = extractStages(config);
-  const deployStageIndex = stages.findIndex((stage) => stage.name === "deploy-main");
+  const deployStageIndex = stages.findIndex((stage) => stage.name === "build-and-deploy");
   const deployStage = stages[deployStageIndex];
 
-  assert.notEqual(deployStageIndex, -1, "the main pipeline must include deploy-main");
+  assert.notEqual(deployStageIndex, -1, "the main pipeline must include build-and-deploy");
   assert.match(
     deployStage.block,
     /arguments:\s*\[scripts\/gocd\/local-pipeline\.mjs,\s*deploy,\s*production\]/,
-    "deploy-main must run the locked production deployment transaction",
+    "build-and-deploy must run the locked production deployment transaction",
   );
   assert.deepStrictEqual(
     {
@@ -65,7 +93,7 @@ it("keeps production verification inside the locked deploy transaction", () => {
       hasSeparateVerifyStage: false,
       invokesVerifierAfterDeploy: false,
     },
-    "production verification must not run after deploy-main releases its operation lock",
+    "production verification must not run after the deploy command releases its operation lock",
   );
 });
 
