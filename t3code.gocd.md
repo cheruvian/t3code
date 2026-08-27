@@ -42,13 +42,14 @@ Git history. It loads exactly these pipeline definitions:
 - `t3code-main.gocd.yaml`
 - `t3code-production-rollback.gocd.yaml`
 
-The candidate and production pipelines observe their Git materials automatically. The first stage
+The production mirror's launchd job notifies the candidate and production pipelines when their Git
+refs change; GoCD does not poll the application material independently. The first stage
 of `t3code-production-rollback` requires manual approval, so observing a new `main` revision never
 starts a rollback. Starting that pipeline deliberately swaps production's `current` and `previous`
 release pointers, launches the release that was one version back, and verifies it.
 The emergency job reuses its existing material checkout and runs the dependency-free Node rollback
 command directly, avoiding a clean clone and package install before an artifact-only rollback.
-All application materials use shallow clones. Update pipeline definitions and run their
+All application materials use shallow clones from the production-owned local mirror. Update pipeline definitions and run their
 dependency-free checks in the config repository; this application repository owns the scripts the
 pipelines invoke.
 
