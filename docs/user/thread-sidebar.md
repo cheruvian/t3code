@@ -29,3 +29,13 @@ pill** fallback because their colors are not controlled by T3 Code.
 To generate a fresh title from the conversation, open a thread's context menu and choose
 **Regenerate title**. While T3 Code is generating it, the action reads **Regenerating…** and cannot
 be selected again. The option is hidden when the connected environment needs a server update.
+
+## Completion attention
+
+T3 Code can play a short chime when a session finishes with a completion you have not seen. The
+desktop app also shows the number of these completed threads on its dock or taskbar icon. Opening a
+thread marks its completion as seen and reduces the count.
+
+Use **Settings → General** to turn **Session finish sound** or **App icon unread badge** on or off.
+The app-icon badge is desktop-only. Mobile completion sounds and badges continue to come from
+system push notifications.

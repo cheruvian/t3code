@@ -283,6 +283,15 @@ export const setTheme = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const setBadgeCount = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.SET_BADGE_COUNT_CHANNEL,
+  payload: Schema.Number,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.window.setBadgeCount")(function* (count) {
+    yield* ElectronApp.setBadgeCount(count);
+  }),
+});
+
 export const showContextMenu = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.CONTEXT_MENU_CHANNEL,
   payload: ContextMenuInput,

@@ -35,6 +35,23 @@ describe("ClientSettings word wrap", () => {
   });
 });
 
+describe("ClientSettings completion attention", () => {
+  it("defaults the finish sound and desktop unread badge on", () => {
+    const settings = decodeClientSettings({});
+    expect(settings.sessionFinishSoundEnabled).toBe(true);
+    expect(settings.appIconUnreadBadgeEnabled).toBe(true);
+  });
+
+  it("accepts boolean patches for both preferences", () => {
+    const patch = decodeClientSettingsPatch({
+      sessionFinishSoundEnabled: false,
+      appIconUnreadBadgeEnabled: false,
+    });
+    expect(patch.sessionFinishSoundEnabled).toBe(false);
+    expect(patch.appIconUnreadBadgeEnabled).toBe(false);
+  });
+});
+
 describe("ClientSettings glass opacity", () => {
   it("defaults to a readable translucent surface", () => {
     expect(decodeClientSettings({}).glassOpacity).toBe(80);

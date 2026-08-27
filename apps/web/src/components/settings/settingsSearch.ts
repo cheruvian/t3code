@@ -152,6 +152,17 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "session-finish-sound",
+    title: "Session finish sound",
+    to: "/settings/general",
+  },
+  {
+    id: "app-icon-unread-badge",
+    title: "App icon unread badge",
+    to: "/settings/general",
+    desktopOnly: true,
+  },
+  {
     id: "new-threads",
     title: "New threads",
     to: "/settings/general",

@@ -211,3 +211,8 @@ export const make = ElectronApp.of({
 });
 
 export const layer = Layer.succeed(ElectronApp, make);
+
+export const setBadgeCount = (count: number): Effect.Effect<void> =>
+  Effect.sync(() => {
+    Electron.app.setBadgeCount(Math.max(0, Math.trunc(count)));
+  });

@@ -533,6 +533,12 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.showSkillsInSlashMenu !== DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu
         ? ["Show skills in slash menu"]
         : []),
+      ...(settings.sessionFinishSoundEnabled !== DEFAULT_UNIFIED_SETTINGS.sessionFinishSoundEnabled
+        ? ["Session finish sound"]
+        : []),
+      ...(settings.appIconUnreadBadgeEnabled !== DEFAULT_UNIFIED_SETTINGS.appIconUnreadBadgeEnabled
+        ? ["App icon unread badge"]
+        : []),
       ...(settings.enableLegacyTokenStreaming !==
       DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming
         ? ["Stream token by token"]
@@ -602,6 +608,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarThreadSortOrder,
       settings.sidebarThreadPreviewCount,
       settings.showSkillsInSlashMenu,
+      settings.sessionFinishSoundEnabled,
+      settings.appIconUnreadBadgeEnabled,
       settings.timestampFormat,
       settings.wordWrap,
       followSystem,
@@ -678,6 +686,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       showSkillsInSlashMenu: DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu,
+      sessionFinishSoundEnabled: DEFAULT_UNIFIED_SETTINGS.sessionFinishSoundEnabled,
+      appIconUnreadBadgeEnabled: DEFAULT_UNIFIED_SETTINGS.appIconUnreadBadgeEnabled,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
@@ -2290,6 +2300,62 @@ export function GeneralSettingsPanel() {
             />
           }
         />
+
+        <SettingsRow
+          {...searchableSetting("session-finish-sound")}
+          description="Play a short chime when a session finishes and needs your attention."
+          resetAction={
+            settings.sessionFinishSoundEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.sessionFinishSoundEnabled ? (
+              <SettingResetButton
+                label="session finish sound"
+                onClick={() =>
+                  updateSettings({
+                    sessionFinishSoundEnabled: DEFAULT_UNIFIED_SETTINGS.sessionFinishSoundEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sessionFinishSoundEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ sessionFinishSoundEnabled: Boolean(checked) })
+              }
+              aria-label="Play a sound when a session finishes"
+            />
+          }
+        />
+
+        {isElectron ? (
+          <SettingsRow
+            {...searchableSetting("app-icon-unread-badge")}
+            description="Show the number of completed threads that still need your attention on the app icon."
+            resetAction={
+              settings.appIconUnreadBadgeEnabled !==
+              DEFAULT_UNIFIED_SETTINGS.appIconUnreadBadgeEnabled ? (
+                <SettingResetButton
+                  label="app icon unread badge"
+                  onClick={() =>
+                    updateSettings({
+                      appIconUnreadBadgeEnabled: DEFAULT_UNIFIED_SETTINGS.appIconUnreadBadgeEnabled,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.appIconUnreadBadgeEnabled}
+                onCheckedChange={(checked) =>
+                  updateSettings({ appIconUnreadBadgeEnabled: Boolean(checked) })
+                }
+                aria-label="Show unread completed threads on the app icon"
+              />
+            }
+          />
+        ) : null}
 
         <SettingsRow
           title={
