@@ -1,6 +1,8 @@
 # Local GoCD pipelines
 
-This repository defines three GoCD pipelines for two immutable T3 server environments:
+The canonical configuration in
+[`cheruvian/t3code-gocd-config`](https://github.com/cheruvian/t3code-gocd-config) defines three
+GoCD pipelines for two immutable T3 server environments:
 
 `candidate branch -> build and activate candidate -> verify candidate`
 
@@ -31,8 +33,10 @@ assembly. Later work does not rebuild a different revision.
 Install the GoCD server and agent on this Mac, start the server, and open
 `http://localhost:8153/go`. Register the local agent with the resource `t3-local`.
 
-Configure one YAML config repository that reads this repository's `main` branch and matches
-`**/*.gocd.yaml`. It loads exactly these pipeline definitions:
+Configure one YAML config repository that reads
+`https://github.com/cheruvian/t3code-gocd-config.git` on `main` and matches `*.gocd.yaml`. Keeping
+the pipeline definitions in that small repository makes polling independent of this application's
+Git history. It loads exactly these pipeline definitions:
 
 - `t3code-candidate.gocd.yaml`
 - `t3code-main.gocd.yaml`
@@ -44,6 +48,9 @@ starts a rollback. Starting that pipeline deliberately swaps production's `curre
 release pointers, launches the release that was one version back, and verifies it.
 The emergency job reuses its existing material checkout and runs the dependency-free Node rollback
 command directly, avoiding a clean clone and package install before an artifact-only rollback.
+All application materials use shallow clones. Update pipeline definitions and run their
+dependency-free checks in the config repository; this application repository owns the scripts the
+pipelines invoke.
 
 GoCD promotes committed material, not uncommitted worktree changes. Keep the production material at
 `https://github.com/cheruvian/t3code.git` on `main`; the deployment command independently checks that
