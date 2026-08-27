@@ -11,14 +11,17 @@ import {
 } from "../buildIdentity.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import helperIcon from "./t3-chat-helper.svg?raw";
+
+export const T3_CHAT_HELPER_TITLE = "T3 Chat Helper";
 
 const instructions = (input: {
   readonly settingsPath: string;
   readonly keybindingsPath: string;
   readonly commit: string | null;
-}) => `# T3 Code metaproject
+}) => `# T3 Chat Helper pseudo-project
 
-This workspace exists to query and manage the T3 Code environment that launched you. It is not an ordinary user project.
+This workspace is a built-in pseudo-project for inspecting and managing the T3 Code environment that launched you through chat. It is not an ordinary source project.
 
 ## Live configuration
 
@@ -26,7 +29,9 @@ This workspace exists to query and manage the T3 Code environment that launched 
 - Keybindings: \`${input.keybindingsPath}\`
 - Typed API inventory: \`api-inventory.json\` (generated from the running contracts)
 
-Read a file before changing it, preserve valid JSON, and make the smallest change that satisfies the request. A missing file means T3 Code is using its defaults; create the file only when a requested change needs persisted configuration. The server watches both files and reloads valid edits. Never modify the state database, authentication material, runtime identifiers, logs, attachments, caches, or worktrees unless the user explicitly asks for that exact operation.
+Use the agent-callable typed APIs in the inventory for supported changes: \`server.updateSettings\`, \`server.upsertKeybinding\`, and \`server.removeKeybinding\`. Direct writes are supported only for the two user-managed JSON files listed above. Read before writing, preserve valid JSON, and make the smallest change that satisfies the request. A missing file means T3 Code is using its defaults; create it only when a requested change needs persisted configuration. The server watches both files and reloads valid edits.
+
+Everything else is outside this helper's write boundary. Never write to the source snapshot, state database, authentication or secret material, runtime identifiers, logs, attachments, caches, or any worktree, including unrelated worktrees. Explain the boundary and direct product source changes to a separate normal project opened on the real T3 Code repository.
 
 When the user asks what a setting currently does, inspect the live value first. Explain defaults separately from configured values. Prefer the Settings UI when it supports the requested change; direct file edits are appropriate when the user asks you to make the change from this project.
 
@@ -125,7 +130,16 @@ export const ensureT3CodeMetaproject = Effect.gen(function* () {
   }
   yield* fs.writeFileString(
     path.join(config.t3CodeProjectDir, "README.md"),
-    "# T3 Code\n\nAsk an agent in this project to inspect, explain, or change this environment's T3 Code configuration.\n",
+    `# ${T3_CHAT_HELPER_TITLE}\n\nA built-in pseudo-project for inspecting, explaining, and changing supported T3 Code configuration through chat. Product source changes belong in a normal project opened on the T3 Code repository.\n`,
+  );
+  yield* fs.makeDirectory(path.join(config.t3CodeProjectDir, "assets"), { recursive: true });
+  yield* fs.writeFileString(
+    path.join(config.t3CodeProjectDir, "assets", "t3-chat-helper.svg"),
+    helperIcon,
+  );
+  yield* fs.writeFileString(
+    path.join(config.t3CodeProjectDir, "t3.json"),
+    `${JSON.stringify({ iconPath: "assets/t3-chat-helper.svg" }, null, 2)}\n`,
   );
   yield* fs.writeFileString(
     path.join(config.t3CodeProjectDir, "api-inventory.json"),

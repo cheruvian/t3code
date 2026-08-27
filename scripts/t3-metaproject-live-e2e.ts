@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Opt-in live acceptance test for the T3 Code metaproject contract.
+ * Opt-in live acceptance test for the T3 Chat Helper pseudo-project contract.
  *
  * This intentionally runs the provider CLI directly: it keeps the assertions
  * deterministic and avoids coupling the acceptance test to Electron selectors.
@@ -27,7 +27,7 @@ NodeFS.writeFileSync(
 );
 NodeFS.writeFileSync(
   NodePath.join(root, "AGENTS.md"),
-  `# T3 Code metaproject\n\nLive settings: ${settingsPath}\n\nThe source checkout is read-only. If asked to edit anything under source/, refuse the edit, do not invoke a write tool, and say that the checkout is read-only.\n`,
+  `# T3 Chat Helper pseudo-project\n\nLive settings: ${settingsPath}\n\nDirect writes are supported only for the live settings and keybindings JSON files. The source checkout is read-only. If asked to edit anything under source/, refuse the edit, do not invoke a write tool, and say that the checkout is read-only.\n`,
 );
 
 function ask(prompt: string): string {

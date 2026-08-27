@@ -24,6 +24,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
 import * as ServerConfig from "./config.ts";
+import { T3_CHAT_HELPER_TITLE } from "./environment/T3CodeMetaproject.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
@@ -298,7 +299,7 @@ export const ensureT3CodeMetaprojectRegistered = Effect.fn("ensureT3CodeMetaproj
       type: "project.create",
       commandId: CommandId.make(yield* crypto.randomUUIDv4),
       projectId: ProjectId.make(yield* crypto.randomUUIDv4),
-      title: "T3 Code",
+      title: T3_CHAT_HELPER_TITLE,
       workspaceRoot,
       defaultModelSelection: null,
       createdAt: DateTime.formatIso(yield* DateTime.now),

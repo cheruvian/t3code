@@ -17,4 +17,18 @@ describe("agent API inventory", () => {
       expect(operation.mutability).toBe("destructive");
     }
   });
+
+  it("marks supported helper configuration APIs with their narrow scope", () => {
+    for (const name of [
+      WS_METHODS.serverGetSettings,
+      WS_METHODS.serverUpdateSettings,
+      WS_METHODS.serverUpsertKeybinding,
+      WS_METHODS.serverRemoveKeybinding,
+    ]) {
+      expect(AGENT_API_INVENTORY.find((operation) => operation.name === name)).toMatchObject({
+        exposure: "agent",
+        scope: "configuration",
+      });
+    }
+  });
 });

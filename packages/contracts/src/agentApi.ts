@@ -9,6 +9,7 @@ export interface AgentApiOperation {
   readonly surface: "rpc" | "orchestration";
   readonly exposure: AgentApiExposure;
   readonly mutability: AgentApiMutability;
+  readonly scope?: "configuration";
 }
 
 const readOnlyNamePatterns = [
@@ -52,9 +53,16 @@ const operationNames = [
 
 /** Contract-derived inventory consumed by the T3 Code metaproject. */
 export const AGENT_API_INVENTORY: ReadonlyArray<AgentApiOperation> = operationNames.map(
-  ({ name, surface }) => ({ name, surface, ...classifyOperation(name) }),
+  ({ name, surface }) => ({
+    name,
+    surface,
+    ...classifyOperation(name),
+    ...(/^server\.(getSettings|updateSettings|upsertKeybinding|removeKeybinding)$/.test(name)
+      ? { scope: "configuration" as const }
+      : {}),
+  }),
 );
 
 export function agentApiInventoryJson(): string {
-  return `${JSON.stringify({ version: 1, operations: AGENT_API_INVENTORY }, null, 2)}\n`;
+  return `${JSON.stringify({ version: 2, operations: AGENT_API_INVENTORY }, null, 2)}\n`;
 }

@@ -388,7 +388,7 @@ it.effect("registers the T3 Code metaproject when it is missing", () =>
     const command = commands[0];
     assert.equal(command?.type, "project.create");
     if (command?.type !== "project.create") return;
-    assert.equal(command.title, "T3 Code");
+    assert.equal(command.title, "T3 Chat Helper");
     assert.equal(command.workspaceRoot, "/tmp/t3-code-project");
     assert.equal(command.defaultModelSelection, null);
   }),

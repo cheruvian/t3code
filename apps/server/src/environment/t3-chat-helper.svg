@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title description">
+  <title id="title">T3 Chat Helper</title>
+  <desc id="description">A friendly blue paperclip with eyes and a chat bubble</desc>
+  <rect width="128" height="128" rx="28" fill="#111827"/>
+  <path d="M77 31 49 73c-8 12-5 27 7 34 12 8 27 4 35-8l21-32c5-8 3-19-5-24-8-5-19-3-24 5L62 80c-2 4-1 9 3 11 4 3 9 1 12-3l18-27" fill="none" stroke="#60a5fa" stroke-width="11" stroke-linecap="round"/>
+  <circle cx="88" cy="51" r="4" fill="#fff"/><circle cx="101" cy="59" r="4" fill="#fff"/>
+  <path d="M29 25h48a10 10 0 0 1 10 10v3H46L31 49v-8a10 10 0 0 1-2-16Z" fill="#f8fafc"/>
+  <path d="M43 34h25" stroke="#2563eb" stroke-width="5" stroke-linecap="round"/>
+</svg>
