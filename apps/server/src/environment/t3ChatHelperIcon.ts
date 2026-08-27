@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title description">
+export const helperIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title description">
   <title id="title">T3 Chat Helper</title>
   <desc id="description">A friendly blue paperclip with eyes and a chat bubble</desc>
   <rect width="128" height="128" rx="28" fill="#111827"/>
@@ -7,3 +7,4 @@
   <path d="M29 25h48a10 10 0 0 1 10 10v3H46L31 49v-8a10 10 0 0 1-2-16Z" fill="#f8fafc"/>
   <path d="M43 34h25" stroke="#2563eb" stroke-width="5" stroke-linecap="round"/>
 </svg>
+`;

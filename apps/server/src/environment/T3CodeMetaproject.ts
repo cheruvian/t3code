@@ -13,6 +13,7 @@ import {
 } from "../buildIdentity.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
+
 export const T3_CHAT_HELPER_TITLE = "T3 Chat Helper";
 
 const instructions = (input: {
