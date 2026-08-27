@@ -1,3 +1,5 @@
+import * as NodeURL from "node:url";
+
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -11,8 +13,6 @@ import {
 } from "../buildIdentity.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import helperIcon from "./t3-chat-helper.svg?raw";
-
 export const T3_CHAT_HELPER_TITLE = "T3 Chat Helper";
 
 const instructions = (input: {
@@ -101,6 +101,9 @@ export const ensureT3CodeMetaproject = Effect.gen(function* () {
   const path = yield* Path.Path;
   const config = yield* ServerConfig.ServerConfig;
   const processRunner = yield* ProcessRunner.ProcessRunner;
+  const helperIcon = yield* fs.readFileString(
+    NodeURL.fileURLToPath(new URL("./t3-chat-helper.svg", import.meta.url)),
+  );
   const localCommit = yield* processRunner
     .run({ command: "git", args: ["rev-parse", "HEAD"], cwd: config.cwd, timeout: "5 seconds" })
     .pipe(
@@ -139,7 +142,7 @@ export const ensureT3CodeMetaproject = Effect.gen(function* () {
   );
   yield* fs.writeFileString(
     path.join(config.t3CodeProjectDir, "t3.json"),
-    `${JSON.stringify({ iconPath: "assets/t3-chat-helper.svg" }, null, 2)}\n`,
+    '{\n  "iconPath": "assets/t3-chat-helper.svg"\n}\n',
   );
   yield* fs.writeFileString(
     path.join(config.t3CodeProjectDir, "api-inventory.json"),
