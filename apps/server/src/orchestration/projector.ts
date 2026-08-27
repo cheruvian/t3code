@@ -238,6 +238,7 @@ export function projectEvent(
             defaultThreadEnvMode: null,
             faviconPath: payload.faviconPath ?? null,
             scripts: payload.scripts,
+            disabledInheritedScriptIds: payload.disabledInheritedScriptIds,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
@@ -276,6 +277,9 @@ export function projectEvent(
                     ? { faviconPath: payload.faviconPath }
                     : {}),
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
+                  ...(payload.disabledInheritedScriptIds !== undefined
+                    ? { disabledInheritedScriptIds: payload.disabledInheritedScriptIds }
+                    : {}),
                   updatedAt: payload.updatedAt,
                 }
               : project,

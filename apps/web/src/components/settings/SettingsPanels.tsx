@@ -1,4 +1,12 @@
-import { ArchiveIcon, ArchiveX, ChevronRightIcon, LoaderIcon, SettingsIcon } from "lucide-react";
+import {
+  ArchiveIcon,
+  ArchiveX,
+  ChevronRightIcon,
+  LoaderIcon,
+  PlusIcon,
+  SettingsIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -42,6 +50,8 @@ import { createModelSelection } from "@t3tools/shared/model";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
+import { AsyncResult } from "effect/unstable/reactivity";
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { APP_VERSION, HOSTED_APP_CHANNEL, HOSTED_APP_CHANNEL_LABEL } from "../../branding";
 import {
   canCheckForUpdate,
@@ -93,6 +103,15 @@ import { useProjects } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
+import { buildProjectScript, nextProjectScriptId } from "../../projectScripts";
+import {
+  EMPTY_PROJECT_SCRIPT_INPUT,
+  editorRequestForScript,
+  ProjectScriptEditorDialog,
+  ScriptIcon,
+  type NewProjectScriptInput,
+  type ProjectScriptEditorRequest,
+} from "../projectScriptEditor";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
@@ -1900,6 +1919,43 @@ export function GeneralSettingsPanel() {
   const openNewThread = useNewThreadHandler();
   const [openingConfigurationProject, setOpeningConfigurationProject] = useState(false);
   const [backgroundActivityDialogOpen, setBackgroundActivityDialogOpen] = useState(false);
+  const [globalScriptEditor, setGlobalScriptEditor] = useState<ProjectScriptEditorRequest | null>(
+    null,
+  );
+  const saveGlobalScript = useCallback(
+    async (scriptId: string | null, input: NewProjectScriptInput) => {
+      const id =
+        scriptId ??
+        nextProjectScriptId(
+          input.name,
+          settings.globalScripts.map((script) => script.id),
+        );
+      const script = buildProjectScript(id, input);
+      const current = input.runOnWorktreeCreate
+        ? settings.globalScripts.map((candidate) =>
+            candidate.runOnWorktreeCreate
+              ? { ...candidate, runOnWorktreeCreate: false }
+              : candidate,
+          )
+        : settings.globalScripts;
+      const next =
+        scriptId === null
+          ? [...current, script]
+          : current.map((candidate) => (candidate.id === scriptId ? script : candidate));
+      updateSettings({ globalScripts: next });
+      return AsyncResult.success(undefined);
+    },
+    [settings.globalScripts, updateSettings],
+  );
+  const deleteGlobalScript = useCallback(
+    async (scriptId: string) => {
+      updateSettings({
+        globalScripts: settings.globalScripts.filter((script) => script.id !== scriptId),
+      });
+      return AsyncResult.success(undefined);
+    },
+    [settings.globalScripts, updateSettings],
+  );
   const lastEnabledProjectGroupingMode = useRef<SidebarProjectGroupingMode>(
     readLastEnabledProjectGroupingMode(),
   );
@@ -1992,6 +2048,73 @@ export function GeneralSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <SettingsSection
+        title="Global actions"
+        headerAction={
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() =>
+              setGlobalScriptEditor({ scriptId: null, initial: EMPTY_PROJECT_SCRIPT_INPUT })
+            }
+          >
+            <PlusIcon className="size-3.5" />
+            Add action
+          </Button>
+        }
+      >
+        {settings.globalScripts.length === 0 ? (
+          <SettingsRow
+            title="No global actions"
+            description="Actions added here are available in every project on this environment."
+          />
+        ) : (
+          settings.globalScripts.map((script) => (
+            <SettingsRow
+              key={script.id}
+              title={
+                <span className="flex min-w-0 items-center gap-2">
+                  <ScriptIcon icon={script.icon} className="size-4 text-muted-foreground" />
+                  <span>{script.name}</span>
+                  <code className="truncate font-mono font-normal text-muted-foreground">
+                    {script.command}
+                  </code>
+                </span>
+              }
+              {...(script.runOnWorktreeCreate
+                ? { description: "Runs when a worktree is created." }
+                : {})}
+              control={
+                <div className="flex gap-1">
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label={`Edit ${script.name}`}
+                    onClick={() =>
+                      setGlobalScriptEditor(
+                        editorRequestForScript(
+                          script,
+                          serverConfig?.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS,
+                        ),
+                      )
+                    }
+                  >
+                    <SettingsIcon className="size-3.5" />
+                  </Button>
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label={`Delete ${script.name}`}
+                    onClick={() => void deleteGlobalScript(script.id)}
+                  >
+                    <Trash2Icon className="size-3.5" />
+                  </Button>
+                </div>
+              }
+            />
+          ))
+        )}
+      </SettingsSection>
       <SettingsSection title="General">
         <SettingsRow
           title="T3 Code configuration"
@@ -2716,6 +2839,13 @@ export function GeneralSettingsPanel() {
       </SettingsSection>
 
       <LegacyFeaturesSection />
+      <ProjectScriptEditorDialog
+        request={globalScriptEditor}
+        scripts={settings.globalScripts}
+        onSubmit={saveGlobalScript}
+        onDelete={deleteGlobalScript}
+        onClose={() => setGlobalScriptEditor(null)}
+      />
     </SettingsPageContainer>
   );
 }

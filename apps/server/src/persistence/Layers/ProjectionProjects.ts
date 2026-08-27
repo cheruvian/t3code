@@ -19,6 +19,7 @@ const ProjectionProjectDbRow = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
+    disabledInheritedScriptIds: Schema.fromJsonString(Schema.Array(Schema.String)),
   }),
 );
 type ProjectionProjectDbRow = typeof ProjectionProjectDbRow.Type;
@@ -38,6 +39,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_thread_env_mode,
           favicon_path,
           scripts_json,
+          disabled_inherited_script_ids_json,
           created_at,
           updated_at,
           deleted_at
@@ -50,6 +52,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           ${row.defaultThreadEnvMode},
           ${row.faviconPath ?? null},
           ${JSON.stringify(row.scripts)},
+          ${JSON.stringify(row.disabledInheritedScriptIds)},
           ${row.createdAt},
           ${row.updatedAt},
           ${row.deletedAt}
@@ -62,6 +65,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_thread_env_mode = excluded.default_thread_env_mode,
           favicon_path = excluded.favicon_path,
           scripts_json = excluded.scripts_json,
+          disabled_inherited_script_ids_json = excluded.disabled_inherited_script_ids_json,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           deleted_at = excluded.deleted_at
@@ -81,6 +85,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_thread_env_mode AS "defaultThreadEnvMode",
           favicon_path AS "faviconPath",
           scripts_json AS "scripts",
+          disabled_inherited_script_ids_json AS "disabledInheritedScriptIds",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -102,6 +107,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_thread_env_mode AS "defaultThreadEnvMode",
           favicon_path AS "faviconPath",
           scripts_json AS "scripts",
+          disabled_inherited_script_ids_json AS "disabledInheritedScriptIds",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"

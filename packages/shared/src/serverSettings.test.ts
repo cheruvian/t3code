@@ -18,6 +18,29 @@ import {
 } from "./serverSettings.ts";
 
 describe("serverSettings helpers", () => {
+  it("replaces global scripts as a whole array", () => {
+    const first = {
+      id: "first",
+      name: "First",
+      command: "first",
+      icon: "play",
+      runOnWorktreeCreate: false,
+    } as const;
+    const second = {
+      id: "second",
+      name: "Second",
+      command: "second",
+      icon: "test",
+      runOnWorktreeCreate: false,
+    } as const;
+    const current = { ...DEFAULT_SERVER_SETTINGS, globalScripts: [first, second] };
+
+    expect(applyServerSettingsPatch(current, { globalScripts: [second] }).globalScripts).toEqual([
+      second,
+    ]);
+    expect(applyServerSettingsPatch(current, { globalScripts: [] }).globalScripts).toEqual([]);
+  });
+
   it("normalizes optional persisted strings", () => {
     expect(normalizePersistedServerSettingString(undefined)).toBeUndefined();
     expect(normalizePersistedServerSettingString("   ")).toBeUndefined();

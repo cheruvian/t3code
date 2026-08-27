@@ -2,7 +2,7 @@ import type { ProjectScript, ResolvedKeybindingsConfig } from "@t3tools/contract
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import ProjectScriptsControl from "./ProjectScriptsControl";
+import ProjectScriptsControl, { importableProjectFileScripts } from "./ProjectScriptsControl";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const PRIMARY_SCRIPT: ProjectScript = {
@@ -45,6 +45,31 @@ function expectResponsiveXsControl(markup: string | undefined) {
 }
 
 describe("ProjectScriptsControl compact controls", () => {
+  it("renders an inherited t3.json action as a direct runnable primary action", () => {
+    const fileAction = { ...PRIMARY_SCRIPT, id: "file:dev" };
+    const html = renderToStaticMarkup(
+      <ProjectScriptsControl
+        scripts={[fileAction]}
+        editableScriptIds={new Set()}
+        inheritedScriptIds={new Set([fileAction.id])}
+        keybindings={EMPTY_KEYBINDINGS}
+        onRunScript={() => {}}
+        onAddScript={async () => undefined as never}
+        onUpdateScript={async () => undefined as never}
+        onDeleteScript={async () => undefined as never}
+        onSetInheritedDisabled={() => {}}
+      />,
+    );
+    expect(html).toContain('aria-label="Run Dev"');
+    expect(html).not.toContain('aria-label="Edit Dev"');
+  });
+
+  it("does not offer a t3.json action that matches an inherited action", () => {
+    expect(
+      importableProjectFileScripts([{ name: "DEV", command: "another command" }], [PRIMARY_SCRIPT]),
+    ).toEqual([]);
+  });
+
   it("keeps the primary Run control compact and expands it with its label", () => {
     const html = renderControl([PRIMARY_SCRIPT]);
 

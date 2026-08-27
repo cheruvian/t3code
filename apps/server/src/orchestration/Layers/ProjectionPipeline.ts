@@ -649,6 +649,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             defaultThreadEnvMode: null,
             faviconPath: event.payload.faviconPath ?? null,
             scripts: event.payload.scripts,
+            disabledInheritedScriptIds: event.payload.disabledInheritedScriptIds ?? [],
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
             deletedAt: null,
@@ -678,6 +679,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               ? { faviconPath: event.payload.faviconPath }
               : {}),
             ...(event.payload.scripts !== undefined ? { scripts: event.payload.scripts } : {}),
+            ...(event.payload.disabledInheritedScriptIds !== undefined
+              ? { disabledInheritedScriptIds: event.payload.disabledInheritedScriptIds }
+              : {}),
             updatedAt: event.payload.updatedAt,
           });
           return;

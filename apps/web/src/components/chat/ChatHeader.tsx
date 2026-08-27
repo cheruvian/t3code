@@ -35,6 +35,7 @@ import { OpenInPicker } from "./OpenInPicker";
 import { useRemoteOpenState, type RemoteOpenMode } from "../../remoteOpen";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
+import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
 import { useThreadActionMenu } from "~/hooks/useThreadActionMenu";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -60,6 +61,9 @@ interface ChatHeaderProps {
   activeProjectFaviconPath: string | null;
   openInCwd: string | null;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
+  activeGlobalScripts: ReadonlyArray<ProjectScript>;
+  disabledInheritedScriptIds: ReadonlyArray<string>;
+  activeProjectScriptIds?: ReadonlySet<string>;
   preferredScriptId: string | null;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
@@ -74,6 +78,7 @@ interface ChatHeaderProps {
     input: NewProjectScriptInput,
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
+  onSetInheritedProjectScriptDisabled: (scriptId: string, disabled: boolean) => void;
 }
 
 /**
@@ -129,6 +134,9 @@ export const ChatHeader = memo(function ChatHeader({
   activeProjectFaviconPath,
   openInCwd,
   activeProjectScripts,
+  activeGlobalScripts,
+  disabledInheritedScriptIds,
+  activeProjectScriptIds,
   preferredScriptId,
   keybindings,
   availableEditors,
@@ -140,11 +148,36 @@ export const ChatHeader = memo(function ChatHeader({
   onAddProjectScript,
   onUpdateProjectScript,
   onDeleteProjectScript,
+  onSetInheritedProjectScriptDisabled,
 }: ChatHeaderProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const fileScripts = useT3ProjectFileScripts(
     activeThreadEnvironmentId,
     activeProjectScripts ? activeProjectCwd : null,
+  );
+  const resolvedProjectScripts = useMemo(
+    () =>
+      activeProjectScripts
+        ? resolveProjectScripts(
+            activeProjectScripts,
+            fileScripts,
+            activeGlobalScripts,
+            disabledInheritedScriptIds,
+          )
+        : undefined,
+    [activeGlobalScripts, activeProjectScripts, disabledInheritedScriptIds, fileScripts],
+  );
+  const inheritedScriptIds = useMemo(
+    () =>
+      new Set(
+        (resolvedProjectScripts ?? [])
+          .filter(
+            (script) =>
+              !activeProjectScripts?.some((projectScript) => projectScript.id === script.id),
+          )
+          .map((script) => script.id),
+      ),
+    [activeProjectScripts, resolvedProjectScripts],
   );
   const remoteOpenState = useRemoteOpenState(activeThreadEnvironmentId);
   const showOpenInPicker = shouldShowOpenInPicker({
@@ -380,16 +413,18 @@ export const ChatHeader = memo(function ChatHeader({
           rightPanelOpen ? "pr-0" : "pr-16",
         )}
       >
-        {activeProjectScripts && (
+        {resolvedProjectScripts && (
           <ProjectScriptsControl
-            scripts={activeProjectScripts}
-            fileScripts={fileScripts}
+            scripts={resolvedProjectScripts}
+            {...(activeProjectScriptIds ? { editableScriptIds: activeProjectScriptIds } : {})}
+            inheritedScriptIds={inheritedScriptIds}
             keybindings={keybindings}
             preferredScriptId={preferredScriptId}
             onRunScript={onRunProjectScript}
             onAddScript={onAddProjectScript}
             onUpdateScript={onUpdateProjectScript}
             onDeleteScript={onDeleteProjectScript}
+            onSetInheritedDisabled={onSetInheritedProjectScriptDisabled}
           />
         )}
         {showOpenInPicker && (

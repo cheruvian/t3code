@@ -22,6 +22,7 @@ import type {
 } from "@t3tools/contracts";
 import { resolveEnvModeLabel } from "../BranchToolbar.logic";
 import { createModelSelection } from "@t3tools/shared/model";
+import { projectScriptsMatch, resolveProjectScripts } from "@t3tools/shared/projectScripts";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { useCanGoBack, useNavigate } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
@@ -468,6 +469,8 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   );
   const keybindings = selectedServerConfig?.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS;
   const scripts = selectedCheckout.scripts;
+  const globalScripts = selectedServerConfig?.settings.globalScripts ?? [];
+  const disabledInheritedScriptIds = selectedCheckout.disabledInheritedScriptIds ?? [];
   const [editorRequest, setEditorRequest] = useState<ProjectScriptEditorRequest | null>(null);
   // Script writes replace the whole array, so two overlapping writes computed
   // from the same snapshot would drop each other's changes. One at a time.
@@ -485,13 +488,32 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     () =>
       t3File.scripts.filter(
         (fileScript) =>
-          !scripts.some(
-            (script) =>
-              script.command === fileScript.command ||
-              script.name.toLowerCase() === fileScript.name.toLowerCase(),
-          ),
+          ![...scripts, ...globalScripts].some((script) => projectScriptsMatch(script, fileScript)),
       ),
-    [scripts, t3File.scripts],
+    [globalScripts, scripts, t3File.scripts],
+  );
+  const setInheritedScriptDisabled = useCallback(
+    async (scriptId: string, disabled: boolean) => {
+      const next = new Set(disabledInheritedScriptIds);
+      if (disabled) next.add(scriptId);
+      else next.delete(scriptId);
+      const result = mapAtomCommandResult(
+        await updateProject({
+          environmentId: selectedCheckout.environmentId,
+          input: {
+            projectId: selectedCheckout.id,
+            disabledInheritedScriptIds: [...next],
+          },
+        }),
+        () => undefined,
+      );
+      reportFailure("Failed to update inherited action", result);
+    },
+    [disabledInheritedScriptIds, reportFailure, selectedCheckout, updateProject],
+  );
+  const inheritedScripts = useMemo(
+    () => resolveProjectScripts([], t3File.scripts, globalScripts, []),
+    [globalScripts, t3File.scripts],
   );
 
   const persistScripts = useCallback(
@@ -1137,6 +1159,66 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
               );
             })
           )}
+          {inheritedScripts.length > 0 ? (
+            <div className="border-t border-border/60 pt-2">
+              <p className="px-3 py-1 text-xs font-medium text-muted-foreground sm:px-4">
+                Inherited actions (t3.json, then global)
+              </p>
+              {inheritedScripts.map((script) => {
+                const disabled = disabledInheritedScriptIds.includes(script.id);
+                const overridden = scripts.some((candidate) =>
+                  projectScriptsMatch(candidate, script),
+                );
+                return (
+                  <SettingsRow
+                    key={script.id}
+                    className="py-2"
+                    title={
+                      <span className="flex min-w-0 items-center gap-2">
+                        <ScriptIcon icon={script.icon} className="size-4 text-muted-foreground" />
+                        <span>{script.name}</span>
+                        <code className="truncate font-mono font-normal text-muted-foreground">
+                          {script.command}
+                        </code>
+                      </span>
+                    }
+                    description={
+                      overridden
+                        ? "Overridden by a project action"
+                        : disabled
+                          ? "Disabled"
+                          : "Inherited"
+                    }
+                    control={
+                      <div className="flex gap-1.5">
+                        {!overridden ? (
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            onClick={() => void setInheritedScriptDisabled(script.id, !disabled)}
+                          >
+                            {disabled ? "Enable" : "Disable"}
+                          </Button>
+                        ) : null}
+                        {!overridden ? (
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            onClick={() => {
+                              const request = editorRequestForScript(script, keybindings);
+                              setEditorRequest({ ...request, scriptId: null });
+                            }}
+                          >
+                            Customize
+                          </Button>
+                        ) : null}
+                      </div>
+                    }
+                  />
+                );
+              })}
+            </div>
+          ) : null}
           {t3File.status === "invalid" ? (
             <SettingsRow
               title="t3.json is invalid"

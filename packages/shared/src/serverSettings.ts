@@ -128,6 +128,7 @@ export function applyServerSettingsPatch(
 ): ServerSettings {
   const selectionPatch = patch.textGenerationModelSelection;
   const {
+    globalScripts,
     automaticGitFetchInterval,
     providerHealthRefreshInterval,
     backgroundActivityProfile,
@@ -172,6 +173,7 @@ export function applyServerSettingsPatch(
   const next = deepMerge(current, patchForMerge);
   const nextWithReplacementsBase = {
     ...next,
+    ...(globalScripts !== undefined ? { globalScripts } : {}),
     ...(backgroundActivity !== undefined
       ? {
           backgroundActivity: {

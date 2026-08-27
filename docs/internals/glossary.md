@@ -28,6 +28,15 @@ The root filesystem path for a project. In [the orchestration model][1], it is t
 
 A Git worktree used as an isolated workspace for a thread. If a thread has a `worktreePath` in [the contracts][1], it runs there instead of in the main working tree. Git operations live behind the VCS driver contract in `apps/server/src/vcs/VcsDriver.ts`, implemented by [GitVcsDriverCore.ts][3].
 
+#### Project action
+
+A named terminal command available from a project's action menu. Effective actions resolve in
+precedence order: project projection, checked-in `t3.json`, then global server settings. A higher
+layer overrides a lower action with the same ID, command, or case-insensitive name. Projects persist
+the effective IDs of disabled inherited actions in `disabledInheritedScriptIds`; project-owned
+actions are never suppressed by that list. The same resolved ordering selects the first worktree
+setup action.
+
 ### Thread timeline
 
 #### Thread

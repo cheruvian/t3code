@@ -260,6 +260,23 @@ describe("provider enabled defaults", () => {
 });
 
 describe("ServerSettings worktree defaults", () => {
+  it("defaults global actions for legacy settings and decodes replacements", () => {
+    expect(decodeServerSettings({}).globalScripts).toEqual([]);
+    expect(
+      decodeServerSettingsPatch({
+        globalScripts: [
+          {
+            id: "lint",
+            name: "Lint",
+            command: "vp lint",
+            icon: "lint",
+            runOnWorktreeCreate: false,
+          },
+        ],
+      }).globalScripts,
+    ).toHaveLength(1);
+  });
+
   it("defaults start-from-origin on for legacy configs", () => {
     expect(decodeServerSettings({}).newWorktreesStartFromOrigin).toBe(true);
   });

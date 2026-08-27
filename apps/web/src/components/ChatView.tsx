@@ -1837,6 +1837,20 @@ function ChatViewContent(props: ChatViewProps) {
   const pendingFileSurfaceIds = activeProjectKey
     ? (pendingFileSurfaceIdsByProject.get(activeProjectKey) ?? EMPTY_PENDING_FILE_SURFACE_IDS)
     : EMPTY_PENDING_FILE_SURFACE_IDS;
+  const activeProjectScripts = activeProject?.scripts;
+  const setInheritedProjectScriptDisabled = useCallback(
+    (scriptId: string, disabled: boolean) => {
+      if (!activeProject) return;
+      const next = new Set(activeProject.disabledInheritedScriptIds ?? []);
+      if (disabled) next.add(scriptId);
+      else next.delete(scriptId);
+      void updateProject({
+        environmentId,
+        input: { projectId: activeProject.id, disabledInheritedScriptIds: [...next] },
+      });
+    },
+    [activeProject, environmentId, updateProject],
+  );
   const handleFilePendingChange = useCallback(
     (relativePath: string, pending: boolean) => {
       if (!activeProjectKey) return;
@@ -1856,8 +1870,8 @@ function ChatViewContent(props: ChatViewProps) {
     [activeProjectKey],
   );
   const configuredPreviewUrls = useMemo(
-    () => getConfiguredPreviewUrls(activeProject?.scripts),
-    [activeProject?.scripts],
+    () => getConfiguredPreviewUrls(activeProjectScripts),
+    [activeProjectScripts],
   );
 
   useEffect(() => {
@@ -6651,7 +6665,14 @@ function ChatViewContent(props: ChatViewProps) {
             activeProjectCwd={activeProject?.workspaceRoot ?? null}
             activeProjectFaviconPath={activeProject?.faviconPath ?? null}
             openInCwd={gitCwd}
-            activeProjectScripts={activeProject?.scripts}
+            activeProjectScripts={activeProjectScripts}
+            activeGlobalScripts={settings.globalScripts}
+            disabledInheritedScriptIds={activeProject?.disabledInheritedScriptIds ?? []}
+            {...(activeProject
+              ? {
+                  activeProjectScriptIds: new Set(activeProject.scripts.map((script) => script.id)),
+                }
+              : {})}
             preferredScriptId={
               activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
             }
@@ -6664,6 +6685,7 @@ function ChatViewContent(props: ChatViewProps) {
             onAddProjectScript={saveProjectScript}
             onUpdateProjectScript={updateProjectScript}
             onDeleteProjectScript={deleteProjectScript}
+            onSetInheritedProjectScriptDisabled={setInheritedProjectScriptDisabled}
           />
         </WorkspacePageHeader>
 

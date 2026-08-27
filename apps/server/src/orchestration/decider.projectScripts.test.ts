@@ -39,6 +39,9 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
       const event = Array.isArray(result) ? result[0] : result;
       expect(event.type).toBe("project.created");
       expect((event.payload as { scripts: unknown[] }).scripts).toEqual([]);
+      expect(
+        (event.payload as { disabledInheritedScriptIds: unknown[] }).disabledInheritedScriptIds,
+      ).toEqual([]);
     }),
   );
 
@@ -84,6 +87,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
           commandId: CommandId.make("cmd-project-update-scripts"),
           projectId: asProjectId("project-scripts"),
           scripts: Array.from(scripts),
+          disabledInheritedScriptIds: ["global-lint"],
         },
         readModel,
       });
@@ -91,6 +95,9 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
       const event = Array.isArray(result) ? result[0] : result;
       expect(event.type).toBe("project.meta-updated");
       expect((event.payload as { scripts?: unknown[] }).scripts).toEqual(scripts);
+      expect(
+        (event.payload as { disabledInheritedScriptIds?: unknown[] }).disabledInheritedScriptIds,
+      ).toEqual(["global-lint"]);
     }),
   );
 

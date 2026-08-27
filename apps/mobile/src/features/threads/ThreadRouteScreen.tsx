@@ -7,13 +7,25 @@ import {
   type StaticScreenProps,
 } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
-import { EnvironmentId, ThreadId, type ProjectScript } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ThreadId,
+  T3_PROJECT_FILE_NAME,
+  type ProjectReadFileResult,
+  type ProjectScript,
+} from "@t3tools/contracts";
 import {
   requestOlderThreadTurns,
   threadHasOlderTurns,
 } from "@t3tools/client-runtime/state/threads";
-import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
+import {
+  projectScriptCwd,
+  projectScriptRuntimeEnv,
+  resolveProjectScripts,
+} from "@t3tools/shared/projectScripts";
+import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import { Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMobileGitStatus } from "../../state/queries";
@@ -63,6 +75,9 @@ import { useSelectedThreadRequests } from "../../state/use-selected-thread-reque
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
 import { useThreadComposerState } from "../../state/use-thread-composer-state";
 import { threadEnvironment } from "../../state/threads";
+import { serverEnvironment } from "../../state/server";
+import { projectEnvironment } from "../../state/projects";
+import { useEnvironmentQuery } from "../../state/query";
 import { projectThreadContentPresentation } from "./threadContentPresentation";
 import {
   useAdaptiveWorkspaceLayout,
@@ -192,6 +207,39 @@ function ThreadRouteContent(
   const { onReconnectEnvironment } = useRemoteConnections();
   const { selectedThread, selectedThreadProject, selectedEnvironmentConnection } =
     useThreadSelection();
+  const selectedServerSettings = useAtomValue(
+    serverEnvironment.settingsValueAtom(
+      selectedThread?.environmentId ?? EnvironmentId.make("unavailable"),
+    ),
+  );
+  const projectFileQuery = useEnvironmentQuery(
+    selectedThreadProject
+      ? projectEnvironment.readFile({
+          environmentId: selectedThreadProject.environmentId,
+          input: {
+            cwd: selectedThreadProject.workspaceRoot,
+            relativePath: T3_PROJECT_FILE_NAME,
+          },
+        })
+      : null,
+  );
+  const projectFileData = projectFileQuery.data as ProjectReadFileResult | null;
+  const fileScripts = useMemo(() => {
+    if (projectFileData === null || projectFileData.truncated) return [];
+    return parseT3ProjectFile(projectFileData.contents)?.scripts ?? [];
+  }, [projectFileData]);
+  const projectScripts = useMemo(
+    () =>
+      selectedThreadProject
+        ? resolveProjectScripts(
+            selectedThreadProject.scripts,
+            fileScripts,
+            selectedServerSettings?.globalScripts ?? [],
+            selectedThreadProject.disabledInheritedScriptIds ?? [],
+          )
+        : [],
+    [fileScripts, selectedServerSettings?.globalScripts, selectedThreadProject],
+  );
   const selectedThreadDetailState = props.selectedThreadDetailState;
   const selectedThreadDetail = Option.getOrNull(selectedThreadDetailState.data);
   // "Load earlier turns" header state for windowed (paginated) thread loads.
@@ -645,7 +693,7 @@ function ThreadRouteContent(
     gitOperationLabel: gitState.gitOperationLabel,
     canOpenTerminal: Boolean(selectedThreadProject?.workspaceRoot),
     canOpenFiles: Boolean(selectedThreadProject?.workspaceRoot),
-    projectScripts: selectedThreadProject?.scripts ?? [],
+    projectScripts,
     terminalSessions: terminalMenuSessions,
     showDirectFileControl: layout.usesSplitView,
     onOpenTerminal: handleOpenTerminal,

@@ -22,6 +22,9 @@ import * as ServerSettingsModule from "./serverSettings.ts";
 
 const decodeSettingsPatch = Schema.decodeUnknownEffect(ServerSettingsPatch);
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
+const decodeJsonObject = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+);
 
 const makeServerSettingsLayer = () =>
   ServerSettingsModule.layer.pipe(
@@ -48,6 +51,38 @@ const makeFailingSecretStoreLayer = (cause: ServerSecretStore.SecretStoreError) 
   );
 
 it.layer(NodeServices.layer)("server settings", (it) => {
+  it.effect("replaces global actions and strips the empty default from settings.json", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const first = {
+        id: "first",
+        name: "First",
+        command: "first",
+        icon: "play" as const,
+        runOnWorktreeCreate: false,
+      };
+      const second = {
+        id: "second",
+        name: "Second",
+        command: "second",
+        icon: "test" as const,
+        runOnWorktreeCreate: false,
+      };
+
+      yield* serverSettings.updateSettings({ globalScripts: [first, second] });
+      const shrunk = yield* serverSettings.updateSettings({ globalScripts: [second] });
+      assert.deepStrictEqual(shrunk.globalScripts, [second]);
+
+      yield* serverSettings.updateSettings({ globalScripts: [] });
+      const persisted = yield* decodeJsonObject(
+        yield* fileSystem.readFileString(serverConfig.settingsPath),
+      );
+      assert.notProperty(persisted, "globalScripts");
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("preserves context when reading a provider environment secret fails", () => {
     const platformCause = PlatformError.systemError({
       _tag: "PermissionDenied",

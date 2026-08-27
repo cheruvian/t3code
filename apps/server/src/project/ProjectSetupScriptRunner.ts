@@ -1,5 +1,9 @@
 import { ProjectId } from "@t3tools/contracts";
-import { projectScriptRuntimeEnv, setupProjectScript } from "@t3tools/shared/projectScripts";
+import {
+  projectScriptRuntimeEnv,
+  resolveProjectScripts,
+  setupProjectScript,
+} from "@t3tools/shared/projectScripts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -8,6 +12,8 @@ import * as Schema from "effect/Schema";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
+import { T3ProjectFileLoader } from "./T3ProjectFileLoader.ts";
 
 export interface ProjectSetupScriptRunnerResultNoScript {
   readonly status: "no-script";
@@ -81,6 +87,8 @@ export class ProjectSetupScriptRunner extends Context.Service<
 export const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const terminalManager = yield* TerminalManager.TerminalManager;
+  const serverSettings = yield* ServerSettingsService;
+  const t3ProjectFileLoader = yield* T3ProjectFileLoader;
 
   const runForThread: ProjectSetupScriptRunner["Service"]["runForThread"] = Effect.fn(
     "ProjectSetupScriptRunner.runForThread",
@@ -124,7 +132,25 @@ export const make = Effect.gen(function* () {
       return yield* new ProjectSetupScriptProjectNotFoundError(errorContext);
     }
 
-    const script = setupProjectScript(project.scripts);
+    const settings = yield* serverSettings.getSettings.pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProjectSetupScriptOperationError({
+            ...errorContext,
+            operation: "resolveProject",
+            cause,
+          }),
+      ),
+    );
+    const projectFile = yield* t3ProjectFileLoader.load(project.workspaceRoot);
+    const script = setupProjectScript(
+      resolveProjectScripts(
+        project.scripts,
+        Option.isSome(projectFile) ? (projectFile.value.scripts ?? []) : [],
+        settings.globalScripts,
+        project.disabledInheritedScriptIds ?? [],
+      ),
+    );
     if (!script) {
       return {
         status: "no-script",

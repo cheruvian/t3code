@@ -7,8 +7,9 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { ChevronDownIcon, DownloadIcon, PlusIcon, SettingsIcon } from "lucide-react";
+import { BanIcon, ChevronDownIcon, DownloadIcon, PlusIcon, SettingsIcon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
+import { projectScriptsMatch } from "@t3tools/shared/projectScripts";
 
 import { commandForProjectScript, primaryProjectScript } from "~/projectScripts";
 import { shortcutLabelForCommand } from "~/keybindings";
@@ -38,10 +39,23 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 export type { NewProjectScriptInput, ProjectScriptActionResult };
 
 const NO_FILE_SCRIPTS: ReadonlyArray<T3ProjectFileScript> = [];
+const NO_INHERITED_SCRIPT_IDS: ReadonlySet<string> = new Set();
+
+export function importableProjectFileScripts(
+  fileScripts: ReadonlyArray<T3ProjectFileScript>,
+  scripts: ReadonlyArray<ProjectScript>,
+): ReadonlyArray<T3ProjectFileScript> {
+  return fileScripts.filter(
+    (fileScript) => !scripts.some((script) => projectScriptsMatch(script, fileScript)),
+  );
+}
 
 interface ProjectScriptsControlProps {
   scripts: ReadonlyArray<ProjectScript>;
-  /** Scripts declared in the project's checked-in t3.json, offered for import. */
+  /** IDs owned by this project. Inherited actions are runnable but not editable here. */
+  editableScriptIds?: ReadonlySet<string>;
+  inheritedScriptIds?: ReadonlySet<string>;
+  /** Legacy import candidates used by project-settings callers. */
   fileScripts?: ReadonlyArray<T3ProjectFileScript>;
   keybindings: ResolvedKeybindingsConfig;
   preferredScriptId?: string | null;
@@ -52,10 +66,13 @@ interface ProjectScriptsControlProps {
     input: NewProjectScriptInput,
   ) => Promise<ProjectScriptActionResult>;
   onDeleteScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
+  onSetInheritedDisabled?: (scriptId: string, disabled: boolean) => void;
 }
 
 export default function ProjectScriptsControl({
   scripts,
+  editableScriptIds,
+  inheritedScriptIds = NO_INHERITED_SCRIPT_IDS,
   fileScripts = NO_FILE_SCRIPTS,
   keybindings,
   preferredScriptId = null,
@@ -63,6 +80,7 @@ export default function ProjectScriptsControl({
   onAddScript,
   onUpdateScript,
   onDeleteScript,
+  onSetInheritedDisabled,
 }: ProjectScriptsControlProps) {
   const [actionsMenuOpen, setActionsMenuOpen] = useState({
     scripts: false,
@@ -78,15 +96,7 @@ export default function ProjectScriptsControl({
     return primaryProjectScript(scripts);
   }, [preferredScriptId, scripts]);
   const importableScripts = useMemo(
-    () =>
-      fileScripts.filter(
-        (fileScript) =>
-          !scripts.some(
-            (script) =>
-              script.command === fileScript.command ||
-              script.name.toLowerCase() === fileScript.name.toLowerCase(),
-          ),
-      ),
+    () => importableProjectFileScripts(fileScripts, scripts),
     [fileScripts, scripts],
   );
   const dropdownItemClassName =
@@ -99,6 +109,11 @@ export default function ProjectScriptsControl({
   const openEditDialog = (script: ProjectScript) => {
     setActionsMenuOpen({ scripts: false, imports: false });
     setEditorRequest(editorRequestForScript(script, keybindings));
+  };
+
+  const openCustomizeDialog = (script: ProjectScript) => {
+    setActionsMenuOpen({ scripts: false, imports: false });
+    setEditorRequest({ ...editorRequestForScript(script, keybindings), scriptId: null });
   };
 
   const submitScript = useCallback(
@@ -191,10 +206,10 @@ export default function ProjectScriptsControl({
             </MenuTrigger>
             <MenuPopup align="end">
               {scripts.map((script) => {
-                const shortcutLabel = shortcutLabelForCommand(
-                  keybindings,
-                  commandForProjectScript(script.id),
-                );
+                const inherited = inheritedScriptIds.has(script.id);
+                const shortcutLabel = inherited
+                  ? null
+                  : shortcutLabelForCommand(keybindings, commandForProjectScript(script.id));
                 return (
                   <MenuItem
                     key={script.id}
@@ -211,24 +226,49 @@ export default function ProjectScriptsControl({
                           {shortcutLabel}
                         </MenuShortcut>
                       )}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        className="absolute right-0 top-1/2 size-6 -translate-y-1/2 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-visible:opacity-100 group-focus-visible:pointer-events-auto"
-                        aria-label={`Edit ${script.name}`}
-                        onPointerDown={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                        }}
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          openEditDialog(script);
-                        }}
-                      >
-                        <SettingsIcon className="size-3.5" />
-                      </Button>
+                      {editableScriptIds?.has(script.id) !== false || inherited ? (
+                        <>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            className="absolute right-0 top-1/2 size-6 -translate-y-1/2 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-visible:opacity-100 group-focus-visible:pointer-events-auto"
+                            aria-label={`${inherited ? "Customize" : "Edit"} ${script.name}`}
+                            onPointerDown={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                            }}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              if (inherited) openCustomizeDialog(script);
+                              else openEditDialog(script);
+                            }}
+                          >
+                            <SettingsIcon className="size-3.5" />
+                          </Button>
+                          {inherited && onSetInheritedDisabled ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-xs"
+                              className="absolute right-6 top-1/2 size-6 -translate-y-1/2 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-visible:opacity-100 group-focus-visible:pointer-events-auto"
+                              aria-label={`Disable ${script.name}`}
+                              onPointerDown={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                              }}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                onSetInheritedDisabled(script.id, true);
+                              }}
+                            >
+                              <BanIcon className="size-3.5" />
+                            </Button>
+                          ) : null}
+                        </>
+                      ) : null}
                     </span>
                   </MenuItem>
                 );
