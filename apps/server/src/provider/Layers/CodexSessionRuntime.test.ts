@@ -202,6 +202,7 @@ function makeThreadOpenResponse(
     sandbox: { type: "danger-full-access" },
     thread: {
       id: threadId,
+      projectId: null,
       createdAt: "2026-04-18T00:00:00.000Z",
       source: { session: "cli" },
       turns: [],
@@ -864,6 +865,7 @@ function makeThreadStartedNotification(
         id: threadId,
         modelProvider: "openai",
         preview: "",
+        projectId: null,
         sessionId: threadId,
         source,
         status: { type: "idle" as const },

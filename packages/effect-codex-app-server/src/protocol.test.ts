@@ -36,8 +36,63 @@ const decodeConsumeRateLimitResetCreditParams = Schema.decodeUnknownEffect(
 const decodeConsumeRateLimitResetCreditResponse = Schema.decodeUnknownEffect(
   CodexRpc.CLIENT_REQUEST_RESPONSES["account/rateLimitResetCredit/consume"],
 );
+const decodeThreadResumeResponse = Schema.decodeUnknownEffect(
+  CodexRpc.CLIENT_REQUEST_RESPONSES["thread/resume"],
+);
+const decodeServerSubAgentActivityKind = Schema.decodeUnknownEffect(
+  CodexSchema.ServerNotification__SubAgentActivityKind,
+);
+const decodeThreadResumeSubAgentActivityKind = Schema.decodeUnknownEffect(
+  CodexSchema.V2ThreadResumeResponse__SubAgentActivityKind,
+);
 
 it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
+  it.effect("decodes completed sub-agent activity in thread resume history", () =>
+    Effect.gen(function* () {
+      const response = {
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+        cwd: "/workspace",
+        model: "gpt-5.3-codex",
+        modelProvider: "openai",
+        sandbox: { type: "workspaceWrite" },
+        thread: {
+          cliVersion: "0.150.1",
+          createdAt: 1,
+          cwd: "/workspace",
+          ephemeral: false,
+          id: "thread-1",
+          modelProvider: "openai",
+          preview: "delegate work",
+          projectId: null,
+          sessionId: "session-1",
+          source: "appServer",
+          status: { type: "idle" },
+          turns: [
+            {
+              id: "turn-4",
+              items: [
+                {
+                  id: "item-28",
+                  type: "subAgentActivity",
+                  agentPath: "/root/reviewer",
+                  agentThreadId: "child-1",
+                  kind: "completed",
+                },
+              ],
+              status: "completed",
+            },
+          ],
+          updatedAt: 2,
+        },
+      } as const;
+
+      assert.deepEqual(yield* decodeThreadResumeResponse(response), response);
+      assert.equal(yield* decodeServerSubAgentActivityKind("completed"), "completed");
+      assert.equal(yield* decodeThreadResumeSubAgentActivityKind("completed"), "completed");
+    }),
+  );
+
   it.effect("maps account usage responses to the upstream token usage schema", () =>
     Effect.gen(function* () {
       assert.strictEqual(

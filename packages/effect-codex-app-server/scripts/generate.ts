@@ -17,7 +17,7 @@ import {
 } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-const UPSTREAM_REF = "678157acaa819d5510adfe359abb5d0392cfe461";
+const UPSTREAM_REF = "90854393966b21e9ebfd21b122334eb09a20c93d";
 const USER_AGENT = "effect-codex-app-server-generator";
 const GITHUB_API_BASE =
   "https://api.github.com/repos/openai/codex/contents/codex-rs/app-server-protocol";
@@ -52,6 +52,12 @@ interface MethodEntry {
   readonly method: string;
   readonly paramsType?: string;
 }
+
+const ManualClientRequestEntries: ReadonlyArray<MethodEntry> = [
+  // T3's account-usage client contract remains available even when the
+  // pinned app-server TypeScript request union omits this schema-backed method.
+  { method: "account/usage/read" },
+];
 
 interface JsonSchemaFile {
   readonly namespace?: string;
@@ -624,7 +630,13 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
     `https://raw.githubusercontent.com/openai/codex/${UPSTREAM_REF}/codex-rs/app-server-protocol/schema/typescript/ServerNotification.ts`,
   );
 
-  const clientRequestEntries = parseRequestEntries(clientRequestRaw);
+  const parsedClientRequestEntries = parseRequestEntries(clientRequestRaw);
+  const clientRequestEntries = [
+    ...parsedClientRequestEntries,
+    ...ManualClientRequestEntries.filter(
+      (manual) => !parsedClientRequestEntries.some((entry) => entry.method === manual.method),
+    ),
+  ];
   const clientNotificationEntries = parseNotificationEntries(clientNotificationRaw);
   const serverRequestEntries = parseRequestEntries(serverRequestRaw);
   const serverNotificationEntries = parseNotificationEntries(serverNotificationRaw);

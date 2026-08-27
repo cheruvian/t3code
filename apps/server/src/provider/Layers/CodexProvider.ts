@@ -98,11 +98,16 @@ function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["accoun
     case "team":
       return "ChatGPT Team Subscription";
     case "self_serve_business_usage_based":
+    case "self_serve_business_prolite":
     case "business":
       return "ChatGPT Business Subscription";
+    case "ent26":
+    case "enterprise_cbp_automation":
     case "enterprise_cbp_usage_based":
     case "enterprise":
       return "ChatGPT Enterprise Subscription";
+    case "edu_plus":
+    case "edu_pro":
     case "edu":
       return "ChatGPT Edu Subscription";
     case "unknown":

@@ -433,7 +433,7 @@ export function toMcpElicitationResponse(
         ? "always"
         : undefined;
   const form = mcpElicitationFormFields(payload);
-  const content: Record<string, unknown> = {};
+  const content: Record<string, Schema.Json> = {};
 
   for (const [key, field] of Object.entries(form?.properties ?? {})) {
     const options = mcpElicitationFieldOptions(field);
@@ -447,7 +447,11 @@ export function toMcpElicitationResponse(
       content[key] = chosenOption.value;
     } else if (field.type === "boolean" && isMcpElicitationPersistenceField(key, field)) {
       content[key] = decision === "acceptAlways";
-    } else if (field.default !== undefined && field.default !== null) {
+    } else if (
+      field.default !== undefined &&
+      field.default !== null &&
+      Schema.is(Schema.Json)(field.default)
+    ) {
       content[key] = field.default;
     }
   }

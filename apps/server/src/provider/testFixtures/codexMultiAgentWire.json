@@ -384,6 +384,7 @@
     "threadStart": {
       "thread": {
         "id": "019fcfd6-17bb-72f0-ae12-a1f2dee6e3e5",
+        "projectId": null,
         "extra": null,
         "sessionId": "019fcfd6-17bb-72f0-ae12-a1f2dee6e3e5",
         "forkedFromId": null,

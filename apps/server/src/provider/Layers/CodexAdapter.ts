@@ -609,6 +609,15 @@ function mapCollabAgentEvent(
           },
         ];
       }
+      if (activityKind === "completed") {
+        return [
+          {
+            ...base,
+            type: "task.updated",
+            payload: { taskId, status: "idle", ...statusLinkage },
+          },
+        ];
+      }
       // Reading a child's result also emits "interacted" after its turn is idle.
       // Only the child's turn or thread lifecycle can prove it resumed work.
       return [];
