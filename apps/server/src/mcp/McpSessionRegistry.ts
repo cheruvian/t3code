@@ -4,10 +4,13 @@ import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpServer } from "effect/unstable/http";
 
+import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpProviderSession from "./McpProviderSession.ts";
 
@@ -95,13 +98,44 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const environmentId = yield* environment.getEnvironmentId;
   const httpServer = yield* HttpServer.HttpServer;
+  const serverConfig = yield* ServerConfig.ServerConfig;
+  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const state = yield* SynchronizedRef.make<RegistryState>({ records: new Map() });
   const currentTimeMillis = options.now ? Effect.sync(options.now) : Clock.currentTimeMillis;
   const livenessWindowMs = options.livenessWindowMs ?? DEFAULT_LIVENESS_WINDOW_MS;
-  const endpoint =
+  const endpointBase =
     httpServer.address._tag === "TcpAddress"
-      ? `http://${getHttpMcpEndpointHost(httpServer.address.hostname)}:${httpServer.address.port}/mcp`
-      : "http://127.0.0.1/mcp";
+      ? `http://${getHttpMcpEndpointHost(httpServer.address.hostname)}:${httpServer.address.port}`
+      : "http://127.0.0.1";
+
+  /**
+   * A thread is a helper thread when its project is the one registered on the
+   * environment's T3 Chat Helper root. Decided at issuance: threads never
+   * change projects, and a read failure withholds the capability rather than
+   * failing the session start.
+   */
+  const isHelperThread = (threadId: ThreadId) =>
+    projectionSnapshotQuery.getThreadShellById(threadId).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.succeed(false),
+          onSome: (thread) =>
+            projectionSnapshotQuery
+              .getActiveProjectByWorkspaceRoot(serverConfig.t3CodeProjectDir)
+              .pipe(
+                Effect.map(
+                  (project) => Option.isSome(project) && project.value.id === thread.projectId,
+                ),
+              ),
+        }),
+      ),
+      Effect.catch((cause) =>
+        Effect.logWarning(
+          "could not resolve the thread's project; issuing an MCP credential without the environment capability",
+          { threadId, cause },
+        ).pipe(Effect.as(false)),
+      ),
+    );
 
   const hashToken = (token: string) =>
     crypto
@@ -123,12 +157,15 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       const providerSessionId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
       const rawToken = yield* crypto.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie);
       const tokenHash = yield* hashToken(rawToken);
+      const helperThread = yield* isHelperThread(request.threadId);
       const scope: McpInvocationContext.McpInvocationScope = {
         environmentId,
         threadId: ThreadId.make(request.threadId),
         providerSessionId,
         providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
-        capabilities: new Set(["preview"]),
+        capabilities: new Set<McpInvocationContext.McpCapability>(
+          helperThread ? ["preview", "environment"] : ["preview"],
+        ),
         issuedAt,
       };
       yield* SynchronizedRef.update(state, ({ records }) => {
@@ -142,7 +179,13 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           threadId: scope.threadId,
           providerSessionId,
           providerInstanceId: scope.providerInstanceId,
-          endpoint,
+          // Helper sessions get the endpoint that also mounts the typed API
+          // bridge; every other session only ever learns the preview endpoint.
+          endpoint: `${endpointBase}${
+            helperThread
+              ? McpInvocationContext.MCP_HELPER_HTTP_PATH
+              : McpInvocationContext.MCP_HTTP_PATH
+          }`,
           authorizationHeader: `Bearer ${rawToken}`,
         },
       };

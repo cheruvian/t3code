@@ -1,3 +1,5 @@
+import * as Schema from "effect/Schema";
+
 import { ORCHESTRATION_WS_METHODS } from "./orchestration.ts";
 import { WS_METHODS } from "./rpc.ts";
 
@@ -24,7 +26,7 @@ const destructiveNamePatterns = [
   /installRelayClient/,
 ];
 const agentNamePatterns = [
-  /^(projects\.(list|add|remove)|server\.(getConfig|getSettings|updateSettings|upsertKeybinding|removeKeybinding))$/,
+  /^server\.(getConfig|getSettings|updateSettings|upsertKeybinding|removeKeybinding)$/,
   /^projects\.(listEntries|readFile|searchContents|searchEntries|writeFile)$/,
   /^orchestration\.(dispatchCommand|getTurnDiff|getFullThreadDiff|searchThreads|subscribeShell|subscribeThread)$/,
 ];
@@ -63,6 +65,21 @@ export const AGENT_API_INVENTORY: ReadonlyArray<AgentApiOperation> = operationNa
   }),
 );
 
+/** Names of the operations the agent-facing MCP bridge must serve. */
+export const AGENT_EXPOSED_API_NAMES: ReadonlyArray<string> = AGENT_API_INVENTORY.filter(
+  (operation) => operation.exposure === "agent",
+).map((operation) => operation.name);
+
 export function agentApiInventoryJson(): string {
   return `${JSON.stringify({ version: 2, operations: AGENT_API_INVENTORY }, null, 2)}\n`;
 }
+
+/** Failure surface of the agent-facing `api_call` MCP tool. */
+export class AgentApiCallError extends Schema.TaggedErrorClass<AgentApiCallError>()(
+  "AgentApiCallError",
+  {
+    operation: Schema.String,
+    reason: Schema.Literals(["unknown_operation", "unavailable", "invalid_input", "failed"]),
+    message: Schema.String,
+  },
+) {}

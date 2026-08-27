@@ -104,6 +104,8 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(metaprojectInstructions).toContain("t3 project add");
       expect(metaprojectInstructions).toContain("Actions and keybindings");
       expect(metaprojectInstructions).toContain("server.updateSettings");
+      expect(metaprojectInstructions).toContain("api_call");
+      expect(metaprojectInstructions).toContain("orchestration.dispatchCommand");
       expect(metaprojectInstructions).toContain("outside this helper's write boundary");
       expect(yield* fileSystem.readFileString(`${baseDir}/t3code/t3.json`)).toContain(
         '"iconPath": "assets/t3-chat-helper.svg"',

@@ -103,7 +103,8 @@ const collectQueueUntil = Effect.fn("TransferBudget.collectQueueUntil")(function
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ServerConfig from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
-import { isThreadDetailEvent, resolveAvailableEditorsForConfig } from "./ws.ts";
+import { isThreadDetailEvent } from "./ws.ts";
+import { resolveAvailableEditorsForConfig } from "./serverConfigSnapshot.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";

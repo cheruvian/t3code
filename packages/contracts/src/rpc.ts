@@ -212,10 +212,9 @@ import {
 import { VcsError } from "./vcs.ts";
 
 export const WS_METHODS = {
-  // Project registry methods
-  projectsList: "projects.list",
-  projectsAdd: "projects.add",
-  projectsRemove: "projects.remove",
+  // Project workspace methods. Project registry mutations are orchestration
+  // commands (`project.create`, `project.meta.update`, `project.delete`)
+  // dispatched through `orchestration.dispatchCommand`.
   projectsListEntries: "projects.listEntries",
   projectsReadFile: "projects.readFile",
   projectsSearchContents: "projects.searchContents",

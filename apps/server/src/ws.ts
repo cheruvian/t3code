@@ -110,8 +110,6 @@ import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
-import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
-import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
@@ -136,19 +134,11 @@ import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
+import { loadServerConfig } from "./serverConfigSnapshot.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-const EDITOR_DISCOVERY_TIMEOUT = Duration.seconds(5);
-
-export const resolveAvailableEditorsForConfig = <A, E, R>(
-  discovery: Effect.Effect<ReadonlyArray<A>, E, R>,
-) =>
-  discovery.pipe(
-    Effect.timeoutOption(EDITOR_DISCOVERY_TIMEOUT),
-    Effect.map(Option.getOrElse(() => [])),
-  );
 
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
@@ -434,7 +424,6 @@ const makeWsRpcLayer = (
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
-      const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
@@ -494,7 +483,6 @@ const makeWsRpcLayer = (
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
-      const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
       yield* Effect.addFinalizer(() =>
@@ -1123,49 +1111,6 @@ const makeWsRpcLayer = (
             ),
           );
       };
-
-      const loadServerConfig = Effect.gen(function* () {
-        const keybindingsConfig = yield* keybindings.loadConfigState;
-        const providers = yield* providerRegistry.getProviders;
-        const settings = ServerSettings.redactServerSettingsForClient(
-          yield* serverSettings.getSettings,
-        );
-        const environment = yield* serverEnvironment.getDescriptor;
-        const auth = yield* serverAuth.getDescriptor();
-
-        return {
-          environment,
-          auth,
-          cwd: config.cwd,
-          keybindingsConfigPath: config.keybindingsConfigPath,
-          keybindings: keybindingsConfig.keybindings,
-          issues: keybindingsConfig.issues,
-          providers,
-          availableEditors: yield* resolveAvailableEditorsForConfig(
-            externalLauncher.resolveAvailableEditors(),
-          ),
-          // Same discovery-with-timeout treatment as editors: a slow probe
-          // must not stall server.getConfig, so it degrades to no targets.
-          remoteOpenTargets: yield* resolveAvailableEditorsForConfig(
-            remoteOpenTargets.resolveTargets(),
-          ),
-          observability: {
-            logsDirectoryPath: config.logsDir,
-            localTracingEnabled: true,
-            ...(config.otlpTracesUrl !== undefined ? { otlpTracesUrl: config.otlpTracesUrl } : {}),
-            otlpTracesEnabled: config.otlpTracesUrl !== undefined,
-            ...(config.otlpMetricsUrl !== undefined
-              ? { otlpMetricsUrl: config.otlpMetricsUrl }
-              : {}),
-            otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
-          },
-          settings,
-          shellResumeCompletionMarker: true,
-          threadResumeCompletionMarker: true,
-          assistantPreviews: true as const,
-          threadSnapshotPagination: true,
-        };
-      });
 
       const refreshGitStatus = (cwd: string) =>
         vcsStatusBroadcaster

@@ -1,13 +1,19 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import { HttpServer } from "effect/unstable/http";
 
+import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { PersistenceSqlError } from "../persistence/Errors.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
+const helperRoot = "/tmp/t3-mcp-registry-test/t3code";
+const helperProjectId = ProjectId.make("project-helper");
 const makeFakeHttpServer = (hostname: string, port = 43123) =>
   HttpServer.HttpServer.of({
     address: { _tag: "TcpAddress", hostname, port },
@@ -18,8 +24,36 @@ const fakeEnvironment = ServerEnvironment.ServerEnvironment.of({
   getEnvironmentId: Effect.succeed(environmentId),
   getDescriptor: Effect.die("unused"),
 });
+const fakeServerConfig = { t3CodeProjectDir: helperRoot } as ServerConfig.ServerConfig["Service"];
 
-const makeRegistry = (now: () => number, httpServer = fakeHttpServer) =>
+interface ProjectionStubOptions {
+  readonly threadProjects?: Readonly<Record<string, ProjectId>>;
+  readonly failReads?: boolean;
+}
+
+const makeProjectionStub = (options: ProjectionStubOptions = {}) =>
+  ({
+    getThreadShellById: (threadId: ThreadId) =>
+      options.failReads
+        ? Effect.fail(
+            new PersistenceSqlError({ operation: "test.read", detail: "projection unavailable" }),
+          )
+        : Effect.succeed(
+            options.threadProjects?.[threadId] === undefined
+              ? Option.none()
+              : Option.some({ id: threadId, projectId: options.threadProjects[threadId] }),
+          ),
+    getActiveProjectByWorkspaceRoot: (workspaceRoot: string) =>
+      Effect.succeed(
+        workspaceRoot === helperRoot ? Option.some({ id: helperProjectId }) : Option.none(),
+      ),
+  }) as unknown as ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"];
+
+const makeRegistry = (
+  now: () => number,
+  httpServer = fakeHttpServer,
+  projectionStub: ProjectionStubOptions = {},
+) =>
   McpSessionRegistry.__testing
     .make({
       now,
@@ -28,6 +62,11 @@ const makeRegistry = (now: () => number, httpServer = fakeHttpServer) =>
     .pipe(
       Effect.provideService(HttpServer.HttpServer, httpServer),
       Effect.provideService(ServerEnvironment.ServerEnvironment, fakeEnvironment),
+      Effect.provideService(ServerConfig.ServerConfig, fakeServerConfig),
+      Effect.provideService(
+        ProjectionSnapshotQuery.ProjectionSnapshotQuery,
+        makeProjectionStub(projectionStub),
+      ),
       Effect.provide(NodeServices.layer),
     );
 
@@ -71,6 +110,55 @@ it.effect("builds MCP endpoints from the bound server host", () =>
       });
       expect(issued.config.endpoint).toBe(expectedEndpoint);
     }
+  }),
+);
+
+it.effect("issues helper-thread credentials with the environment capability and endpoint", () =>
+  Effect.gen(function* () {
+    const helperThreadId = ThreadId.make("thread-helper");
+    const registry = yield* makeRegistry(() => 1_000, fakeHttpServer, {
+      threadProjects: { [helperThreadId]: helperProjectId },
+    });
+    const issued = yield* registry.issue({
+      threadId: helperThreadId,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    });
+    expect(issued.config.endpoint).toBe("http://127.0.0.1:43123/mcp/helper");
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    const resolved = yield* registry.resolve(token);
+    expect(resolved?.capabilities.has("environment")).toBe(true);
+    expect(resolved?.capabilities.has("preview")).toBe(true);
+  }),
+);
+
+it.effect("issues non-helper credentials without the environment capability", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("thread-ordinary");
+    const registry = yield* makeRegistry(() => 1_000, fakeHttpServer, {
+      threadProjects: { [threadId]: ProjectId.make("project-ordinary") },
+    });
+    const issued = yield* registry.issue({
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    });
+    expect(issued.config.endpoint).toBe("http://127.0.0.1:43123/mcp");
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    const resolved = yield* registry.resolve(token);
+    expect(resolved?.capabilities.has("environment")).toBe(false);
+  }),
+);
+
+it.effect("withholds the environment capability when the projection read fails", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(() => 1_000, fakeHttpServer, { failReads: true });
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-unreadable"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    });
+    expect(issued.config.endpoint).toBe("http://127.0.0.1:43123/mcp");
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    const resolved = yield* registry.resolve(token);
+    expect(resolved?.capabilities.has("environment")).toBe(false);
   }),
 );
 

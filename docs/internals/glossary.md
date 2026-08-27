@@ -125,6 +125,10 @@ Controls how assistant text reaches the thread timeline. In [the contracts][1], 
 
 A point-in-time view of state. The word is used in multiple layers, including orchestration, provider, and checkpointing. See [ProjectionSnapshotQuery.ts][10], [ProviderAdapter.ts][15], and [CheckpointStore.ts][19].
 
+#### Agent API bridge
+
+The `api_call` tool on the server's built-in `t3-code` MCP server. It lets an agent session invoke the typed operations marked agent-exposed in the contract inventory (`packages/contracts/src/agentApi.ts`), including `orchestration.dispatchCommand`, without a WebSocket client. At credential issuance the server resolves the thread's project; only threads of the T3 Chat Helper pseudo-project receive the `environment` capability and the `/mcp/helper` endpoint that mounts this tool. Every other session gets the preview-only `/mcp` endpoint and never sees the bridge in its tool list. Implementation lives in `apps/server/src/mcp/toolkits/api/`.
+
 ### Checkpointing
 
 Checkpointing captures workspace state over time so the app can diff turns and restore earlier points. The main pieces are [CheckpointStore.ts][19], [CheckpointDiffQuery.ts][20], and [CheckpointReactor.ts][6].
