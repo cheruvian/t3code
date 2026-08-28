@@ -62,6 +62,7 @@ import * as DesktopUpdates from "./updates/DesktopUpdates.ts";
 import * as BrowserSession from "./preview/BrowserSession.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as DesktopWindow from "./window/DesktopWindow.ts";
+import * as RendererStallWatchdog from "./diagnostics/RendererStallWatchdog.ts";
 import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
@@ -170,6 +171,7 @@ const desktopPreviewLayer = PreviewManager.layer.pipe(
 const desktopWindowLayer = DesktopWindow.layer.pipe(
   Layer.provideMerge(desktopServerExposureLayer),
   Layer.provideMerge(desktopPreviewLayer),
+  Layer.provideMerge(RendererStallWatchdog.layer(Electron.ipcMain)),
 );
 
 // Pool layer instantiates the backend factory once for the Windows

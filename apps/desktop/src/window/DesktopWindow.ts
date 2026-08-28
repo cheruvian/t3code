@@ -26,6 +26,7 @@ import {
 import * as PreviewManager from "../preview/Manager.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
+import * as RendererStallWatchdog from "../diagnostics/RendererStallWatchdog.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import { makeQuitHoldHandler } from "./QuitHold.ts";
 
@@ -271,6 +272,9 @@ export const make = Effect.gen(function* () {
   const electronTheme = yield* ElectronTheme.ElectronTheme;
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const previewManager = yield* PreviewManager.PreviewManager;
+  const rendererStallWatchdog = yield* Effect.serviceOption(
+    RendererStallWatchdog.RendererStallWatchdog,
+  );
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
   const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
   const electronApp = yield* ElectronApp.ElectronApp;
@@ -375,6 +379,18 @@ export const make = Effect.gen(function* () {
     if (environment.platform === "darwin") {
       window.setAutoHideCursor(false);
     }
+    const rendererStallWatchdogFiber = Option.isSome(rendererStallWatchdog)
+      ? RendererStallWatchdog.installRendererStallWatchdog({
+          enabled: environment.rendererStallWatchdogEnabled,
+          watchdog: rendererStallWatchdog.value,
+          target: {
+            id: window.webContents.id,
+            isActive: () => window.isVisible() && !window.isMinimized(),
+            debugger: window.webContents.debugger,
+          },
+          runFork,
+        })
+      : undefined;
     let boundsPersistFiber: Fiber.Fiber<void, never> | undefined;
     let pendingBoundsPersistFiber: Fiber.Fiber<void, never> | undefined;
     let boundsPersistenceEnabled = persistedBounds === null || restoredPersistedBounds;
@@ -752,6 +768,9 @@ export const make = Effect.gen(function* () {
     window.on("closed", () => {
       clearDevelopmentLoadRetry();
       clearBoundsPersist();
+      if (rendererStallWatchdogFiber !== undefined) {
+        runFork(Fiber.interrupt(rendererStallWatchdogFiber));
+      }
       void runPromise(electronWindow.clearMain(Option.some(window)));
     });
 

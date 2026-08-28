@@ -66,6 +66,7 @@ export const DesktopConfig = Config.all({
   appImagePath: trimmedString("APPIMAGE"),
   disableAutoUpdate: optionalBoolean("T3CODE_DISABLE_AUTO_UPDATE"),
   mockUpdates: optionalBoolean("T3CODE_DESKTOP_MOCK_UPDATES"),
+  rendererStallWatchdog: optionalBoolean("T3CODE_DESKTOP_RENDERER_STALL_WATCHDOG"),
   mockUpdateServerPort: Config.port("T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT").pipe(
     Config.withDefault(3000),
   ),

@@ -1,3 +1,4 @@
+// @effect-diagnostics globalTimers:off - Electron preload heartbeats run before an Effect runtime exists.
 import type {
   DesktopBridge,
   DesktopPreviewPointerEvent,
@@ -8,6 +9,12 @@ import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer } from "electron";
 
 import * as IpcChannels from "./ipc/channels.ts";
+
+const RENDERER_HEARTBEAT_INTERVAL_MS = 1_000;
+
+setInterval(() => {
+  ipcRenderer.send(IpcChannels.RENDERER_HEARTBEAT_CHANNEL);
+}, RENDERER_HEARTBEAT_INTERVAL_MS);
 
 exposeClerkBridge({ passkeys: true });
 
