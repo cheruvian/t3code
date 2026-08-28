@@ -200,6 +200,12 @@ export function makeRendererStallWatchdog(
           Effect.gen(function* () {
             yield* Effect.sleep(CHECK_INTERVAL_MS);
             const now = yield* Clock.currentTimeMillis;
+            const active = target.isActive();
+            if (!active) {
+              heartbeatPending = false;
+              lastHeartbeatAt = now;
+              return;
+            }
             if (heartbeatPending) {
               heartbeatPending = false;
               lastHeartbeatAt = now;
@@ -207,7 +213,7 @@ export function makeRendererStallWatchdog(
             }
             if (
               !evaluateStall({
-                active: target.isActive(),
+                active,
                 lastHeartbeatAt,
                 now,
                 stallThresholdMs: STALL_THRESHOLD_MS,

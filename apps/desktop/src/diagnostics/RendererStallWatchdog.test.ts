@@ -153,7 +153,7 @@ describe("RendererStallWatchdog", () => {
       harness.setActive(true);
       harness.heartbeat(senderId + 1);
       yield* advance(CHECK_INTERVAL_MS);
-      assert.deepEqual(harness.commands, ["attach", "Profiler.enable", "Profiler.start"]);
+      assert.deepEqual(harness.commands, []);
       yield* Fiber.interrupt(fiber);
     }).pipe(Effect.provide(TestClock.layer())),
   );
