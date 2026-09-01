@@ -176,10 +176,7 @@ export function ensureElectronRuntime() {
   return electronPath;
 }
 
-if (
-  process.argv[1] !== undefined &&
-  NodeFS.realpathSync(new URL(import.meta.url)) === NodeFS.realpathSync(process.argv[1])
-) {
+if (import.meta.url === `file://${process.argv[1]}`) {
   const electronPath = ensureElectronRuntime();
   process.stdout.write(`${electronPath}\n`);
 }

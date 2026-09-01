@@ -1424,33 +1424,21 @@ function resolveBuildCommit() {
   }).stdout.trim();
 }
 
-export function assembleRunPlan(pendingRelease) {
-  const desktopRelease = join(pendingRelease, "apps", "desktop");
-  return [
-    ["vp", ["run", "build"]],
-    ["vp", ["run", "build:desktop"]],
-    ["pnpm", ["deploy", "--legacy", "--filter", "t3", "--prod", pendingRelease]],
-    ["pnpm", ["deploy", "--legacy", "--filter", "@t3tools/desktop", "--prod", desktopRelease]],
-    ["node", [join(desktopRelease, "scripts", "ensure-electron-runtime.mjs")]],
-  ];
-}
-
-export function prepareDesktopDeployTarget(pendingRelease) {
-  rmSync(join(pendingRelease, "apps", "desktop"), { recursive: true, force: true });
-}
-
 function assembleReleaseRuntime(pendingRelease) {
-  const [buildWeb, buildDesktop, deployServer, deployDesktop, ensureElectron] =
-    assembleRunPlan(pendingRelease);
-  run(...buildWeb);
-  run(...buildDesktop);
-  run(...deployServer);
+  run("vp", ["run", "build"]);
+  run("vp", ["run", "build:desktop"]);
+  run("pnpm", ["deploy", "--legacy", "--filter", "t3", "--prod", pendingRelease]);
   mkdirSync(join(pendingRelease, "apps", "server"), { recursive: true });
   symlinkSync("../../dist", join(pendingRelease, "apps", "server", "dist"));
   cpSync(join(root, "assets"), join(pendingRelease, "assets"), { recursive: true });
-  prepareDesktopDeployTarget(pendingRelease);
-  run(...deployDesktop);
-  run(...ensureElectron);
+  run("pnpm", [
+    "deploy",
+    "--legacy",
+    "--filter",
+    "@t3tools/desktop",
+    "--prod",
+    join(pendingRelease, "apps", "desktop"),
+  ]);
   cpSync(join(root, "apps", "server", "dist"), join(pendingRelease, "dist"), {
     recursive: true,
   });
