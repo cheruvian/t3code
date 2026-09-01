@@ -59,6 +59,8 @@ import Migration0043 from "./Migrations/043_ProjectionThreadActivityPayloadSlim.
 import Migration0044 from "./Migrations/044_BackfillProjectionThreadActivityPayloadSlim.ts";
 import Migration0045 from "./Migrations/045_AuthSessionClientConnection.ts";
 import Migration0046 from "./Migrations/046_ProjectionProjectsDisabledGlobalScripts.ts";
+import Migration0047 from "./Migrations/047_ProjectionThreadLinkedPullRequest.ts";
+import Migration0048 from "./Migrations/048_ProjectionThreadsUnsettledAt.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -117,6 +119,8 @@ export const migrationEntries = [
   [44, "BackfillProjectionThreadActivityPayloadSlim", Migration0044],
   [45, "AuthSessionClientConnection", Migration0045],
   [46, "ProjectionProjectsDisabledGlobalScripts", Migration0046],
+  [47, "ProjectionThreadLinkedPullRequest", Migration0047],
+  [48, "ProjectionThreadsUnsettledAt", Migration0048],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

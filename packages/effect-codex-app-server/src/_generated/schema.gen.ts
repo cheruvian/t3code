@@ -2471,7 +2471,7 @@ export const ServerNotification__ProjectChangeType = Schema.Literals([
 ]).annotate({ identifier: "ServerNotification__ProjectChangeType" });
 
 export type ServerNotification__ThreadProjectUpdatedNotification = {
-  readonly projectId: string | null;
+  readonly projectId?: string | null;
   readonly threadId: string;
 };
 export const ServerNotification__ThreadProjectUpdatedNotification = Schema.Struct({
@@ -38004,12 +38004,14 @@ export const ServerNotification__Thread = Schema.Struct({
   preview: Schema.String.annotate({
     description: "Usually the first user message in the thread, if available.",
   }),
-  projectId: Schema.Union([
-    Schema.String.annotate({
-      description: "Canonical project assignment owned by app-server, if any.",
-    }),
-    Schema.Null,
-  ]),
+  projectId: Schema.optionalKey(
+    Schema.Union([
+      Schema.String.annotate({
+        description: "Canonical project assignment owned by app-server, if any.",
+      }),
+      Schema.Null,
+    ]),
+  ),
   recencyAt: Schema.optionalKey(
     Schema.Union([
       Schema.Number.annotate({
@@ -38800,7 +38802,7 @@ export type V2ThreadResumeResponse__Thread = {
   readonly parentThreadId?: string | null;
   readonly path?: string | null;
   readonly preview: string;
-  readonly projectId: string | null;
+  readonly projectId?: string | null;
   readonly recencyAt?: number | null;
   readonly section?: V2ThreadResumeResponse__ThreadSection | null;
   readonly sectionEnteredAt?: number | null;
@@ -38886,12 +38888,14 @@ export const V2ThreadResumeResponse__Thread = Schema.Struct({
   preview: Schema.String.annotate({
     description: "Usually the first user message in the thread, if available.",
   }),
-  projectId: Schema.Union([
-    Schema.String.annotate({
-      description: "Canonical project assignment owned by app-server, if any.",
-    }),
-    Schema.Null,
-  ]),
+  projectId: Schema.optionalKey(
+    Schema.Union([
+      Schema.String.annotate({
+        description: "Canonical project assignment owned by app-server, if any.",
+      }),
+      Schema.Null,
+    ]),
+  ),
   recencyAt: Schema.optionalKey(
     Schema.Union([
       Schema.Number.annotate({

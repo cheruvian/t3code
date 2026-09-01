@@ -11,6 +11,7 @@ This is a living glossary for T3 Code. It explains what common terms mean in thi
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
 - [Checkpointing](#checkpointing)
+- [Appearance](#appearance)
 
 ## Concepts
 
@@ -129,6 +130,10 @@ A point-in-time view of state. The word is used in multiple layers, including or
 
 The `api_call` tool on the server's built-in `t3-code` MCP server. It lets an agent session invoke the typed operations marked agent-exposed in the contract inventory (`packages/contracts/src/agentApi.ts`), including `orchestration.dispatchCommand`, without a WebSocket client. At credential issuance the server resolves the thread's project; only threads of the T3 Chat Helper pseudo-project receive the `environment` capability and the `/mcp/helper` endpoint that mounts this tool. Every other session gets the preview-only `/mcp` endpoint and never sees the bridge in its tool list. Implementation lives in `apps/server/src/mcp/toolkits/api/`.
 
+#### Model manifest
+
+The per-driver list of current model slugs that decides which models land in the model picker's legacy section. Bundled at `apps/server/src/provider/model-manifest.json` and refreshed at runtime from the same file on `main`, so classification updates ship as commits instead of releases. See the [provider architecture][16] model manifest section.
+
 ### Checkpointing
 
 Checkpointing captures workspace state over time so the app can diff turns and restore earlier points. The main pieces are [CheckpointStore.ts][19], [CheckpointDiffQuery.ts][20], and [CheckpointReactor.ts][6].
@@ -152,6 +157,21 @@ The patch difference between two checkpoints. Query logic lives in [CheckpointDi
 #### Turn diff
 
 The file patch and changed-file summary for one turn. It is usually computed in [CheckpointDiffQuery.ts][20], represented in [the contracts][1], and recorded into thread state by [projector.ts][4].
+
+### Appearance
+
+#### Environment theme
+
+A theme an environment's machine publishes for clients to follow, one file per theme under `themes/` in that environment's state directory; the filename is the theme id. [environmentTheme.ts][25] watches the directory and streams the set over `subscribeServerConfig`; clients render each as a library card, generating a full palette when the file carries seed colors and using the palette directly when it is a standard exported theme file. A desktop that retints its apps when the system theme changes rewrites its file, so T3 Code follows along without a restart. See [environment-theme.md][26].
+
+#### Default theme
+
+The environment's theme, held in its `settings.json` as `defaultTheme` (with `defaultThemeSetAt`
+as the set-generation) and set with `t3 theme set <id>`. Web and desktop clients apply each set
+once — live when connected, on the next connect otherwise — so setting it switches them, while a
+theme a user picks in Settings afterwards sticks until the next set; mobile keeps its own
+appearance settings. Naming a published [environment theme](#environment-theme) is how a desktop
+ships T3 Code already matching it.
 
 ## Practical Shortcuts
 
@@ -192,3 +212,5 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [22]: ../../apps/server/src/checkpointing/Utils.ts
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
+[25]: ../../apps/server/src/environmentTheme.ts
+[26]: ../user/environment-theme.md

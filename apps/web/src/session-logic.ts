@@ -3,6 +3,7 @@ import * as Arr from "effect/Array";
 import { orderThreadActivities } from "@t3tools/client-runtime/state/thread-activity";
 import * as Schema from "effect/Schema";
 import { isBackgroundTaskActivity } from "@t3tools/client-runtime/state/subagentRuntime";
+import { isWorktreeSetupActivity } from "@t3tools/client-runtime/work-log/presentation";
 import {
   ApprovalRequestId,
   isToolLifecycleItemType,
@@ -278,6 +279,17 @@ export function workEntryIndicatesToolFailure(entry: WorkLogEntry): boolean {
 /** True when the rendered result indicates failure. The command itself is user intent, not output. */
 export function workEntryDisplayIndicatesToolFailure(entry: WorkLogEntry): boolean {
   return workEntryIndicatesToolFailureFromOutput(entry, false);
+}
+
+/** Severe failures keep the red treatment ordinary tool failures lost: runtime
+ *  errors and orchestration `*.failed` activities (provider.turn.start.failed,
+ *  checkpoint.capture.failed, ...) mean the turn or a core side effect broke,
+ *  not that a command exited nonzero. */
+export function workEntrySignalsSevereFailure(entry: WorkLogEntry): boolean {
+  return (
+    entry.sourceActivityKind === "runtime.error" ||
+    entry.sourceActivityKind?.endsWith(".failed") === true
+  );
 }
 
 /** Tool/command row completed without failure (blue check affordance). */
@@ -904,6 +916,7 @@ export function deriveWorkLogEntries(
 }
 
 function includeActivityInWorkLog(activity: OrchestrationThreadActivity): boolean {
+  if (activity.tone !== "error" && isWorktreeSetupActivity(activity.kind)) return false;
   if (activity.kind === "tool.started") return false;
   // Agent task.started rows are CTA seeds: they carry the true spawn turn,
   // which is the batch key (completions of background subagents arrive
@@ -913,7 +926,9 @@ function includeActivityInWorkLog(activity: OrchestrationThreadActivity): boolea
   if (activity.kind === "task.updated") return false;
   if (activity.kind === "tool.progress") return false;
   if (activity.kind === "context-window.updated") return false;
+  if (activity.kind === "turn.plan.updated") return false;
   if (activity.summary === "Checkpoint captured") return false;
+  if (isNoContentRuntimeWarning(activity)) return false;
   if (isPlanBoundaryToolActivity(activity)) return false;
   if (isAgentInternalActivity(activity)) return false;
   return true;
@@ -955,6 +970,17 @@ function toWorkLogEntry(entry: DerivedWorkLogEntry): WorkLogEntry {
   const { [workLogCollapseKey]: _collapseKey, ...projected } = entry;
   workLogEntryCache.set(entry, projected);
   return projected;
+}
+
+/** Adapters forward unknown wire-only SDK messages (background_tasks_changed,
+ *  commands_changed, ...) as runtime warnings. The suffix comes from
+ *  describeUnknownSdkMessage in the Claude adapter; a row with no displayable
+ *  text carries nothing a user can act on, so it does not render. */
+function isNoContentRuntimeWarning(activity: OrchestrationThreadActivity): boolean {
+  return (
+    activity.kind === "runtime.warning" &&
+    activity.summary.endsWith("(no displayable text content)")
+  );
 }
 
 function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): boolean {
@@ -1933,7 +1959,7 @@ export function deriveTimelineEntries(
   messages: ReadonlyArray<ChatMessage>,
   proposedPlans: ReadonlyArray<ProposedPlan>,
   workEntries: ReadonlyArray<WorkLogEntry>,
-  turnPlans: ReadonlyArray<TurnPlanEntry> = [],
+  turnPlans: ReadonlyArray<TurnPlanEntry>,
 ): TimelineEntry[] {
   const messageRows: TimelineEntry[] = messages.map((message) => ({
     id: message.id,
@@ -1947,17 +1973,17 @@ export function deriveTimelineEntries(
     createdAt: proposedPlan.createdAt,
     proposedPlan,
   }));
-  const turnPlanRows: TimelineEntry[] = turnPlans.map((turnPlan) => ({
-    id: turnPlan.id,
-    kind: "turn-plan",
-    createdAt: turnPlan.createdAt,
-    turnPlan,
-  }));
   const workRows: TimelineEntry[] = workEntries.map((entry) => ({
     id: entry.id,
     kind: "work",
     createdAt: entry.createdAt,
     entry,
+  }));
+  const turnPlanRows: TimelineEntry[] = turnPlans.map((turnPlan) => ({
+    id: turnPlan.id,
+    kind: "turn-plan",
+    createdAt: turnPlan.createdAt,
+    turnPlan,
   }));
   const sources = [messageRows, proposedPlanRows, turnPlanRows, workRows];
   return sources.every(isTimelineSourceOrdered)

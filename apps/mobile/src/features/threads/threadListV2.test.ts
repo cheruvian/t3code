@@ -16,17 +16,12 @@ import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
-  mergeThreadListV2ChangeRequestSnapshot,
-  snapshotsForThreadListVisibility,
-  resolveThreadListV2ChangeRequestState,
   resolveThreadListV2Enabled,
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2Status,
   resolveThreadListV2SwipeActions,
   sortThreadsForListV2,
-  threadListV2ChangeRequestTargetKey,
-  type ThreadListV2ChangeRequestSnapshot,
 } from "./threadListV2";
 
 const environmentId = EnvironmentId.make("environment-1");
@@ -58,6 +53,12 @@ function makeThread(
 }
 
 const NOW = "2026-06-02T00:00:00.000Z";
+const linkedPullRequest = {
+  projectId: ProjectId.make("project-1"),
+  repository: "pingdotgg/t3code",
+  number: 42,
+  url: "https://github.com/pingdotgg/t3code/pull/42",
+};
 
 describe("resolveThreadListV2SnoozeMenuSelection", () => {
   it("accepts a displayed evening preset while its wake time is still future", () => {
@@ -265,76 +266,30 @@ describe("sortThreadsForListV2", () => {
     ]);
     expect(sorted.map((thread) => thread.id)).toEqual(["newest", "middle", "oldest"]);
   });
-});
 
-describe("Thread List v2 change-request snapshots", () => {
-  const targetA = threadListV2ChangeRequestTargetKey({ environmentId, cwd: " /workspace/a " });
-  const targetB = threadListV2ChangeRequestTargetKey({ environmentId, cwd: "/workspace/b" });
-  const knownA: ThreadListV2ChangeRequestSnapshot = {
-    targetKey: targetA!,
-    refName: "feature/shared",
-    state: "merged",
-  };
-
-  it("normalizes target identity and resolves only the current target and ref", () => {
-    expect(targetA).toBe(JSON.stringify([environmentId, "/workspace/a"]));
-    expect(resolveThreadListV2ChangeRequestState(knownA, "feature/shared", targetA)).toBe("merged");
-    expect(
-      resolveThreadListV2ChangeRequestState(knownA, "feature/shared", targetB),
-    ).toBeUndefined();
-    expect(resolveThreadListV2ChangeRequestState(knownA, "feature/other", targetA)).toBeUndefined();
-  });
-
-  it("preserves known state through same-target remount unknown only", () => {
-    expect(
-      mergeThreadListV2ChangeRequestSnapshot(knownA, {
-        targetKey: targetA!,
-        refName: "feature/shared",
-        state: undefined,
-      }),
-    ).toBe(knownA);
-
-    expect(
-      mergeThreadListV2ChangeRequestSnapshot(knownA, {
-        targetKey: targetB!,
-        refName: "feature/shared",
-        state: undefined,
-      }),
-    ).toEqual({ targetKey: targetB, refName: "feature/shared", state: undefined });
-    expect(
-      mergeThreadListV2ChangeRequestSnapshot(knownA, {
-        targetKey: targetA!,
-        refName: "feature/other",
-        state: undefined,
-      }),
-    ).toEqual({ targetKey: targetA, refName: "feature/other", state: undefined });
-  });
-
-  it("drops retained snapshots while the owning surface is hidden", () => {
-    const snapshots = new Map([["thread-a", knownA]]);
-
-    expect(snapshotsForThreadListVisibility(snapshots, true)).toBe(snapshots);
-    expect(snapshotsForThreadListVisibility(snapshots, false)).toEqual(new Map());
+  it("surfaces an un-settled thread at the top via its re-entry stamp", () => {
+    const sorted = sortThreadsForListV2([
+      {
+        id: "old-unsettled",
+        createdAt: "2026-06-01T08:00:00.000Z",
+        unsettledAt: "2026-06-01T13:00:00.000Z",
+      },
+      { id: "newest", createdAt: "2026-06-01T12:00:00.000Z" },
+      { id: "middle", createdAt: "2026-06-01T10:00:00.000Z" },
+    ]);
+    expect(sorted.map((thread) => thread.id)).toEqual(["old-unsettled", "newest", "middle"]);
   });
 });
 
 describe("buildThreadListV2Items", () => {
-  it("keeps inactivity auto-settlement for branchless threads without subscribing", () => {
+  it("places a persisted settled thread in the settled shelf", () => {
     const thread = makeThread({
-      id: ThreadId.make("branchless-inactive"),
-      title: "Branchless inactive",
-      branch: null,
-      latestUserMessageAt: "2026-05-01T00:00:00.000Z",
-      latestTurn: {
-        turnId: TurnId.make("branchless-inactive-turn"),
-        state: "completed",
-        requestedAt: "2026-05-01T00:00:00.000Z",
-        startedAt: "2026-05-01T00:00:00.000Z",
-        completedAt: "2026-05-01T00:10:00.000Z",
-        assistantMessageId: null,
-      },
+      id: ThreadId.make("linked-merged"),
+      title: "Linked merged pull request",
+      linkedPullRequest,
+      settledOverride: "settled",
+      settledAt: NOW,
     });
-
     const layout = buildThreadListV2Items({
       threads: [thread],
       environmentId: null,
@@ -342,165 +297,8 @@ describe("buildThreadListV2Items", () => {
       now: NOW,
     });
 
+    expect(layout.settledCount).toBe(1);
     expect(layout.items[0]?.variant).toBe("slim");
-  });
-
-  it("keeps an inactive thread active while its branch PR state is unknown", () => {
-    const thread = makeThread({
-      id: ThreadId.make("remote-unknown"),
-      title: "Remote status unknown",
-      branch: "feature/current",
-      latestUserMessageAt: "2026-05-01T00:00:00.000Z",
-      latestTurn: {
-        turnId: TurnId.make("remote-unknown-turn"),
-        state: "completed",
-        requestedAt: "2026-05-01T00:00:00.000Z",
-        startedAt: "2026-05-01T00:00:00.000Z",
-        completedAt: "2026-05-01T00:10:00.000Z",
-        assistantMessageId: null,
-      },
-    });
-
-    const layout = buildThreadListV2Items({
-      threads: [thread],
-      environmentId: null,
-      searchQuery: "",
-      changeRequestSnapshotByKey: new Map(),
-      now: NOW,
-    });
-
-    expect(layout.items.map((item) => [item.thread.id, item.variant])).toEqual([
-      ["remote-unknown", "card"],
-    ]);
-  });
-
-  it("ignores branch A state after switching to B until B becomes known", () => {
-    const thread = makeThread({
-      id: ThreadId.make("ref-transition"),
-      title: "Ref transition",
-      branch: "feature/a",
-      worktreePath: "/worktree",
-      latestUserMessageAt: "2026-05-01T00:00:00.000Z",
-      latestTurn: {
-        turnId: TurnId.make("ref-transition-turn"),
-        state: "completed",
-        requestedAt: "2026-05-01T00:00:00.000Z",
-        startedAt: "2026-05-01T00:00:00.000Z",
-        completedAt: "2026-05-01T00:10:00.000Z",
-        assistantMessageId: null,
-      },
-    });
-    const threadKey = `${environmentId}:${thread.id}`;
-    const targetKey = threadListV2ChangeRequestTargetKey({ environmentId, cwd: "/worktree" })!;
-    const build = (branch: string, snapshot: ThreadListV2ChangeRequestSnapshot) =>
-      buildThreadListV2Items({
-        threads: [{ ...thread, branch }],
-        environmentId: null,
-        searchQuery: "",
-        changeRequestSnapshotByKey: new Map([[threadKey, snapshot]]),
-        now: NOW,
-      });
-
-    expect(
-      build("feature/a", {
-        targetKey,
-        refName: "feature/a",
-        state: "merged",
-      }).items[0]?.variant,
-    ).toBe("slim");
-    // Local status observes B before the durable shell metadata follows the
-    // checkout. That evidence must invalidate A immediately.
-    expect(
-      build("feature/a", { targetKey, refName: "feature/b", state: undefined }).items[0]?.variant,
-    ).toBe("card");
-    expect(
-      build("feature/b", { targetKey, refName: "feature/b", state: undefined }).items[0]?.variant,
-    ).toBe("card");
-    // A same-ref known-null result is materially different from unknown: no
-    // open PR blocks the normal inactivity settlement path.
-    expect(
-      build("feature/b", {
-        targetKey,
-        refName: "feature/b",
-        state: null,
-      }).items[0]?.variant,
-    ).toBe("slim");
-    expect(
-      build("feature/b", {
-        targetKey,
-        refName: "feature/b",
-        state: "merged",
-      }).items[0]?.variant,
-    ).toBe("slim");
-  });
-
-  it("ignores same-ref state from an old cwd until the current target becomes known", () => {
-    const thread = makeThread({
-      id: ThreadId.make("target-transition"),
-      title: "Target transition",
-      branch: "feature/shared",
-      latestUserMessageAt: "2026-05-01T00:00:00.000Z",
-      latestTurn: {
-        turnId: TurnId.make("target-transition-turn"),
-        state: "completed",
-        requestedAt: "2026-05-01T00:00:00.000Z",
-        startedAt: "2026-05-01T00:00:00.000Z",
-        completedAt: "2026-05-01T00:10:00.000Z",
-        assistantMessageId: null,
-      },
-    });
-    const threadKey = `${environmentId}:${thread.id}`;
-    const projectKey = `${environmentId}:${thread.projectId}`;
-    const targetA = threadListV2ChangeRequestTargetKey({ environmentId, cwd: "/workspace/a" })!;
-    const targetB = threadListV2ChangeRequestTargetKey({ environmentId, cwd: "/workspace/b" })!;
-    const build = (snapshot: ThreadListV2ChangeRequestSnapshot) =>
-      buildThreadListV2Items({
-        threads: [thread],
-        environmentId: null,
-        searchQuery: "",
-        projectCwdByKey: new Map([[projectKey, " /workspace/b "]]),
-        changeRequestSnapshotByKey: new Map([[threadKey, snapshot]]),
-        now: NOW,
-      });
-
-    expect(
-      build({ targetKey: targetA, refName: "feature/shared", state: "merged" }).items[0]?.variant,
-    ).toBe("card");
-    expect(
-      build({ targetKey: targetB, refName: "feature/shared", state: undefined }).items[0]?.variant,
-    ).toBe("card");
-    expect(
-      build({ targetKey: targetB, refName: "feature/shared", state: "merged" }).items[0]?.variant,
-    ).toBe("slim");
-  });
-
-  it("keeps a merged thread active when auto-settle on merge is off", () => {
-    const merged = makeThread({
-      id: ThreadId.make("merged"),
-      title: "Merged",
-      branch: "feature/merged",
-      worktreePath: "/workspace/merged",
-    });
-    const targetKey = threadListV2ChangeRequestTargetKey({
-      environmentId,
-      cwd: merged.worktreePath,
-    });
-    const layout = buildThreadListV2Items({
-      threads: [merged],
-      environmentId: null,
-      searchQuery: "",
-      changeRequestSnapshotByKey: new Map([
-        [
-          `${environmentId}:${merged.id}`,
-          { targetKey: targetKey!, refName: merged.branch, state: "merged" },
-        ],
-      ]),
-      autoSettleOnMerge: false,
-      now: NOW,
-    });
-
-    expect(layout.items.map((item) => item.thread.id)).toEqual(["merged"]);
-    expect(layout.settledCount).toBe(0);
   });
 
   it("hides snoozed threads and counts them — visibility parity with web", () => {
@@ -554,89 +352,21 @@ describe("buildThreadListV2Items", () => {
     expect(layout.settledCount).toBe(1);
   });
 
-  it("moves pinned threads to the settled shelf when their pull request merges", () => {
-    const merged = makeThread({
-      id: ThreadId.make("pinned-merged"),
-      title: "Pinned merged pull request",
+  it("keeps active pinned threads in the pinned block", () => {
+    const pinned = makeThread({
+      id: ThreadId.make("pinned"),
+      title: "Pinned thread",
       pinnedAt: "2026-06-01T12:00:00.000Z",
-      branch: "feature/pinned-merged",
-      worktreePath: "/worktree/pinned-merged",
-    });
-    const targetKey = threadListV2ChangeRequestTargetKey({
-      environmentId,
-      cwd: merged.worktreePath,
-    })!;
-    const layout = buildThreadListV2Items({
-      threads: [makeThread({ id: ThreadId.make("active"), title: "Active" }), merged],
-      environmentId: null,
-      searchQuery: "",
-      changeRequestSnapshotByKey: new Map([
-        [`${environmentId}:${merged.id}`, { targetKey, refName: merged.branch, state: "merged" }],
-      ]),
-      now: NOW,
-    });
-
-    expect(layout.items.map((item) => item.thread.id)).toEqual(["active", "pinned-merged"]);
-    expect(layout.items.map((item) => item.variant)).toEqual(["card", "slim"]);
-    expect(layout.items[1]?.thread.pinnedAt).toBe("2026-06-01T12:00:00.000Z");
-    expect(layout.settledCount).toBe(1);
-  });
-
-  it("moves inactive pinned threads to the settled shelf", () => {
-    const inactive = makeThread({
-      id: ThreadId.make("pinned-inactive"),
-      title: "Pinned inactive thread",
-      createdAt: "2026-05-20T00:00:00.000Z",
-      pinnedAt: "2026-05-21T00:00:00.000Z",
-      latestTurn: {
-        turnId: TurnId.make("turn-inactive"),
-        state: "completed",
-        requestedAt: "2026-05-21T00:00:00.000Z",
-        startedAt: "2026-05-21T00:00:01.000Z",
-        completedAt: "2026-05-21T00:00:02.000Z",
-        assistantMessageId: null,
-      },
     });
     const layout = buildThreadListV2Items({
-      threads: [inactive],
+      threads: [pinned],
       environmentId: null,
       searchQuery: "",
       now: NOW,
     });
 
     expect(layout.items[0]).toMatchObject({
-      thread: { id: "pinned-inactive" },
-      variant: "slim",
-      pinned: false,
-    });
-    expect(layout.settledCount).toBe(1);
-  });
-
-  it("keeps pinned merged threads pinned when auto-settle on merge is off", () => {
-    const merged = makeThread({
-      id: ThreadId.make("pinned-merged"),
-      title: "Pinned merged pull request",
-      pinnedAt: "2026-06-01T12:00:00.000Z",
-      branch: "feature/pinned-merged",
-      worktreePath: "/worktree/pinned-merged",
-    });
-    const targetKey = threadListV2ChangeRequestTargetKey({
-      environmentId,
-      cwd: merged.worktreePath,
-    })!;
-    const layout = buildThreadListV2Items({
-      threads: [merged],
-      environmentId: null,
-      searchQuery: "",
-      changeRequestSnapshotByKey: new Map([
-        [`${environmentId}:${merged.id}`, { targetKey, refName: merged.branch, state: "merged" }],
-      ]),
-      autoSettleOnMerge: false,
-      now: NOW,
-    });
-
-    expect(layout.items[0]).toMatchObject({
-      thread: { id: "pinned-merged" },
+      thread: { id: "pinned" },
       variant: "card",
       pinned: true,
     });
@@ -691,9 +421,7 @@ describe("buildThreadListV2Items", () => {
       ],
       environmentId: null,
       searchQuery: "",
-      // Minute-floored partition clock vs precise snooze clock.
-      now: "2026-06-02T00:01:00.000Z",
-      snoozeNow: "2026-06-02T00:01:07.500Z",
+      now: "2026-06-02T00:01:07.500Z",
     });
 
     expect(layout.items.map((item) => item.thread.id)).toEqual(["just-woke"]);

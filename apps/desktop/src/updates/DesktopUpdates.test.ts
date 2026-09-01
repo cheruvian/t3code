@@ -168,6 +168,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
           setMainWindowBounds: () => Effect.die("unexpected main window bounds update"),
           setServerExposureMode: () => Effect.die("unexpected server exposure update"),
           setTailscaleServe: () => Effect.die("unexpected Tailscale Serve update"),
+          setCloudflaredTunnel: () => Effect.die("unexpected Cloudflare Tunnel update"),
           setUpdateChannel: (channel) =>
             setUpdateChannelError
               ? Effect.fail(setUpdateChannelError)

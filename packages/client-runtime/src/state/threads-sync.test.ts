@@ -125,6 +125,7 @@ function testSession(
       ...(options?.completionMarker === true ? { threadResumeCompletionMarker: true } : {}),
       ...(options?.assistantPreviews === true ? { assistantPreviews: true } : {}),
     } as never),
+    subscribeServerConfig: (input) => client.subscribeServerConfig(input),
     ready: Effect.void,
     probe: Effect.void,
     closed: Effect.never,

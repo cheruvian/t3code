@@ -1,6 +1,7 @@
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import type { FileManagerRevealKind } from "@t3tools/contracts";
 
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ServerConfig from "./config.ts";
@@ -11,15 +12,24 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
 
-const EDITOR_DISCOVERY_TIMEOUT = Duration.seconds(5);
+const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
+
+const resolveDiscoveryForConfig = <A, E, R>(
+  discovery: Effect.Effect<A, E, R>,
+  onTimeout: () => A,
+) =>
+  discovery.pipe(
+    Effect.timeoutOption(CONFIG_DISCOVERY_TIMEOUT),
+    Effect.map(Option.getOrElse(onTimeout)),
+  );
 
 export const resolveAvailableEditorsForConfig = <A, E, R>(
   discovery: Effect.Effect<ReadonlyArray<A>, E, R>,
-) =>
-  discovery.pipe(
-    Effect.timeoutOption(EDITOR_DISCOVERY_TIMEOUT),
-    Effect.map(Option.getOrElse(() => [])),
-  );
+) => resolveDiscoveryForConfig(discovery, () => []);
+
+export const resolveFileManagerRevealKindForConfig = <E, R>(
+  discovery: Effect.Effect<FileManagerRevealKind | undefined, E, R>,
+) => resolveDiscoveryForConfig(discovery, () => undefined);
 
 /**
  * Assembles the `server.getConfig` payload. Shared by the WebSocket RPC
@@ -44,6 +54,13 @@ export const loadServerConfig = Effect.gen(function* () {
   const environment = yield* serverEnvironment.getDescriptor;
   const auth = yield* serverAuth.getDescriptor();
 
+  const availableEditors = yield* resolveAvailableEditorsForConfig(
+    externalLauncher.resolveAvailableEditors(),
+  );
+  const fileManagerRevealKind = availableEditors.includes("file-manager")
+    ? yield* resolveFileManagerRevealKindForConfig(externalLauncher.resolveFileManagerRevealKind())
+    : undefined;
+
   return {
     environment,
     auth,
@@ -52,9 +69,7 @@ export const loadServerConfig = Effect.gen(function* () {
     keybindings: keybindingsConfig.keybindings,
     issues: keybindingsConfig.issues,
     providers,
-    availableEditors: yield* resolveAvailableEditorsForConfig(
-      externalLauncher.resolveAvailableEditors(),
-    ),
+    availableEditors,
     // Same discovery-with-timeout treatment as editors: a slow probe
     // must not stall server.getConfig, so it degrades to no targets.
     remoteOpenTargets: yield* resolveAvailableEditorsForConfig(remoteOpenTargets.resolveTargets()),
@@ -68,6 +83,12 @@ export const loadServerConfig = Effect.gen(function* () {
     },
     settings,
     shellResumeCompletionMarker: true,
+    ...(fileManagerRevealKind === undefined
+      ? {}
+      : {
+          shellRevealInFileManager: true,
+          shellRevealInFileManagerKind: fileManagerRevealKind,
+        }),
     threadResumeCompletionMarker: true,
     assistantPreviews: true as const,
     threadSnapshotPagination: true,
