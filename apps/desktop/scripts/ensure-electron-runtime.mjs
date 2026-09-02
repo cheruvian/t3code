@@ -115,17 +115,40 @@ function runChecked(command, args) {
   );
 }
 
+export function electronDownloadArgs(url, zipPath) {
+  return [
+    "-fsSL",
+    "--retry",
+    "5",
+    "--retry-all-errors",
+    "--retry-delay",
+    "2",
+    "--retry-max-time",
+    "1200",
+    "--connect-timeout",
+    "30",
+    "--max-time",
+    "600",
+    "--continue-at",
+    "-",
+    url,
+    "-o",
+    zipPath,
+  ];
+}
+
 function installElectronRuntime(electronDir, version) {
   const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-electron-"));
   const zipPath = NodePath.join(tempDir, `electron-v${version}-${hostPlatform}-${hostArch}.zip`);
 
   try {
-    runChecked("curl", [
-      "-fsSL",
-      `https://github.com/electron/electron/releases/download/v${version}/electron-v${version}-${hostPlatform}-${hostArch}.zip`,
-      "-o",
-      zipPath,
-    ]);
+    runChecked(
+      "curl",
+      electronDownloadArgs(
+        `https://github.com/electron/electron/releases/download/v${version}/electron-v${version}-${hostPlatform}-${hostArch}.zip`,
+        zipPath,
+      ),
+    );
     if (hostPlatform === "darwin") {
       runChecked("ditto", ["-x", "-k", zipPath, NodePath.join(electronDir, "dist")]);
     } else {
