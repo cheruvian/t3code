@@ -27,6 +27,65 @@ export const SIDEBAR_THREAD_PREWARM_LIMIT = 3;
 export type SidebarThreadRowVariant = "card" | "slim";
 export type SidebarThreadSection = "pinned" | "active" | "snoozed" | "settled";
 
+/** Fields that can change a thread's sidebar bucket or position. Runtime-only
+ * status lives on the row subscription and must not invalidate the full list. */
+export function sidebarThreadSortSignature<
+  T extends Pick<
+    SidebarThreadSummary,
+    | "environmentId"
+    | "id"
+    | "projectId"
+    | "title"
+    | "archivedAt"
+    | "pinnedAt"
+    | "pinOrderKey"
+    | "settledOverride"
+    | "settledAt"
+    | "unsettledAt"
+    | "snoozedUntil"
+    | "snoozedAt"
+    | "updatedAt"
+    | "createdAt"
+    | "latestTurn"
+  > & { readonly latestUserMessageAt?: string | null },
+>(thread: T): string {
+  return JSON.stringify([
+    thread.environmentId,
+    thread.id,
+    thread.projectId,
+    // Search and rendered project metadata also consume the stable ordering
+    // snapshot, so rename it when user-visible identity changes.
+    thread.title,
+    thread.archivedAt,
+    thread.pinnedAt ?? null,
+    thread.pinOrderKey ?? null,
+    thread.settledOverride,
+    thread.settledAt,
+    thread.unsettledAt ?? null,
+    thread.snoozedUntil ?? null,
+    thread.snoozedAt ?? null,
+    thread.updatedAt,
+    thread.latestUserMessageAt,
+    thread.createdAt,
+    thread.latestTurn?.requestedAt ?? null,
+    thread.latestTurn?.startedAt ?? null,
+    thread.latestTurn?.completedAt ?? null,
+  ]);
+}
+
+export interface SidebarOrderingThreadsState<T> {
+  readonly signature: string;
+  readonly threads: ReadonlyArray<T>;
+}
+
+export function resolveSidebarOrderingThreads<T extends SidebarThreadSummary>(
+  previous: SidebarOrderingThreadsState<T> | null,
+  threads: ReadonlyArray<T>,
+): SidebarOrderingThreadsState<T> {
+  const signature = threads.map(sidebarThreadSortSignature).join("\u0001");
+  return previous?.signature === signature ? previous : { signature, threads };
+}
+
 export function sidebarThreadRowRenderKey(
   threadKey: string,
   section: SidebarThreadSection,

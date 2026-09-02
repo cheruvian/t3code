@@ -45,7 +45,13 @@ function DiffWorkerThemeSync({ themeName }: { themeName: DiffThemeName }) {
   return null;
 }
 
-export function DiffWorkerPoolProvider({ children }: { children?: ReactNode }) {
+export function DiffWorkerPoolProvider({
+  active = true,
+  children,
+}: {
+  active?: boolean;
+  children?: ReactNode;
+}) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const workerPoolSize = useMemo(() => {
@@ -53,6 +59,10 @@ export function DiffWorkerPoolProvider({ children }: { children?: ReactNode }) {
       typeof navigator === "undefined" ? 4 : Math.max(1, navigator.hardwareConcurrency || 4);
     return Math.max(2, Math.min(6, Math.floor(cores / 2)));
   }, []);
+
+  if (!active) {
+    return children;
+  }
 
   return (
     <WorkerPoolContextProvider

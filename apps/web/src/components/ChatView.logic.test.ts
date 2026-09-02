@@ -37,6 +37,7 @@ import {
   scheduleEnvironmentReconnectWarning,
   startNewThreadForProject,
   shouldMountDiffPanel,
+  shouldMountDiffWorkerPool,
   codexArtifactTemplatePromptToAppend,
   shouldDockDraftHeroForSubmission,
   shouldReleaseTimelineAnchorForToolActivity,
@@ -278,6 +279,23 @@ describe("DiffPanel ownership", () => {
       expect(shouldMountDiffPanel({ rightPanelOpen, activeSurfaceKind })).toBe(expected);
     },
   );
+});
+
+describe("diff worker pool ownership", () => {
+  it.each([
+    [0, [], false],
+    [1, [], true],
+    [0, ["diff"], true],
+    [0, ["pull-request"], true],
+    [0, ["terminal", "preview"], false],
+  ] as const)("resolves %i summaries and %j surfaces", (turnDiffSummaryCount, kinds, expected) => {
+    expect(
+      shouldMountDiffWorkerPool({
+        turnDiffSummaryCount,
+        rightPanelSurfaceKinds: kinds,
+      }),
+    ).toBe(expected);
+  });
 });
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {

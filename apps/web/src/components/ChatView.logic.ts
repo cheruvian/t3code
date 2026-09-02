@@ -49,6 +49,16 @@ export function shouldMountDiffPanel(input: {
   return input.rightPanelOpen && input.activeSurfaceKind === "diff";
 }
 
+export function shouldMountDiffWorkerPool(input: {
+  turnDiffSummaryCount: number;
+  rightPanelSurfaceKinds: ReadonlyArray<string>;
+}): boolean {
+  return (
+    input.turnDiffSummaryCount > 0 ||
+    input.rightPanelSurfaceKinds.some((kind) => kind === "diff" || kind === "pull-request")
+  );
+}
+
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 
 export function codexArtifactTemplatePromptToAppend(

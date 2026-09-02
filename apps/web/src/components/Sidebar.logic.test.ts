@@ -22,6 +22,7 @@ import {
   orderItemsByPreferredIds,
   resolveProjectStatusIndicator,
   resolveSidebarSortableRowBag,
+  resolveSidebarOrderingThreads,
   resolveThreadRowClassName,
   resolveSidebarThreadStatus,
   resolveSidebarV2UnreadState,
@@ -40,6 +41,7 @@ import {
   sortProjectsForSidebar,
   sortScopedProjectsForSidebar,
   sidebarThreadRowRenderKey,
+  sidebarThreadSortSignature,
   shouldCreateNewThreadInCurrentProject,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
@@ -959,6 +961,77 @@ describe("sortThreadsForSidebar", () => {
     ]);
 
     expect(sorted.map((thread) => thread.id)).toEqual(["newest", "stale-stamp"]);
+  });
+});
+
+describe("sidebarThreadSortSignature", () => {
+  it("ignores live status fields while tracking ordering and lifecycle fields", () => {
+    const thread = makeThread({
+      latestTurn: makeLatestTurn(),
+      updatedAt: "2026-03-09T10:00:00.000Z",
+    });
+    const baseline = sidebarThreadSortSignature(thread);
+
+    expect(
+      sidebarThreadSortSignature({
+        ...thread,
+        session: {
+          threadId: thread.id,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: DEFAULT_RUNTIME_MODE,
+          activeTurnId: "turn-1" as never,
+          lastError: null,
+          updatedAt: "2026-03-09T10:01:00.000Z",
+        },
+        hasPendingApprovals: true,
+        hasPendingUserInput: true,
+        backgroundLiveness: "working",
+        planProgress: { step: "Test", completedSteps: 1, totalSteps: 2 },
+        latestTurn: { ...thread.latestTurn!, state: "running" },
+      }),
+    ).toBe(baseline);
+
+    expect(
+      sidebarThreadSortSignature({ ...thread, updatedAt: "2026-03-09T11:00:00.000Z" }),
+    ).not.toBe(baseline);
+    expect(
+      sidebarThreadSortSignature({ ...thread, pinnedAt: "2026-03-09T11:00:00.000Z" }),
+    ).not.toBe(baseline);
+    expect(sidebarThreadSortSignature({ ...thread, settledOverride: "settled" })).not.toBe(
+      baseline,
+    );
+    expect(
+      sidebarThreadSortSignature({ ...thread, snoozedUntil: "2026-03-09T11:00:00.000Z" }),
+    ).not.toBe(baseline);
+  });
+
+  it("keeps the ordered snapshot stable for status-only updates", () => {
+    const thread = {
+      ...makeThread({ latestTurn: makeLatestTurn() }),
+      latestUserMessageAt: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+      backgroundLiveness: null as "working" | "monitoring" | null,
+    };
+    const initial = resolveSidebarOrderingThreads(null, [thread]);
+    const statusOnly = resolveSidebarOrderingThreads(initial, [
+      {
+        ...thread,
+        hasPendingApprovals: true,
+        backgroundLiveness: "working" as const,
+        latestTurn: { ...thread.latestTurn!, state: "running" as const },
+      },
+    ]);
+    const reordered = resolveSidebarOrderingThreads(initial, [
+      { ...thread, pinnedAt: "2026-03-09T11:00:00.000Z" },
+    ]);
+
+    expect(statusOnly).toBe(initial);
+    expect(statusOnly.threads).toBe(initial.threads);
+    expect(reordered).not.toBe(initial);
   });
 });
 

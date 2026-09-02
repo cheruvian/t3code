@@ -262,6 +262,47 @@ export type MessagesTimelineRow =
       createdAt: string | null;
     };
 
+export interface TimelineMinimapItem {
+  readonly id: string;
+  readonly rowIndex: number;
+  readonly userText: string | null;
+  assistantText: string | null;
+}
+
+function compactMinimapPreview(text: string | null | undefined): string | null {
+  const compact = text?.replace(/\s+/g, " ").trim() ?? "";
+  return compact.length > 0 ? compact : null;
+}
+
+export function deriveTimelineMinimapItems(
+  rows: ReadonlyArray<MessagesTimelineRow>,
+): TimelineMinimapItem[] {
+  const items: TimelineMinimapItem[] = [];
+  let currentItem: TimelineMinimapItem | null = null;
+
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (row?.kind !== "message") continue;
+
+    if (row.message.role === "user") {
+      currentItem = {
+        id: row.id,
+        rowIndex: index,
+        userText: compactMinimapPreview(row.message.text),
+        assistantText: null,
+      };
+      items.push(currentItem);
+      continue;
+    }
+
+    if (row.message.role === "assistant" && currentItem !== null) {
+      currentItem.assistantText = compactMinimapPreview(row.message.text);
+    }
+  }
+
+  return items;
+}
+
 export interface StableMessagesTimelineRowsState {
   byId: Map<string, MessagesTimelineRow>;
   result: MessagesTimelineRow[];

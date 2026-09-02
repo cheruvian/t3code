@@ -4,10 +4,63 @@ import {
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
+  deriveTimelineMinimapItems,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
   shouldPreserveAssistantLineBreaks,
 } from "./MessagesTimeline.logic";
+
+describe("deriveTimelineMinimapItems", () => {
+  const messageRow = (id: string, role: "user" | "assistant" | "system", text: string) =>
+    ({
+      kind: "message" as const,
+      id: `${id}-entry`,
+      createdAt: "2026-01-01T00:00:00Z",
+      message: {
+        id: MessageId.make(id),
+        role,
+        text,
+        turnId: role === "assistant" ? TurnId.make("turn-1") : null,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+        streaming: false,
+      },
+      durationStart: "2026-01-01T00:00:00Z",
+      showAssistantMeta: false,
+      showAssistantCopyButton: false,
+      assistantCopyStreaming: false,
+    }) as const;
+
+  it("returns one item per user row with the final assistant text before the next user", () => {
+    const rows = [
+      messageRow("user-1", "user", "  First\n prompt "),
+      { kind: "thinking", id: "thinking", createdAt: null } as const,
+      messageRow("assistant-1", "assistant", "interim"),
+      messageRow("system-1", "system", "ignored"),
+      messageRow("assistant-2", "assistant", " final\nanswer "),
+      messageRow("user-2", "user", "Second"),
+      messageRow("user-3", "user", "Third"),
+      messageRow("assistant-3", "assistant", "trailing"),
+    ];
+
+    expect(deriveTimelineMinimapItems(rows)).toEqual([
+      {
+        id: "user-1-entry",
+        rowIndex: 0,
+        userText: "First prompt",
+        assistantText: "final answer",
+      },
+      { id: "user-2-entry", rowIndex: 5, userText: "Second", assistantText: null },
+      { id: "user-3-entry", rowIndex: 6, userText: "Third", assistantText: "trailing" },
+    ]);
+  });
+
+  it("returns no items without user rows", () => {
+    expect(deriveTimelineMinimapItems([messageRow("assistant", "assistant", "answer")])).toEqual(
+      [],
+    );
+  });
+});
 
 describe("shouldPreserveAssistantLineBreaks", () => {
   it("preserves Claude insight formatting without changing regular markdown", () => {

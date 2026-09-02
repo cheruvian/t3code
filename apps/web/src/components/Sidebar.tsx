@@ -106,7 +106,7 @@ import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useThreadShells } from "../state/entities";
+import { useProjects, useThreadShell, useThreadShells } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -135,6 +135,7 @@ import {
   resolveSidebarThreadStatus,
   resolveSidebarV2UnreadState,
   resolveSidebarSortableRowBag,
+  resolveSidebarOrderingThreads,
   searchSidebarThreadsByTitle,
   sidebarThreadRowRenderKey,
   shouldCreateNewThreadInCurrentProject,
@@ -215,6 +216,14 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 // Keep the v2 key so existing preferences survive the v2-to-default rename.
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar-v2:snoozed-expanded";
+
+function useSidebarOrderingThreads(
+  threads: ReadonlyArray<EnvironmentThreadShell>,
+): ReadonlyArray<EnvironmentThreadShell> {
+  const stable = useRef(resolveSidebarOrderingThreads(null, threads));
+  stable.current = resolveSidebarOrderingThreads(stable.current, threads);
+  return stable.current.threads;
+}
 
 function compactSidebarTimeLabel(label: string): string {
   if (label === "just now") return "now";
@@ -310,7 +319,6 @@ function SidebarThreadTooltip({
       side="right"
       align="start"
       sideOffset={4}
-      variant="glass"
       className="max-w-80 text-left whitespace-normal [&_[data-slot=tooltip-viewport]]:p-0"
     >
       <div className="flex min-w-0 max-w-80 flex-col gap-2 p-[var(--floating-content-inset)]">
@@ -781,14 +789,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     onUnpin,
     openPullRequestsInRightPanel,
     renamingTitle,
-    thread,
+    thread: threadSnapshot,
     variant,
     variantAction,
   } = props;
   const threadRef = useMemo(
-    () => scopeThreadRef(thread.environmentId, thread.id),
-    [thread.environmentId, thread.id],
+    () => scopeThreadRef(threadSnapshot.environmentId, threadSnapshot.id),
+    [threadSnapshot.environmentId, threadSnapshot.id],
   );
+  const thread = useThreadShell(threadRef) ?? threadSnapshot;
   const threadKey = scopedThreadKey(threadRef);
   const isRegeneratingTitle = thread.titleRegeneration != null;
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
@@ -1807,6 +1816,7 @@ export default function Sidebar() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
+  const orderingThreads = useSidebarOrderingThreads(threads);
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -1963,8 +1973,13 @@ export default function Sidebar() {
     ],
   );
   const projectGroups = useMemo(
-    () => sortLogicalProjectsForSidebar(unsortedProjectGroups, threads, sidebarProjectSortOrder),
-    [sidebarProjectSortOrder, threads, unsortedProjectGroups],
+    () =>
+      sortLogicalProjectsForSidebar(
+        unsortedProjectGroups,
+        orderingThreads,
+        sidebarProjectSortOrder,
+      ),
+    [orderingThreads, sidebarProjectSortOrder, unsortedProjectGroups],
   );
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   // Threads on non-primary environments (T3 Connect, hosted) resolve their
@@ -2155,7 +2170,7 @@ export default function Sidebar() {
     // memo exactly at the next wake boundary.
     void snoozeWakeTick;
     const preciseNow = new Date().toISOString();
-    const visible = threads.filter(
+    const visible = orderingThreads.filter(
       (thread) =>
         thread.archivedAt === null &&
         (scopedProjectKeys === null ||
@@ -2217,7 +2232,7 @@ export default function Sidebar() {
     serverConfigs,
     sidebarThreadSortOrder,
     snoozeWakeTick,
-    threads,
+    orderingThreads,
   ]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
