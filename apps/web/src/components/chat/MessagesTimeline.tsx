@@ -1291,13 +1291,10 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
       <div className="flex h-6 min-w-0 items-baseline px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
         <span
           key={isPreparingWorktree ? "setup" : "working"}
-          className="relative shrink-0 overflow-hidden whitespace-nowrap transition-opacity duration-150 starting:opacity-0 motion-reduce:transition-none"
+          className="animate-status-pulse relative shrink-0 whitespace-nowrap transition-opacity duration-150 starting:opacity-0 motion-reduce:animate-none motion-reduce:transition-none"
         >
           {isPreparingWorktree ? (
-            <>
-              Setting up worktree…
-              <ActivityShimmerOverlay>Setting up worktree…</ActivityShimmerOverlay>
-            </>
+            "Setting up worktree…"
           ) : row.createdAt ? (
             <>
               Working for <WorkingTimer createdAt={row.createdAt} />
@@ -1391,19 +1388,6 @@ const WorkGroupSection = memo(function WorkGroupSection({
   );
 });
 
-function ActivityShimmerOverlay({ children }: { children: ReactNode }) {
-  return (
-    <span
-      aria-hidden
-      className="live-activity-focus pointer-events-none absolute inset-y-0 select-none"
-    >
-      <span className="live-activity-focus-counter block">
-        <span className="live-activity-focus-aligned block text-foreground">{children}</span>
-      </span>
-    </span>
-  );
-}
-
 function LiveActivityRow({
   label,
   iconName,
@@ -1414,16 +1398,13 @@ function LiveActivityRow({
   failed?: boolean;
 }) {
   return (
-    <div className="relative min-h-6 w-fit max-w-full min-w-0 overflow-hidden rounded-md text-sm leading-relaxed">
+    <div className="animate-status-pulse min-h-6 w-fit max-w-full min-w-0 rounded-md text-sm leading-relaxed motion-reduce:animate-none">
       <LiveActivityContent
         label={label}
         iconName={iconName}
         failed={failed}
         announceFailure={failed}
       />
-      <ActivityShimmerOverlay>
-        <LiveActivityContent label={label} iconName={iconName} failed={failed} highlighted />
-      </ActivityShimmerOverlay>
     </div>
   );
 }

@@ -355,20 +355,17 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
     [],
   );
 
-  // Label widths can change without the strip box moving (font family or
-  // size preferences), so re-measure on every render as well as on resize
-  // and font loads.
-  useLayoutEffect(() => {
-    measure();
-  });
-
   useEffect(() => {
     if (!element) return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
+    const resizeObserver = new ResizeObserver(measure);
+    const mutationObserver = new MutationObserver(measure);
+    resizeObserver.observe(element);
+    mutationObserver.observe(element, { childList: true, characterData: true, subtree: true });
     document.fonts.addEventListener("loadingdone", measure);
+    measure();
     return () => {
-      observer.disconnect();
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
       document.fonts.removeEventListener("loadingdone", measure);
     };
   }, [element, measure]);

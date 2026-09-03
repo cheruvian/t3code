@@ -14,6 +14,7 @@ import {
   writePrimaryEnvironmentDescriptor,
 } from ".";
 import { installEnvironmentHttpTest } from "../../../test/environmentHttpTest";
+import { refreshDesktopSecondaryBootstraps } from "../../connection/desktopLocal";
 
 const BASE_ENVIRONMENT = {
   environmentId: EnvironmentId.make("environment-local"),
@@ -57,10 +58,11 @@ function captureThrown(run: () => unknown): unknown {
 }
 
 describe("environmentBootstrap", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     installTestBrowser("http://localhost/");
+    await refreshDesktopSecondaryBootstraps();
   });
 
   afterEach(async () => {
@@ -202,6 +204,7 @@ describe("environmentBootstrap", () => {
         ],
       },
     });
+    await refreshDesktopSecondaryBootstraps();
     await installDescriptorApi();
 
     await expect(resolveInitialPrimaryEnvironmentDescriptor()).resolves.toEqual(BASE_ENVIRONMENT);
@@ -228,7 +231,7 @@ describe("environmentBootstrap", () => {
     expect(error.message).not.toContain("http://[");
   });
 
-  it("describes which desktop bootstrap endpoint is missing", () => {
+  it("describes which desktop bootstrap endpoint is missing", async () => {
     vi.stubGlobal("window", {
       location: new URL("http://127.0.0.1:5733/"),
       history: { replaceState: vi.fn() },
@@ -243,6 +246,7 @@ describe("environmentBootstrap", () => {
         ],
       },
     });
+    await refreshDesktopSecondaryBootstraps();
 
     const error = captureThrown(readPrimaryEnvironmentTarget);
 

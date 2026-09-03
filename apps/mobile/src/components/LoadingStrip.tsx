@@ -1,34 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { View } from "react-native";
 import Animated, {
   cancelAnimation,
   Easing,
+  ReduceMotion,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
   withTiming,
 } from "react-native-reanimated";
 
-const INDICATOR_WIDTH_FRACTION = 0.3;
-const MIN_INDICATOR_WIDTH = 48;
-
-function LoadingStripFrame(props: {
-  readonly children: React.ReactNode;
-  readonly onLayout?: (width: number) => void;
-}) {
+function LoadingStripFrame(props: { readonly children: React.ReactNode }) {
   return (
     <View
       pointerEvents="none"
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
       className="absolute inset-x-0 top-0 z-10 h-0.5 overflow-hidden"
-      onLayout={
-        props.onLayout
-          ? (event) => {
-              props.onLayout?.(event.nativeEvent.layout.width);
-            }
-          : undefined
-      }
     >
       {props.children}
     </View>
@@ -36,41 +24,33 @@ function LoadingStripFrame(props: {
 }
 
 function IndeterminateLoadingStrip() {
-  const [containerWidth, setContainerWidth] = useState(0);
-  const travelProgress = useSharedValue(0);
-  const indicatorWidth = Math.max(MIN_INDICATOR_WIDTH, containerWidth * INDICATOR_WIDTH_FRACTION);
+  const opacity = useSharedValue(1);
 
   useEffect(() => {
-    travelProgress.value = 0;
-    travelProgress.value = withRepeat(
-      withTiming(1, {
+    opacity.value = 1;
+    opacity.value = withRepeat(
+      withTiming(0.35, {
         duration: 1100,
         easing: Easing.inOut(Easing.quad),
+        reduceMotion: ReduceMotion.System,
       }),
       -1,
-      false,
+      true,
     );
 
     return () => {
-      cancelAnimation(travelProgress);
+      cancelAnimation(opacity);
     };
-  }, [travelProgress]);
+  }, [opacity]);
 
-  const indicatorStyle = useAnimatedStyle(
-    () => ({
-      transform: [
-        {
-          translateX: (containerWidth + indicatorWidth) * travelProgress.value - indicatorWidth,
-        },
-      ],
-      width: indicatorWidth,
-    }),
-    [containerWidth, indicatorWidth],
-  );
+  const indicatorStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
 
   return (
-    <LoadingStripFrame onLayout={setContainerWidth}>
-      <Animated.View className="h-full rounded-full bg-primary" style={indicatorStyle} />
+    <LoadingStripFrame>
+      <Animated.View
+        className="mx-auto h-full w-1/3 rounded-full bg-primary"
+        style={indicatorStyle}
+      />
     </LoadingStripFrame>
   );
 }

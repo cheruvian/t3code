@@ -2395,10 +2395,9 @@ function OpenCommandPaletteDialog(props: {
       let primaryRunningDistro: string | null = null;
       try {
         primaryRunningDistro =
-          window.desktopBridge
-            ?.getLocalEnvironmentBootstraps()
-            .find((bootstrap) => bootstrap.id === PRIMARY_LOCAL_ENVIRONMENT_ID)?.runningDistro ??
-          null;
+          (await window.desktopBridge?.getLocalEnvironmentBootstraps())?.find(
+            (bootstrap) => bootstrap.id === PRIMARY_LOCAL_ENVIRONMENT_ID,
+          )?.runningDistro ?? null;
       } catch {
         // Keep UNC routing strict when the live primary identity cannot be read.
       }

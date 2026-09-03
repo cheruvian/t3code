@@ -1,18 +1,7 @@
 import * as Haptics from "expo-haptics";
 import { type AppSymbolName, SymbolView } from "../../components/AppSymbol";
-import { MaskedView } from "@expo/ui/community/masked-view";
-import { useIsFocused } from "@react-navigation/native";
-import { useEffect, useId, useState, type ComponentProps } from "react";
-import {
-  AccessibilityInfo,
-  AppState,
-  type ColorValue,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  View,
-} from "react-native";
-import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
+import { useEffect } from "react";
+import { type ColorValue, Pressable, ScrollView, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
@@ -24,182 +13,57 @@ import {
 import type { MarkdownImageRenderer } from "../../native/SelectableMarkdownText";
 import Animated, {
   cancelAnimation,
-  Easing,
   FadeIn,
   FadeOut,
   LinearTransition,
   ReduceMotion,
   useAnimatedStyle,
   useSharedValue,
-  withDelay,
   withRepeat,
-  withSequence,
   withTiming,
 } from "react-native-reanimated";
 
-const SHIMMER_WIDTH = 72;
-const SHIMMER_SWEEP_MS = 1_350;
-const SHIMMER_PAUSE_MS = 1_450;
-const SHIMMER_ICON_AND_GAP_WIDTH = 30;
 export const THREAD_DISCLOSURE_TRANSITION_MS = 180;
 const WORK_LOG_LAYOUT_TRANSITION = LinearTransition.duration(THREAD_DISCLOSURE_TRANSITION_MS);
 const WORK_LOG_DETAIL_ENTER_TRANSITION = FadeIn.duration(140);
 const WORK_LOG_DETAIL_EXIT_TRANSITION = FadeOut.duration(120);
 
-function ShimmerWorkContent(props: {
-  readonly highlighted: boolean;
+export function LiveWorkContent(props: {
   readonly icon: AppSymbolName;
   readonly iconSubtleColor: ColorValue;
   readonly label: string;
-  readonly onTextLayout?: ComponentProps<typeof Text>["onTextLayout"];
   readonly showIcon: boolean;
 }) {
+  const opacity = useSharedValue(1);
+
+  useEffect(() => {
+    opacity.value = withRepeat(
+      withTiming(0.5, { duration: 1_000, reduceMotion: ReduceMotion.System }),
+      -1,
+      true,
+    );
+    return () => cancelAnimation(opacity);
+  }, [opacity]);
+
+  const animatedStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
+
   return (
-    <View className="flex-row items-center gap-1.5">
+    <Animated.View className="min-w-0 flex-1 flex-row items-center gap-1.5" style={animatedStyle}>
       <View className="h-6 w-6 shrink-0 items-center justify-center">
         {props.showIcon ? (
           <SymbolView
             name={props.icon}
             size={14}
             weight="medium"
-            {...(props.highlighted
-              ? { tintColorClassName: "accent-foreground" as const }
-              : { tintColor: props.iconSubtleColor })}
+            tintColor={props.iconSubtleColor}
             type="monochrome"
           />
         ) : null}
       </View>
-      <Text
-        className={cn(
-          "min-w-0 shrink text-sm",
-          props.highlighted ? "text-foreground" : "text-foreground-muted",
-        )}
-        numberOfLines={1}
-        onTextLayout={props.onTextLayout}
-      >
+      <Text className="min-w-0 shrink text-sm text-foreground-muted" numberOfLines={1}>
         {props.label}
       </Text>
-    </View>
-  );
-}
-
-export function ShimmeringWorkContent(props: {
-  readonly icon: AppSymbolName;
-  readonly iconSubtleColor: ColorValue;
-  readonly label: string;
-  readonly showIcon: boolean;
-}) {
-  const [availableWidth, setAvailableWidth] = useState(0);
-  const [textWidth, setTextWidth] = useState(0);
-  const [appIsActive, setAppIsActive] = useState(AppState.currentState === "active");
-  const [reducedMotion, setReducedMotion] = useState(true);
-  const screenIsFocused = useIsFocused();
-  const progress = useSharedValue(0);
-  const gradientId = `work-shimmer-${useId().replaceAll(":", "")}`;
-  const contentWidth = Math.min(availableWidth, SHIMMER_ICON_AND_GAP_WIDTH + Math.ceil(textWidth));
-
-  useEffect(() => {
-    const subscription = AppState.addEventListener("change", (state) => {
-      setAppIsActive(state === "active");
-    });
-    return () => subscription.remove();
-  }, []);
-
-  useEffect(() => {
-    void AccessibilityInfo.isReduceMotionEnabled().then(setReducedMotion);
-    const subscription = AccessibilityInfo.addEventListener(
-      "reduceMotionChanged",
-      setReducedMotion,
-    );
-    return () => subscription.remove();
-  }, []);
-
-  useEffect(() => {
-    cancelAnimation(progress);
-    progress.value = 0;
-    if (contentWidth <= 0 || reducedMotion || !appIsActive || !screenIsFocused) return;
-
-    progress.value = withRepeat(
-      withSequence(
-        withTiming(1, {
-          duration: SHIMMER_SWEEP_MS,
-          easing: Easing.linear,
-          reduceMotion: ReduceMotion.Never,
-        }),
-        withDelay(
-          SHIMMER_PAUSE_MS,
-          withTiming(0, { duration: 0, reduceMotion: ReduceMotion.Never }),
-        ),
-      ),
-      -1,
-      false,
-      undefined,
-      ReduceMotion.Never,
-    );
-    return () => cancelAnimation(progress);
-  }, [appIsActive, contentWidth, progress, reducedMotion, screenIsFocused]);
-
-  const sweepStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: -SHIMMER_WIDTH + progress.value * (contentWidth + SHIMMER_WIDTH) }],
-  }));
-  const counterSweepStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: SHIMMER_WIDTH - progress.value * (contentWidth + SHIMMER_WIDTH) }],
-  }));
-
-  return (
-    <View
-      className="min-w-0 flex-1 overflow-hidden"
-      onLayout={(event) => setAvailableWidth(event.nativeEvent.layout.width)}
-    >
-      <ShimmerWorkContent
-        highlighted={false}
-        icon={props.icon}
-        iconSubtleColor={props.iconSubtleColor}
-        label={props.label}
-        showIcon={props.showIcon}
-        onTextLayout={(event) => setTextWidth(event.nativeEvent.lines[0]?.width ?? 0)}
-      />
-      {!reducedMotion && appIsActive && screenIsFocused && contentWidth > 0 ? (
-        <Animated.View
-          className="absolute inset-y-0 left-0 overflow-hidden"
-          pointerEvents="none"
-          accessible={false}
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-          style={[{ width: SHIMMER_WIDTH }, sweepStyle]}
-        >
-          <MaskedView
-            style={StyleSheet.absoluteFill}
-            maskElement={
-              <Svg width="100%" height="100%">
-                <Defs>
-                  <LinearGradient id={gradientId} x1="0%" x2="100%" y1="0%" y2="0%">
-                    <Stop offset="0" stopColor="white" stopOpacity={0} />
-                    <Stop offset="0.15" stopColor="white" stopOpacity={0.12} />
-                    <Stop offset="0.35" stopColor="white" stopOpacity={0.55} />
-                    <Stop offset="0.5" stopColor="white" stopOpacity={1} />
-                    <Stop offset="0.65" stopColor="white" stopOpacity={0.55} />
-                    <Stop offset="0.85" stopColor="white" stopOpacity={0.12} />
-                    <Stop offset="1" stopColor="white" stopOpacity={0} />
-                  </LinearGradient>
-                </Defs>
-                <Rect width="100%" height="100%" fill={`url(#${gradientId})`} />
-              </Svg>
-            }
-          >
-            <Animated.View style={[{ width: availableWidth }, counterSweepStyle]}>
-              <ShimmerWorkContent
-                highlighted
-                icon={props.icon}
-                iconSubtleColor={props.iconSubtleColor}
-                label={props.label}
-                showIcon={props.showIcon}
-              />
-            </Animated.View>
-          </MaskedView>
-        </Animated.View>
-      ) : null}
-    </View>
+    </Animated.View>
   );
 }
 
@@ -333,7 +197,7 @@ export function ThreadWorkLog(props: {
               >
                 <View className="min-h-8 flex-row items-center gap-1.5">
                   {row.live ? (
-                    <ShimmeringWorkContent
+                    <LiveWorkContent
                       icon={workRowSymbolName(row.icon)}
                       iconSubtleColor={props.iconSubtleColor}
                       label={displayText}
@@ -458,7 +322,7 @@ export function ThreadWorkGroupToggle(props: {
         className="min-h-8 flex-row items-center gap-1.5 rounded-md px-0.5 py-0 active:bg-subtle"
       >
         {props.shimmer ? (
-          <ShimmeringWorkContent
+          <LiveWorkContent
             icon={icon}
             iconSubtleColor={props.iconSubtleColor}
             label={props.summary}

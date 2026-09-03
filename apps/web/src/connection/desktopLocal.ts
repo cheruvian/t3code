@@ -49,8 +49,9 @@ export type DesktopSecondaryBootstrapsRead =
     };
 
 export interface DesktopSecondaryBootstrapsReader {
-  readonly readResult: () => DesktopSecondaryBootstrapsRead;
+  readonly refresh: () => Promise<DesktopSecondaryBootstrapsRead>;
   readonly readSnapshot: () => ReadonlyArray<DesktopEnvironmentBootstrap>;
+  readonly readAllSnapshot: () => ReadonlyArray<DesktopEnvironmentBootstrap>;
 }
 
 /**
@@ -64,16 +65,18 @@ export function createDesktopSecondaryBootstrapsReader(
 ): DesktopSecondaryBootstrapsReader {
   let snapshot: ReadonlyArray<DesktopEnvironmentBootstrap> = [];
 
-  const readResult = (): DesktopSecondaryBootstrapsRead => {
+  let allBootstraps: ReadonlyArray<DesktopEnvironmentBootstrap> = [];
+
+  const refresh = async (): Promise<DesktopSecondaryBootstrapsRead> => {
     const bridge = resolveBridge();
     if (bridge === undefined) {
+      allBootstraps = [];
       snapshot = [];
       return { _tag: "Success", bootstraps: snapshot };
     }
     try {
-      snapshot = bridge
-        .getLocalEnvironmentBootstraps()
-        .filter((entry) => entry.id !== PRIMARY_LOCAL_ENVIRONMENT_ID);
+      allBootstraps = await bridge.getLocalEnvironmentBootstraps();
+      snapshot = allBootstraps.filter((entry) => entry.id !== PRIMARY_LOCAL_ENVIRONMENT_ID);
       return { _tag: "Success", bootstraps: snapshot };
     } catch (cause) {
       return { _tag: "Failure", cause };
@@ -81,11 +84,9 @@ export function createDesktopSecondaryBootstrapsReader(
   };
 
   return {
-    readResult,
-    readSnapshot: () => {
-      const result = readResult();
-      return result._tag === "Success" ? result.bootstraps : snapshot;
-    },
+    refresh,
+    readSnapshot: () => snapshot,
+    readAllSnapshot: () => allBootstraps,
   };
 }
 
@@ -94,11 +95,15 @@ const desktopSecondaryBootstrapsReader = createDesktopSecondaryBootstrapsReader(
 );
 
 /** Read the topology while preserving failures for platform cache policy. */
-export function readDesktopSecondaryBootstrapsResult(): DesktopSecondaryBootstrapsRead {
-  return desktopSecondaryBootstrapsReader.readResult();
+export function refreshDesktopSecondaryBootstraps(): Promise<DesktopSecondaryBootstrapsRead> {
+  return desktopSecondaryBootstrapsReader.refresh();
 }
 
 /** Read the latest successful topology snapshot for renderer consumers. */
 export function readDesktopSecondaryBootstraps(): ReadonlyArray<DesktopEnvironmentBootstrap> {
   return desktopSecondaryBootstrapsReader.readSnapshot();
+}
+
+export function readDesktopLocalBootstraps(): ReadonlyArray<DesktopEnvironmentBootstrap> {
+  return desktopSecondaryBootstrapsReader.readAllSnapshot();
 }

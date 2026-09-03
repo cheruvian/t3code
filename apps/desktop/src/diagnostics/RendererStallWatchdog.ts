@@ -6,11 +6,13 @@ import * as FileSystem from "effect/FileSystem";
 import type * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 
 import type * as Electron from "electron";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
+import * as ElectronPowerMonitor from "../electron/ElectronPowerMonitor.ts";
 import { RENDERER_HEARTBEAT_CHANNEL } from "../ipc/channels.ts";
 
 export const HEARTBEAT_INTERVAL_MS = 1_000;
@@ -61,6 +63,10 @@ export interface RendererStallWatchdogDependencies {
   readonly platform: NodeJS.Platform;
   readonly arch: string;
   readonly processUptime: () => number;
+  readonly onPowerEvent: (
+    eventName: "lock-screen" | "unlock-screen" | "suspend" | "resume",
+    listener: () => void,
+  ) => Effect.Effect<void, never, Scope.Scope>;
 }
 
 export function evaluateStall(input: {
@@ -183,12 +189,27 @@ export function makeRendererStallWatchdog(
     let lastCaptureAt: number | undefined;
     let capturesThisSession = 0;
     let captureInProgress = false;
+    const unavailablePowerStates = new Set<"locked" | "suspended">();
     const listener: HeartbeatListener = (event) => {
       if (event.sender.id === target.id) heartbeatPending = true;
     };
 
     return yield* Effect.scoped(
       Effect.gen(function* () {
+        const updatePowerState = (state: "locked" | "suspended", unavailable: boolean): void => {
+          if (unavailable) unavailablePowerStates.add(state);
+          else unavailablePowerStates.delete(state);
+          heartbeatPending = true;
+        };
+        yield* Effect.all(
+          [
+            dependencies.onPowerEvent("lock-screen", () => updatePowerState("locked", true)),
+            dependencies.onPowerEvent("unlock-screen", () => updatePowerState("locked", false)),
+            dependencies.onPowerEvent("suspend", () => updatePowerState("suspended", true)),
+            dependencies.onPowerEvent("resume", () => updatePowerState("suspended", false)),
+          ],
+          { concurrency: "unbounded" },
+        );
         yield* Effect.acquireRelease(
           Effect.sync(() => dependencies.ipcMain.on(RENDERER_HEARTBEAT_CHANNEL, listener)),
           () =>
@@ -201,7 +222,7 @@ export function makeRendererStallWatchdog(
             yield* Effect.sleep(CHECK_INTERVAL_MS);
             const now = yield* Clock.currentTimeMillis;
             const active = target.isActive();
-            if (!active) {
+            if (!active || unavailablePowerStates.size > 0) {
               heartbeatPending = false;
               lastHeartbeatAt = now;
               return;
@@ -266,6 +287,7 @@ export const layer = (ipcMain: typeof Electron.ipcMain) =>
     RendererStallWatchdog,
     Effect.gen(function* () {
       const environment = yield* DesktopEnvironment.DesktopEnvironment;
+      const powerMonitor = yield* ElectronPowerMonitor.ElectronPowerMonitor;
       const fileSystem = yield* FileSystem.FileSystem;
       return makeRendererStallWatchdog({
         ipcMain,
@@ -284,6 +306,7 @@ export const layer = (ipcMain: typeof Electron.ipcMain) =>
         platform: environment.platform,
         arch: environment.processArch,
         processUptime: () => process.uptime(),
+        onPowerEvent: powerMonitor.onSimpleEvent,
       });
     }),
   );

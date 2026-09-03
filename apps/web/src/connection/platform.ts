@@ -55,7 +55,7 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { acknowledgeRpcRequest, trackRpcRequestSent } from "../rpc/requestLatencyState";
 import {
   desktopLocalConnectionId,
-  readDesktopSecondaryBootstrapsResult,
+  refreshDesktopSecondaryBootstraps,
   type DesktopSecondaryBootstrapsRead,
 } from "./desktopLocal";
 import { connectionStorageLayer } from "./storage";
@@ -517,7 +517,7 @@ const platformConnectionSourceLayer = Layer.effect(
         }
       }
 
-      const topologyRead = readDesktopSecondaryBootstrapsResult();
+      const topologyRead = yield* Effect.promise(refreshDesktopSecondaryBootstraps);
       for (const [id, cached] of secondaryRegistrationsToRetainAfterTopologyRead(
         previous,
         topologyRead,

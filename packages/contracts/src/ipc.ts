@@ -1122,7 +1122,7 @@ export interface DesktopBridge {
   // One bootstrap per pool instance currently registered with bootstrap
   // info (omits instances whose backend hasn't produced a config yet).
   // The primary backend is identified by id === PRIMARY_LOCAL_ENVIRONMENT_ID.
-  getLocalEnvironmentBootstraps: () => readonly DesktopEnvironmentBootstrap[];
+  getLocalEnvironmentBootstraps: () => Promise<readonly DesktopEnvironmentBootstrap[]>;
   getLocalEnvironmentBearerToken: () => Promise<string>;
   getClientSettings: () => Promise<ClientSettings | null>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;

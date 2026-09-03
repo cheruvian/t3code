@@ -1329,9 +1329,8 @@ describe("DesktopBackendConfiguration", () => {
   );
 
   it("resolvePrimaryLabel is runSync-safe against the real WSL availability probe", async () => {
-    // getLocalEnvironmentBootstraps is a sync IPC method: it resolves the
-    // primary instance's lazy label through Effect.runSync. The label chains
-    // to wslEnvironment.isAvailable, whose real layer probes the filesystem.
+    // The primary instance's lazy label resolves through Effect.runSync. The
+    // label chains to wslEnvironment.isAvailable, whose real layer probes the filesystem.
     // That probe must run once at layer build and expose a resolved value, not
     // a live async effect — otherwise runSync throws in the handler. Build the
     // real WSL layer (not the sync test stub) and resolve the label with a

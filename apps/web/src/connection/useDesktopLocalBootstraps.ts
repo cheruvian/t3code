@@ -1,7 +1,7 @@
 import type { DesktopEnvironmentBootstrap } from "@t3tools/contracts";
 import { useEffect, useState } from "react";
 
-import { readDesktopSecondaryBootstraps } from "./desktopLocal";
+import { readDesktopSecondaryBootstraps, refreshDesktopSecondaryBootstraps } from "./desktopLocal";
 
 const DESKTOP_LOCAL_BOOTSTRAP_POLL_MS = 2_000;
 
@@ -18,8 +18,12 @@ export function useDesktopLocalBootstraps(): ReadonlyArray<DesktopEnvironmentBoo
   );
 
   useEffect(() => {
-    const read = () => setBootstraps(readDesktopSecondaryBootstraps());
-    read();
+    const read = () => {
+      void refreshDesktopSecondaryBootstraps().then(() => {
+        setBootstraps(readDesktopSecondaryBootstraps());
+      });
+    };
+    void read();
     const interval = setInterval(read, DESKTOP_LOCAL_BOOTSTRAP_POLL_MS);
     return () => clearInterval(interval);
   }, []);

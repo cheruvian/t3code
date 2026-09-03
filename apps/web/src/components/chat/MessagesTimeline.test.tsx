@@ -1250,7 +1250,8 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Working for");
     expect(markup).toContain("Running pnpm");
-    expect(markup).toContain("live-activity-focus");
+    expect(markup).toContain("animate-status-pulse");
+    expect(markup).not.toContain("live-activity-focus");
   });
 
   it("scopes a live row failure to the tool named by the row", () => {

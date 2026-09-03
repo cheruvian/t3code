@@ -27,6 +27,7 @@ function makeHarness(options?: { readonly failFirstStop?: boolean }) {
   let attached = false;
   let active = true;
   let stopFailuresRemaining = options?.failFirstStop === true ? 1 : 0;
+  const powerListeners = new Map<string, () => void>();
 
   const dependencies: RendererStallWatchdogDependencies = {
     ipcMain: {
@@ -49,6 +50,16 @@ function makeHarness(options?: { readonly failFirstStop?: boolean }) {
     platform: "darwin",
     arch: "arm64",
     processUptime: () => 123,
+    onPowerEvent: (eventName, powerListener) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          powerListeners.set(eventName, powerListener);
+        }),
+        () =>
+          Effect.sync(() => {
+            powerListeners.delete(eventName);
+          }),
+      ).pipe(Effect.asVoid),
   };
   const target = {
     id: senderId,
@@ -83,6 +94,8 @@ function makeHarness(options?: { readonly failFirstStop?: boolean }) {
       active = next;
     },
     heartbeat: (id = senderId) => listener?.({ sender: { id } }),
+    powerEvent: (eventName: "lock-screen" | "unlock-screen" | "suspend" | "resume") =>
+      powerListeners.get(eventName)?.(),
     hasListener: () => listener !== undefined,
     isAttached: () => attached,
   };
@@ -154,6 +167,27 @@ describe("RendererStallWatchdog", () => {
       harness.heartbeat(senderId + 1);
       yield* advance(CHECK_INTERVAL_MS);
       assert.deepEqual(harness.commands, []);
+      yield* Fiber.interrupt(fiber);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("resets the heartbeat baseline across suspend and resume", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      const fiber = yield* makeRendererStallWatchdog(harness.dependencies)
+        .watch(harness.target)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+
+      harness.powerEvent("suspend");
+      yield* advance(STALL_THRESHOLD_MS * 10);
+      assert.deepEqual(harness.commands, []);
+
+      harness.powerEvent("resume");
+      yield* advance(CHECK_INTERVAL_MS);
+      assert.deepEqual(harness.commands, []);
+      yield* advance(STALL_THRESHOLD_MS - CHECK_INTERVAL_MS);
+      assert.deepEqual(harness.commands, []);
+
       yield* Fiber.interrupt(fiber);
     }).pipe(Effect.provide(TestClock.layer())),
   );

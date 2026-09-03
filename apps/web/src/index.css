@@ -145,11 +145,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 @theme inline {
   --color-zinc-25: oklch(99.2% 0 0);
-  --animate-skeleton: skeleton 2s infinite linear;
   /* Duty-cycled indicator animations: long holds with stepped ramps, so the
      compositor updates discrete frames instead of every vsync. */
   --animate-status-pulse: status-pulse 2s infinite;
-  --animate-ghost-pulse: ghost-pulse 2.4s infinite;
   --animate-status-ping: status-ping 2s infinite;
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
@@ -207,35 +205,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
-  @keyframes skeleton {
-    /* Transform-only so the highlight sweep stays on the compositor, then a
-       long hold with the band parked off-screen instead of a constant shimmer. */
-    0% {
-      transform: translateX(-100%);
-    }
-    60%,
-    100% {
-      transform: translateX(100%);
-    }
-  }
-  @keyframes ghost-pulse {
-    /* The loading ghosts' breath. Stepped like the status indicators, so however many bars a
-       ghost holds, the compositor draws a handful of discrete frames per cycle rather than one
-       per vsync — which on a 120Hz display is the difference between ~14 and ~288 updates. */
-    0%,
-    42% {
-      opacity: 1;
-      animation-timing-function: steps(4);
-    }
-    50%,
-    92% {
-      opacity: 0.55;
-      animation-timing-function: steps(4);
-    }
-    100% {
-      opacity: 1;
-    }
-  }
   @keyframes status-pulse {
     0%,
     40% {
@@ -434,80 +403,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
       var(--stage-fade) 93%
     );
   }
-}
-
-@keyframes live-activity-focus {
-  0% {
-    transform: translateX(0);
-  }
-  100% {
-    transform: translateX(100%);
-  }
-}
-
-@keyframes live-activity-focus-counter {
-  0% {
-    transform: translateX(0);
-  }
-  100% {
-    transform: translateX(-100%);
-  }
-}
-
-@utility live-activity-focus {
-  --live-activity-focus-width: 4.5rem;
-
-  right: auto;
-  left: calc(-1 * var(--live-activity-focus-width));
-  width: calc(100% + var(--live-activity-focus-width) + var(--live-activity-focus-width));
-  -webkit-mask-image: linear-gradient(
-    to right,
-    transparent 0,
-    rgb(0 0 0 / 12%) 0.675rem,
-    rgb(0 0 0 / 55%) 1.575rem,
-    black 2.25rem,
-    rgb(0 0 0 / 55%) 2.925rem,
-    rgb(0 0 0 / 12%) 3.825rem,
-    transparent var(--live-activity-focus-width),
-    transparent 100%
-  );
-  -webkit-mask-repeat: no-repeat;
-  mask-image: linear-gradient(
-    to right,
-    transparent 0,
-    rgb(0 0 0 / 12%) 0.675rem,
-    rgb(0 0 0 / 55%) 1.575rem,
-    black 2.25rem,
-    rgb(0 0 0 / 55%) 2.925rem,
-    rgb(0 0 0 / 12%) 3.825rem,
-    transparent var(--live-activity-focus-width),
-    transparent 100%
-  );
-  mask-repeat: no-repeat;
-  animation: live-activity-focus 2.2s linear infinite;
-  will-change: transform;
-
-  @media (prefers-reduced-motion: reduce) {
-    animation: none;
-    opacity: 0;
-    will-change: auto;
-  }
-}
-
-@utility live-activity-focus-counter {
-  width: 100%;
-  animation: live-activity-focus-counter 2.2s linear infinite;
-  will-change: transform;
-
-  @media (prefers-reduced-motion: reduce) {
-    animation: none;
-    will-change: auto;
-  }
-}
-
-@utility live-activity-focus-aligned {
-  width: calc(100% - var(--live-activity-focus-width) - var(--live-activity-focus-width));
-  margin-left: var(--live-activity-focus-width);
 }
 
 @layer base {
@@ -1898,24 +1793,6 @@ code {
   color: var(--code-foreground) !important;
 }
 
-@keyframes ultrathink-rainbow {
-  0% {
-    background-position: 0% 50%;
-  }
-  100% {
-    background-position: 200% 50%;
-  }
-}
-
-@keyframes ultrathink-chroma-shift {
-  0% {
-    filter: hue-rotate(0deg) saturate(1.2);
-  }
-  100% {
-    filter: hue-rotate(360deg) saturate(1.2);
-  }
-}
-
 .ultrathink-frame {
   --ultrathink-spectrum: linear-gradient(
     120deg,
@@ -1948,7 +1825,7 @@ code {
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
   mask-composite: exclude;
-  animation: ultrathink-rainbow 10s linear infinite;
+  animation: status-pulse 2s infinite;
 }
 
 .ultrathink-frame > * {
@@ -1956,7 +1833,15 @@ code {
 }
 
 .ultrathink-chroma {
-  animation: ultrathink-chroma-shift 10s linear infinite;
+  color: #a855f7;
+  animation: status-pulse 2s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ultrathink-frame::before,
+  .ultrathink-chroma {
+    animation: none;
+  }
 }
 
 @keyframes preview-loading-progress {

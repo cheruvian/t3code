@@ -46,7 +46,7 @@ import { ProviderIcon } from "../../components/ProviderIcon";
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 import { COMPOSER_LAYOUT_TRANSITION, ComposerSurface } from "./ThreadComposer";
-import { ShimmeringWorkContent } from "./thread-work-log";
+import { LiveWorkContent } from "./thread-work-log";
 import { ComposerCommandPopover } from "./ComposerCommandPopover";
 import { useComposerCommandMenu } from "./use-composer-command-menu";
 import {
@@ -1166,7 +1166,7 @@ export function NewTaskDraftScreen(props: {
           accessibilityLabel="Setting up worktree…"
           className="h-11 w-full max-w-[260px] flex-row items-center px-2"
         >
-          <ShimmeringWorkContent
+          <LiveWorkContent
             icon="arrow.triangle.branch"
             iconSubtleColor={theme["--color-icon-subtle"]}
             label="Setting up worktree…"

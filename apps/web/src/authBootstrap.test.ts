@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import { installEnvironmentHttpTest } from "../test/environmentHttpTest";
 import { __setPrimaryHttpRunnerForTests, type PrimaryHttpEffectRunner } from "./lib/runtime";
+import { refreshDesktopSecondaryBootstraps } from "./connection/desktopLocal";
 
 type TestWindow = {
   location: URL;
@@ -71,7 +72,7 @@ function installTestBrowser(url: string) {
   return testWindow;
 }
 
-function installDesktopBootstrap() {
+async function installDesktopBootstrap() {
   const testWindow = installTestBrowser("http://localhost/");
   testWindow.desktopBridge = {
     getLocalEnvironmentBootstraps: () => [
@@ -84,6 +85,7 @@ function installDesktopBootstrap() {
       },
     ],
   } as unknown as DesktopBridge;
+  await refreshDesktopSecondaryBootstraps();
 }
 
 function sequence<A>(...values: ReadonlyArray<A>) {
@@ -119,10 +121,11 @@ async function installAuthApi(input: {
 }
 
 describe("resolveInitialServerAuthGateState", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     installTestBrowser("http://localhost/");
+    await refreshDesktopSecondaryBootstraps();
   });
 
   afterEach(async () => {
@@ -158,6 +161,7 @@ describe("resolveInitialServerAuthGateState", () => {
         },
       ],
     } as unknown as DesktopBridge;
+    await refreshDesktopSecondaryBootstraps();
 
     const { resolveInitialServerAuthGateState } = await import("./environments/primary");
 
@@ -215,6 +219,7 @@ describe("resolveInitialServerAuthGateState", () => {
         },
       ],
     } as unknown as DesktopBridge;
+    await refreshDesktopSecondaryBootstraps();
 
     const { resolveInitialServerAuthGateState, resolvePrimaryEnvironmentHttpUrl } =
       await import("./environments/primary");
@@ -402,6 +407,7 @@ describe("resolveInitialServerAuthGateState", () => {
         },
       ],
     } as unknown as DesktopBridge;
+    await refreshDesktopSecondaryBootstraps();
 
     const { resolveInitialServerAuthGateState } = await import("./environments/primary");
 
@@ -419,7 +425,7 @@ describe("resolveInitialServerAuthGateState", () => {
       browserSession: () => Effect.succeed(browserSession(["orchestration:read", "access:write"])),
     });
 
-    installDesktopBootstrap();
+    await installDesktopBootstrap();
 
     const { resolveInitialServerAuthGateState } = await import("./environments/primary");
 

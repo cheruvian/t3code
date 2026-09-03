@@ -38,22 +38,22 @@ describe("desktop local connection identity", () => {
 });
 
 describe("desktop local topology reads", () => {
-  it("distinguishes a successful empty topology from a read failure", () => {
+  it("distinguishes a successful empty topology from a read failure", async () => {
     let readBootstraps = () => [];
     const reader = createDesktopSecondaryBootstrapsReader(() => ({
-      getLocalEnvironmentBootstraps: () => readBootstraps(),
+      getLocalEnvironmentBootstraps: async () => readBootstraps(),
     }));
 
-    expect(reader.readResult()).toEqual({ _tag: "Success", bootstraps: [] });
+    expect(await reader.refresh()).toEqual({ _tag: "Success", bootstraps: [] });
 
     const cause = new Error("IPC unavailable");
     readBootstraps = () => {
       throw cause;
     };
-    expect(reader.readResult()).toEqual({ _tag: "Failure", cause });
+    expect(await reader.refresh()).toEqual({ _tag: "Failure", cause });
   });
 
-  it("filters the primary bootstrap from successful topology reads", () => {
+  it("filters the primary bootstrap from successful topology reads", async () => {
     const secondary = {
       id: "wsl:Ubuntu",
       label: "WSL: Ubuntu",
@@ -62,7 +62,7 @@ describe("desktop local topology reads", () => {
     };
 
     const reader = createDesktopSecondaryBootstrapsReader(() => ({
-      getLocalEnvironmentBootstraps: () => [
+      getLocalEnvironmentBootstraps: async () => [
         {
           ...secondary,
           id: PRIMARY_LOCAL_ENVIRONMENT_ID,
@@ -72,10 +72,10 @@ describe("desktop local topology reads", () => {
       ],
     }));
 
-    expect(reader.readResult()).toEqual({ _tag: "Success", bootstraps: [secondary] });
+    expect(await reader.refresh()).toEqual({ _tag: "Success", bootstraps: [secondary] });
   });
 
-  it("retains the last successful snapshot only until another read succeeds", () => {
+  it("retains the last successful snapshot only until another read succeeds", async () => {
     const secondary = {
       id: "wsl:Ubuntu",
       label: "WSL: Ubuntu",
@@ -84,24 +84,28 @@ describe("desktop local topology reads", () => {
     };
     let readBootstraps = () => [secondary];
     const reader = createDesktopSecondaryBootstrapsReader(() => ({
-      getLocalEnvironmentBootstraps: () => readBootstraps(),
+      getLocalEnvironmentBootstraps: async () => readBootstraps(),
     }));
 
+    await reader.refresh();
     const connectedSnapshot = reader.readSnapshot();
     expect(connectedSnapshot).toEqual([secondary]);
 
     readBootstraps = () => {
       throw new Error("IPC unavailable");
     };
+    expect(await reader.refresh()).toEqual({ _tag: "Failure", cause: expect.any(Error) });
     expect(reader.readSnapshot()).toBe(connectedSnapshot);
 
     readBootstraps = () => [];
+    await reader.refresh();
     const removedSnapshot = reader.readSnapshot();
     expect(removedSnapshot).toEqual([]);
 
     readBootstraps = () => {
       throw new Error("IPC unavailable again");
     };
+    expect(await reader.refresh()).toEqual({ _tag: "Failure", cause: expect.any(Error) });
     expect(reader.readSnapshot()).toBe(removedSnapshot);
   });
 });

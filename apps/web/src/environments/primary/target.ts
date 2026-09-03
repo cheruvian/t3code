@@ -1,5 +1,6 @@
 import { PRIMARY_LOCAL_ENVIRONMENT_ID, type DesktopEnvironmentBootstrap } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { readDesktopLocalBootstraps } from "../../connection/desktopLocal";
 
 const PrimaryEnvironmentTargetSource = Schema.Literals([
   "configured",
@@ -79,7 +80,7 @@ function getDesktopLocalEnvironmentBootstrap(): DesktopEnvironmentBootstrap | nu
   // The primary (Windows-native) backend keeps the "primary" id. The
   // plural list may include a second WSL entry; the primary-target
   // resolver only cares about the primary, so just find it.
-  const bootstraps = window.desktopBridge?.getLocalEnvironmentBootstraps() ?? [];
+  const bootstraps = readDesktopLocalBootstraps();
   return bootstraps.find((entry) => entry.id === PRIMARY_LOCAL_ENVIRONMENT_ID) ?? null;
 }
 

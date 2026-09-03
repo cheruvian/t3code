@@ -3,6 +3,7 @@ import { View } from "react-native";
 import Animated, {
   cancelAnimation,
   Easing,
+  ReduceMotion,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
@@ -52,6 +53,7 @@ function usePulseAnimation(pulse: boolean) {
         withTiming(1, {
           duration: 1100,
           easing: Easing.out(Easing.cubic),
+          reduceMotion: ReduceMotion.System,
         }),
         -1,
         false,
@@ -82,7 +84,6 @@ export function ConnectionStatusDot(props: {
 
   const haloStyle = useAnimatedStyle(() => ({
     opacity: props.pulse ? 0.14 + (1 - pulseProgress.value) * 0.3 : 0,
-    transform: [{ scale: 0.78 + pulseProgress.value * 1.16 }],
   }));
 
   return (

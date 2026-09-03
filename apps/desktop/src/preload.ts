@@ -50,12 +50,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     const result = ipcRenderer.sendSync(IpcChannels.GET_SYSTEM_LOCALE_CHANNEL);
     return typeof result === "string" ? result : null;
   },
-  getLocalEnvironmentBootstraps: () => {
-    const result = ipcRenderer.sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL);
+  getLocalEnvironmentBootstraps: async () => {
+    const result = await ipcRenderer.invoke(IpcChannels.GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL);
     if (!Array.isArray(result)) {
       return [];
     }
-    return result as ReturnType<DesktopBridge["getLocalEnvironmentBootstraps"]>;
+    return result as Awaited<ReturnType<DesktopBridge["getLocalEnvironmentBootstraps"]>>;
   },
   getLocalEnvironmentBearerToken: () =>
     ipcRenderer.invoke(IpcChannels.GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL),
