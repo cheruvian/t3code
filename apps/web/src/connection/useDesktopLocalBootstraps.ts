@@ -18,14 +18,35 @@ export function useDesktopLocalBootstraps(): ReadonlyArray<DesktopEnvironmentBoo
   );
 
   useEffect(() => {
+    if (window.desktopBridge?.getLocalEnvironmentBootstraps === undefined) return;
+    let interval: number | undefined;
+    let disposed = false;
     const read = () => {
       void refreshDesktopSecondaryBootstraps().then(() => {
-        setBootstraps(readDesktopSecondaryBootstraps());
+        if (disposed) return;
+        const next = readDesktopSecondaryBootstraps();
+        setBootstraps((current) =>
+          current.length === next.length &&
+          current.every((entry, index) => entry.id === next[index]?.id)
+            ? current
+            : next,
+        );
       });
     };
-    void read();
-    const interval = setInterval(read, DESKTOP_LOCAL_BOOTSTRAP_POLL_MS);
-    return () => clearInterval(interval);
+    const sync = () => {
+      if (interval !== undefined) window.clearInterval(interval);
+      interval = undefined;
+      if (document.visibilityState !== "visible") return;
+      read();
+      interval = window.setInterval(read, DESKTOP_LOCAL_BOOTSTRAP_POLL_MS);
+    };
+    sync();
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      disposed = true;
+      if (interval !== undefined) window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", sync);
+    };
   }, []);
 
   return bootstraps;

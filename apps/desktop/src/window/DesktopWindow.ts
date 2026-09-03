@@ -99,6 +99,7 @@ export class DesktopWindow extends Context.Service<
     // window so a "macOS dock click" while the backend is down doesn't
     // produce a stranded window pointing at nothing.
     readonly handleBackendNotReady: Effect.Effect<void>;
+    readonly captureRendererCpuProfile?: Effect.Effect<boolean>;
     readonly flushMainWindowBounds: Effect.Effect<void>;
     readonly dispatchMenuAction: (action: string) => Effect.Effect<void, DesktopWindowError>;
     // Zooms the main window's own webContents. The Electron `zoomIn`/`zoomOut`
@@ -933,6 +934,16 @@ export const make = Effect.gen(function* () {
         syncWindowAppearance(window, shouldUseDarkColors, environment.platform),
       );
     }).pipe(Effect.withSpan("desktop.window.syncAppearance")),
+    captureRendererCpuProfile: Effect.gen(function* () {
+      if (Option.isNone(rendererStallWatchdog)) return false;
+      const window = yield* focusedMainWindow;
+      if (Option.isNone(window) || window.value.isDestroyed()) return false;
+      return yield* rendererStallWatchdog.value.captureNow({
+        id: window.value.webContents.id,
+        isActive: () => window.value.isVisible() && !window.value.isMinimized(),
+        debugger: window.value.webContents.debugger,
+      });
+    }),
   });
 });
 

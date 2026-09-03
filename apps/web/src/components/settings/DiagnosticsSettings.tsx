@@ -3,6 +3,7 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   CopyIcon,
+  CpuIcon,
   FolderOpenIcon,
   InfoIcon,
   RefreshCwIcon,
@@ -820,6 +821,30 @@ export function DiagnosticsSettingsPanel() {
     reportFailure: false,
   });
   const [resourceWindowMs, setResourceWindowMs] = useState(15 * 60_000);
+  const [isCapturingRenderer, setIsCapturingRenderer] = useState(false);
+  const captureRendererProfile = useCallback(async () => {
+    const capture = window.desktopBridge?.captureRendererCpuProfile;
+    if (capture === undefined || isCapturingRenderer) return;
+    setIsCapturingRenderer(true);
+    try {
+      const captured = await capture();
+      toastManager.add({
+        type: captured ? "success" : "info",
+        title: captured ? "Renderer profile captured" : "Renderer profile not captured",
+        description: captured
+          ? "The CPU profile was saved in the desktop diagnostics folder."
+          : "A profile is already running or the capture limit has been reached.",
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not capture renderer profile",
+        description: error instanceof Error ? error.message : "The profile capture failed.",
+      });
+    } finally {
+      setIsCapturingRenderer(false);
+    }
+  }, [isCapturingRenderer]);
   const selectedResourceWindow =
     RESOURCE_HISTORY_WINDOWS.find((option) => option.windowMs === resourceWindowMs) ??
     RESOURCE_HISTORY_WINDOWS[1];
@@ -1125,6 +1150,24 @@ export function DiagnosticsSettingsPanel() {
         headerAction={
           <div className="flex items-center gap-1.5">
             <DiagnosticsLastChecked checkedAt={data?.readAt ?? null} />
+            {window.desktopBridge?.captureRendererCpuProfile ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="icon-micro"
+                      variant="ghost-muted"
+                      disabled={isCapturingRenderer}
+                      onClick={() => void captureRendererProfile()}
+                      aria-label="Capture renderer CPU profile"
+                    >
+                      <CpuIcon className="size-3" />
+                    </Button>
+                  }
+                />
+                <TooltipPopup side="top">Capture a 5-second renderer CPU profile</TooltipPopup>
+              </Tooltip>
+            ) : null}
             <Tooltip>
               <TooltipTrigger
                 render={

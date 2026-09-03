@@ -34,6 +34,7 @@ import * as ElectronMenu from "../../electron/ElectronMenu.ts";
 import * as ElectronShell from "../../electron/ElectronShell.ts";
 import * as ElectronTheme from "../../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
+import * as DesktopWindow from "../../window/DesktopWindow.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 import {
@@ -73,6 +74,16 @@ export const getSystemLocale = DesktopIpc.makeSyncIpcMethod({
   handler: Effect.fn("desktop.ipc.window.getSystemLocale")(function* () {
     const electronApp = yield* ElectronApp.ElectronApp;
     return yield* electronApp.systemLocale;
+  }),
+});
+
+export const captureRendererCpuProfile = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.CAPTURE_RENDERER_CPU_PROFILE_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.window.captureRendererCpuProfile")(function* () {
+    const desktopWindow = yield* DesktopWindow.DesktopWindow;
+    return yield* desktopWindow.captureRendererCpuProfile ?? Effect.succeed(false);
   }),
 });
 

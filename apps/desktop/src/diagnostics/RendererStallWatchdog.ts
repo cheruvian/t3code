@@ -97,6 +97,7 @@ export class RendererStallWatchdog extends Context.Service<
   RendererStallWatchdog,
   {
     readonly watch: (target: RendererStallTarget) => Effect.Effect<never>;
+    readonly captureNow: (target: RendererStallTarget) => Effect.Effect<boolean>;
   }
 >()("@t3tools/desktop/diagnostics/RendererStallWatchdog") {}
 
@@ -134,6 +135,9 @@ const attemptPromise = <A>(evaluate: () => Promise<A>): Effect.Effect<A> =>
 export function makeRendererStallWatchdog(
   dependencies: RendererStallWatchdogDependencies,
 ): RendererStallWatchdog["Service"] {
+  let lastCaptureAt: number | undefined;
+  let capturesThisSession = 0;
+  let captureInProgress = false;
   const capture = Effect.fn("rendererStallWatchdog.capture")(function* (
     target: RendererStallTarget,
     input: {
@@ -181,14 +185,46 @@ export function makeRendererStallWatchdog(
     });
   });
 
+  const captureNow = Effect.fn("rendererStallWatchdog.captureNow")(function* (
+    target: RendererStallTarget,
+    stallDurationMs = 0,
+  ) {
+    const now = yield* Clock.currentTimeMillis;
+    if (
+      !evaluateCaptureAllowed({
+        now,
+        lastCaptureAt,
+        minIntervalMs: MIN_CAPTURE_INTERVAL_MS,
+        capturesThisSession,
+        maxCaptures: MAX_CAPTURES_PER_SESSION,
+        captureInProgress,
+      })
+    ) {
+      return false;
+    }
+    lastCaptureAt = now;
+    capturesThisSession += 1;
+    captureInProgress = true;
+    return yield* capture(target, {
+      capturedAt: now,
+      stallDurationMs,
+      sessionCaptureIndex: capturesThisSession,
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (target.debugger.isAttached()) target.debugger.detach();
+          captureInProgress = false;
+        }),
+      ),
+      Effect.as(true),
+    );
+  });
+
   const watch = Effect.fn("rendererStallWatchdog.watch")(function* (
     target: RendererStallTarget,
   ): Effect.fn.Return<never> {
     let heartbeatPending = false;
     let lastHeartbeatAt = yield* Clock.currentTimeMillis;
-    let lastCaptureAt: number | undefined;
-    let capturesThisSession = 0;
-    let captureInProgress = false;
     const unavailablePowerStates = new Set<"locked" | "suspended">();
     const listener: HeartbeatListener = (event) => {
       if (event.sender.id === target.id) heartbeatPending = true;
@@ -238,33 +274,12 @@ export function makeRendererStallWatchdog(
                 lastHeartbeatAt,
                 now,
                 stallThresholdMs: STALL_THRESHOLD_MS,
-              }) ||
-              !evaluateCaptureAllowed({
-                now,
-                lastCaptureAt,
-                minIntervalMs: MIN_CAPTURE_INTERVAL_MS,
-                capturesThisSession,
-                maxCaptures: MAX_CAPTURES_PER_SESSION,
-                captureInProgress,
               })
             ) {
               return;
             }
 
-            lastCaptureAt = now;
-            capturesThisSession += 1;
-            captureInProgress = true;
-            yield* capture(target, {
-              capturedAt: now,
-              stallDurationMs: now - lastHeartbeatAt,
-              sessionCaptureIndex: capturesThisSession,
-            }).pipe(
-              Effect.ensuring(
-                Effect.sync(() => {
-                  if (target.debugger.isAttached()) target.debugger.detach();
-                  captureInProgress = false;
-                }),
-              ),
+            yield* captureNow(target, now - lastHeartbeatAt).pipe(
               Effect.catchCause((cause) =>
                 logWarning("renderer stall CPU profile capture failed", {
                   cause,
@@ -279,7 +294,7 @@ export function makeRendererStallWatchdog(
     );
   });
 
-  return RendererStallWatchdog.of({ watch });
+  return RendererStallWatchdog.of({ watch, captureNow });
 }
 
 export const layer = (ipcMain: typeof Electron.ipcMain) =>

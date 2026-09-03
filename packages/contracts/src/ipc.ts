@@ -1110,6 +1110,7 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
 
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
+  captureRendererCpuProfile?: () => Promise<boolean>;
   /** The desktop client's OS platform, read from Electron's preload process. */
   getClientPlatform?: () => string;
   /**

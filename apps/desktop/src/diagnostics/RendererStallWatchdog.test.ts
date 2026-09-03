@@ -153,6 +153,29 @@ describe("RendererStallWatchdog", () => {
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
+  it.effect("captures a bounded CPU profile on demand without a stall", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      const watchdog = makeRendererStallWatchdog(harness.dependencies);
+      const capture = yield* watchdog.captureNow(harness.target).pipe(Effect.forkChild);
+
+      yield* advance(CAPTURE_DURATION_MS);
+      assert.isTrue(yield* Fiber.join(capture));
+      assert.deepEqual(harness.commands, [
+        "attach",
+        "Profiler.enable",
+        "Profiler.start",
+        "Profiler.stop",
+        "Profiler.disable",
+        "detach",
+      ]);
+      assert.equal(
+        [...harness.writes.keys()].filter((path) => path.endsWith(".cpuprofile")).length,
+        1,
+      );
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
   it.effect("ignores hidden windows and heartbeats from other renderers", () =>
     Effect.gen(function* () {
       const harness = makeHarness();

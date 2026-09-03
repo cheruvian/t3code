@@ -45,6 +45,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     }
     return result as ReturnType<DesktopBridge["getAppBranding"]>;
   },
+  captureRendererCpuProfile: () =>
+    ipcRenderer.invoke(IpcChannels.CAPTURE_RENDERER_CPU_PROFILE_CHANNEL),
   getClientPlatform: () => clientPlatform,
   getSystemLocale: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_SYSTEM_LOCALE_CHANNEL);
