@@ -902,6 +902,15 @@ function waitForCondition(predicate, timeout, processControl) {
   return predicate();
 }
 
+function portStaysQuiescent(port, duration, processControl) {
+  const deadline = processControl.now() + duration;
+  while (processControl.now() < deadline) {
+    if (processControl.listenerPids(port).length > 0) return false;
+    processControl.pause(100);
+  }
+  return processControl.listenerPids(port).length === 0;
+}
+
 function captureManagedBackend(paths, release, processControl) {
   const state = readBackendRuntimeState(paths);
   if (!state || !processControl.isAlive(state.pid)) return undefined;
@@ -1281,6 +1290,7 @@ function stopUnlocked(
     }
   }
 
+  portStaysQuiescent(paths.port, 1_000, processControl);
   const remainingListeners = processControl.listenerPids(paths.port);
   if (remainingListeners.length > 0) {
     const replacementState = readBackendRuntimeState(paths);

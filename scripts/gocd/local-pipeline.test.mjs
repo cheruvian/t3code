@@ -1796,6 +1796,7 @@ it("stops an older Electron supervisor that reclaims the port during shutdown", 
     const launcherCommand = `${executable} ${join(selectedRelease, "apps/desktop/dist-electron/main.cjs")}`;
     const backendCommand = `${executable} ${join(selectedRelease, "apps/server/dist/bin.mjs")} --bootstrap-fd 3`;
     const processes = new Map();
+    let replacementPending = false;
     processes.set(olderSupervisorPid, {
       alive: true,
       ppid: 1,
@@ -1829,7 +1830,15 @@ it("stops an older Electron supervisor that reclaims the port during shutdown", 
       listenerPort: 17774,
       onSignal: (signal, selected) => {
         if (signal !== "SIGTERM") return;
+        selected.alive = false;
         selected.listenerPort = undefined;
+        replacementPending = true;
+      },
+    });
+    const processControl = createProcessControl(processes, {
+      onPause: () => {
+        if (!replacementPending) return;
+        replacementPending = false;
         processes.set(replacementBackendPid, {
           alive: true,
           ppid: olderSupervisorPid,
@@ -1841,7 +1850,6 @@ it("stops an older Electron supervisor that reclaims the port during shutdown", 
         writeRuntimeState(replacementBackendPid, "2026-08-14T12:00:02.000Z");
       },
     });
-    const processControl = createProcessControl(processes);
     const { stop } = await import("./local-pipeline.mjs?runtime-handoff-test");
 
     await stop("production", { processControl });
