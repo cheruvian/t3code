@@ -226,11 +226,12 @@ describe("makeCodexProgressCoalescer", () => {
         const emissions: Array<ReadonlyArray<string>> = [];
         const tickStarted = yield* Deferred.make<void>();
         const tickInterrupted = yield* Deferred.make<void>();
+        const keepTickPending = yield* Deferred.make<void>();
         const coalescer = yield* makeCodexProgressCoalescer<string, string>({
           emit: (values) =>
             Effect.gen(function* () {
               yield* Deferred.succeed(tickStarted, undefined);
-              yield* Effect.never;
+              yield* Deferred.await(keepTickPending);
               emissions.push([...values]);
             }).pipe(Effect.ensuring(Deferred.succeed(tickInterrupted, undefined))),
         });

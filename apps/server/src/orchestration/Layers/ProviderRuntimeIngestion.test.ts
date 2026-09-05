@@ -4069,6 +4069,7 @@ describe("ProviderRuntimeIngestion", () => {
                 completion !== undefined && durableSequence < completion.durableSequence,
             ),
           ).toBe(true);
+          expect(progress.length).toBe(withLifecycleBarrier ? 4 : 2);
           if (withLifecycleBarrier) {
             const waiting = childActivities.find(
               ({ activity }) =>
@@ -4089,7 +4090,6 @@ describe("ProviderRuntimeIngestion", () => {
               ),
             ).toHaveLength(2);
           }
-          expect(progress.length).toBe(withLifecycleBarrier ? 4 : 2);
         } finally {
           yield* Deferred.succeed(stopAdapter, undefined);
           yield* Fiber.join(adapterRun);
