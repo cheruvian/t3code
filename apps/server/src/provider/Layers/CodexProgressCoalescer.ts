@@ -12,6 +12,7 @@ export interface CodexProgressCoalescer<K, V> {
   readonly offerItem: (key: K, value: V) => Effect.Effect<void>;
   readonly offerTokenUsage: (key: K, value: V) => Effect.Effect<void>;
   readonly flush: (key: K) => Effect.Effect<void>;
+  readonly flushAll: Effect.Effect<void>;
   readonly close: Effect.Effect<void>;
 }
 
@@ -187,6 +188,11 @@ export const makeCodexProgressCoalescer = Effect.fn("makeCodexProgressCoalescer"
       );
   });
 
+  const flushAll = Effect.gen(function* () {
+    const registry = yield* SynchronizedRef.get(registryRef);
+    yield* Effect.forEach(registry.keys.keys(), flush, { concurrency: 1, discard: true });
+  });
+
   const close = Effect.uninterruptible(
     Effect.gen(function* () {
       const states = yield* SynchronizedRef.modify(registryRef, (registry) =>
@@ -227,6 +233,7 @@ export const makeCodexProgressCoalescer = Effect.fn("makeCodexProgressCoalescer"
     offerItem: offer("item"),
     offerTokenUsage: offer("tokenUsage"),
     flush,
+    flushAll,
     close,
   };
 });

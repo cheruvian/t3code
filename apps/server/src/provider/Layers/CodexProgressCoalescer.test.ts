@@ -78,7 +78,7 @@ describe("makeCodexProgressCoalescer", () => {
         const keyBFlush = yield* coalescer
           .flush("key-b")
           .pipe(Effect.forkChild({ startImmediately: true }));
-        yield* Deferred.await(keyBEmitted).pipe(Effect.timeout("1 second"));
+        yield* Deferred.await(keyBEmitted);
         yield* Fiber.join(keyBFlush);
         assert.deepStrictEqual(emissions, [["b"]]);
 
@@ -108,6 +108,7 @@ describe("makeCodexProgressCoalescer", () => {
       yield* coalescer.offerItem("child", "late-item");
       yield* coalescer.offerTokenUsage("child", "late-usage");
       yield* coalescer.flush("child");
+      yield* coalescer.flushAll;
       yield* coalescer.close;
 
       assert.deepStrictEqual(emissions, []);
@@ -187,6 +188,103 @@ describe("makeCodexProgressCoalescer", () => {
 
         assert.deepStrictEqual(firstEmissions, [["first-instance"]]);
         assert.deepStrictEqual(secondEmissions, [["second-instance"]]);
+      }),
+    ),
+  );
+
+  it.effect("flushes all children in first-seen order with item before usage", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const emissions: Array<ReadonlyArray<string>> = [];
+        const coalescer = yield* makeCodexProgressCoalescer<string, string>({
+          emit: (values) =>
+            Effect.sync(() => {
+              emissions.push([...values]);
+            }),
+        });
+        yield* coalescer.offerTokenUsage("second-name", "usage-a-old");
+        yield* coalescer.offerItem("first-name", "item-b-old");
+        yield* coalescer.offerItem("second-name", "item-a");
+        yield* coalescer.offerTokenUsage("second-name", "usage-a");
+        yield* coalescer.offerTokenUsage("first-name", "usage-b");
+        yield* coalescer.offerItem("first-name", "item-b");
+
+        yield* coalescer.flushAll;
+        yield* coalescer.flushAll;
+        yield* TestClock.adjust("250 millis");
+        assert.deepStrictEqual(emissions, [
+          ["item-a", "usage-a"],
+          ["item-b", "usage-b"],
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("close interrupts an in-flight timer while flushAll waits for its key", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const emissions: Array<ReadonlyArray<string>> = [];
+        const tickStarted = yield* Deferred.make<void>();
+        const tickInterrupted = yield* Deferred.make<void>();
+        const coalescer = yield* makeCodexProgressCoalescer<string, string>({
+          emit: (values) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(tickStarted, undefined);
+              yield* Effect.never;
+              emissions.push([...values]);
+            }).pipe(Effect.ensuring(Deferred.succeed(tickInterrupted, undefined))),
+        });
+        yield* coalescer.offerItem("child", "timer-value");
+        const advanceToTick = yield* TestClock.adjust("250 millis").pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Deferred.await(tickStarted);
+        const flushing = yield* coalescer.flushAll.pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        const closing = yield* coalescer.close.pipe(Effect.forkChild({ startImmediately: true }));
+        const alsoClosing = yield* coalescer.close.pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Deferred.await(tickInterrupted);
+        yield* Fiber.join(closing);
+        yield* Fiber.join(alsoClosing);
+        yield* Fiber.join(flushing);
+        yield* Fiber.join(advanceToTick);
+        yield* coalescer.offerItem("child", "late-value");
+        yield* coalescer.flushAll;
+        yield* TestClock.adjust("250 millis");
+        assert.deepStrictEqual(emissions, []);
+      }),
+    ),
+  );
+
+  it.effect("close waits for an explicit flush and discards the other pending child", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const emissions: Array<ReadonlyArray<string>> = [];
+        const flushStarted = yield* Deferred.make<void>();
+        const releaseFlush = yield* Deferred.make<void>();
+        const coalescer = yield* makeCodexProgressCoalescer<string, string>({
+          emit: (values) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(flushStarted, undefined);
+              yield* Deferred.await(releaseFlush);
+              emissions.push([...values]);
+            }),
+        });
+        yield* coalescer.offerItem("first", "flushing-value");
+        yield* coalescer.offerItem("second", "discarded-value");
+        const flushing = yield* coalescer.flushAll.pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Deferred.await(flushStarted);
+        const closing = yield* coalescer.close.pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.succeed(releaseFlush, undefined);
+        yield* Fiber.join(flushing);
+        yield* Fiber.join(closing);
+        yield* TestClock.adjust("250 millis");
+        assert.deepStrictEqual(emissions, [["flushing-value"]]);
       }),
     ),
   );

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -12,6 +13,10 @@ vi.mock("@pierre/diffs/react", () => ({
   },
 }));
 
+vi.mock("../DiffWorkerPoolProvider", () => ({
+  DiffWorkerPoolProvider: ({ children }: { children?: ReactNode }) => children,
+}));
+
 vi.mock("~/composerDraftStore", () => ({
   useComposerDraftStore: (selector: (store: Record<string, unknown>) => unknown) =>
     selector({
@@ -21,8 +26,8 @@ vi.mock("~/composerDraftStore", () => ({
     }),
 }));
 
-vi.mock("../files/LocalCommentAnnotation", () => ({
-  LocalCommentAnnotation: () => null,
+vi.mock("./DiffCommentAnnotation", () => ({
+  DiffCommentAnnotation: () => null,
 }));
 
 vi.mock("../files/fileCommentAnnotations", () => ({
@@ -46,6 +51,7 @@ describe("AnnotatableCodeView", () => {
         composerDraftTarget={"draft-test" as never}
         options={{}}
         renderHeaderPrefix={() => null}
+        renderHeaderFilenameSuffix={() => null}
       />,
     );
 

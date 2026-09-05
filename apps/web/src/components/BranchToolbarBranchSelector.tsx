@@ -34,6 +34,7 @@ import { vcsEnvironment } from "../state/vcs";
 import { cn } from "../lib/utils";
 import { parsePullRequestReference } from "../pullRequestReference";
 import { getSourceControlPresentation } from "../sourceControlPresentation";
+import { composerFloatingLayerProps } from "./chat/composerEventScope";
 import {
   deriveLocalBranchNameFromRemoteRef,
   resolveBranchTriggerLabel,
@@ -42,6 +43,7 @@ import {
   resolveBranchToolbarValue,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
+  sanitizeNewRefName,
   shouldIncludeBranchPickerItem,
 } from "./BranchToolbar.logic";
 import {
@@ -51,6 +53,7 @@ import {
 } from "./ThreadStatusIndicators";
 import { Button } from "./ui/button";
 import { Switch } from "./ui/switch";
+import { getVirtualizedScrollFadeClassName } from "./ui/scroll-area";
 import {
   Combobox,
   ComboboxEmpty,
@@ -219,13 +222,18 @@ export function BranchToolbarBranchSelector({
   );
   const trimmedBranchQuery = branchQuery.trim();
   const deferredTrimmedBranchQuery = deferredBranchQuery.trim();
+  // The server filters refs by substring, so it has to be given the sanitized
+  // name as well: querying the raw "new branch" drops an existing new-branch
+  // from the response entirely, which would defeat the collision check below.
+  // Ref names cannot contain an ASCII space, so sanitizing loses no matches.
+  const branchRefQuery = sanitizeNewRefName(deferredTrimmedBranchQuery);
   const branchRefTarget = useMemo(
     () => ({
       environmentId,
       cwd: branchCwd,
-      query: deferredTrimmedBranchQuery,
+      query: branchRefQuery,
     }),
-    [branchCwd, deferredTrimmedBranchQuery, environmentId],
+    [branchCwd, branchRefQuery, environmentId],
   );
   const branchRefState = usePaginatedBranches(branchRefTarget);
   const refs = branchRefState.refs;
@@ -258,7 +266,11 @@ export function BranchToolbarBranchSelector({
   const checkoutPullRequestItemValue =
     prReference && onCheckoutPullRequestRequest ? `__checkout_pull_request__:${prReference}` : null;
   const canCreateBranch = !isSelectingWorktreeBase && trimmedBranchQuery.length > 0;
-  const hasExactBranchMatch = branchByName.has(trimmedBranchQuery);
+  // The ref is created under its sanitized name, so the collision check has to
+  // use that name too. Matching on the raw query would offer to create a ref
+  // that already exists whenever sanitizing changes the name.
+  const newRefName = sanitizeNewRefName(trimmedBranchQuery);
+  const hasExactBranchMatch = branchByName.has(newRefName);
   const createBranchItemValue = canCreateBranch
     ? `__create_new_branch__:${trimmedBranchQuery}`
     : null;
@@ -440,7 +452,7 @@ export function BranchToolbarBranchSelector({
   };
 
   const createRef = (rawName: string) => {
-    const name = rawName.trim();
+    const name = sanitizeNewRefName(rawName);
     if (!branchCwd || !name || isBranchActionPending) return;
 
     setIsBranchMenuOpen(false);
@@ -613,9 +625,9 @@ export function BranchToolbarBranchSelector({
   // Action-oriented tooltip (the pill opens the PR), distinct from the sidebar's
   // state-description tooltip.
   const branchPrTooltip = branchPr
-    ? `Open ${sourceControlPresentation.terminology.singular} #${branchPr.number} (${branchPr.state}) in browser`
+    ? `Open ${sourceControlPresentation.terminology.singular} #${branchPr.number} (${branchPr.state})`
     : "";
-  const openPrLink = useOpenPrLink();
+  const openPrLink = useOpenPrLink(threadRef);
 
   function renderPickerItem(itemValue: string, index: number) {
     if (checkoutPullRequestItemValue && itemValue === checkoutPullRequestItemValue) {
@@ -658,7 +670,7 @@ export function BranchToolbarBranchSelector({
           className="pe-1.5"
           onClick={() => createRef(trimmedBranchQuery)}
         >
-          <span className="truncate">Create new ref &quot;{trimmedBranchQuery}&quot;</span>
+          <span className="truncate">Create new ref &quot;{newRefName}&quot;</span>
         </ComboboxItem>
       );
     }
@@ -714,7 +726,10 @@ export function BranchToolbarBranchSelector({
       open={isBranchMenuOpen}
       value={resolvedActiveBranch}
     >
-      <div className={cn("flex min-w-0 items-center gap-1", className)}>
+      <div
+        className={cn("flex min-w-0 items-center gap-1", className)}
+        data-composer-context-control
+      >
         {branchPr && branchPrStatus ? (
           <Tooltip>
             <TooltipTrigger
@@ -730,8 +745,22 @@ export function BranchToolbarBranchSelector({
                 />
               }
             >
-              <ChangeRequestStatusIcon className="size-3" />
-              <span>#{branchPr.number}</span>
+              <ChangeRequestStatusIcon
+                state={branchPr.state}
+                isDraft={branchPr.isDraft}
+                className="size-3"
+              />
+              <span
+                data-composer-label
+                className="min-w-0 max-w-12 overflow-hidden group-data-[compact]/composer-context:max-w-0"
+              >
+                <span
+                  data-composer-label-motion
+                  className="block w-full min-w-0 max-w-12 origin-left truncate transition-[opacity,transform] duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:[transform:translateX(-0.25rem)_scaleX(0.95)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transform-none motion-reduce:transition-opacity"
+                >
+                  #{branchPr.number}
+                </span>
+              </span>
             </TooltipTrigger>
             <TooltipPopup side="top">{branchPrTooltip}</TooltipPopup>
           </Tooltip>
@@ -745,21 +774,31 @@ export function BranchToolbarBranchSelector({
         >
           <ComboboxTrigger
             render={<Button variant="ghost" size="xs" />}
-            className="min-w-0 max-w-full text-muted-foreground/70 hover:text-foreground/80"
+            className="min-w-0 max-w-full font-normal text-muted-foreground/70 text-xs! hover:text-foreground/80"
             disabled={isInitialBranchesLoadPending || isBranchActionPending}
           >
             <GitBranchIcon className="size-3 shrink-0 opacity-70" />
             <span
               data-composer-label
-              className="min-w-0 max-w-[240px] truncate transition-[max-width,opacity] duration-300 ease-out group-data-[compact]/composer-context:max-w-0 group-data-[compact]/composer-context:opacity-0"
+              className="min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0"
             >
-              {triggerLabel}
+              <span
+                data-composer-label-motion
+                className="block w-full min-w-0 max-w-[240px] origin-left truncate transition-[opacity,transform] duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:[transform:translateX(-0.25rem)_scaleX(0.95)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transform-none motion-reduce:transition-opacity"
+              >
+                {triggerLabel}
+              </span>
             </span>
             <ChevronDownIcon className="size-3 shrink-0 opacity-50" />
           </ComboboxTrigger>
         </span>
       </div>
-      <ComboboxPopup align="end" side="top" className="flex w-80 flex-col">
+      <ComboboxPopup
+        align="end"
+        side="top"
+        className="flex w-80 flex-col"
+        {...composerFloatingLayerProps}
+      >
         <div className="shrink-0 px-3 pt-2.5">
           <div className="relative -translate-y-px border-b border-border/70 pb-1.5 transition-colors focus-within:border-ring">
             <SearchIcon
@@ -806,9 +845,11 @@ export function BranchToolbarBranchSelector({
                   maybeFetchNextBranchPage();
                 }}
                 className={cn(
-                  "scrollbar-gutter-stable overflow-x-hidden overscroll-y-contain ps-1 pe-0 pt-2 pb-1 [--fade-size:1.5rem]",
-                  showTopBranchScrollFade && "mask-t-from-[calc(100%-var(--fade-size))]",
-                  showBottomBranchScrollFade && "mask-b-from-[calc(100%-var(--fade-size))]",
+                  "scrollbar-gutter-stable overflow-x-hidden overscroll-y-contain ps-1 pe-0 pt-2 pb-1",
+                  getVirtualizedScrollFadeClassName({
+                    top: showTopBranchScrollFade,
+                    bottom: showBottomBranchScrollFade,
+                  }),
                 )}
                 style={{ maxHeight: "14rem" }}
               />
@@ -829,7 +870,7 @@ export function BranchToolbarBranchSelector({
                     <Switch
                       id={startFromOriginSwitchId}
                       checked={startFromOrigin}
-                      className="[--thumb-size:--spacing(3.5)]"
+                      size="sm"
                       aria-label="Start worktree from origin"
                       onCheckedChange={(checked) => onStartFromOriginChange(Boolean(checked))}
                     />

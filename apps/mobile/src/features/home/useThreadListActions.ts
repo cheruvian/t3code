@@ -1,5 +1,5 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { canSettle, canSnooze } from "@t3tools/client-runtime/state/thread-settled";
+import { canSnooze } from "@t3tools/client-runtime/state/thread-settled";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
@@ -45,6 +45,15 @@ function environmentSupportsPinReorder(environmentId: EnvironmentThreadShell["en
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadPinReorder === true
+  );
+}
+
+function environmentSupportsTitleRegeneration(
+  environmentId: EnvironmentThreadShell["environmentId"],
+) {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadTitleRegeneration === true
   );
 }
 
@@ -106,16 +115,6 @@ function useThreadActionExecutor(
           Alert.alert(
             actionFailureTitle(action),
             "This environment's server does not support settling yet. Update the server to use Settle.",
-          );
-          return false;
-        }
-        // Settle may only target what effectiveSettled could classify as
-        // settled: not starting/running sessions, not threads waiting on
-        // approvals or user input. Anything else would hide live work.
-        if (action === "settle" && !canSettle(thread, { now: new Date().toISOString() })) {
-          Alert.alert(
-            actionFailureTitle(action),
-            "This thread still needs attention. Resolve or interrupt it first, then try again.",
           );
           return false;
         }
@@ -227,13 +226,18 @@ export function useThreadListActions(): {
     thread: EnvironmentThreadShell,
     direction: "up" | "down",
   ) => Promise<boolean>;
+  readonly regenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
 } {
   const executeAction = useThreadActionExecutor();
   const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
   const unsnoozeMutation = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
   const pinMutation = useAtomCommand(threadEnvironment.pin, { reportFailure: false });
   const unpinMutation = useAtomCommand(threadEnvironment.unpin, { reportFailure: false });
+  const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
   const snoozeInFlightThreadKeys = useRef(new Set<string>());
+  const titleRegenerationInFlightThreadKeys = useRef(new Set<string>());
 
   const archiveThread = useCallback(
     (thread: EnvironmentThreadShell) => {
@@ -405,6 +409,47 @@ export function useThreadListActions(): {
     },
     [unpinMutation],
   );
+  const regenerateThreadTitle = useCallback(
+    async (thread: EnvironmentThreadShell) => {
+      const key = scopedThreadKey(thread.environmentId, thread.id);
+      if (
+        thread.titleRegeneration != null ||
+        titleRegenerationInFlightThreadKeys.current.has(key)
+      ) {
+        return false;
+      }
+      if (!environmentSupportsTitleRegeneration(thread.environmentId)) {
+        Alert.alert(
+          "Could not regenerate title",
+          "This environment's server does not support title regeneration yet. Update the server to regenerate thread titles.",
+        );
+        return false;
+      }
+
+      titleRegenerationInFlightThreadKeys.current.add(key);
+      selectionHaptic();
+      try {
+        const result = await updateThreadMetadata({
+          environmentId: thread.environmentId,
+          input: { threadId: thread.id, regenerateTitle: true },
+        });
+        if (result._tag === "Failure") {
+          const error = Cause.squash(result.cause);
+          Alert.alert(
+            "Could not regenerate title",
+            error instanceof Error && error.message.trim().length > 0
+              ? error.message
+              : "The thread title could not be regenerated.",
+          );
+          return false;
+        }
+        return true;
+      } finally {
+        titleRegenerationInFlightThreadKeys.current.delete(key);
+      }
+    },
+    [updateThreadMetadata],
+  );
 
   // Move up / Move down for the pinned block. Computed against the CANONICAL
   // keyed pinned order (not the rendered list), so the move is valid even
@@ -497,6 +542,7 @@ export function useThreadListActions(): {
     pinThread,
     unpinThread,
     movePinnedThread,
+    regenerateThreadTitle,
   };
 }
 
