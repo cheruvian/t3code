@@ -1344,7 +1344,6 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
-
   it.effect("clears session state even when cleanup finalizers throw", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;

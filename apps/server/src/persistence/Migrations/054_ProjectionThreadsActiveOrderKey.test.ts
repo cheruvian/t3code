@@ -22,7 +22,10 @@ it.layer(NodeSqliteClient.layerMemory())("054_ProjectionThreadsActiveOrderKey", 
         )
       `;
       const applied = yield* runMigrations({ toMigrationInclusive: 54 });
-      assert.deepEqual(applied.map(([id]) => id), [49, 50, 51, 52, 53, 54]);
+      assert.deepEqual(
+        applied.map(([id]) => id),
+        [49, 50, 51, 52, 53, 54],
+      );
       assert.deepEqual(yield* runMigrations(), []);
       const migrated = yield* sql<{ readonly activeOrderKey: string | null }>`
         SELECT active_order_key AS "activeOrderKey" FROM projection_threads WHERE thread_id = 'thread-1'
