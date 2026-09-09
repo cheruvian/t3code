@@ -9,6 +9,7 @@ import {
   PickFolderOptionsSchema,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   REMOTE_CAPABLE_EDITOR_IDS,
+  SystemSettingsPaneSchema,
   type DesktopEnvironmentBootstrap,
   type PickedThemeFile,
 } from "@t3tools/contracts";
@@ -23,7 +24,6 @@ import * as Schema from "effect/Schema";
 
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
 import * as DesktopLocalEnvironmentAuth from "../../backend/DesktopLocalEnvironmentAuth.ts";
-import * as DesktopSafeShutdown from "../../app/DesktopSafeShutdown.ts";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
 import * as DesktopWslBackend from "../../wsl/DesktopWslBackend.ts";
@@ -181,21 +181,6 @@ export const getLocalEnvironmentBearerToken = DesktopIpc.makeIpcMethod({
   }),
 });
 
-export const resolveSafeShutdown = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.SAFE_SHUTDOWN_RESOLVE_CHANNEL,
-  payload: Schema.Struct({
-    requestId: Schema.String,
-    resolution: Schema.Literals(["committed", "cancelled", "failed"]),
-  }),
-  result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.window.resolveSafeShutdown")(function* (input) {
-    const safeShutdown = yield* Effect.serviceOption(DesktopSafeShutdown.DesktopSafeShutdown);
-    if (Option.isSome(safeShutdown)) {
-      yield* safeShutdown.value.resolve(input.requestId, input.resolution);
-    }
-  }),
-});
-
 export const pickFolder = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PICK_FOLDER_CHANNEL,
   payload: Schema.UndefinedOr(PickFolderOptionsSchema),
@@ -332,6 +317,16 @@ export const openExternal = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.window.openExternal")(function* (url) {
     const shell = yield* ElectronShell.ElectronShell;
     return yield* shell.openExternal(url);
+  }),
+});
+
+export const openSystemSettings = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.OPEN_SYSTEM_SETTINGS_CHANNEL,
+  payload: SystemSettingsPaneSchema,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.window.openSystemSettings")(function* (pane) {
+    const shell = yield* ElectronShell.ElectronShell;
+    return yield* shell.openSystemSettings(pane);
   }),
 });
 

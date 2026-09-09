@@ -75,7 +75,7 @@ export function agentApiInventoryJson(): string {
 }
 
 /** Failure surface of the agent-facing `api_call` MCP tool. */
-export class AgentApiCallError extends Schema.TaggedErrorClass<AgentApiCallError>()(
+export class AgentApiCallError extends Schema.TaggedError<AgentApiCallError>()(
   "AgentApiCallError",
   {
     operation: Schema.String,

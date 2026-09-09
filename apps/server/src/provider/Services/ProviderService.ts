@@ -1,3 +1,4 @@
+import type * as Option from "effect/Option";
 /**
  * ProviderService - Service interface for provider sessions, turns, and checkpoints.
  *
@@ -20,16 +21,15 @@ import type {
   ProviderSendTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
-  ProviderSessionGeneration,
   ProviderStopSessionInput,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
+  MessageId,
   ThreadId,
   ProviderTurnStartResult,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
-import type * as Option from "effect/Option";
 import type * as Stream from "effect/Stream";
 
 import type { ProviderServiceError } from "../Errors.ts";
@@ -54,6 +54,12 @@ export interface ProviderServiceShape {
   readonly sendTurn: (
     input: ProviderSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
+
+  readonly compactThread: (
+    threadId: ThreadId,
+    modelSelection?: ProviderSendTurnInput["modelSelection"],
+    requestId?: MessageId,
+  ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
    * Interrupt a running provider turn.
@@ -84,17 +90,13 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
-   * Read one active provider session through its persisted thread binding.
-   */
-  readonly getSession: (
-    threadId: ThreadId,
-  ) => Effect.Effect<Option.Option<ProviderSession>, ProviderServiceError>;
-
-  /**
    * List active provider sessions.
    *
    * Aggregates runtime session lists from all registered adapters.
    */
+  readonly getSession: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<ProviderSession>, ProviderServiceError>;
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
   /**
@@ -109,24 +111,19 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<ProviderInstanceRoutingInfo, ProviderServiceError>;
 
   /**
+   * Reject unsupported rewind before files change, without resuming the session.
+   */
+  readonly assertConversationRollbackSupported: (
+    threadId: ThreadId,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
    * Roll back provider conversation state by a number of turns.
    */
   readonly rollbackConversation: (input: {
     readonly threadId: ThreadId;
     readonly numTurns: number;
   }) => Effect.Effect<void, ProviderServiceError>;
-
-  readonly runIfCurrentGeneration: <A, E, R>(
-    input: {
-      readonly threadId: ThreadId;
-      readonly sessionGeneration?: ProviderSessionGeneration;
-    },
-    effect: Effect.Effect<A, E, R>,
-  ) => Effect.Effect<Option.Option<A>, E | ProviderServiceError, R>;
-
-  readonly getTerminalDisposition: (
-    threadId: ThreadId,
-  ) => Effect.Effect<"interrupted" | null, ProviderServiceError>;
 
   /**
    * Upload a thread and return the provider's shareable feedback identifier.

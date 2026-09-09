@@ -13,6 +13,7 @@ import * as Path from "effect/Path";
 
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
+import { resolveLinuxDesktopEntryName } from "./DesktopEarlyElectronStartup.ts";
 import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
 import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
 
@@ -102,13 +103,21 @@ function resolveDesktopAppStageLabel(input: {
   return isNightlyDesktopVersion(input.appVersion) ? "Nightly" : "Alpha";
 }
 
-function resolveDesktopAppBranding(input: {
-  readonly stageLabel: DesktopAppStageLabel;
+export function resolveDesktopAppBranding(input: {
+  readonly stageLabel?: DesktopAppStageLabel;
+  readonly isDevelopment?: boolean;
+  readonly appVersion?: string;
 }): DesktopAppBranding {
+  const stageLabel =
+    input.stageLabel ??
+    resolveDesktopAppStageLabel({
+      isDevelopment: input.isDevelopment ?? false,
+      appVersion: input.appVersion ?? "0.0.0",
+    });
   return {
     baseName: APP_BASE_NAME,
-    stageLabel: input.stageLabel,
-    displayName: `${APP_BASE_NAME} (${input.stageLabel})`,
+    stageLabel,
+    displayName: `${APP_BASE_NAME} (${stageLabel})`,
   };
 }
 
@@ -233,7 +242,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
       isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
     ),
-    linuxDesktopEntryName: isDevelopment ? "t3code-dev.desktop" : "t3code.desktop",
+    linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment),
     linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
     linuxApplicationsDir,
     appImagePath: config.appImagePath,

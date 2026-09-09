@@ -1,11 +1,11 @@
-import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import * as NodeAssert from "node:assert/strict";
+import * as NodeTest from "node:test";
 
 import { electronDownloadArgs } from "./ensure-electron-runtime.mjs";
 
-describe("Electron runtime download", () => {
-  it("retries transient transfer failures within a bounded window", () => {
-    assert.deepEqual(
+NodeTest.describe("Electron runtime download", () => {
+  NodeTest.it("retries transient transfer failures within a bounded window", () => {
+    NodeAssert.deepEqual(
       electronDownloadArgs("https://example.test/electron.zip", "/tmp/electron.zip"),
       [
         "-fsSL",

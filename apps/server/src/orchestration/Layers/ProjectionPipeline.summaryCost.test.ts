@@ -1301,7 +1301,8 @@ it.layer(RebuildTestLayer)("OrchestrationProjectionPipeline shell-summary rebuil
             last_applied_sequence AS "lastAppliedSequence",
             updated_at AS "updatedAt"
           FROM projection_state
-          ORDER BY projector ASC
+          WHERE projector != 'projection.attachment-cleanup'
+    ORDER BY projector ASC
         `;
 
       const expectedProjection = {

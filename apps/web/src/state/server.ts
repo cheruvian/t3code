@@ -5,7 +5,6 @@ import {
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
-  type ServerDrainSnapshot,
   type ServerProvider,
   type ServerSettings,
 } from "@t3tools/contracts";
@@ -29,6 +28,8 @@ import { environmentSession } from "./session";
 export const serverEnvironment = createServerEnvironmentAtoms(connectionAtomRuntime, {
   initialConfigValueAtom: environmentSession.initialConfigValueAtom,
   environmentThemes: true,
+  usageLimitSources: true,
+  usageLimitsCommand: true,
 });
 export const environmentServerConfigsAtom = createEnvironmentServerConfigsAtom({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
@@ -49,7 +50,7 @@ const EMPTY_PRIMARY_SERVER_STATE: PrimaryServerState = {
   welcome: null,
 };
 
-export const primaryServerStateAtom = Atom.make((get): PrimaryServerState => {
+const primaryServerStateAtom = Atom.make((get): PrimaryServerState => {
   const environmentId = get(primaryEnvironmentIdAtom);
   if (environmentId === null) {
     return EMPTY_PRIMARY_SERVER_STATE;
@@ -79,14 +80,6 @@ export const primaryServerConfigEventAtom = Atom.make(
 export const primaryServerWelcomeAtom = Atom.make(
   (get): ServerLifecycleWelcomePayload | null => get(primaryServerStateAtom).welcome,
 ).pipe(Atom.withLabel("web-primary-server-welcome"));
-
-export const primaryServerDrainAtom = Atom.make((get): ServerDrainSnapshot | null => {
-  const environmentId = get(primaryEnvironmentIdAtom);
-  if (environmentId === null) return null;
-  return Option.getOrNull(
-    AsyncResult.value(get(serverEnvironment.drain({ environmentId, input: {} }))),
-  );
-}).pipe(Atom.withLabel("web-primary-server-drain"));
 
 export const primaryServerSettingsAtom = Atom.make(
   (get): ServerSettings => get(primaryServerConfigAtom)?.settings ?? DEFAULT_SERVER_SETTINGS,

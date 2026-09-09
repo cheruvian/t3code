@@ -54,7 +54,7 @@ const AgentAwarenessOperation = Schema.Literals([
   "prime-live-activity",
 ]);
 
-export class AgentAwarenessOperationError extends Schema.TaggedErrorClass<AgentAwarenessOperationError>()(
+export class AgentAwarenessOperationError extends Schema.TaggedError<AgentAwarenessOperationError>()(
   "AgentAwarenessOperationError",
   {
     operation: AgentAwarenessOperation,
@@ -137,16 +137,6 @@ export function mergeAgentAwarenessRegistrationPreferences(
   override: Partial<Preferences> | undefined,
 ): Preferences {
   return { ...stored, ...override };
-}
-
-export function normalizeAgentAwarenessRelayBaseUrl(
-  value: string | null | undefined,
-): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed.replace(/\/+$/g, "");
 }
 
 function readRelayConfig(): { readonly url: string } | null {
@@ -255,9 +245,6 @@ function nativePushTokenRegistration(observedPushToken?: string) {
     if (!canRegisterRemoteLiveActivities() || !supportsAgentAwarenessPush()) {
       return { notificationsEnabled: false, pushToken: null };
     }
-    if (observedPushToken) {
-      return { notificationsEnabled: true, pushToken: observedPushToken };
-    }
     const permissions = yield* Effect.tryPromise({
       try: () => Notifications.getPermissionsAsync(),
       catch: (cause) =>
@@ -268,6 +255,9 @@ function nativePushTokenRegistration(observedPushToken?: string) {
     });
     if (!permissions.granted) {
       return { notificationsEnabled: false, pushToken: null };
+    }
+    if (observedPushToken) {
+      return { notificationsEnabled: true, pushToken: observedPushToken };
     }
     const token = yield* Effect.tryPromise({
       try: () => Notifications.getDevicePushTokenAsync(),
@@ -826,18 +816,6 @@ function removeAgentAwarenessConnection(environmentId: EnvironmentId): void {
 
 export function unregisterAgentAwarenessConnection(environmentId: EnvironmentId): void {
   removeAgentAwarenessConnection(environmentId);
-}
-
-export function unregisterAllAgentAwarenessConnections(): void {
-  environmentConnections.clear();
-  pushTokenSubscription?.remove();
-  pushTokenSubscription = null;
-  appStateSubscription?.remove();
-  appStateSubscription = null;
-  if (activeLiveActivityRegistrationRetry) {
-    clearTimeout(activeLiveActivityRegistrationRetry);
-    activeLiveActivityRegistrationRetry = null;
-  }
 }
 
 export function refreshAgentAwarenessRegistration(): Effect.Effect<

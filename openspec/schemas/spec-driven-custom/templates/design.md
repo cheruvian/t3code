@@ -31,8 +31,8 @@ flowchart LR
   B -->|reads / writes| store[(Owned store)]
 ```
 
-| Subsystem | Responsibility | Owns (data / contract) |
-| --------- | -------------- | ---------------------- |
+| Subsystem     | Responsibility              | Owns (data / contract)      |
+| ------------- | --------------------------- | --------------------------- |
 | <!-- name --> | <!-- one responsibility --> | <!-- explicit ownership --> |
 
 ## 4. Components and Runtime Flows
@@ -63,9 +63,9 @@ explicitly. Use an erDiagram when relationships matter. Reference canonical
 types or schemas when they already exist instead of duplicating them here.
 -->
 
-| Entity / record | Owner | Store and format | Lifecycle / invariants |
-| --------------- | ----- | ---------------- | ---------------------- |
-| <!-- name --> | <!-- subsystem --> | <!-- table, file, event, memory, etc. --> | <!-- retention, uniqueness, transitions --> |
+| Entity / record | Owner              | Store and format                          | Lifecycle / invariants                      |
+| --------------- | ------------------ | ----------------------------------------- | ------------------------------------------- |
+| <!-- name -->   | <!-- subsystem --> | <!-- table, file, event, memory, etc. --> | <!-- retention, uniqueness, transitions --> |
 
 ## 6. Interfaces and Contracts
 
@@ -77,8 +77,8 @@ Include validation, errors, idempotency, pagination, and versioning where they
 matter. Mark Not applicable with a reason if no interface changes.
 -->
 
-| Interface | Purpose | Input | Output / errors | Compatibility |
-| --------- | ------- | ----- | --------------- | ------------- |
+| Interface                                             | Purpose          | Input                   | Output / errors                      | Compatibility                          |
+| ----------------------------------------------------- | ---------------- | ----------------------- | ------------------------------------ | -------------------------------------- |
 | <!-- method, event, command, or function boundary --> | <!-- purpose --> | <!-- canonical type --> | <!-- result and failure contract --> | <!-- additive, breaking, versioned --> |
 
 ## 7. Security and Trust Boundaries
@@ -97,8 +97,8 @@ down, slow, duplicated, interrupted, or partially complete. Be explicit about
 timeouts, retries, fallback behavior, recovery, and blast radius.
 -->
 
-| Failure | Expected behavior | Mitigation / recovery | Blast radius |
-| ------- | ----------------- | --------------------- | ------------ |
+| Failure                           | Expected behavior          | Mitigation / recovery                     | Blast radius                            |
+| --------------------------------- | -------------------------- | ----------------------------------------- | --------------------------------------- |
 | <!-- dependency or transition --> | <!-- observable result --> | <!-- timeout, retry, rollback, repair --> | <!-- affected users/data/components --> |
 
 ## 9. Decisions, Risks, and Trade-offs

@@ -2,6 +2,7 @@ import { ProjectId } from "@t3tools/contracts";
 import {
   projectScriptRuntimeEnv,
   resolveProjectScripts,
+  resolveInheritedProjectScripts,
   setupProjectScript,
 } from "@t3tools/shared/projectScripts";
 import * as Context from "effect/Context";
@@ -11,8 +12,9 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
-import { ServerSettingsService } from "../serverSettings.ts";
+
 import { T3ProjectFileLoader } from "./T3ProjectFileLoader.ts";
 
 export interface ProjectSetupScriptRunnerResultNoScript {
@@ -39,14 +41,14 @@ export interface ProjectSetupScriptRunnerInput {
   readonly preferredTerminalId?: string;
 }
 
-export class ProjectSetupScriptOperationError extends Schema.TaggedErrorClass<ProjectSetupScriptOperationError>()(
+export class ProjectSetupScriptOperationError extends Schema.TaggedError<ProjectSetupScriptOperationError>()(
   "ProjectSetupScriptOperationError",
   {
     threadId: Schema.String,
     projectId: Schema.optional(Schema.String),
     projectCwd: Schema.optional(Schema.String),
     worktreePath: Schema.String,
-    operation: Schema.Literals(["resolveProject", "openTerminal", "writeCommand"]),
+    operation: Schema.Literals(["resolveProject", "readSettings", "openTerminal", "writeCommand"]),
     cause: Schema.Defect(),
   },
 ) {
@@ -55,7 +57,7 @@ export class ProjectSetupScriptOperationError extends Schema.TaggedErrorClass<Pr
   }
 }
 
-export class ProjectSetupScriptProjectNotFoundError extends Schema.TaggedErrorClass<ProjectSetupScriptProjectNotFoundError>()(
+export class ProjectSetupScriptProjectNotFoundError extends Schema.TaggedError<ProjectSetupScriptProjectNotFoundError>()(
   "ProjectSetupScriptProjectNotFoundError",
   {
     threadId: Schema.String,
@@ -84,11 +86,12 @@ export class ProjectSetupScriptRunner extends Context.Service<
   }
 >()("t3/project/ProjectSetupScriptRunner") {}
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const terminalManager = yield* TerminalManager.TerminalManager;
-  const serverSettings = yield* ServerSettingsService;
-  const t3ProjectFileLoader = yield* T3ProjectFileLoader;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const projectFileLoader = yield* T3ProjectFileLoader;
 
   const runForThread: ProjectSetupScriptRunner["Service"]["runForThread"] = Effect.fn(
     "ProjectSetupScriptRunner.runForThread",
@@ -137,16 +140,16 @@ export const make = Effect.gen(function* () {
         (cause) =>
           new ProjectSetupScriptOperationError({
             ...errorContext,
-            operation: "resolveProject",
+            operation: "readSettings",
             cause,
           }),
       ),
     );
-    const projectFile = yield* t3ProjectFileLoader.load(project.workspaceRoot);
+    const projectFile = yield* projectFileLoader.load(project.workspaceRoot);
     const script = setupProjectScript(
-      resolveProjectScripts(
-        project.scripts,
-        Option.isSome(projectFile) ? (projectFile.value.scripts ?? []) : [],
+      resolveInheritedProjectScripts(
+        resolveProjectScripts(settings, project),
+        Option.getOrUndefined(projectFile)?.scripts ?? [],
         settings.globalScripts,
         project.disabledInheritedScriptIds ?? [],
       ),

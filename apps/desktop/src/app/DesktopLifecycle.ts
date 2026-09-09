@@ -1,7 +1,6 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -15,10 +14,9 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopState from "./DesktopState.ts";
-import * as DesktopSafeShutdown from "./DesktopSafeShutdown.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 
-export class DesktopLifecycleRelaunchError extends Schema.TaggedErrorClass<DesktopLifecycleRelaunchError>()(
+export class DesktopLifecycleRelaunchError extends Schema.TaggedError<DesktopLifecycleRelaunchError>()(
   "DesktopLifecycleRelaunchError",
   {
     reason: Schema.String,
@@ -61,16 +59,6 @@ export class DesktopLifecycle extends Context.Service<
 
 const { logInfo: logLifecycleInfo, logError: logLifecycleError } =
   makeComponentLogger("desktop-lifecycle");
-
-const requestSafeShutdown = (action: "shutdown" | "restart") =>
-  Effect.serviceOption(DesktopSafeShutdown.DesktopSafeShutdown).pipe(
-    Effect.flatMap(
-      Option.match({
-        onNone: () => Effect.succeed("committed" as const),
-        onSome: (safeShutdown) => safeShutdown.request(action),
-      }),
-    ),
-  );
 
 function addScopedListener<Args extends ReadonlyArray<unknown>>(
   target: unknown,
@@ -132,11 +120,6 @@ function handleBeforeQuit(
       const electronWindow = yield* ElectronWindow.ElectronWindow;
       yield* Ref.set(state.quitting, true);
       yield* logLifecycleInfo("before-quit received");
-      const resolution = yield* requestSafeShutdown("shutdown");
-      if (resolution !== "committed") {
-        yield* Ref.set(state.quitting, false);
-        return;
-      }
       yield* requestDesktopShutdownAndWait(
         electronWindow.destroyAll.pipe(
           Effect.catchCause((cause) =>
@@ -144,11 +127,16 @@ function handleBeforeQuit(
           ),
         ),
       );
-      markQuitAllowed();
-      const electronApp = yield* ElectronApp.ElectronApp;
-      yield* electronApp.quit;
     }).pipe(Effect.withSpan("desktop.lifecycle.beforeQuit")),
-  );
+  ).finally(() => {
+    markQuitAllowed();
+    void runEffect(
+      Effect.gen(function* () {
+        const electronApp = yield* ElectronApp.ElectronApp;
+        yield* electronApp.quit;
+      }).pipe(Effect.withSpan("desktop.lifecycle.quitAfterShutdown")),
+    );
+  });
 }
 
 function quitFromSignal(
@@ -171,6 +159,7 @@ function quitFromSignal(
   );
 }
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = DesktopLifecycle.of({
   relaunch: Effect.fn("desktop.lifecycle.relaunch")(function* (reason) {
     const electronApp = yield* ElectronApp.ElectronApp;
@@ -179,7 +168,6 @@ export const make = DesktopLifecycle.of({
     yield* logLifecycleInfo("desktop relaunch requested", { reason });
     yield* Effect.gen(function* () {
       yield* Effect.yieldNow;
-      if ((yield* requestSafeShutdown("restart")) !== "committed") return;
       yield* Ref.set(state.quitting, true);
       yield* requestDesktopShutdownAndWait();
       if (environment.isDevelopment) {
@@ -202,6 +190,7 @@ export const make = DesktopLifecycle.of({
   }),
   register: Effect.gen(function* () {
     const desktopWindow = yield* DesktopWindow.DesktopWindow;
+    const electronWindow = yield* ElectronWindow.ElectronWindow;
     const electronApp = yield* ElectronApp.ElectronApp;
     const electronTheme = yield* ElectronTheme.ElectronTheme;
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -219,8 +208,16 @@ export const make = DesktopLifecycle.of({
       // Cancelling the following app "before-quit" event breaks that sequence,
       // most visibly on macOS where the native updater performs the relaunch.
       updaterQuitAllowed = true;
-      void runEffect(
-        logLifecycleInfo("allowing updater-controlled quit").pipe(
+      // This event is synchronous and the updater's quit proceeds as soon as
+      // the listener returns, so a forked destroyAll would race the quit
+      // and windows could still be open when the process exits (visible on
+      // macOS). Destroy them inline.
+      Effect.runSyncWith(context)(
+        electronWindow.destroyAll.pipe(
+          Effect.andThen(logLifecycleInfo("allowing updater-controlled quit")),
+          Effect.catchCause((cause) =>
+            logLifecycleError("failed to destroy windows before updater quit", { cause }),
+          ),
           Effect.withSpan("desktop.lifecycle.beforeQuitForUpdate"),
         ),
       );

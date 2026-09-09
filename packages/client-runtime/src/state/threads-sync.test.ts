@@ -12,10 +12,14 @@ import {
   type OrchestrationThreadStreamItem,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
@@ -147,7 +151,9 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   readonly cached?: OrchestrationThread;
   readonly httpSnapshot?: Option.Option<OrchestrationThreadDetailSnapshot>;
   readonly completionMarker?: boolean;
-  readonly assistantPreviews?: boolean;
+  readonly resumeCache?: NonNullable<Parameters<typeof makeEnvironmentThreadState>[1]>;
+  readonly loadCached?: Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>>;
+  readonly saveThread?: Persistence.EnvironmentCacheStore["Service"]["saveThread"];
 }) {
   const inputs = yield* Queue.unbounded<TestThreadInput>();
   const observed = yield* Queue.unbounded<EnvironmentThreadState>();
@@ -220,6 +226,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     loadShell: () => Effect.succeed(Option.none()),
     saveShell: () => Effect.void,
     loadThread: (_environmentId, threadId) =>
+      options?.loadCached ??
       Effect.succeed(
         threadId === THREAD_ID && options?.cached !== undefined
           ? Option.some({
@@ -228,8 +235,10 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
             })
           : Option.none(),
       ),
-    saveThread: (_environmentId, thread) =>
-      Ref.update(savedThreads, (current) => [...current, thread]),
+    saveThread: (environmentId, thread) =>
+      Ref.update(savedThreads, (current) => [...current, thread]).pipe(
+        Effect.andThen(options?.saveThread?.(environmentId, thread) ?? Effect.void),
+      ),
     removeThread: (_environmentId, threadId) =>
       Ref.update(removedThreads, (current) => [...current, threadId]),
     loadServerConfig: () => Effect.succeed(Option.none()),
@@ -240,7 +249,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     clearVcsRefs: () => Effect.void,
     clear: () => Effect.void,
   });
-  const threadState = yield* makeEnvironmentThreadState(THREAD_ID).pipe(
+  const threadState = yield* makeEnvironmentThreadState(THREAD_ID, options?.resumeCache).pipe(
     Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
     Effect.provideService(Persistence.EnvironmentCacheStore, cache),
     Effect.provideService(ThreadSnapshotLoader, snapshotLoader),
@@ -257,6 +266,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   );
 
   return {
+    threadState,
     inputs,
     observed,
     latest,
@@ -409,168 +419,269 @@ const sessionSettled = (): OrchestrationThreadStreamItem => ({
 });
 
 describe("EnvironmentThreads", () => {
-  it.effect("does not request assistant previews from servers without the capability", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeHarness({ cached: BASE_THREAD });
-      const subscription = yield* Queue.take(harness.subscribeInputs);
+  for (const source of ["disk", "HTTP"] as const) {
+    it.effect(`does not rewrite an unchanged ${source} snapshot on navigation or warm return`, () =>
+      Effect.gen(function* () {
+        const resumeCache: NonNullable<Parameters<typeof makeEnvironmentThreadState>[1]> = {
+          snapshot: undefined,
+          owner: undefined,
+        };
+        const firstSaved = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const h = yield* makeHarness({
+              resumeCache,
+              ...(source === "disk"
+                ? { cached: BASE_THREAD }
+                : { httpSnapshot: Option.some({ snapshotSequence: 7, thread: BASE_THREAD }) }),
+            });
+            yield* awaitThreadState(h.observed, (value) => value.status === "live");
+            if (source === "HTTP") yield* TestClock.adjust("500 millis");
+            return h.savedThreads;
+          }),
+        );
+        expect(yield* Ref.get(firstSaved)).toHaveLength(source === "disk" ? 0 : 1);
+        const nextSaved = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const h = yield* makeHarness({ resumeCache });
+            yield* awaitThreadState(h.observed, (value) => value.status === "live");
+            return h.savedThreads;
+          }),
+        );
+        expect(yield* Ref.get(nextSaved)).toEqual([]);
+      }),
+    );
+  }
 
-      expect(subscription.includeAssistantPreviews).toBeUndefined();
-    }).pipe(Effect.scoped),
+  it.effect("retries a failed background cache write when the scope closes", () =>
+    Effect.gen(function* () {
+      let attempts = 0;
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const h = yield* makeHarness({
+            httpSnapshot: Option.some({ snapshotSequence: 7, thread: BASE_THREAD }),
+            saveThread: () =>
+              Effect.suspend(() => {
+                attempts += 1;
+                return attempts === 1
+                  ? Effect.fail(
+                      new Persistence.ConnectionPersistenceError({
+                        operation: "save-thread",
+                        message: "Test storage failure",
+                      }),
+                    )
+                  : Effect.void;
+              }),
+          });
+          yield* awaitThreadState(h.observed, (value) => value.status === "live");
+          yield* TestClock.adjust("500 millis");
+          expect(attempts).toBe(1);
+        }),
+      );
+      expect(attempts).toBe(2);
+    }),
   );
 
-  it.effect("keeps assistant previews transient across completion and reconnect", () =>
+  it.effect("flushes newer data after an older background write completes", () =>
     Effect.gen(function* () {
-      const harness = yield* makeHarness({
-        cached: BASE_THREAD,
-        assistantPreviews: true,
-      });
-      const initialSubscription = yield* Queue.take(harness.subscribeInputs);
-
-      expect(initialSubscription.includeAssistantPreviews).toBe(true);
-      expect(initialSubscription.afterSequence).toBe(CACHED_SNAPSHOT_SEQUENCE);
-
-      yield* Queue.offer(harness.inputs, assistantPreview("Cumulative preview"));
-      const previewed = yield* awaitThreadState(
-        harness.observed,
-        (value) =>
-          Option.isSome(value.data) &&
-          value.data.value.messages.some(
-            (message) =>
-              message.id === ASSISTANT_MESSAGE_ID &&
-              message.text === "Cumulative preview" &&
-              message.streaming,
-          ),
+      const writing = yield* Deferred.make<void>();
+      const written = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const saved = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const h = yield* makeHarness({
+            cached: BASE_THREAD,
+            saveThread: (_environmentId, snapshot) =>
+              snapshot.snapshotSequence === 8
+                ? Deferred.succeed(writing, undefined).pipe(
+                    Effect.andThen(Deferred.await(release)),
+                    Effect.andThen(Deferred.succeed(written, undefined)),
+                  )
+                : Effect.void,
+          });
+          yield* Queue.offer(h.inputs, titleUpdated("First update", 8));
+          yield* awaitThreadState(
+            h.observed,
+            (value) => Option.getOrNull(value.data)?.title === "First update",
+          );
+          yield* TestClock.adjust("500 millis");
+          yield* Deferred.await(writing);
+          yield* Queue.offer(h.inputs, titleUpdated("Newer update", 9));
+          yield* awaitThreadState(
+            h.observed,
+            (value) => Option.getOrNull(value.data)?.title === "Newer update",
+          );
+          yield* Deferred.succeed(release, undefined);
+          yield* Deferred.await(written);
+          return h.savedThreads;
+        }),
       );
-      expect(Option.getOrThrow(previewed.data).messages).toEqual([
+      expect(
+        (yield* Ref.get(saved)).map((snapshot) => [
+          snapshot.snapshotSequence,
+          snapshot.thread.title,
+        ]),
+      ).toEqual([
+        [8, "First update"],
+        [9, "Newer update"],
+      ]);
+    }),
+  );
+
+  it.effect("does not resume past a canceled event whose data was not applied", () =>
+    Effect.gen(function* () {
+      const resumeCache: NonNullable<Parameters<typeof makeEnvironmentThreadState>[1]> = {
+        snapshot: undefined,
+        owner: undefined,
+      };
+      const scope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+        Scope.close(scope, Exit.void),
+      );
+      const first = yield* makeHarness({
+        httpSnapshot: Option.some({
+          thread: BASE_THREAD,
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+        }),
+        resumeCache,
+      }).pipe(Effect.provideService(Scope.Scope, scope));
+      yield* awaitThreadState(first.observed, (value) => value.status === "live");
+      const applying = yield* Deferred.make<void>();
+      const update = titleUpdated("Not applied", 8);
+      if (update.kind !== "event") return yield* Effect.die("Expected an event");
+      Object.defineProperty(update.event.payload, "title", {
+        get: () => {
+          Deferred.doneUnsafe(applying, Exit.void);
+          return "Not applied";
+        },
+      });
+      // The reducer reads the title after it advances the cursor. Hold only
+      // the data write so closing the scope interrupts that exact interval.
+      yield* first.threadState.semaphore.take(1);
+      yield* Queue.offer(first.inputs, update);
+      yield* Deferred.await(applying);
+      yield* Scope.close(scope, Exit.void);
+      yield* first.threadState.semaphore.release(1);
+
+      const resumed = yield* makeHarness({ resumeCache });
+      const state = yield* awaitThreadState(resumed.observed, (value) => value.status === "live");
+      expect(Option.getOrThrow(state.data).title).toBe(BASE_THREAD.title);
+      expect(yield* Ref.get(resumed.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE);
+      expect(yield* Ref.get(first.savedThreads)).toEqual([
         {
-          id: ASSISTANT_MESSAGE_ID,
-          role: "assistant",
-          text: "Cumulative preview",
-          turnId: TURN_ID,
-          streaming: true,
-          createdAt: "2026-04-01T01:30:00.000Z",
-          updatedAt: "2026-04-01T01:30:00.000Z",
+          thread: BASE_THREAD,
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
         },
       ]);
-
-      yield* Queue.offer(harness.inputs, assistantPreview("Cumulative preview replacement"));
-      const replaced = yield* awaitThreadState(
-        harness.observed,
-        (value) =>
-          Option.isSome(value.data) &&
-          value.data.value.messages.some(
-            (message) =>
-              message.id === ASSISTANT_MESSAGE_ID &&
-              message.text === "Cumulative preview replacement",
-          ),
-      );
-      expect(
-        Option.getOrThrow(replaced.data).messages.filter(
-          (message) => message.id === ASSISTANT_MESSAGE_ID,
-        ),
-      ).toHaveLength(1);
-
-      yield* TestClock.adjust("500 millis");
-      yield* Effect.yieldNow;
-      expect(yield* Ref.get(harness.savedThreads)).toEqual([]);
-
-      yield* harness.replaceSession;
-      const resumedSubscription = yield* Queue.take(harness.subscribeInputs);
-      expect(resumedSubscription.includeAssistantPreviews).toBe(true);
-      expect(resumedSubscription.afterSequence).toBe(CACHED_SNAPSHOT_SEQUENCE);
-      expect(
-        Option.getOrThrow((yield* SubscriptionRef.get(harness.threadState)).data).messages,
-      ).toEqual([]);
-
-      yield* Queue.offer(harness.inputs, assistantPreview("Cumulative preview"));
-      yield* awaitThreadState(
-        harness.observed,
-        (value) =>
-          Option.isSome(value.data) &&
-          value.data.value.messages.some(
-            (message) => message.id === ASSISTANT_MESSAGE_ID && message.streaming,
-          ),
-      );
-      yield* Queue.offer(harness.inputs, assistantCompleted("Durable answer"));
-      const completed = yield* awaitThreadState(
-        harness.observed,
-        (value) =>
-          Option.isSome(value.data) &&
-          value.data.value.messages.some(
-            (message) =>
-              message.id === ASSISTANT_MESSAGE_ID &&
-              message.text === "Durable answer" &&
-              !message.streaming,
-          ),
-      );
-      const matchingMessages = Option.getOrThrow(completed.data).messages.filter(
-        (message) => message.id === ASSISTANT_MESSAGE_ID,
-      );
-      expect(matchingMessages).toHaveLength(1);
-      expect(matchingMessages[0]?.text).toBe("Durable answer");
-      expect(matchingMessages[0]?.streaming).toBe(false);
-
-      yield* Queue.offer(
-        harness.inputs,
-        assistantPreview("Next segment preview", SECOND_ASSISTANT_MESSAGE_ID),
-      );
-      const nextSegment = yield* awaitThreadState(
-        harness.observed,
-        (value) =>
-          Option.isSome(value.data) &&
-          value.data.value.messages.some(
-            (message) =>
-              message.id === SECOND_ASSISTANT_MESSAGE_ID &&
-              message.text === "Next segment preview" &&
-              message.streaming,
-          ),
-      );
-      expect(
-        Option.getOrThrow(nextSegment.data).messages.some(
-          (message) => message.id === ASSISTANT_MESSAGE_ID && !message.streaming,
-        ),
-      ).toBe(true);
-    }).pipe(Effect.scoped),
+    }),
   );
 
-  it.effect("clears previews when the turn settles and ignores late frames", () =>
+  it.effect("prevents an old scope from replacing its successor's cached data", () =>
     Effect.gen(function* () {
-      const harness = yield* makeHarness({
-        cached: ACTIVE_THREAD,
-        assistantPreviews: true,
-      });
-      yield* Queue.take(harness.subscribeInputs);
-      yield* Queue.offer(harness.inputs, assistantPreview("Transient answer"));
+      const resumeCache: NonNullable<Parameters<typeof makeEnvironmentThreadState>[1]> = {
+        snapshot: undefined,
+        owner: undefined,
+      };
+      const oldScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+        Scope.close(scope, Exit.void),
+      );
+      const old = yield* makeHarness({ cached: BASE_THREAD, resumeCache }).pipe(
+        Effect.provideService(Scope.Scope, oldScope),
+      );
+      yield* awaitThreadState(old.observed, (value) => value.status === "live");
+      const successor = yield* makeHarness({ resumeCache });
+      yield* Queue.offer(successor.inputs, titleUpdated("Successor title", 9));
       yield* awaitThreadState(
-        harness.observed,
-        (value) =>
-          Option.isSome(value.data) &&
-          value.data.value.messages.some(
-            (message) => message.id === ASSISTANT_MESSAGE_ID && message.streaming,
-          ),
+        successor.observed,
+        (value) => Option.getOrNull(value.data)?.title === "Successor title",
       );
+      yield* Queue.offer(old.inputs, titleUpdated("Old scope title", 8));
+      yield* awaitThreadState(
+        old.observed,
+        (value) => Option.getOrNull(value.data)?.title === "Old scope title",
+      );
+      yield* Scope.close(oldScope, Exit.void);
 
-      yield* Queue.offer(harness.inputs, sessionSettled());
-      const settled = yield* awaitThreadState(
-        harness.observed,
-        (value) =>
-          Option.isSome(value.data) &&
-          value.data.value.session?.status === "ready" &&
-          value.data.value.messages.length === 0,
-      );
-      expect(Option.getOrThrow(settled.data).messages).toEqual([]);
+      expect(resumeCache.snapshot?.sequence).toBe(9);
+      expect(Option.getOrThrow(resumeCache.snapshot!.state.data).title).toBe("Successor title");
+      expect(yield* Ref.get(old.savedThreads)).toEqual([]);
+    }),
+  );
 
-      yield* Queue.offer(harness.inputs, assistantPreview("Late stale preview"));
-      yield* Queue.offer(
-        harness.inputs,
-        titleUpdated("After settle", CACHED_SNAPSHOT_SEQUENCE + 2),
+  it.effect("does not let a delayed cache read replace an initialized successor", () =>
+    Effect.gen(function* () {
+      const resumeCache: NonNullable<Parameters<typeof makeEnvironmentThreadState>[1]> = {
+        snapshot: undefined,
+        owner: undefined,
+      };
+      const loading = yield* Deferred.make<void>();
+      const response = yield* Deferred.make<Option.Option<OrchestrationThreadDetailSnapshot>>();
+      const oldFiber = yield* makeHarness({
+        resumeCache,
+        loadCached: Deferred.succeed(loading, undefined).pipe(
+          Effect.andThen(Deferred.await(response)),
+        ),
+      }).pipe(Effect.forkScoped);
+      yield* Deferred.await(loading);
+      const successor = yield* makeHarness({ cached: BASE_THREAD, resumeCache });
+      yield* awaitThreadState(successor.observed, (value) => value.status === "live");
+      yield* Deferred.succeed(
+        response,
+        Option.some({ snapshotSequence: 3, thread: { ...BASE_THREAD, title: "Old disk data" } }),
       );
-      const afterLateFrame = yield* awaitThreadState(
-        harness.observed,
-        (value) => Option.isSome(value.data) && value.data.value.title === "After settle",
+      const old = yield* Fiber.join(oldFiber);
+      yield* awaitThreadState(old.observed, (value) => value.status === "live");
+
+      expect(resumeCache.snapshot?.sequence).toBe(CACHED_SNAPSHOT_SEQUENCE);
+      expect(Option.getOrThrow(resumeCache.snapshot!.state.data).title).toBe(BASE_THREAD.title);
+    }),
+  );
+
+  it.effect("does not let an old deletion remove its successor's persisted cache", () =>
+    Effect.gen(function* () {
+      const resumeCache: NonNullable<Parameters<typeof makeEnvironmentThreadState>[1]> = {
+        snapshot: undefined,
+        owner: undefined,
+      };
+      const old = yield* makeHarness({ cached: BASE_THREAD, resumeCache });
+      yield* awaitThreadState(old.observed, (value) => value.status === "live");
+      const successor = yield* makeHarness({ resumeCache });
+      yield* Queue.offer(successor.inputs, titleUpdated("Successor title", 9));
+      yield* awaitThreadState(
+        successor.observed,
+        (value) => Option.getOrNull(value.data)?.title === "Successor title",
       );
-      expect(Option.getOrThrow(afterLateFrame.data).messages).toEqual([]);
-    }).pipe(Effect.scoped),
+      const update = deleted();
+      if (update.kind !== "event") return yield* Effect.die("Expected an event");
+      yield* Queue.offer(old.inputs, { ...update, event: { ...update.event, sequence: 8 } });
+      yield* awaitThreadState(old.observed, (value) => value.status === "deleted");
+
+      expect(resumeCache.snapshot?.sequence).toBe(9);
+      expect(yield* Ref.get(old.removedThreads)).toEqual([]);
+    }),
+  );
+
+  it.effect("retains a deletion instead of restoring the old disk snapshot", () =>
+    Effect.gen(function* () {
+      const resumeCache: NonNullable<Parameters<typeof makeEnvironmentThreadState>[1]> = {
+        snapshot: undefined,
+        owner: undefined,
+      };
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const first = yield* makeHarness({ cached: BASE_THREAD, resumeCache });
+          const update = deleted();
+          if (update.kind !== "event") return yield* Effect.die("Expected an event");
+          yield* Queue.offer(first.inputs, { ...update, event: { ...update.event, sequence: 8 } });
+          yield* awaitThreadState(first.observed, (value) => value.status === "deleted");
+        }),
+      );
+      const resumed = yield* makeHarness({ cached: BASE_THREAD, resumeCache });
+      const state = yield* awaitThreadState(
+        resumed.observed,
+        (value) => value.status === "deleted",
+      );
+      expect(Option.isNone(state.data)).toBe(true);
+      expect(yield* Ref.get(resumed.loaderCalls)).toBe(0);
+    }),
   );
 
   it.effect("publishes cached data immediately from a warm cache", () =>
@@ -968,5 +1079,168 @@ describe("EnvironmentThreads", () => {
       }
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(3);
     }),
+  );
+  it.effect("does not request assistant previews from servers without the capability", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      const subscription = yield* Queue.take(harness.subscribeInputs);
+
+      expect(subscription.includeAssistantPreviews).toBeUndefined();
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("keeps assistant previews transient across completion and reconnect", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        cached: BASE_THREAD,
+        assistantPreviews: true,
+      });
+      const initialSubscription = yield* Queue.take(harness.subscribeInputs);
+
+      expect(initialSubscription.includeAssistantPreviews).toBe(true);
+      expect(initialSubscription.afterSequence).toBe(CACHED_SNAPSHOT_SEQUENCE);
+
+      yield* Queue.offer(harness.inputs, assistantPreview("Cumulative preview"));
+      const previewed = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.messages.some(
+            (message) =>
+              message.id === ASSISTANT_MESSAGE_ID &&
+              message.text === "Cumulative preview" &&
+              message.streaming,
+          ),
+      );
+      expect(Option.getOrThrow(previewed.data).messages).toEqual([
+        {
+          id: ASSISTANT_MESSAGE_ID,
+          role: "assistant",
+          text: "Cumulative preview",
+          turnId: TURN_ID,
+          streaming: true,
+          createdAt: "2026-04-01T01:30:00.000Z",
+          updatedAt: "2026-04-01T01:30:00.000Z",
+        },
+      ]);
+
+      yield* Queue.offer(harness.inputs, assistantPreview("Cumulative preview replacement"));
+      const replaced = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.messages.some(
+            (message) =>
+              message.id === ASSISTANT_MESSAGE_ID &&
+              message.text === "Cumulative preview replacement",
+          ),
+      );
+      expect(
+        Option.getOrThrow(replaced.data).messages.filter(
+          (message) => message.id === ASSISTANT_MESSAGE_ID,
+        ),
+      ).toHaveLength(1);
+
+      yield* TestClock.adjust("500 millis");
+      yield* Effect.yieldNow;
+      expect(yield* Ref.get(harness.savedThreads)).toEqual([]);
+
+      yield* harness.replaceSession;
+      const resumedSubscription = yield* Queue.take(harness.subscribeInputs);
+      expect(resumedSubscription.includeAssistantPreviews).toBe(true);
+      expect(resumedSubscription.afterSequence).toBe(CACHED_SNAPSHOT_SEQUENCE);
+      expect(
+        Option.getOrThrow((yield* SubscriptionRef.get(harness.threadState)).data).messages,
+      ).toEqual([]);
+
+      yield* Queue.offer(harness.inputs, assistantPreview("Cumulative preview"));
+      yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.messages.some(
+            (message) => message.id === ASSISTANT_MESSAGE_ID && message.streaming,
+          ),
+      );
+      yield* Queue.offer(harness.inputs, assistantCompleted("Durable answer"));
+      const completed = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.messages.some(
+            (message) =>
+              message.id === ASSISTANT_MESSAGE_ID &&
+              message.text === "Durable answer" &&
+              !message.streaming,
+          ),
+      );
+      const matchingMessages = Option.getOrThrow(completed.data).messages.filter(
+        (message) => message.id === ASSISTANT_MESSAGE_ID,
+      );
+      expect(matchingMessages).toHaveLength(1);
+      expect(matchingMessages[0]?.text).toBe("Durable answer");
+      expect(matchingMessages[0]?.streaming).toBe(false);
+
+      yield* Queue.offer(
+        harness.inputs,
+        assistantPreview("Next segment preview", SECOND_ASSISTANT_MESSAGE_ID),
+      );
+      const nextSegment = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.messages.some(
+            (message) =>
+              message.id === SECOND_ASSISTANT_MESSAGE_ID &&
+              message.text === "Next segment preview" &&
+              message.streaming,
+          ),
+      );
+      expect(
+        Option.getOrThrow(nextSegment.data).messages.some(
+          (message) => message.id === ASSISTANT_MESSAGE_ID && !message.streaming,
+        ),
+      ).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("clears previews when the turn settles and ignores late frames", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        cached: ACTIVE_THREAD,
+        assistantPreviews: true,
+      });
+      yield* Queue.take(harness.subscribeInputs);
+      yield* Queue.offer(harness.inputs, assistantPreview("Transient answer"));
+      yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.messages.some(
+            (message) => message.id === ASSISTANT_MESSAGE_ID && message.streaming,
+          ),
+      );
+
+      yield* Queue.offer(harness.inputs, sessionSettled());
+      const settled = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          Option.isSome(value.data) &&
+          value.data.value.session?.status === "ready" &&
+          value.data.value.messages.length === 0,
+      );
+      expect(Option.getOrThrow(settled.data).messages).toEqual([]);
+
+      yield* Queue.offer(harness.inputs, assistantPreview("Late stale preview"));
+      yield* Queue.offer(
+        harness.inputs,
+        titleUpdated("After settle", CACHED_SNAPSHOT_SEQUENCE + 2),
+      );
+      const afterLateFrame = yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.isSome(value.data) && value.data.value.title === "After settle",
+      );
+      expect(Option.getOrThrow(afterLateFrame.data).messages).toEqual([]);
+    }).pipe(Effect.scoped),
   );
 });

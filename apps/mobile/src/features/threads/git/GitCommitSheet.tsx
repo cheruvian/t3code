@@ -91,7 +91,7 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
             </Text>
           </View>
           {isDefaultRef ? (
-            <Text className="text-xs leading-normal text-adaptive-amber-700-400">
+            <Text className="text-xs leading-normal text-warning-foreground">
               Warning: this is the default branch.
             </Text>
           ) : null}

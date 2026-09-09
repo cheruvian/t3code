@@ -11,7 +11,6 @@ import {
   ProviderDriverKind,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
@@ -269,9 +268,6 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
           status: "ready",
           runtimeMode: input.runtimeMode,
           threadId,
-          ...(input.sessionGeneration !== undefined
-            ? { sessionGeneration: input.sessionGeneration }
-            : {}),
           cwd: input.cwd,
           resumeCursor: input.resumeCursor ?? { threadId: String(threadId), seed: sessionCount },
           createdAt,
@@ -320,9 +316,6 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
             eventId: nextEventId(input.threadId),
             provider,
             sessionId: RuntimeSessionId.make(String(input.threadId)),
-            ...(state.session.sessionGeneration !== undefined
-              ? { sessionGeneration: state.session.sessionGeneration }
-              : {}),
           };
           rawEvent.threadId = state.snapshot.threadId;
           if (Object.hasOwn(rawEvent, "turnId")) {
@@ -438,11 +431,6 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
         sessions.delete(threadId);
       });
 
-    const getSession: ProviderAdapterShape<ProviderAdapterError>["getSession"] = (threadId) =>
-      Effect.sync(() =>
-        Option.map(Option.fromUndefinedOr(sessions.get(threadId)), (state) => state.session),
-      );
-
     const listSessions: ProviderAdapterShape<ProviderAdapterError>["listSessions"] = () =>
       Effect.sync(() => Array.from(sessions.values(), (state) => state.session));
 
@@ -502,7 +490,6 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
       respondToRequest,
       respondToUserInput,
       stopSession,
-      getSession,
       listSessions,
       hasSession,
       readThread,

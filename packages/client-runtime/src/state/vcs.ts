@@ -35,6 +35,8 @@ import {
 } from "./vcsRefInvalidation.ts";
 
 const OFFLINE_BRANCH_LIST_LIMIT = 100;
+// Rows retain their rendered status; release live work with the last consumer.
+const VCS_STATUS_IDLE_TTL_MS = 0;
 
 export interface VcsStatusDemand {
   readonly demand: "local" | "remote";
@@ -263,7 +265,7 @@ export const makeCachedVcsRefsChanges = Effect.fn("CachedVcsRefsState.makeChange
   return Stream.concat(cachedRefs, refreshedRefs);
 });
 
-export function cachedVcsRefsChanges(
+function cachedVcsRefsChanges(
   environmentId: EnvironmentId,
   input: VcsListRefsInput,
   expectedRevision: number,
@@ -333,8 +335,8 @@ export function createVcsEnvironmentAtoms<R, E>(
 
   const createStatusFamily = (includeRemote: boolean, label: string) => {
     const family = createEnvironmentSubscriptionAtomFamily(runtime, {
-      idleTtlMs: 0,
       label,
+      idleTtlMs: VCS_STATUS_IDLE_TTL_MS,
       subscribe: (input: EnvironmentRpcInput<typeof WS_METHODS.subscribeVcsStatus>) =>
         subscribe(WS_METHODS.subscribeVcsStatus, input, {
           onExpectedFailure: () =>
@@ -419,4 +421,3 @@ export function createVcsEnvironmentAtoms<R, E>(
 export * from "./gitActions.ts";
 export * from "./vcsAction.ts";
 export * from "./vcsRef.ts";
-export * from "./vcsStatus.ts";

@@ -139,7 +139,7 @@ export interface EventNdjsonLoggerOptions extends EventNdjsonLogStoreOptions {
   readonly stream: EventNdjsonStream;
 }
 
-export class EventNdjsonLogConfigurationError extends Schema.TaggedErrorClass<EventNdjsonLogConfigurationError>()(
+export class EventNdjsonLogConfigurationError extends Schema.TaggedError<EventNdjsonLogConfigurationError>()(
   "EventNdjsonLogConfigurationError",
   {
     filePath: Schema.String,
@@ -153,7 +153,7 @@ export class EventNdjsonLogConfigurationError extends Schema.TaggedErrorClass<Ev
   }
 }
 
-export class EventNdjsonLogDirectoryError extends Schema.TaggedErrorClass<EventNdjsonLogDirectoryError>()(
+export class EventNdjsonLogDirectoryError extends Schema.TaggedError<EventNdjsonLogDirectoryError>()(
   "EventNdjsonLogDirectoryError",
   {
     directory: Schema.String,
@@ -169,7 +169,7 @@ export type EventNdjsonLogStoreError =
   | EventNdjsonLogConfigurationError
   | EventNdjsonLogDirectoryError;
 
-export class EventNdjsonLogCloseTimeout extends Schema.TaggedErrorClass<EventNdjsonLogCloseTimeout>()(
+export class EventNdjsonLogCloseTimeout extends Schema.TaggedError<EventNdjsonLogCloseTimeout>()(
   "EventNdjsonLogCloseTimeout",
   {
     filePath: Schema.String,
@@ -263,11 +263,6 @@ interface RetentionResult {
   readonly failures: ReadonlyArray<FileOperationFailure>;
 }
 
-interface DrainResult {
-  readonly attributions: ReadonlyArray<AttributionSummary>;
-  readonly failures: ReadonlyArray<FileOperationFailure>;
-}
-
 function logWarning(message: string, context: Record<string, unknown>): Effect.Effect<void> {
   return Effect.logWarning(message, context).pipe(Effect.annotateLogs({ scope: LOG_SCOPE }));
 }
@@ -342,7 +337,15 @@ function shouldPersist(stream: EventNdjsonStream, event: unknown): boolean {
       const part = Reflect.get(properties, "part");
       if (typeof part !== "object" || part === null) return true;
       const partType = Reflect.get(part, "type");
-      return partType !== "text" && partType !== "reasoning";
+      if (partType === "text" || partType === "reasoning") return false;
+      if (partType === "tool") {
+        // Running snapshots repeat growing output. Pending and terminal states stay in the log.
+        const state = Reflect.get(part, "state");
+        if (typeof state === "object" && state !== null) {
+          return Reflect.get(state, "status") !== "running";
+        }
+      }
+      return true;
     }
 
     return true;

@@ -31,11 +31,10 @@ const DESKTOP_STAGE_LABELS = ["Alpha", "Dev", "Nightly", "Candidate", "Productio
 type DesktopStageLabel = (typeof DESKTOP_STAGE_LABELS)[number];
 const desktopStageLabel = trimmedString("T3CODE_DESKTOP_STAGE_LABEL").pipe(
   Config.map(
-    Option.flatMap(
-      (value): Option.Option<DesktopStageLabel> =>
-        DESKTOP_STAGE_LABELS.includes(value as DesktopStageLabel)
-          ? Option.some(value as DesktopStageLabel)
-          : Option.none(),
+    Option.flatMap((value): Option.Option<DesktopStageLabel> =>
+      DESKTOP_STAGE_LABELS.includes(value as DesktopStageLabel)
+        ? Option.some(value as DesktopStageLabel)
+        : Option.none(),
     ),
   ),
 );

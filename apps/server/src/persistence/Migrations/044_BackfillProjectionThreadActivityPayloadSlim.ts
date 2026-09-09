@@ -64,7 +64,7 @@ export default Effect.gen(function* () {
             SET payload_slim_json = ${slim === payload ? null : JSON.stringify(slim)},
                 payload_slim_version = ${ACTIVITY_PAYLOAD_SLIM_VERSION}
             WHERE activity_id = ${row.activityId}
-          `;
+          `.pipe(Effect.asVoid);
         },
         { concurrency: 1, discard: true },
       ),

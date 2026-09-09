@@ -1,10 +1,9 @@
 import type {
+  AgentSessionImportSource,
   ProviderInstanceId,
-  ProviderSessionGeneration,
   ProviderDriverKind,
   ProviderSessionRuntimeStatus,
   RuntimeMode,
-  ServerOwnerGeneration,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -30,10 +29,6 @@ export interface ProviderRuntimeBinding {
   readonly resumeCursor?: unknown | null;
   readonly runtimePayload?: unknown | null;
   readonly runtimeMode?: RuntimeMode;
-  readonly ownerGeneration?: ServerOwnerGeneration | null;
-  readonly sessionGeneration?: ProviderSessionGeneration | null;
-  readonly terminalDisposition?: "interrupted" | null;
-  readonly expectedSessionGeneration?: ProviderSessionGeneration | null;
 }
 
 export interface ProviderRuntimeBindingWithMetadata extends ProviderRuntimeBinding {
@@ -46,11 +41,21 @@ export type ProviderSessionDirectoryWriteError =
   | ProviderValidationError
   | ProviderSessionDirectoryPersistenceError;
 
+export interface ProviderSessionDirectoryUpsertOptions {
+  readonly onConflict?: "update" | "ignore";
+}
+
 export interface ProviderSessionDirectoryShape {
-  readonly ownerGeneration: ServerOwnerGeneration;
   readonly upsert: (
     binding: ProviderRuntimeBinding,
-  ) => Effect.Effect<boolean, ProviderSessionDirectoryWriteError>;
+    options?: ProviderSessionDirectoryUpsertOptions,
+  ) => Effect.Effect<void, ProviderSessionDirectoryWriteError>;
+
+  /** Record an imported file without changing the current provider session. */
+  readonly recordImportedTranscript: (input: {
+    readonly threadId: ThreadId;
+    readonly source: AgentSessionImportSource;
+  }) => Effect.Effect<void, ProviderSessionDirectoryPersistenceError>;
 
   readonly getProvider: (
     threadId: ThreadId,

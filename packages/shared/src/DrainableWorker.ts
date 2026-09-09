@@ -31,7 +31,7 @@ export interface DrainableWorker<A> {
   readonly drain: Effect.Effect<void>;
 }
 
-export class DrainableWorkerClosedError extends Schema.TaggedErrorClass<DrainableWorkerClosedError>()(
+export class DrainableWorkerClosedError extends Schema.TaggedError<DrainableWorkerClosedError>()(
   "DrainableWorkerClosedError",
   {},
 ) {

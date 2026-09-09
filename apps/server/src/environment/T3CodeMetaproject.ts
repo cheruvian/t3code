@@ -44,7 +44,7 @@ This project may also manage the environment itself. The generated \`api-invento
 Running server version: \`${packageJson.version}\`${
   input.commit === null
     ? ""
-    : `  
+    : `
 Running source commit: \`${input.commit}\``
 }
 

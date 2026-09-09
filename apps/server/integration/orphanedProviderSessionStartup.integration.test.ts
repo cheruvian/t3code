@@ -7,10 +7,13 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  type ProviderSendTurnInput,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -32,7 +35,6 @@ import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../src/persistence/ProviderSessionRuntime.ts";
 import * as ExternalLauncher from "../src/process/externalLauncher.ts";
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
-import { SessionReconcilerLive } from "../src/provider/Layers/SessionReconciler.ts";
 import * as ProviderService from "../src/provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../src/provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderSessionReaper from "../src/provider/Services/ProviderSessionReaper.ts";
@@ -41,6 +43,7 @@ import * as ServerLifecycleEvents from "../src/serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "../src/serverRuntimeStartup.ts";
 import * as ServerSettings from "../src/serverSettings.ts";
 import * as AnalyticsService from "../src/telemetry/AnalyticsService.ts";
+import * as GitVcsDriver from "../src/vcs/GitVcsDriver.ts";
 
 const providerInstanceId = ProviderInstanceId.make("codex");
 const projectId = ProjectId.make("project-startup-orphan");
@@ -106,20 +109,21 @@ const startupDependencies = Layer.mergeAll(
     }),
   ),
   AnalyticsService.layerTest,
+  Layer.mock(GitVcsDriver.GitVcsDriver)({}),
   Layer.succeed(ProviderService.ProviderService, {
+    getSession: () => Effect.die("unexpected session lookup"),
     startSession: () => Effect.die("unused"),
     sendTurn: () => Effect.die("unused"),
+    compactThread: () => Effect.die("unused"),
     interruptTurn: () => Effect.die("unused"),
     respondToRequest: () => Effect.die("unused"),
     respondToUserInput: () => Effect.die("unused"),
     stopSession: () => Effect.die("unused"),
-    getSession: () => Effect.succeed(Option.none()),
     listSessions: () => Effect.succeed([]),
     getCapabilities: () => Effect.die("unused"),
+    assertConversationRollbackSupported: () => Effect.die("unused"),
     getInstanceInfo: () => Effect.die("unused"),
     rollbackConversation: () => Effect.die("unused"),
-    runIfCurrentGeneration: (_input, effect) => Effect.map(effect, Option.some),
-    getTerminalDisposition: () => Effect.succeed(null),
     uploadFeedback: () => Effect.die("unused"),
     streamEvents: Stream.empty,
   }),
@@ -255,7 +259,6 @@ it.effect(
 
       const secondRuntime = makePersistedRuntimeLayer(config.dbPath);
       const startupLayer = ServerRuntimeStartup.layer.pipe(
-        Layer.provideMerge(SessionReconcilerLive),
         Layer.provideMerge(secondRuntime),
         Layer.provideMerge(startupDependencies),
       );
@@ -336,7 +339,7 @@ it.effect(
       }).pipe(Effect.provide(startupLayer));
 
       assert.deepStrictEqual(result, {
-        sessionStatus: "stopped",
+        sessionStatus: "error",
         activeTurnId: null,
         latestTurn: null,
         pendingTurnCount: 0,
@@ -346,11 +349,11 @@ it.effect(
         bindingStatus: "stopped",
         resumeCursor,
         runtimePayload: { activeTurnId: null, unrelated: "preserve-me" },
-        stoppedBindingSessionStatus: "stopped",
+        stoppedBindingSessionStatus: "error",
         stoppedBindingStatus: "stopped",
         stoppedBindingResumeCursor,
         stoppedBindingRuntimePayload: {
-          activeTurnId: "stale",
+          activeTurnId: null,
           unrelated: "also-preserve-me",
         },
       });
@@ -359,6 +362,126 @@ it.effect(
         ServerConfig.layerTest(process.cwd(), {
           prefix: "t3-orphaned-provider-session-startup-",
         }).pipe(Layer.provideMerge(NodeServices.layer)),
+      ),
+    ),
+);
+
+it.effect.each(["opt-in desktop restart", "marked remote update"] as const)(
+  "continues a newer persisted turn after %s",
+  (restart) =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const createdAt = DateTime.formatIso(yield* DateTime.now);
+      const activeTurnId = TurnId.make("turn-started-after-original-send");
+      const originalTurnId = TurnId.make("turn-from-original-send");
+      const sent = yield* Deferred.make<ProviderSendTurnInput>();
+
+      yield* Effect.gen(function* () {
+        const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("create-restart-project"),
+          projectId,
+          title: "Restart continuation",
+          workspaceRoot: "/tmp/startup-orphan-project",
+          defaultModelSelection: { instanceId: providerInstanceId, model: "gpt-5" },
+          createdAt,
+        });
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("create-restart-thread"),
+          threadId,
+          projectId,
+          title: "Newer running turn",
+          modelSelection: { instanceId: providerInstanceId, model: "gpt-5" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        });
+        yield* engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("persist-newer-running-turn"),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            providerInstanceId,
+            runtimeMode: "full-access",
+            activeTurnId,
+            lastError: null,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        });
+        yield* directory.upsert({
+          threadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId,
+          status: "running",
+          resumeCursor,
+          runtimePayload: { activeTurnId: originalTurnId },
+        });
+        if (restart === "marked remote update") {
+          assert.deepStrictEqual(
+            yield* ServerRuntimeStartup.markRunningProviderSessionsForContinuation,
+            [threadId],
+          );
+        }
+      }).pipe(Effect.provide(makePersistedRuntimeLayer(config.dbPath)));
+
+      yield* Effect.gen(function* () {
+        const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        const provider = yield* ProviderService.ProviderService;
+        const before = Option.getOrThrow(yield* query.getThreadDetailById(threadId));
+        assert.equal(before.session?.activeTurnId, activeTurnId);
+        assert.propertyVal(
+          Option.getOrThrow(yield* directory.getBinding(threadId)).runtimePayload,
+          "activeTurnId",
+          originalTurnId,
+        );
+        yield* ServerRuntimeStartup.reconcileProviderSessions.pipe(
+          Effect.provideService(ProviderService.ProviderService, {
+            ...provider,
+            getCapabilities: () =>
+              Effect.succeed({
+                sessionModelSwitch: "in-session",
+                promptlessTurnContinuation: true,
+              }),
+            sendTurn: (input) =>
+              Deferred.succeed(sent, input).pipe(
+                Effect.as({ threadId, turnId: TurnId.make("continued-turn") }),
+              ),
+          }),
+          Effect.provide(
+            ServerSettings.layerTest({
+              continueThreadsAfterServerUpdate: restart === "opt-in desktop restart",
+            }),
+          ),
+        );
+        const after = Option.getOrThrow(yield* query.getThreadDetailById(threadId));
+        assert.equal(after.session?.status, "starting");
+        assert.equal(after.session?.activeTurnId, null);
+        assert.equal(after.session?.lastError, null);
+        assert.deepStrictEqual(yield* Deferred.await(sent), {
+          threadId,
+          continuation: true,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        });
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(makePersistedRuntimeLayer(config.dbPath), startupDependencies),
+        ),
+      );
+    }).pipe(
+      Effect.provide(
+        ServerConfig.layerTest(process.cwd(), { prefix: "t3-restart-newer-turn-" }).pipe(
+          Layer.provideMerge(NodeServices.layer),
+        ),
       ),
     ),
 );
