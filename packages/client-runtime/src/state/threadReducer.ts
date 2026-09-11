@@ -10,17 +10,42 @@ import type {
   OrchestrationSession,
   OrchestrationThread,
   OrchestrationThreadActivity,
+  ThreadPullRequestLink,
   TurnId,
 } from "@t3tools/contracts";
+import { threadPullRequestKeysEqual } from "@t3tools/shared/threadPullRequests";
 import { isImportedAgentSessionMessageId } from "@t3tools/contracts";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 
-import { upsertThreadActivity } from "./threadActivity.ts";
+import { compareThreadActivities, upsertThreadActivity } from "./threadActivity.ts";
 
 export type ThreadDetailReducerResult =
   | { readonly kind: "updated"; readonly thread: OrchestrationThread }
   | { readonly kind: "deleted" }
   | { readonly kind: "unchanged" };
+
+/** Keep only a legacy route supplied by the server; detail events cannot resolve project hosts. */
+function withPullRequests(
+  thread: OrchestrationThread,
+  pullRequests: ReadonlyArray<ThreadPullRequestLink>,
+  updatedAt: string,
+): ThreadDetailReducerResult {
+  return {
+    kind: "updated",
+    thread: {
+      ...thread,
+      pullRequests,
+      linkedPullRequest:
+        thread.linkedPullRequest &&
+        pullRequests.some(
+          (link) => link.source !== "stack-dismissed" && link.url === thread.linkedPullRequest?.url,
+        )
+          ? thread.linkedPullRequest
+          : null,
+      updatedAt,
+    },
+  };
+}
 
 const proposedPlanOrder = O.combine<OrchestrationThread["proposedPlans"][number]>(
   O.mapInput(O.String, (p) => p.createdAt),
@@ -33,16 +58,10 @@ const checkpointOrder = O.mapInput(
     cp.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER,
 );
 
-const activityOrder = O.combineAll<OrchestrationThreadActivity>([
-  O.mapInput(O.Number, (a) => a.sequence ?? Number.MAX_SAFE_INTEGER),
-  O.mapInput(O.String, (a) => a.createdAt),
-  O.mapInput(O.String, (a) => a.id),
-]);
-
 // Per-array id index so the streaming append path can reject a re-delivered
 // id without rescanning the history. Only arrays this reducer produced are
-// indexed: presence also proves the array is activityOrder-sorted, which
-// snapshot-loaded arrays (DB order, null sequences first) are not.
+// indexed: presence also proves the array is canonically sorted, which
+// snapshot-loaded arrays have not yet been checked.
 const activityIdIndex = new WeakMap<
   ReadonlyArray<OrchestrationThreadActivity>,
   Set<OrchestrationThreadActivity["id"]>
@@ -111,6 +130,7 @@ export function applyThreadDetailEvent(
           snoozedUntil: null,
           snoozedAt: null,
           deletedAt: null,
+          pullRequests: [],
           messages: [],
           proposedPlans: [],
           activities: [],
@@ -254,6 +274,40 @@ export function applyThreadDetailEvent(
           updatedAt: event.payload.updatedAt,
         },
       };
+
+    case "thread.pull-request-linked": {
+      const link = event.payload.link;
+      const others = thread.pullRequests.filter(
+        (existing) => !threadPullRequestKeysEqual(existing, link),
+      );
+      return withPullRequests(thread, [...others, link], event.payload.updatedAt);
+    }
+
+    case "thread.pull-request-unlinked":
+      return withPullRequests(
+        thread,
+        thread.pullRequests.filter(
+          (existing) => !threadPullRequestKeysEqual(existing, event.payload),
+        ),
+        event.payload.updatedAt,
+      );
+
+    case "thread.pull-request-synced": {
+      if (
+        !thread.pullRequests.some((existing) => threadPullRequestKeysEqual(existing, event.payload))
+      ) {
+        return { kind: "unchanged" };
+      }
+      return withPullRequests(
+        thread,
+        thread.pullRequests.map((existing) =>
+          threadPullRequestKeysEqual(existing, event.payload)
+            ? { ...existing, snapshot: event.payload.snapshot, stack: event.payload.stack }
+            : existing,
+        ),
+        event.payload.updatedAt,
+      );
+    }
 
     case "thread.runtime-mode-set":
       return {
@@ -626,7 +680,7 @@ export function applyThreadDetailEvent(
       if (
         !supersedesContextWindow &&
         ids !== undefined &&
-        (lastActivity === undefined || activityOrder(lastActivity, activity) <= 0) &&
+        (lastActivity === undefined || compareThreadActivities(lastActivity, activity) <= 0) &&
         !ids.has(activity.id)
       ) {
         const activities = Arr.append(thread.activities, activity);

@@ -79,6 +79,7 @@ const BASE_THREAD: OrchestrationThread = {
   archivedAt: null,
   settledOverride: null,
   settledAt: null,
+  pullRequests: [],
   deletedAt: null,
   messages: [],
   proposedPlans: [],
@@ -151,6 +152,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   readonly cached?: OrchestrationThread;
   readonly httpSnapshot?: Option.Option<OrchestrationThreadDetailSnapshot>;
   readonly completionMarker?: boolean;
+  readonly assistantPreviews?: boolean;
   readonly resumeCache?: NonNullable<Parameters<typeof makeEnvironmentThreadState>[1]>;
   readonly loadCached?: Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>>;
   readonly saveThread?: Persistence.EnvironmentCacheStore["Service"]["saveThread"];
@@ -276,7 +278,6 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     lastSubscribeAfterSequence,
     lastRequestCompletionMarker,
     subscribeInputs,
-    threadState,
     supervisorState,
     supervisorSession,
     savedThreads,

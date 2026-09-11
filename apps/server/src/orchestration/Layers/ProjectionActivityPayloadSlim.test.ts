@@ -338,6 +338,48 @@ slimLayer("pre-slimmed activity payload column", (it) => {
     }),
   );
 
+  it.effect("recovers question text from version-one slim rows", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* resetProjections;
+      yield* insertThreadRow("thread-question");
+      const repository = yield* ProjectionThreadActivityRepository;
+      yield* repository.upsert({
+        activityId: EventId.make("question-tool"),
+        threadId: ThreadId.make("thread-question"),
+        turnId: TurnId.make("turn-question"),
+        tone: "tool",
+        kind: "tool.completed",
+        summary: "Asked a question",
+        payload: {
+          itemType: "mcp_tool_call",
+          data: {
+            item: {
+              tool: "request_user_input",
+              arguments: { questions: [{ question: "Which branch?" }] },
+            },
+          },
+        },
+        sequence: 1,
+        createdAt: "2026-09-11T00:00:00.000Z",
+      });
+      yield* sql`
+        UPDATE projection_thread_activities
+        SET payload_slim_json = '{"itemType":"mcp_tool_call","data":{}}',
+            payload_slim_version = 1
+        WHERE activity_id = 'question-tool'
+      `;
+
+      const activities = yield* readProjectedActivities("thread-question");
+      assert.nestedPropertyVal(activities[0]?.payload, "data.toolName", "request_user_input");
+      assert.nestedPropertyVal(
+        activities[0]?.payload,
+        "data.input.questions[0].question",
+        "Which branch?",
+      );
+    }),
+  );
+
   it.effect("ignores a slim payload stamped with a superseded version", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

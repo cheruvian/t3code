@@ -453,6 +453,49 @@ describe("workEntryIndicatesToolNeutralStatus", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("folds new answers into cached question activity and restores it after a revert", () => {
+    const request = makeActivity({
+      id: "question-request",
+      kind: "user-input.requested",
+      turnId: "turn-question",
+      sequence: 1,
+      payload: {
+        requestId: "request-1",
+        questions: [{ id: "branch", question: "Which branch?" }],
+      },
+    });
+    const tool = makeActivity({
+      id: "question-tool",
+      kind: "tool.completed",
+      turnId: "turn-question",
+      sequence: 2,
+      payload: {
+        toolCallId: "question-call",
+        title: "request_user_input",
+        data: { input: { questions: [{ question: "Which branch?" }] } },
+      },
+    });
+    const answer = makeActivity({
+      id: "question-answer",
+      kind: "user-input.answer-submitted",
+      turnId: "turn-question",
+      sequence: 3,
+      payload: { requestId: "request-1", answers: { branch: "main" } },
+    });
+    const pending = deriveWorkLogEntries([request, tool]);
+    const answered = deriveWorkLogEntries([request, tool, answer]);
+    expect(answered).toHaveLength(1);
+    expect(answered[0]).toMatchObject({
+      id: "question-request",
+      questionAnswer: {
+        questionTextById: { branch: "Which branch?" },
+        answers: { branch: "main" },
+      },
+    });
+    expect(deriveWorkLogEntries([request, tool])).toEqual(pending);
+    expect(pending[0]?.questionAnswer?.answers).toEqual({});
+  });
+
   it("keeps the latest task progress without emitting plan-update log entries", () => {
     const activities = [
       makeActivity({ id: "before", kind: "tool.completed", summary: "Read files", sequence: 0 }),

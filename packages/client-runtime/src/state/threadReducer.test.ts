@@ -37,6 +37,7 @@ const baseThread: OrchestrationThread = {
   archivedAt: null,
   settledOverride: null,
   settledAt: null,
+  pullRequests: [],
   deletedAt: null,
   messages: [],
   proposedPlans: [],
@@ -404,6 +405,124 @@ describe("applyThreadDetailEvent", () => {
         }
       },
     );
+  });
+
+  describe("thread pull request links", () => {
+    const link = {
+      host: "github.com",
+      repository: "pingdotgg/t3code",
+      number: 42,
+      url: "https://github.com/pingdotgg/t3code/pull/42",
+      source: "manual" as const,
+      linkedAt: "2026-04-01T05:00:00.000Z",
+      snapshot: null,
+      stack: null,
+    };
+    const key = { host: "github.com", repository: "pingdotgg/t3code", number: 42 };
+    const linkEvent = (sequence: number) =>
+      ({
+        ...baseEventFields,
+        sequence,
+        occurredAt: "2026-04-01T05:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.pull-request-linked",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          link,
+          updatedAt: "2026-04-01T05:00:00.000Z",
+        },
+      }) as const;
+
+    it("links without inventing a legacy route and replaces by key", () => {
+      const linked = applyThreadDetailEvent(baseThread, linkEvent(5));
+      expect(linked.kind).toBe("updated");
+      if (linked.kind !== "updated") return;
+      expect(linked.thread.pullRequests).toEqual([link]);
+      expect(linked.thread.linkedPullRequest).toBeNull();
+
+      const relinked = applyThreadDetailEvent(linked.thread, {
+        ...linkEvent(6),
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          link: { ...link, host: "GitHub.com", source: "agent" },
+          updatedAt: "2026-04-01T06:00:00.000Z",
+        },
+      });
+      if (relinked.kind !== "updated") throw new Error("expected update");
+      expect(relinked.thread.pullRequests).toHaveLength(1);
+      expect(relinked.thread.pullRequests[0]?.source).toBe("agent");
+    });
+
+    it("syncs snapshot and stack onto the matching link only", () => {
+      const linked = applyThreadDetailEvent(baseThread, linkEvent(5));
+      if (linked.kind !== "updated") throw new Error("expected update");
+      const snapshot = {
+        state: "merged" as const,
+        title: "Ship it",
+        headBranch: "feature",
+        baseBranch: "main",
+        isDraft: false,
+        updatedAt: "2026-04-02T00:00:00.000Z",
+        syncedAt: "2026-04-02T00:01:00.000Z",
+      };
+      const synced = applyThreadDetailEvent(linked.thread, {
+        ...baseEventFields,
+        sequence: 6,
+        occurredAt: "2026-04-02T00:01:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.pull-request-synced",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          ...key,
+          snapshot,
+          stack: null,
+          updatedAt: "2026-04-02T00:01:00.000Z",
+        },
+      });
+      if (synced.kind !== "updated") throw new Error("expected update");
+      expect(synced.thread.pullRequests[0]?.snapshot).toEqual(snapshot);
+
+      const unknown = applyThreadDetailEvent(synced.thread, {
+        ...baseEventFields,
+        sequence: 7,
+        occurredAt: "2026-04-02T00:02:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.pull-request-synced",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          ...key,
+          number: 99,
+          snapshot,
+          stack: null,
+          updatedAt: "2026-04-02T00:02:00.000Z",
+        },
+      });
+      expect(unknown.kind).toBe("unchanged");
+    });
+
+    it("unlinks and clears the compat field", () => {
+      const linked = applyThreadDetailEvent(baseThread, linkEvent(5));
+      if (linked.kind !== "updated") throw new Error("expected update");
+      const unlinked = applyThreadDetailEvent(linked.thread, {
+        ...baseEventFields,
+        sequence: 6,
+        occurredAt: "2026-04-01T06:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.pull-request-unlinked",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          ...key,
+          updatedAt: "2026-04-01T06:00:00.000Z",
+        },
+      });
+      if (unlinked.kind !== "updated") throw new Error("expected update");
+      expect(unlinked.thread.pullRequests).toEqual([]);
+      expect(unlinked.thread.linkedPullRequest).toBeNull();
+    });
   });
 
   describe("thread.message-sent", () => {
@@ -1000,13 +1119,12 @@ describe("applyThreadDetailEvent", () => {
         ...(sequence === null ? {} : { sequence }),
         createdAt: "2026-04-01T11:00:00.000Z",
       });
-      // Snapshot loads deliver null-sequence rows first (DB order), which
-      // activityOrder sorts last; an in-order live append must not freeze
-      // that prefix.
+      // An out-of-order snapshot must be normalized before a live append
+      // can establish the fast path's sortedness invariant.
       const result = applyThreadDetailEvent(
         {
           ...baseThread,
-          activities: [makeActivity("activity-null", null), makeActivity("activity-a", 1)],
+          activities: [makeActivity("activity-a", 1), makeActivity("activity-null", null)],
         },
         {
           ...baseEventFields,
@@ -1025,9 +1143,9 @@ describe("applyThreadDetailEvent", () => {
       expect(result.kind).toBe("updated");
       if (result.kind === "updated") {
         expect(result.thread.activities.map((activity) => activity.id)).toEqual([
+          "activity-null",
           "activity-a",
           "activity-b",
-          "activity-null",
         ]);
       }
     });

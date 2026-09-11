@@ -15,6 +15,7 @@ import * as Schema from "effect/Schema";
 import { McpSchema, McpServer } from "effect/unstable/ai";
 import { HttpBody, HttpClient, HttpRouter } from "effect/unstable/http";
 
+import * as DeviceService from "../../../device/DeviceService.ts";
 import * as CheckpointDiffQuery from "../../../checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as EnvironmentAuth from "../../../auth/EnvironmentAuth.ts";
@@ -307,6 +308,7 @@ const stubRegistryLayer = Layer.succeed(
 const HttpTestLayer = HttpRouter.serve(
   McpHttpServer.layer.pipe(
     Layer.provide(stubRegistryLayer),
+    Layer.provide(Layer.mock(DeviceService.DeviceService)({})),
     Layer.provide(PreviewAutomationBroker.layer),
   ),
   { disableListenLog: true, disableLogger: true },
@@ -380,12 +382,15 @@ it.effect("lists the API bridge only on the helper endpoint", () =>
     const standard = yield* listTools(McpInvocationContext.MCP_HTTP_PATH, previewToken);
     expect(standard.status).toBe(200);
     expect(standard.toolNames).toContain("preview_status");
+    expect(standard.toolNames).toContain("device_list");
+    expect(standard.toolNames).toContain("list_thread_pull_requests");
     expect(standard.toolNames).not.toContain("api_call");
 
     const helper = yield* listTools(McpInvocationContext.MCP_HELPER_HTTP_PATH, helperToken);
     expect(helper.status).toBe(200);
     expect(helper.toolNames).toContain("api_call");
     expect(helper.toolNames).toContain("preview_status");
+    expect(helper.toolNames).toEqual(expect.arrayContaining([...standard.toolNames]));
 
     const rejected = yield* listTools(McpInvocationContext.MCP_HELPER_HTTP_PATH, previewToken);
     expect(rejected.status).toBe(401);

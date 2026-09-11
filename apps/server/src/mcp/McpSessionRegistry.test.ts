@@ -78,6 +78,7 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
     const issued = yield* registry.issue({
       threadId,
       providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(["preview"]),
     });
     expect(issued.config.endpoint).toBe("http://127.0.0.1:43123/mcp");
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
@@ -90,6 +91,35 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
     expect(yield* registry.resolve(token)).toBeUndefined();
 
     timestamp += 2_000;
+  }),
+);
+
+it.effect("always grants pull-requests and gates browser and device access independently", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(() => 1_000);
+    const withPreview = yield* registry.issue({
+      threadId: ThreadId.make("thread-preview"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(["preview"]),
+    });
+    const withoutPreview = yield* registry.issue({
+      threadId: ThreadId.make("thread-no-preview"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(),
+    });
+    const withDevice = yield* registry.issue({
+      threadId: ThreadId.make("thread-device"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(["device"]),
+    });
+    const capabilitiesOf = (issued: typeof withPreview) =>
+      registry
+        .resolve(issued.config.authorizationHeader.replace(/^Bearer\s+/, ""))
+        .pipe(Effect.map((scope) => [...(scope?.capabilities ?? [])].sort()));
+
+    expect(yield* capabilitiesOf(withPreview)).toEqual(["preview", "pull-requests"]);
+    expect(yield* capabilitiesOf(withoutPreview)).toEqual(["pull-requests"]);
+    expect(yield* capabilitiesOf(withDevice)).toEqual(["device", "pull-requests"]);
   }),
 );
 
@@ -107,6 +137,7 @@ it.effect("builds MCP endpoints from the bound server host", () =>
       const issued = yield* registry.issue({
         threadId: ThreadId.make(`thread-${hostname}`),
         providerInstanceId: ProviderInstanceId.make("codex"),
+        capabilities: new Set(["preview"]),
       });
       expect(issued.config.endpoint).toBe(expectedEndpoint);
     }
@@ -122,12 +153,15 @@ it.effect("issues helper-thread credentials with the environment capability and 
     const issued = yield* registry.issue({
       threadId: helperThreadId,
       providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(["preview", "device"]),
     });
     expect(issued.config.endpoint).toBe("http://127.0.0.1:43123/mcp/helper");
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
     const resolved = yield* registry.resolve(token);
     expect(resolved?.capabilities.has("environment")).toBe(true);
     expect(resolved?.capabilities.has("preview")).toBe(true);
+    expect(resolved?.capabilities.has("device")).toBe(true);
+    expect(resolved?.capabilities.has("pull-requests")).toBe(true);
   }),
 );
 
@@ -140,6 +174,7 @@ it.effect("issues non-helper credentials without the environment capability", ()
     const issued = yield* registry.issue({
       threadId,
       providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(["preview", "environment"]),
     });
     expect(issued.config.endpoint).toBe("http://127.0.0.1:43123/mcp");
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
@@ -154,6 +189,7 @@ it.effect("withholds the environment capability when the projection read fails",
     const issued = yield* registry.issue({
       threadId: ThreadId.make("thread-unreadable"),
       providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(["preview", "environment"]),
     });
     expect(issued.config.endpoint).toBe("http://127.0.0.1:43123/mcp");
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
@@ -169,6 +205,7 @@ it.effect("expires credentials once their session stops showing signs of life", 
     const issued = yield* registry.issue({
       threadId: ThreadId.make("thread-2"),
       providerInstanceId: ProviderInstanceId.make("claude"),
+      capabilities: new Set(["preview"]),
     });
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
     timestamp += 101;
@@ -184,6 +221,7 @@ it.effect("keeps a credential alive across turns that never touch an MCP tool", 
     const issued = yield* registry.issue({
       threadId,
       providerInstanceId: ProviderInstanceId.make("claude"),
+      capabilities: new Set(["preview"]),
     });
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
 
@@ -205,6 +243,7 @@ it.effect("does not keep credentials of other threads alive", () =>
     const issued = yield* registry.issue({
       threadId: ThreadId.make("thread-4"),
       providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(["preview"]),
     });
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
 

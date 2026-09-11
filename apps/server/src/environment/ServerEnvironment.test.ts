@@ -202,6 +202,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       );
       expect(checkoutSource).toContain('checkout", "--detach", "--force');
       expect(checkoutSource).toContain("chmodTree(target, 0o555, 0o444)");
+      expect(second.capabilities.threadPullRequests).toBe(true);
       expect(second.capabilities.threadPullRequestLinking).toBe(true);
       expect(second.capabilities.agentActivityPublishing).toBe(false);
     }),
