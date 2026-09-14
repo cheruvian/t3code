@@ -5,12 +5,6 @@ import { PreviewAutomationHosts } from "./components/preview/PreviewAutomationHo
 import { QuitHoldOverlay } from "./components/QuitHoldOverlay";
 import { AppAtomRegistryProvider } from "./rpc/atomRegistry";
 import type { AppRouter } from "./router";
-import { useAttentionSignals } from "./useAttentionSignals";
-
-function AttentionSignals() {
-  useAttentionSignals();
-  return null;
-}
 
 /**
  * Owns renderer-wide providers. The Electron browser host intentionally sits
@@ -20,7 +14,6 @@ function AttentionSignals() {
 export function AppRoot({ router }: { readonly router: AppRouter }) {
   return (
     <AppAtomRegistryProvider>
-      <AttentionSignals />
       <RouterProvider router={router} />
       <PreviewAutomationHosts />
       <ElectronBrowserHost />

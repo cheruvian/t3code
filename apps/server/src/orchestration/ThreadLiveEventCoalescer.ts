@@ -20,7 +20,6 @@ const MAX_PENDING_UPDATES = 512;
 
 export type ThreadLiveInput =
   | { readonly kind: "event"; readonly event: OrchestrationEvent }
-  | { readonly kind: "preview"; readonly preview: OrchestrationThreadStreamItem }
   | { readonly kind: "synchronized" };
 
 function isToolUpdated(event: OrchestrationEvent): boolean {

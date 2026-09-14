@@ -4,7 +4,7 @@ import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 import { runMigrations } from "../Migrations.ts";
 import { ReadOnlySqlClient } from "../Services/ReadOnlySqlClient.ts";
@@ -13,26 +13,8 @@ import { ServerConfig } from "../../config.ts";
 type RuntimeSqliteLayerConfig = {
   readonly filename: string;
   readonly readonly?: boolean;
-  readonly disableWAL?: boolean;
   readonly spanAttributes?: Record<string, unknown>;
 };
-
-type Loader = {
-  layer: (config: RuntimeSqliteLayerConfig) => Layer.Layer<SqlClient.SqlClient, SqlError>;
-};
-const defaultSqliteClientLoaders = {
-  bun: () => import("@effect/sql-sqlite-bun/SqliteClient"),
-  node: () => import("@t3tools/shared/nodeSqliteClient"),
-} satisfies Record<string, () => Promise<Loader>>;
-
-const makeRuntimeSqliteLayer = Effect.fn("makeRuntimeSqliteLayer")(function* (
-  config: RuntimeSqliteLayerConfig,
-) {
-  const runtime = process.versions.bun !== undefined ? "bun" : "node";
-  const loader = defaultSqliteClientLoaders[runtime];
-  const clientModule = yield* Effect.promise<Loader>(loader);
-  return clientModule.layer(config);
-}, Layer.unwrap);
 
 const setup = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -58,13 +40,9 @@ const isInMemoryDatabase = (filename: string): boolean =>
   /[?&]mode=memory(?:&|$)/.test(filename);
 
 const readOnlyConnectionLayer = (config: RuntimeSqliteLayerConfig) =>
-  makeRuntimeSqliteLayer({
+  NodeSqliteClient.layer({
     ...config,
     readonly: true,
-    // Journal mode is a property of the database file, already set to WAL by
-    // `setup` on the write connection; a read-only connection can neither set
-    // nor need to set it.
-    disableWAL: true,
     spanAttributes: { ...config.spanAttributes, "db.connection.role": "read" },
   }).pipe(
     Layer.flatMap((context) => {
@@ -113,13 +91,13 @@ export const makeSqlitePersistenceLive = Effect.fn("makeSqlitePersistenceLive")(
 
   return Layer.provideMerge(
     readOnlySqlClientLayer(config),
-    Layer.provideMerge(setup, makeRuntimeSqliteLayer(config)),
+    Layer.provideMerge(setup, NodeSqliteClient.layer(config)),
   );
 }, Layer.unwrap);
 
 export const SqlitePersistenceMemory = Layer.provideMerge(
   readOnlySqlClientLayer({ filename: ":memory:" }),
-  Layer.provideMerge(setup, makeRuntimeSqliteLayer({ filename: ":memory:" })),
+  Layer.provideMerge(setup, NodeSqliteClient.layer({ filename: ":memory:" })),
 );
 
 export const layerConfig = Layer.unwrap(

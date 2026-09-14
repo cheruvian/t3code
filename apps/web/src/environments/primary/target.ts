@@ -2,6 +2,8 @@ import { PRIMARY_LOCAL_ENVIRONMENT_ID, type DesktopEnvironmentBootstrap } from "
 import * as Schema from "effect/Schema";
 import { readDesktopLocalBootstraps } from "../../connection/desktopLocal";
 
+import { isLocalEnvironmentDisabled } from "../../localEnvironment";
+
 const PrimaryEnvironmentTargetSource = Schema.Literals([
   "configured",
   "window-origin",
@@ -55,6 +57,15 @@ export class DesktopEnvironmentBootstrapIncompleteError extends Schema.TaggedErr
       ...(this.hasWsBaseUrl ? [] : ["wsBaseUrl"]),
     ];
     return `Desktop bootstrap is missing ${missing.join(" and ")} for the local environment.`;
+  }
+}
+
+export class PrimaryEnvironmentDisabledError extends Schema.TaggedError<PrimaryEnvironmentDisabledError>()(
+  "PrimaryEnvironmentDisabledError",
+  {},
+) {
+  override get message(): string {
+    return "The local environment is disabled.";
   }
 }
 
@@ -277,6 +288,9 @@ export function resolvePrimaryEnvironmentHttpUrl(
   searchParams?: Record<string, string>,
 ): string {
   const primaryTarget = readPrimaryEnvironmentTarget();
+  if (!primaryTarget) {
+    throw new PrimaryEnvironmentDisabledError();
+  }
 
   const url = parseTargetUrl({
     rawValue: resolveHttpRequestBaseUrl(primaryTarget),
@@ -290,7 +304,12 @@ export function resolvePrimaryEnvironmentHttpUrl(
   return url.toString();
 }
 
-export function readPrimaryEnvironmentTarget(): PrimaryEnvironmentTarget {
+// Null only when the desktop app runs with its local environment disabled;
+// every other host has a primary (falling back to the page origin).
+export function readPrimaryEnvironmentTarget(): PrimaryEnvironmentTarget | null {
+  if (isLocalEnvironmentDisabled()) {
+    return null;
+  }
   return (
     resolveDesktopPrimaryTarget() ??
     resolveConfiguredPrimaryTarget() ??

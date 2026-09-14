@@ -90,7 +90,6 @@ export const loadServerConfig = Effect.gen(function* () {
           shellRevealInFileManagerKind: fileManagerRevealKind,
         }),
     threadResumeCompletionMarker: true,
-    assistantPreviews: true as const,
     threadSnapshotPagination: true,
   };
 });
