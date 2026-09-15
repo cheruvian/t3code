@@ -611,9 +611,8 @@ export function BranchToolbarBranchSelector({
     });
     implicitWorktreeBaseBranchRef.current = resolution.implicitBranch;
     if (resolution.branchToSet !== null) {
-      setThreadBranch(resolution.branchToSet, null);
+      setThreadBranch(resolution.branchToSet, null, true);
     }
-    setThreadBranch(worktreeBaseBranchCandidate, null, true);
   }, [
     activeThreadBranch,
     activeWorktreePath,
