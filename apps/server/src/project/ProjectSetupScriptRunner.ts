@@ -33,6 +33,8 @@ export interface ProjectSetupScriptRunnerResultStarted {
   readonly scriptCommand: string;
   readonly terminalId: string;
   readonly cwd: string;
+  /** False when the script's `async` flag asks the agent to wait for it. */
+  readonly async: boolean;
   /**
    * Resolves when the script's shell prints the completion sentinel. The
    * exit code is null when the terminal exited or was closed before the
@@ -260,7 +262,13 @@ export const make = Effect.gen(function* () {
         }
         if (event.type === "output") {
           lineBuffer += event.data;
-          const lines = lineBuffer.split(/\r?\n/);
+          // A bare carriage return is how installers redraw a progress line in
+          // place; each redraw becomes a short line of its own instead of
+          // being glued into one long one. The wrapper echo is filtered per
+          // segment too, which is why `echoedWrapperLines` is split on the
+          // same `\r`: a line editor repainting the typed command yields the
+          // same segments.
+          const lines = lineBuffer.split(/\r\n|\r|\n/);
           lineBuffer = lines.pop() ?? "";
           // A script that never prints a newline must not grow this forever.
           // The sentinel is always on its own line, so keeping the tail is safe.
@@ -371,7 +379,8 @@ export const make = Effect.gen(function* () {
         terminalId,
         cwd,
         worktreePath: input.worktreePath,
-        env,
+        // Setup may run before a terminal client attaches to answer color probes.
+        env: { ...env, NO_COLOR: "1", FORCE_COLOR: "0" },
       })
       .pipe(
         Effect.mapError(
@@ -422,6 +431,7 @@ export const make = Effect.gen(function* () {
       scriptCommand: script.command,
       terminalId,
       cwd,
+      async: script.async !== false,
       ...(observed ? { completion: observed.completion } : {}),
     } as const;
   });

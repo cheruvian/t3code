@@ -18,7 +18,7 @@ describe("056_ProjectionThreadMessageContext", () => {
       }>`PRAGMA table_info(projection_thread_messages)`;
       assert.isFalse(beforeColumns.some((column) => column.name === "context_json"));
 
-      const applied = yield* runMigrations();
+      const applied = yield* runMigrations({ toMigrationInclusive: 56 });
       assert.deepEqual(applied, [[56, "ProjectionThreadMessageContext"]]);
       const after =
         yield* sql`SELECT migration_id, name FROM effect_sql_migrations WHERE migration_id <= 55 ORDER BY migration_id`;
@@ -28,7 +28,7 @@ describe("056_ProjectionThreadMessageContext", () => {
         readonly notnull: number;
       }>`PRAGMA table_info(projection_thread_messages)`;
       assert.equal(columns.find((column) => column.name === "context_json")?.notnull, 0);
-      assert.deepEqual(yield* runMigrations(), []);
+      assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 56 }), []);
     }).pipe(Effect.provide(Layer.fresh(NodeSqliteClient.layerMemory()))),
   );
 

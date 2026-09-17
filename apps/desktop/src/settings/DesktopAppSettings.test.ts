@@ -28,8 +28,6 @@ const DesktopSettingsPatch = Schema.Struct({
   serverExposureMode: Schema.optionalKey(Schema.Literals(["local-only", "network-accessible"])),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
-  cloudflaredEnabled: Schema.optionalKey(Schema.Boolean),
-  cloudflaredConfigPath: Schema.optionalKey(Schema.NullOr(Schema.String)),
   updateChannel: Schema.optionalKey(Schema.Literals(["latest", "nightly"])),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
   wslBackendEnabled: Schema.optionalKey(Schema.Boolean),
@@ -93,29 +91,28 @@ function writeSettingsPatch(patch: typeof DesktopSettingsPatch.Type) {
 }
 
 describe("DesktopSettings", () => {
-  it("defaults local cloudflared tunneling to disabled without a config path", () => {
-    const settings =
-      DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS as DesktopAppSettings.DesktopSettings & {
-        readonly cloudflaredConfigPath: string | null;
-        readonly cloudflaredEnabled: boolean;
-      };
-    assert.isFalse(settings.cloudflaredEnabled);
-    assert.isNull(settings.cloudflaredConfigPath);
-  });
-
-  it.effect("persists and normalizes the local cloudflared tunnel settings", () =>
+  it.effect("loads Tailscale settings from documents containing retired tunnel fields", () =>
     withSettings(
       Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
         const settings = yield* DesktopAppSettings.DesktopAppSettings;
-        const change = yield* settings.setCloudflaredTunnel({
-          enabled: true,
-          configPath: "  /tmp/t3-cloudflared.yml  ",
-        });
+        yield* fileSystem.makeDirectory(environment.stateDir, { recursive: true });
+        yield* fileSystem.writeFileString(
+          environment.desktopSettingsPath,
+          JSON.stringify({
+            cloudflaredEnabled: true,
+            cloudflaredConfigPath: "/tmp/tunnel.yml",
+            tailscaleServeEnabled: true,
+            tailscaleServePort: 8443,
+          }),
+        );
 
-        assert.isTrue(change.changed);
-        assert.isTrue(change.settings.cloudflaredEnabled);
-        assert.equal(change.settings.cloudflaredConfigPath, "  /tmp/t3-cloudflared.yml  ");
-        assert.equal((yield* settings.load).cloudflaredConfigPath, "  /tmp/t3-cloudflared.yml  ");
+        assert.deepEqual(yield* settings.load, {
+          ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+          tailscaleServeEnabled: true,
+          tailscaleServePort: 8443,
+        });
       }),
     ),
   );
@@ -159,8 +156,6 @@ describe("DesktopSettings", () => {
         serverExposureMode: "local-only",
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
-        cloudflaredEnabled: false,
-        cloudflaredConfigPath: null,
         updateChannel: "nightly",
         updateChannelConfiguredByUser: false,
         wslBackendEnabled: false,
@@ -179,8 +174,6 @@ describe("DesktopSettings", () => {
           serverExposureMode: "network-accessible",
           tailscaleServeEnabled: true,
           tailscaleServePort: 8443,
-          cloudflaredEnabled: false,
-          cloudflaredConfigPath: null,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
         });
@@ -193,8 +186,6 @@ describe("DesktopSettings", () => {
           serverExposureMode: "network-accessible",
           tailscaleServeEnabled: true,
           tailscaleServePort: 8443,
-          cloudflaredEnabled: false,
-          cloudflaredConfigPath: null,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
           wslBackendEnabled: false,
@@ -303,8 +294,6 @@ describe("DesktopSettings", () => {
           serverExposureMode: "network-accessible",
           tailscaleServeEnabled: true,
           tailscaleServePort: 8443,
-          cloudflaredEnabled: false,
-          cloudflaredConfigPath: null,
           updateChannel: "latest",
           updateChannelConfiguredByUser: false,
           wslBackendEnabled: false,
@@ -362,8 +351,6 @@ describe("DesktopSettings", () => {
             serverExposureMode: "network-accessible",
             tailscaleServeEnabled: true,
             tailscaleServePort: 8443,
-            cloudflaredEnabled: false,
-            cloudflaredConfigPath: null,
             updateChannel: "nightly",
             updateChannelConfiguredByUser: true,
             wslBackendEnabled: false,
@@ -413,8 +400,6 @@ describe("DesktopSettings", () => {
           serverExposureMode: "local-only",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
-          cloudflaredEnabled: false,
-          cloudflaredConfigPath: null,
           updateChannel: "nightly",
           updateChannelConfiguredByUser: false,
           wslBackendEnabled: false,
@@ -444,8 +429,6 @@ describe("DesktopSettings", () => {
           serverExposureMode: "local-only",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
-          cloudflaredEnabled: false,
-          cloudflaredConfigPath: null,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
           wslBackendEnabled: false,
@@ -474,8 +457,6 @@ describe("DesktopSettings", () => {
           serverExposureMode: "local-only",
           tailscaleServeEnabled: true,
           tailscaleServePort: 443,
-          cloudflaredEnabled: false,
-          cloudflaredConfigPath: null,
           updateChannel: "latest",
           updateChannelConfiguredByUser: false,
           wslBackendEnabled: false,

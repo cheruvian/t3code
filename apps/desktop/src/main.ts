@@ -48,7 +48,6 @@ import * as DesktopLinuxUrlHandler from "./app/DesktopLinuxUrlHandler.ts";
 import * as DesktopShutdown from "./app/DesktopShutdown.ts";
 import * as DesktopObservability from "./app/DesktopObservability.ts";
 import * as DesktopServerExposure from "./backend/DesktopServerExposure.ts";
-import * as DesktopCloudflaredTunnel from "./backend/DesktopCloudflaredTunnel.ts";
 import * as DesktopClientSettings from "./settings/DesktopClientSettings.ts";
 import * as DesktopSavedEnvironments from "./settings/DesktopSavedEnvironments.ts";
 import * as DesktopSnapShot from "./snapShot/DesktopSnapShot.ts";
@@ -68,7 +67,6 @@ import * as DesktopWindow from "./window/DesktopWindow.ts";
 import * as RendererStallWatchdog from "./diagnostics/RendererStallWatchdog.ts";
 import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
-import * as RelayClient from "@t3tools/shared/relayClient";
 import * as DesktopWslServerTree from "./wsl/DesktopWslServerTree.ts";
 
 const desktopEnvironmentLayer = Layer.unwrap(
@@ -147,18 +145,6 @@ const desktopServerExposureLayer = DesktopServerExposure.layer.pipe(
   Layer.provideMerge(desktopFoundationLayer),
 );
 
-const desktopRelayClientLayer = Layer.unwrap(
-  Effect.gen(function* () {
-    const environment = yield* DesktopEnvironment.DesktopEnvironment;
-    return RelayClient.layerCloudflared({ baseDir: environment.baseDir });
-  }),
-).pipe(Layer.provideMerge(desktopFoundationLayer));
-
-const desktopCloudflaredTunnelLayer = DesktopCloudflaredTunnel.layer.pipe(
-  Layer.provideMerge(desktopRelayClientLayer),
-  Layer.provideMerge(NodeServices.layer),
-);
-
 const desktopPreviewLayer = PreviewManager.layer.pipe(
   // Merged rather than provided so the IPC handlers can reach the import
   // service alongside the manager; both sit on the same BrowserSession.
@@ -214,7 +200,6 @@ const desktopApplicationLayer = Layer.mergeAll(
   DesktopShellEnvironment.layer,
   desktopSshLayer,
 ).pipe(
-  Layer.provideMerge(desktopCloudflaredTunnelLayer),
   Layer.provideMerge(desktopSnapShotLayer),
   Layer.provideMerge(DesktopUpdates.layer),
   Layer.provideMerge(desktopWslBackendLayer),

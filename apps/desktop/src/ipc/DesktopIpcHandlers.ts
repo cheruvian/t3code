@@ -18,7 +18,6 @@ import {
   setServerExposureMode,
   setTailscaleServeEnabled,
 } from "./methods/serverExposure.ts";
-import { getCloudflaredTunnelState, setCloudflaredTunnel } from "./methods/cloudflaredTunnel.ts";
 import {
   bootstrapSshBearerSession,
   disconnectSshEnvironment,
@@ -122,8 +121,6 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(setServerExposureMode);
   yield* ipc.handle(setTailscaleServeEnabled);
   yield* ipc.handle(getAdvertisedEndpoints);
-  yield* ipc.handle(getCloudflaredTunnelState);
-  yield* ipc.handle(setCloudflaredTunnel);
 
   yield* ipc.handle(getWslState);
   yield* ipc.handle(setWslBackendEnabled);

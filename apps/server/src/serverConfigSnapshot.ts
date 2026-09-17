@@ -91,5 +91,6 @@ export const loadServerConfig = Effect.gen(function* () {
         }),
     threadResumeCompletionMarker: true,
     threadSnapshotPagination: true,
+    reasoningMessages: true,
   };
 });

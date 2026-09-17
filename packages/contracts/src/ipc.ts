@@ -193,28 +193,6 @@ export const DesktopAppStageLabelSchema = Schema.Literals([
   "Production",
 ]);
 
-export const DesktopCloudflaredTunnelStatusSchema = Schema.Literals([
-  "disabled",
-  "running",
-  "failed",
-]);
-export type DesktopCloudflaredTunnelStatus = typeof DesktopCloudflaredTunnelStatusSchema.Type;
-
-export const DesktopCloudflaredTunnelStateSchema = Schema.Struct({
-  status: DesktopCloudflaredTunnelStatusSchema,
-  enabled: Schema.Boolean,
-  configPath: Schema.NullOr(Schema.String),
-  pid: Schema.NullOr(Schema.Number),
-  error: Schema.NullOr(Schema.String),
-});
-export type DesktopCloudflaredTunnelState = typeof DesktopCloudflaredTunnelStateSchema.Type;
-
-export const DesktopCloudflaredTunnelInputSchema = Schema.Struct({
-  enabled: Schema.Boolean,
-  configPath: Schema.NullOr(Schema.String),
-});
-export type DesktopCloudflaredTunnelInput = typeof DesktopCloudflaredTunnelInputSchema.Type;
-
 export interface DesktopAppBranding {
   baseName: string;
   stageLabel: DesktopAppStageLabel;
@@ -1242,6 +1220,8 @@ export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
   captureRendererCpuProfile?: () => Promise<boolean>;
+  /** Absolute path of a dropped or picked file; absent on desktop builds predating it. */
+  getPathForFile?: (file: File) => string;
   /** The desktop client's OS platform, read from Electron's preload process. */
   getClientPlatform?: () => string;
   setNotificationBadge?: (badge: { count: number; image: string | null }) => Promise<void>;
@@ -1309,10 +1289,6 @@ export interface DesktopBridge {
     readonly enabled: boolean;
     readonly port?: number;
   }) => Promise<DesktopServerExposureState>;
-  getCloudflaredTunnelState: () => Promise<DesktopCloudflaredTunnelState>;
-  setCloudflaredTunnel: (
-    input: DesktopCloudflaredTunnelInput,
-  ) => Promise<DesktopCloudflaredTunnelState>;
   getAdvertisedEndpoints: () => Promise<readonly AdvertisedEndpoint[]>;
   getWslState: () => Promise<DesktopWslState>;
   setWslBackendEnabled: (enabled: boolean) => Promise<DesktopWslState>;

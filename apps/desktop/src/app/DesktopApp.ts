@@ -25,7 +25,6 @@ import * as DesktopObservability from "./DesktopObservability.ts";
 import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
-import * as DesktopCloudflaredTunnel from "../backend/DesktopCloudflaredTunnel.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopState from "./DesktopState.ts";
@@ -162,7 +161,6 @@ const bootstrap = Effect.gen(function* () {
   const state = yield* DesktopState.DesktopState;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
-  const cloudflaredTunnel = yield* DesktopCloudflaredTunnel.DesktopCloudflaredTunnel;
   const desktopWindow = yield* DesktopWindow.DesktopWindow;
   const snapShot = yield* DesktopSnapShot.DesktopSnapShot;
   const appActivation = yield* DesktopAppActivation.DesktopAppActivation;
@@ -247,14 +245,6 @@ const bootstrap = Effect.gen(function* () {
     }
     yield* primaryBackend.start;
     yield* logBootstrapInfo("bootstrap backend start requested");
-    const tunnelState = yield* cloudflaredTunnel.apply({
-      enabled: settings.cloudflaredEnabled,
-      configPath: settings.cloudflaredConfigPath,
-    });
-    yield* logBootstrapInfo("bootstrap reconciled local cloudflared tunnel", {
-      status: tunnelState.status,
-      ...(tunnelState.pid === null ? {} : { pid: tunnelState.pid }),
-    });
     yield* appActivation.start.pipe(
       Effect.tap(() => logBootstrapInfo("desktop app control socket ready")),
       Effect.catch((error) => logStartupError("desktop app control socket unavailable", { error })),

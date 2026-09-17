@@ -32,8 +32,6 @@ export interface DesktopSettings {
   readonly serverExposureMode: DesktopServerExposureMode;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
-  readonly cloudflaredEnabled: boolean;
-  readonly cloudflaredConfigPath: string | null;
   readonly updateChannel: DesktopUpdateChannel;
   readonly updateChannelConfiguredByUser: boolean;
   // Was a "local" | "wsl" swap mode in an earlier iteration of the WSL
@@ -83,8 +81,6 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   serverExposureMode: "local-only",
   tailscaleServeEnabled: false,
   tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
-  cloudflaredEnabled: false,
-  cloudflaredConfigPath: null,
   updateChannel: "latest",
   updateChannelConfiguredByUser: false,
   wslBackendEnabled: false,
@@ -107,8 +103,6 @@ const DesktopSettingsDocument = Schema.Struct({
   serverExposureMode: Schema.optionalKey(DesktopServerExposureModeSchema),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
-  cloudflaredEnabled: Schema.optionalKey(Schema.Boolean),
-  cloudflaredConfigPath: Schema.optionalKey(Schema.NullOr(Schema.String)),
   updateChannel: Schema.optionalKey(DesktopUpdateChannelSchema),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
   // Newer form of the WSL toggle. `wslMode` is still accepted on load so
@@ -175,10 +169,6 @@ export class DesktopAppSettings extends Context.Service<
       readonly enabled: boolean;
       readonly port: Option.Option<number>;
     }) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
-    readonly setCloudflaredTunnel: (input: {
-      readonly enabled: boolean;
-      readonly configPath: string | null;
-    }) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setUpdateChannel: (
       channel: DesktopUpdateChannel,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
@@ -216,10 +206,6 @@ function normalizeWslDistro(value: unknown): string | null {
   return typeof value === "string" && isValidDistroName(value) ? value : null;
 }
 
-function normalizeCloudflaredConfigPath(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value : null;
-}
-
 export function normalizeMainWindowBounds(value: unknown): DesktopWindowBounds | null {
   return Option.getOrNull(decodeDesktopWindowBounds(value));
 }
@@ -252,8 +238,6 @@ function normalizeDesktopSettingsDocument(
       parsed.serverExposureMode === "network-accessible" ? "network-accessible" : "local-only",
     tailscaleServeEnabled: parsed.tailscaleServeEnabled === true,
     tailscaleServePort: normalizeTailscaleServePort(parsed.tailscaleServePort),
-    cloudflaredEnabled: parsed.cloudflaredEnabled === true,
-    cloudflaredConfigPath: normalizeCloudflaredConfigPath(parsed.cloudflaredConfigPath),
     updateChannel: updateChannelConfiguredByUser
       ? Option.getOrElse(parsedUpdateChannel, () => defaultSettings.updateChannel)
       : defaultSettings.updateChannel,
@@ -291,12 +275,6 @@ function toDesktopSettingsDocument(
   }
   if (settings.tailscaleServePort !== defaults.tailscaleServePort) {
     document.tailscaleServePort = settings.tailscaleServePort;
-  }
-  if (settings.cloudflaredEnabled !== defaults.cloudflaredEnabled) {
-    document.cloudflaredEnabled = settings.cloudflaredEnabled;
-  }
-  if (settings.cloudflaredConfigPath !== defaults.cloudflaredConfigPath) {
-    document.cloudflaredConfigPath = settings.cloudflaredConfigPath;
   }
   if (settings.updateChannel !== defaults.updateChannel) {
     document.updateChannel = settings.updateChannel;
@@ -359,21 +337,6 @@ function setTailscaleServe(
         ...settings,
         tailscaleServeEnabled: input.enabled,
         tailscaleServePort: port,
-      };
-}
-
-function setCloudflaredTunnel(
-  settings: DesktopSettings,
-  input: { readonly enabled: boolean; readonly configPath: string | null },
-): DesktopSettings {
-  const configPath = normalizeCloudflaredConfigPath(input.configPath);
-  return settings.cloudflaredEnabled === input.enabled &&
-    settings.cloudflaredConfigPath === configPath
-    ? settings
-    : {
-        ...settings,
-        cloudflaredEnabled: input.enabled,
-        cloudflaredConfigPath: configPath,
       };
 }
 
@@ -581,10 +544,6 @@ export const make = Effect.gen(function* () {
       persist((settings) => setTailscaleServe(settings, input)).pipe(
         Effect.withSpan("desktop.settings.setTailscaleServe", { attributes: input }),
       ),
-    setCloudflaredTunnel: (input) =>
-      persist((settings) => setCloudflaredTunnel(settings, input)).pipe(
-        Effect.withSpan("desktop.settings.setCloudflaredTunnel", { attributes: input }),
-      ),
     setUpdateChannel: (channel) =>
       persist((settings) => setUpdateChannel(settings, channel)).pipe(
         Effect.withSpan("desktop.settings.setUpdateChannel", { attributes: { channel } }),
@@ -643,8 +602,6 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
         setServerExposureMode: (mode) =>
           update((settings) => setServerExposureMode(settings, mode)),
         setTailscaleServe: (input) => update((settings) => setTailscaleServe(settings, input)),
-        setCloudflaredTunnel: (input) =>
-          update((settings) => setCloudflaredTunnel(settings, input)),
         setUpdateChannel: (channel) => update((settings) => setUpdateChannel(settings, channel)),
         setWslBackendEnabled: (enabled) =>
           update((settings) => setWslBackendEnabled(settings, enabled)),
