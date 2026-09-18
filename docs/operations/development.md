@@ -37,6 +37,20 @@ different preference when needed.
 
 ### Sharing and remote debugging
 
+To inspect the Electron renderer, set `T3CODE_DESKTOP_DEBUG_PORT` to an unused port
+between 1 and 65535 before starting the desktop app. For example:
+
+```bash
+T3CODE_DESKTOP_DEBUG_PORT=9222 vp run dev:desktop
+```
+
+Connect a Chrome DevTools Protocol client to `http://127.0.0.1:9222` and select the
+T3 app page rather than an embedded browser page. Debugging is disabled by default;
+unset the variable and restart Electron to disable it. An explicit
+`--remote-debugging-port` argument takes precedence. The environment setting binds
+debugging to loopback; do not publish this endpoint through a proxy or tunnel,
+because debugger clients can inspect and control pages.
+
 `vp run dev --share` publishes the web port over the machine's tailnet and prints a pairing URL
 for that origin. Give the tester the complete URL, including its token. The dev runner removes
 its mapping on exit.

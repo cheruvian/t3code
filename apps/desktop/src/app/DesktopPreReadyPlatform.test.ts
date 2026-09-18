@@ -3,7 +3,7 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { beforeEach, vi } from "vite-plus/test";
+import { afterEach, beforeEach, vi } from "vite-plus/test";
 
 const {
   appendSwitchMock,
@@ -48,6 +48,7 @@ import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
 
 describe("DesktopPreReadyPlatform", () => {
   beforeEach(() => {
+    vi.stubEnv("T3CODE_DESKTOP_DEBUG_PORT", undefined);
     appendSwitchMock.mockReset();
     getSwitchValueMock.mockReset();
     hasSwitchMock.mockReset();
@@ -56,6 +57,25 @@ describe("DesktopPreReadyPlatform", () => {
     mkdirSyncMock.mockReset();
     writeFileSyncMock.mockReset();
   });
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  for (const platform of ["darwin", "linux", "win32"] as const) {
+    it.effect(`configures renderer debugging before readiness on ${platform}`, () => {
+      vi.stubEnv("T3CODE_DESKTOP_DEBUG_PORT", "9222");
+      return DesktopPreReadyPlatform.make.pipe(
+        Effect.provideService(HostProcessPlatform, platform),
+        Effect.tap(() =>
+          Effect.sync(() => {
+            assert.deepEqual(appendSwitchMock.mock.calls.slice(0, 2), [
+              ["remote-debugging-address", "127.0.0.1"],
+              ["remote-debugging-port", "9222"],
+            ]);
+          }),
+        ),
+      );
+    });
+  }
 
   it.effect("preserves an explicit Linux password-store switch", () => {
     hasSwitchMock.mockImplementation((switchName) => switchName === "password-store");

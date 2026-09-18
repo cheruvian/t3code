@@ -10,6 +10,7 @@ import * as Electron from "electron";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import * as DesktopEarlyElectronStartup from "./DesktopEarlyElectronStartup.ts";
+import { configureDesktopDebugging } from "./DesktopDebugging.ts";
 import { resolveDesktopAppBranding } from "./DesktopEnvironment.ts";
 import { renderUrlHandlerDesktopEntry } from "./DesktopLinuxUrlHandler.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
@@ -52,6 +53,7 @@ export class DesktopPreReadyElectronOptions extends Context.Service<
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcessPlatform;
   return yield* Effect.sync((): DesktopPreReadyElectronOptions["Service"] => {
+    configureDesktopDebugging(Electron.app.commandLine, process.env.T3CODE_DESKTOP_DEBUG_PORT);
     const linuxPasswordStoreCommandLine =
       platform === "linux"
         ? readCommandLineSwitchValue(Electron.app.commandLine, "password-store")
