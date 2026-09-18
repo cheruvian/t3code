@@ -1040,6 +1040,11 @@ it.effect("decodes active reorder commands through client and orchestration boun
         assert.strictEqual(decoded.orderKey, "gm");
       }
     }
+    for (const decode of [decodeClientOrchestrationCommand, decodeOrchestrationCommand]) {
+      const reset = yield* decode({ ...input, orderKey: null });
+      assert.strictEqual(reset.type, "thread.active.reorder");
+      if (reset.type === "thread.active.reorder") assert.isNull(reset.orderKey);
+    }
     const emptyKey = yield* Effect.exit(
       decodeClientOrchestrationCommand({ ...input, orderKey: " " }),
     );

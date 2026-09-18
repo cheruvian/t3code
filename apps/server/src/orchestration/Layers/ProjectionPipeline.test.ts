@@ -531,6 +531,29 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
         assert.deepEqual(rows, [{ activeOrderKey: "gm", updatedAt: orderUpdatedAt }]);
       }
 
+      yield* eventStore.append({
+        type: "thread.meta-updated",
+        eventId: EventId.make("evt-active-order-reset"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        occurredAt: "2026-01-01T00:00:00.600Z",
+        commandId: CommandId.make("cmd-active-order-reset"),
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          activeOrderKey: null,
+          updatedAt: orderUpdatedAt,
+        },
+      });
+      yield* projectionPipeline.bootstrap;
+      const resetRows = yield* sql<{ readonly key: string | null; readonly updatedAt: string }>`
+        SELECT active_order_key AS "key", updated_at AS "updatedAt"
+        FROM projection_threads WHERE thread_id = 'thread-1'
+      `;
+      assert.deepEqual(resetRows, [{ key: null, updatedAt: orderUpdatedAt }]);
+
       // Settled lifecycle through the DB pipeline: thread.settled writes the
       // override + timestamp, thread.unsettled(user) flips to the active pin.
       yield* eventStore.append({

@@ -1,3 +1,4 @@
+import { allowUnpinnedReorderAtom } from "../../state/preferences";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -150,6 +151,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
   const insets = useSafeAreaInsets();
   const threads = useAtomValue(environmentThreadShells.threadShellsAtom);
   const configs = useAtomValue(environmentServerConfigsAtom);
+  const allowUnpinnedReorder = useAtomValue(allowUnpinnedReorderAtom);
   const queuedThreadKeys = useAtomValue(queuedThreadKeysAtom);
   const pendingOrder = useAtomValue(pendingThreadOrderAtom);
   const dropBusy = useAtomValue(threadDropBusyAtom);
@@ -172,6 +174,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
   }, [threads, now]);
   const sections = useMemo(() => {
     const shared = {
+      allowUnpinnedReorder,
       threads,
       now,
       queuedThreadKeys,
@@ -199,7 +202,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
       snoozed: parked.filter((thread) => effectiveSnoozed(thread, { now })),
       settled: parked.filter((thread) => !effectiveSnoozed(thread, { now })),
     };
-  }, [threads, configs, now, queuedThreadKeys, pendingOrder]);
+  }, [threads, configs, now, queuedThreadKeys, pendingOrder, allowUnpinnedReorder]);
   const planners = useMemo(() => {
     const planner = (section: "pinned" | "active") =>
       createThreadMovePlanner({
@@ -211,7 +214,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
             (
               section === "pinned"
                 ? config.environment.capabilities.threadPinReorder
-                : config.environment.capabilities.threadActiveReorder
+                : allowUnpinnedReorder && config.environment.capabilities.threadActiveReorder
             )
               ? [id]
               : [],
@@ -219,7 +222,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
         ),
       });
     return { pinned: planner("pinned"), active: planner("active") };
-  }, [sections, threads, configs]);
+  }, [sections, threads, configs, allowUnpinnedReorder]);
   const rows = useMemo(() => {
     const result: Row[] = [];
     let offset = 0;
@@ -469,6 +472,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
                         <DragHandle
                           title={thread.title}
                           disabled={
+                            (!allowUnpinnedReorder && item.section !== "pinned") ||
                             dropBusy ||
                             pendingOrder !== null ||
                             !(

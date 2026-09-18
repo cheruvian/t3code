@@ -10,7 +10,11 @@ import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
 import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
-import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import {
+  allowUnpinnedReorderAtom,
+  mobilePreferencesAtom,
+  updateMobilePreferencesAtom,
+} from "../../state/preferences";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
@@ -45,11 +49,28 @@ export function SettingsThreadsRouteScreen() {
           contentContainerClassName="gap-6 px-5 pt-4"
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
         >
+          <ThreadOrderSettings />
           <AutoSettleSettingsRows />
           <LegacySettingsSection />
         </ScrollView>
       </SettingsScreen>
     </>
+  );
+}
+
+function ThreadOrderSettings() {
+  const allowUnpinnedReorder = useAtomValue(allowUnpinnedReorderAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  return (
+    <SettingsSection title="Thread order">
+      <SettingsSwitchRow
+        icon="line.3.horizontal"
+        label="Allow reordering unpinned threads"
+        subtitle="Use saved manual positions on this device. Turn off to restore automatic ordering."
+        value={allowUnpinnedReorder}
+        onValueChange={(value) => savePreferences({ sidebarAllowUnpinnedReorder: value })}
+      />
+    </SettingsSection>
   );
 }
 

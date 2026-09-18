@@ -1,3 +1,4 @@
+import { allowUnpinnedReorderAtom } from "./preferences";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect } from "react";
 import { Atom } from "effect/unstable/reactivity";
@@ -51,8 +52,14 @@ export function beginPendingThreadOrder(pending: PendingThreadOrder) {
     if (refreshPendingOrder !== refresh) return;
     const current = appAtomRegistry.get(pendingThreadOrderAtom);
     if (current === null) return;
+    const allowUnpinnedReorder = appAtomRegistry.get(allowUnpinnedReorderAtom);
+    if (current.section === "active" && !allowUnpinnedReorder) {
+      cancel();
+      return;
+    }
     const configs = appAtomRegistry.get(environmentServerConfigsAtom);
     const ordered = getThreadListV2OrderedSection({
+      allowUnpinnedReorder,
       threads: appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
       section: current.section,
       now: new Date().toISOString(),
@@ -78,6 +85,7 @@ export function beginPendingThreadOrder(pending: PendingThreadOrder) {
     appAtomRegistry.subscribe(environmentThreadShells.threadShellsAtom, refresh),
     appAtomRegistry.subscribe(environmentServerConfigsAtom, refresh),
     appAtomRegistry.subscribe(queuedThreadKeysAtom, refresh),
+    appAtomRegistry.subscribe(allowUnpinnedReorderAtom, refresh),
   );
   return {
     isPending: () => {

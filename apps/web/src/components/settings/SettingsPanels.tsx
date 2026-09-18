@@ -1,3 +1,4 @@
+import { Checkbox } from "../ui/checkbox";
 import { useAtomValue } from "@effect/atom-react";
 import { Spinner } from "~/components/ui/spinner";
 import { NotificationSettings } from "./NotificationSettings";
@@ -814,6 +815,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarCompactMode: DEFAULT_UNIFIED_SETTINGS.sidebarCompactMode,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarThreadSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarThreadSortOrder,
+      sidebarAllowUnpinnedReorder: false,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
@@ -2441,40 +2443,53 @@ export function GeneralSettingsPanel() {
 
         <SettingsRow
           {...searchableSetting("sidebar-thread-order")}
-          description="Choose how the compact sidebar orders active threads. Latest activity uses whichever is newer: your latest message or the latest completed agent turn."
+          description="Choose how the compact sidebar orders active threads. Latest activity uses whichever is newer: your latest message or the latest completed agent turn. Manual reordering takes precedence when enabled."
           resetAction={
-            settings.sidebarThreadSortOrder !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadSortOrder ? (
+            settings.sidebarThreadSortOrder !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadSortOrder ||
+            settings.sidebarAllowUnpinnedReorder ? (
               <SettingResetButton
                 label="sidebar thread order"
                 onClick={() =>
                   updateSettings({
                     sidebarThreadSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarThreadSortOrder,
+                    sidebarAllowUnpinnedReorder: false,
                   })
                 }
               />
             ) : null
           }
           control={
-            <Select
-              value={settings.sidebarThreadSortOrder}
-              onValueChange={(value) => {
-                if (value === null) return;
-                updateSettings({ sidebarThreadSortOrder: value as SidebarThreadSortOrder });
-              }}
-            >
-              <SelectTrigger className="w-44" aria-label="Sidebar thread order">
-                <SelectValue>
-                  {SIDEBAR_THREAD_SORT_LABELS[settings.sidebarThreadSortOrder]}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                {Object.entries(SIDEBAR_THREAD_SORT_LABELS).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>
-                    {label}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
+            <div className="flex flex-wrap items-center gap-4">
+              <Select
+                value={settings.sidebarThreadSortOrder}
+                onValueChange={(value) => {
+                  if (value === null) return;
+                  updateSettings({ sidebarThreadSortOrder: value as SidebarThreadSortOrder });
+                }}
+              >
+                <SelectTrigger className="w-44" aria-label="Sidebar thread order">
+                  <SelectValue>
+                    {SIDEBAR_THREAD_SORT_LABELS[settings.sidebarThreadSortOrder]}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  {Object.entries(SIDEBAR_THREAD_SORT_LABELS).map(([value, label]) => (
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={settings.sidebarAllowUnpinnedReorder}
+                  onCheckedChange={(checked) =>
+                    updateSettings({ sidebarAllowUnpinnedReorder: checked })
+                  }
+                />
+                Allow reordering unpinned threads
+              </label>
+            </div>
           }
         />
 

@@ -394,6 +394,48 @@ describe("getThreadListV2OrderedSection", () => {
 });
 
 describe("buildThreadListV2Items", () => {
+  it("ignores active positions when disabled but retains pinned positions", () => {
+    const threads = [
+      makeThread({
+        id: ThreadId.make("old"),
+        title: "old",
+        createdAt: "2026-06-01T08:00:00.000Z",
+        activeOrderKey: "f",
+      }),
+      makeThread({
+        id: ThreadId.make("new"),
+        title: "new",
+        createdAt: "2026-06-01T12:00:00.000Z",
+        activeOrderKey: "t",
+      }),
+      makeThread({
+        id: ThreadId.make("pin-new"),
+        title: "pin-new",
+        createdAt: "2026-06-01T12:00:00.000Z",
+        pinnedAt: NOW,
+        pinOrderKey: "t",
+      }),
+      makeThread({
+        id: ThreadId.make("pin-old"),
+        title: "pin-old",
+        createdAt: "2026-06-01T08:00:00.000Z",
+        pinnedAt: NOW,
+        pinOrderKey: "f",
+      }),
+    ];
+    const input = { threads, environmentId: null, searchQuery: "", now: NOW };
+    expect(
+      buildThreadListV2Items({ ...input, allowUnpinnedReorder: false }).items.map(
+        (item) => item.thread.id,
+      ),
+    ).toEqual(["pin-old", "pin-new", "new", "old"]);
+    expect(
+      buildThreadListV2Items({ ...input, allowUnpinnedReorder: true }).items.map(
+        (item) => item.thread.id,
+      ),
+    ).toEqual(["pin-old", "pin-new", "old", "new"]);
+  });
+
   it("places a persisted settled thread in the settled shelf", () => {
     const thread = makeThread({
       id: ThreadId.make("linked-merged"),

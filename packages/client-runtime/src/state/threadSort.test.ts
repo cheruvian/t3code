@@ -433,3 +433,12 @@ describe("sortActiveThreadsByOrderKey", () => {
     expect(sortActiveThreadsByOrderKey(updated).map((thread) => thread.id)).toEqual(orderedIds);
   });
 });
+
+it("ignores saved active positions when manual ordering is disabled", () => {
+  const rows = [
+    { id: "older", createdAt: "2026-03-09T08:00:00.000Z", activeOrderKey: "a" },
+    { id: "newer", createdAt: "2026-03-09T12:00:00.000Z", activeOrderKey: "z" },
+  ];
+  expect(sortActiveThreadsByOrderKey(rows, false).map((row) => row.id)).toEqual(["newer", "older"]);
+  expect(sortActiveThreadsByOrderKey(rows, true).map((row) => row.id)).toEqual(["older", "newer"]);
+});

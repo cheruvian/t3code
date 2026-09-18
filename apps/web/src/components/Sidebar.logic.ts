@@ -322,6 +322,7 @@ export function resolveSidebarDropVerb(
 }
 
 export function planSidebarThreadDrop(input: {
+  readonly allowUnpinnedReorder?: boolean;
   readonly activeKey: string;
   readonly activeSection: SidebarSection;
   /** Snoozed threads can retain pinning and settlement beneath the shelf. */
@@ -355,6 +356,7 @@ export function planSidebarThreadDrop(input: {
   }
   switch (target.section) {
     case "active": {
+      if (input.allowUnpinnedReorder === false) return { kind: "none" };
       const order = target.activeOrder;
       if (
         activeSection === "active" &&
@@ -1005,10 +1007,14 @@ export function sortThreadsForSidebar<
     readonly unsettledAt?: string | null | undefined;
     readonly activeOrderKey?: string | null | undefined;
   },
->(threads: readonly T[], sortOrder: SidebarThreadSortOrder = "created_at"): T[] {
+>(
+  threads: readonly T[],
+  sortOrder: SidebarThreadSortOrder = "created_at",
+  allowUnpinnedReorder = true,
+): T[] {
   return [...threads].toSorted((left, right) => {
-    const leftKey = left.activeOrderKey;
-    const rightKey = right.activeOrderKey;
+    const leftKey = allowUnpinnedReorder ? left.activeOrderKey : null;
+    const rightKey = allowUnpinnedReorder ? right.activeOrderKey : null;
     if (leftKey == null && rightKey != null) return -1;
     if (leftKey != null && rightKey == null) return 1;
     if (leftKey != null && rightKey != null)

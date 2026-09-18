@@ -2170,6 +2170,7 @@ export default function Sidebar() {
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const sidebarThreadSortOrder = useClientSettings((s) => s.sidebarThreadSortOrder);
+  const allowUnpinnedReorder = useClientSettings((s) => s.sidebarAllowUnpinnedReorder);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
@@ -2583,7 +2584,8 @@ export default function Sidebar() {
       const supportsSettlement = capabilities?.threadSettlement === true;
       const supportsSnooze = capabilities?.threadSnooze === true;
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      if (capabilities?.threadActiveReorder === true) activeReorderable.add(threadKey);
+      if (allowUnpinnedReorder && capabilities?.threadActiveReorder === true)
+        activeReorderable.add(threadKey);
       // Older servers retain their existing drag actions. Active placement
       // additionally requires its own ordering capability at the drop target.
       if (capabilities?.threadPinning === true && capabilities.threadPinReorder === true) {
@@ -2623,7 +2625,11 @@ export default function Sidebar() {
     // sort, or mixed-version fleets would render different pinned orders on
     // web and mobile from the same data.
     const sortedPinned = sortPinnedThreadsForSidebar(pinned);
-    const sortedActive = sortThreadsForSidebar(active, sidebarThreadSortOrder);
+    const sortedActive = sortThreadsForSidebar(
+      active,
+      sidebarThreadSortOrder,
+      allowUnpinnedReorder,
+    );
     return {
       pinnedThreads:
         optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
@@ -2660,6 +2666,7 @@ export default function Sidebar() {
     snoozeWakeTick,
     orderingThreads,
     sidebarThreadSortOrder,
+    allowUnpinnedReorder,
   ]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
@@ -3522,6 +3529,7 @@ export default function Sidebar() {
         if (target === null) return false;
         return (
           planSidebarThreadDrop({
+            allowUnpinnedReorder,
             activeKey: draggedThreadKey,
             activeSection: draggedFromSection,
             activePinned: source.pinnedAt != null,
@@ -3545,6 +3553,7 @@ export default function Sidebar() {
       },
     );
   }, [
+    allowUnpinnedReorder,
     activeKeysById,
     pinnedKeysById,
     serverConfigs,
@@ -3570,6 +3579,7 @@ export default function Sidebar() {
       if (activeSection === undefined || target === null || activeThread === undefined) return;
       const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
       const plan = planSidebarThreadDrop({
+        allowUnpinnedReorder,
         activeKey,
         activeSection,
         activePinned: activeThread.pinnedAt != null,
@@ -3699,6 +3709,7 @@ export default function Sidebar() {
       })();
     },
     [
+      allowUnpinnedReorder,
       activeKeysById,
       pinnedKeysById,
       serverConfigs,
@@ -4784,7 +4795,9 @@ export default function Sidebar() {
                             key={threadKey}
                             id={threadKey}
                             disabled={
-                              !draggableThreadKeys.has(threadKey) || optimisticDrop !== null
+                              !draggableThreadKeys.has(threadKey) ||
+                              (!allowUnpinnedReorder && section !== "pinned") ||
+                              optimisticDrop !== null
                             }
                           >
                             {(bag) => renderThreadRowInner(thread, section, bag)}

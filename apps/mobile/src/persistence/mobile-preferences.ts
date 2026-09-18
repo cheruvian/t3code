@@ -41,6 +41,7 @@ export interface Preferences {
    * default flat list — see `resolveThreadListV2Enabled`.
    */
   readonly legacyThreadListEnabled?: boolean;
+  readonly sidebarAllowUnpinnedReorder?: boolean;
   /** Device-local counterpart of desktop's `planModeEnabled` legacy flag. */
   readonly planModeEnabled?: boolean;
   /** Model favorites belong to this device, like the web client setting. */
@@ -107,6 +108,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     composerEnterBehavior?: ComposerEnterBehavior;
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
+    sidebarAllowUnpinnedReorder?: boolean;
     legacyThreadListEnabled?: boolean;
     planModeEnabled?: boolean;
     modelFavorites?: Preferences["modelFavorites"];
@@ -175,6 +177,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     parsed.projectGroupingMode === "separate"
   ) {
     preferences.projectGroupingMode = parsed.projectGroupingMode;
+  }
+  if (typeof parsed.sidebarAllowUnpinnedReorder === "boolean") {
+    preferences.sidebarAllowUnpinnedReorder = parsed.sidebarAllowUnpinnedReorder;
   }
   if (typeof parsed.legacyThreadListEnabled === "boolean") {
     preferences.legacyThreadListEnabled = parsed.legacyThreadListEnabled;

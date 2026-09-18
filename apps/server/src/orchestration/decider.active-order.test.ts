@@ -72,7 +72,7 @@ it.layer(NodeServices.layer)("active thread ordering", (it) => {
   it.effect("persists changed and repeated slots without changing thread activity timestamps", () =>
     Effect.gen(function* () {
       let readModel = makeReadModel({ unsettledAt: BEFORE_NOW });
-      for (const orderKey of ["m", "m", "g"]) {
+      for (const orderKey of ["m", "m", "g", null, null]) {
         const decided = yield* decideOrchestrationCommand({
           command: { ...reorderCommand, orderKey },
           readModel,
@@ -156,6 +156,36 @@ it.layer(NodeServices.layer)("active thread ordering", (it) => {
           const projected = yield* projectEvent(readModel, { ...event, sequence: 1 });
           expect(projected.threads[0]).toEqual({ ...readModel.threads[0], activeOrderKey: "m" });
         }
+      }),
+  );
+
+  it.effect(
+    "clears a running snoozed thread's saved slot without changing any other thread fields",
+    () =>
+      Effect.gen(function* () {
+        const readModel = makeReadModel({
+          activeOrderKey: "m",
+          unsettledAt: BEFORE_NOW,
+          snoozedAt: SNOOZED_AT,
+          snoozedUntil: FUTURE_WAKE,
+          session: {
+            threadId: THREAD_ID,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: NOW,
+          },
+        });
+        const decided = yield* decideOrchestrationCommand({
+          command: { ...reorderCommand, orderKey: null },
+          readModel,
+        });
+        const events = Array.isArray(decided) ? decided : [decided];
+        expect(events).toHaveLength(1);
+        const projected = yield* projectEvent(readModel, { ...events[0]!, sequence: 1 });
+        expect(projected.threads[0]).toEqual({ ...readModel.threads[0], activeOrderKey: null });
       }),
   );
 

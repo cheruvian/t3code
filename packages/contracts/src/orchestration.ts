@@ -1205,7 +1205,8 @@ const ThreadActiveReorderCommand = Schema.Struct({
   type: Schema.Literal("thread.active.reorder"),
   commandId: CommandId,
   threadId: ThreadId,
-  orderKey: TrimmedNonEmptyString,
+  // Null restores automatic ordering without changing lifecycle or activity timestamps.
+  orderKey: Schema.NullOr(TrimmedNonEmptyString),
 });
 
 const ThreadMetaUpdateCommand = Schema.Struct({

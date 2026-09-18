@@ -11,10 +11,15 @@ import {
   pendingThreadOrderAtom,
 } from "./thread-order";
 import { environmentThreadShells } from "./threads";
+import { allowUnpinnedReorderAtom } from "./preferences";
 
 vi.mock("./atom-registry", async () => {
   const { AtomRegistry } = await import("effect/unstable/reactivity");
   return { appAtomRegistry: AtomRegistry.make() };
+});
+vi.mock("./preferences", async () => {
+  const { Atom } = await import("effect/unstable/reactivity");
+  return { allowUnpinnedReorderAtom: Atom.make(true).pipe(Atom.keepAlive) };
 });
 vi.mock("./threads", async () => {
   const { Atom } = await import("effect/unstable/reactivity");
@@ -36,6 +41,7 @@ const shellsAtom = environmentThreadShells.threadShellsAtom as Atom.Writable<
 >;
 
 function fixture() {
+  appAtomRegistry.set(allowUnpinnedReorderAtom as Atom.Writable<boolean, boolean>, true);
   // Only section membership and order fields are read by this coordinator.
   const rows = ["a", "b"].map(
     (id, index) =>
@@ -118,4 +124,11 @@ describe("shared mobile pending move", () => {
     appAtomRegistry.set(shellsAtom, rows);
     expect(getPendingThreadOrder()).toBeNull();
   });
+});
+
+it("cancels a pending active arrangement when manual ordering is disabled", () => {
+  const { start } = fixture();
+  start();
+  appAtomRegistry.set(allowUnpinnedReorderAtom as Atom.Writable<boolean, boolean>, false);
+  expect(getPendingThreadOrder()).toBeNull();
 });

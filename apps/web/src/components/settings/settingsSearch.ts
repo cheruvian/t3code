@@ -268,6 +268,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "sidebar-thread-order",
     title: "Sidebar thread order",
+    searchTerms: ["allow reordering unpinned threads manual drag sorting"],
     to: "/settings/general",
   },
   {

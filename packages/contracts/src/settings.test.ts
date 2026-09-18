@@ -542,6 +542,7 @@ describe("ClientSettings sidebar", () => {
     const settings = decodeClientSettings({});
     expect(settings.legacySidebarEnabled).toBe(false);
     expect(settings.sidebarCompactMode).toBe(true);
+    expect(settings.sidebarAllowUnpinnedReorder).toBe(false);
   });
 
   it("drops the retired sidebar v2 beta keys, resetting everyone to the default", () => {
@@ -570,6 +571,12 @@ describe("ClientSettings sidebar", () => {
   });
 
   it("supports opting out of compact inbox rows", () => {
+    expect(
+      decodeClientSettings({ sidebarAllowUnpinnedReorder: true }).sidebarAllowUnpinnedReorder,
+    ).toBe(true);
+    expect(
+      decodeClientSettingsPatch({ sidebarAllowUnpinnedReorder: false }).sidebarAllowUnpinnedReorder,
+    ).toBe(false);
     expect(decodeClientSettings({ sidebarCompactMode: false }).sidebarCompactMode).toBe(false);
     expect(decodeClientSettingsPatch({ sidebarCompactMode: false }).sidebarCompactMode).toBe(false);
   });

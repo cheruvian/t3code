@@ -921,6 +921,33 @@ describe("sortThreadsForSidebar", () => {
     expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
   });
 
+  it("ignores saved positions when manual unpinned ordering is disabled", () => {
+    const rows = [
+      {
+        id: "old",
+        createdAt: "2026-03-09T08:00:00.000Z",
+        updatedAt: "2026-03-09T08:00:00.000Z",
+        activeOrderKey: null,
+      },
+      {
+        id: "recent",
+        createdAt: "2026-03-09T07:00:00.000Z",
+        updatedAt: "2026-03-09T12:00:00.000Z",
+        latestUserMessageAt: "2026-03-09T12:00:00.000Z",
+        activeOrderKey: "m",
+      },
+    ];
+    expect(sortThreadsForSidebar(rows, "activity", false).map((row) => row.id)).toEqual([
+      "recent",
+      "old",
+    ]);
+    expect(sortThreadsForSidebar(rows, "activity", true).map((row) => row.id)).toEqual([
+      "old",
+      "recent",
+    ]);
+    expect(rows[1]?.activeOrderKey).toBe("m");
+  });
+
   it("can order by the latest user message or completed agent turn", () => {
     const sorted = sortThreadsForSidebar(
       [
@@ -1325,6 +1352,27 @@ describe("planSidebarThreadDrop", () => {
       ...overrides,
       target: { activeOrder: [], ...overrides.target },
     });
+
+  it("blocks active placements while preserving pinned reordering when unpinned reordering is off", () => {
+    for (const activeSection of ["active", "pinned", "settled", "snoozed"] as const) {
+      expect(
+        plan({
+          allowUnpinnedReorder: false,
+          activeKey: "a1",
+          activeSection,
+          target: { section: "active", pinnedOrder: [], activeOrder: ["a2", "a1", "a3"] },
+        }),
+      ).toEqual({ kind: "none" });
+    }
+    expect(
+      plan({
+        allowUnpinnedReorder: false,
+        activeKey: "p1",
+        activeSection: "pinned",
+        target: { section: "pinned", pinnedOrder: ["p2", "p1", "p3"] },
+      }).kind,
+    ).toBe("reorder-pinned");
+  });
 
   it("allows old-server pinned reordering while rejecting settlement", () => {
     expect(

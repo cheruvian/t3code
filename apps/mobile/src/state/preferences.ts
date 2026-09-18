@@ -131,3 +131,11 @@ export const mobilePreferencesState = createMobilePreferencesState(mobilePrefere
 
 export const mobilePreferencesAtom = mobilePreferencesState.preferencesAtom;
 export const updateMobilePreferencesAtom = mobilePreferencesState.updatePreferencesAtom;
+
+/** Manual active placement is opt-in on each client. */
+export const allowUnpinnedReorderAtom = Atom.make((get) => {
+  const preferences = get(mobilePreferencesAtom);
+  return (
+    AsyncResult.isSuccess(preferences) && preferences.value.sidebarAllowUnpinnedReorder === true
+  );
+});

@@ -1,3 +1,4 @@
+import { allowUnpinnedReorderAtom } from "../../state/preferences";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
@@ -543,6 +544,8 @@ export function useThreadListActions(): {
           : thread.pinnedAt != null
             ? "pinned"
             : "active";
+      const allowUnpinnedReorder = appAtomRegistry.get(allowUnpinnedReorderAtom);
+      if (section === "active" && !allowUnpinnedReorder) return false;
       if (section === "settled") {
         if (!environmentSupportsSettlement(thread.environmentId)) return false;
         appAtomRegistry.set(threadDropBusyAtom, true);
@@ -567,6 +570,7 @@ export function useThreadListActions(): {
         return false;
       }
       const ordered = getThreadListV2OrderedSection({
+        allowUnpinnedReorder,
         threads: shells,
         section,
         now: new Date().toISOString(),

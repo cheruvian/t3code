@@ -167,8 +167,8 @@ export function sortThreadsForListV2<
     readonly activeOrderKey?: string | null | undefined;
     readonly environmentId?: string | undefined;
   },
->(threads: readonly T[]): T[] {
-  return sortActiveThreadsByOrderKey(threads);
+>(threads: readonly T[], allowUnpinnedReorder = true): T[] {
+  return sortActiveThreadsByOrderKey(threads, allowUnpinnedReorder);
 }
 
 /** Canonical card section for Move up/down, independent of search or scope. */
@@ -176,6 +176,7 @@ export function getThreadListV2OrderedSection(input: {
   readonly threads: readonly EnvironmentThreadShell[];
   readonly section: "pinned" | "active";
   readonly pendingOrder?: PendingThreadOrder | null;
+  readonly allowUnpinnedReorder?: boolean;
   readonly now: string;
   readonly settlementEnvironmentIds?: ReadonlySet<EnvironmentId>;
   readonly snoozeEnvironmentIds?: ReadonlySet<EnvironmentId>;
@@ -201,7 +202,7 @@ export function getThreadListV2OrderedSection(input: {
   const ordered =
     input.section === "pinned"
       ? sortPinnedThreadsByOrderKey(threads)
-      : sortActiveThreadsByOrderKey(threads);
+      : sortActiveThreadsByOrderKey(threads, input.allowUnpinnedReorder);
   const pending =
     input.pendingOrder?.section === input.section
       ? reconcilePendingThreadOrder(input.pendingOrder, ordered)
@@ -339,6 +340,7 @@ export function buildThreadListV2ListItems(input: {
  */
 export function buildThreadListV2Items(input: {
   readonly pendingOrder?: PendingThreadOrder | null;
+  readonly allowUnpinnedReorder?: boolean;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly environmentId: EnvironmentId | null;
   readonly projectRefs?: ReadonlyArray<{
@@ -438,7 +440,11 @@ export function buildThreadListV2Items(input: {
     }
   }
 
-  const orderedActive = applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending);
+  const orderedActive = applyPendingThreadOrder(
+    sortThreadsForListV2(active, input.allowUnpinnedReorder),
+    "active",
+    pending,
+  );
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
       parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),

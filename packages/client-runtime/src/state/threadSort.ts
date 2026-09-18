@@ -341,17 +341,17 @@ export function sortActiveThreadsByOrderKey<
     readonly activeOrderKey?: string | null | undefined;
     readonly environmentId?: string | undefined;
   },
->(threads: readonly T[]): T[] {
+>(threads: readonly T[], allowUnpinnedReorder = true): T[] {
   if (threads.length < 2) return [...threads];
   const timestamps = new Map<T, number>();
   for (const thread of threads) {
-    if (thread.activeOrderKey == null) {
+    if (!allowUnpinnedReorder || thread.activeOrderKey == null) {
       timestamps.set(thread, activeThreadAnchorTimestampMs(thread));
     }
   }
   return [...threads].sort((left, right) => {
-    const leftKey = left.activeOrderKey;
-    const rightKey = right.activeOrderKey;
+    const leftKey = allowUnpinnedReorder ? left.activeOrderKey : null;
+    const rightKey = allowUnpinnedReorder ? right.activeOrderKey : null;
     if (leftKey == null && rightKey != null) return -1;
     if (leftKey != null && rightKey == null) return 1;
     let order = 0;
