@@ -29,5 +29,5 @@ it.effect("adds title state and viewed files without changing the deployed fork 
       VALUES ('github', 'github.com', 'owner/repo', 1, 'reader', 'README.md', 'abc', '2026-09-17T00:00:00.000Z')`;
     assert.equal((yield* sql`SELECT * FROM pull_request_files_viewed`).length, 1);
     assert.deepEqual(yield* runMigrations(), []);
-  }).pipe(Effect.provide(Layer.fresh(NodeSqliteClient.layerMemory()))),
+  }).pipe(Effect.provide(Layer.fresh(NodeSqliteClient.layer({ filename: ":memory:" })))),
 );

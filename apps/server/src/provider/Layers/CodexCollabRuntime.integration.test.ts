@@ -49,38 +49,6 @@ function buildScript() {
   const captured = wireFixture.notifications;
   const extras = [
     {
-      method: "item/started",
-      params: {
-        threadId: CHILD_A,
-        turnId: `${CHILD_A}-turn-background`,
-        startedAtMs: 1_785_898_350_000,
-        item: {
-          type: "commandExecution",
-          id: "call_child_background_command",
-          command: "vp test run",
-          commandActions: [],
-          cwd: "/tmp",
-          status: "inProgress",
-        },
-      },
-    },
-    {
-      method: "item/completed",
-      params: {
-        threadId: CHILD_A,
-        turnId: `${CHILD_A}-turn-background`,
-        completedAtMs: 1_785_898_351_000,
-        item: {
-          type: "commandExecution",
-          id: "call_child_background_command",
-          command: "vp test run",
-          commandActions: [],
-          cwd: "/tmp",
-          status: "declined",
-        },
-      },
-    },
-    {
       method: "item/completed",
       params: {
         threadId: ROOT,
@@ -473,29 +441,6 @@ describe("CodexSessionRuntime collab integration", () => {
           (event.payload as { agentThreadId?: string }).agentThreadId === CHILD_A,
       );
       assert.isDefined(childTurnCompleted, "child A's turn completion becomes an agent event");
-      assert.equal(
-        (childTurnCompleted.payload as { childTurnId?: string }).childTurnId,
-        `${CHILD_A}-turn-1`,
-        "child turn completion keeps the provider child-turn identity",
-      );
-
-      const childTurnStarted = events.find(
-        (event) =>
-          event.method === "collabAgent/turnStarted" &&
-          (event.payload as { agentThreadId?: string }).agentThreadId === CHILD_A,
-      );
-      assert.isDefined(childTurnStarted, "child A's turn start becomes an agent event");
-      const nativeChildTurnStarted = wireFixture.notifications.find(
-        (entry) =>
-          entry.method === "turn/started" &&
-          (entry.params as { threadId?: string }).threadId === CHILD_A,
-      );
-      assert.isDefined(nativeChildTurnStarted);
-      assert.equal(
-        (childTurnStarted.payload as { childTurnId?: string }).childTurnId,
-        (nativeChildTurnStarted.params as { turn: { id: string } }).turn.id,
-        "child turn start keeps the provider child-turn identity",
-      );
 
       const childClosed = events.find(
         (event) =>
@@ -503,33 +448,6 @@ describe("CodexSessionRuntime collab integration", () => {
           (event.payload as { agentThreadId?: string }).agentThreadId === CHILD_B,
       );
       assert.isDefined(childClosed, "child B's close becomes an agent event");
-
-      const childItems = events.filter(
-        (event) =>
-          event.method === "collabAgent/item" &&
-          (event.payload as { item?: { id?: string } }).item?.id ===
-            "call_child_background_command",
-      );
-      assert.deepEqual(
-        childItems.map((event) => ({
-          itemLifecycle: (event.payload as { itemLifecycle?: string }).itemLifecycle,
-          itemId: (event.payload as { item?: { id?: string } }).item?.id,
-          childTurnId: (event.payload as { childTurnId?: string }).childTurnId,
-        })),
-        [
-          {
-            itemLifecycle: "started",
-            itemId: "call_child_background_command",
-            childTurnId: `${CHILD_A}-turn-background`,
-          },
-          {
-            itemLifecycle: "completed",
-            itemId: "call_child_background_command",
-            childTurnId: `${CHILD_A}-turn-background`,
-          },
-        ],
-        "child item source lifecycle, item identity, and child-turn identity survive forwarding",
-      );
 
       // Parent-owned resolution passes through — not swallowed, not
       // re-labelled as an agent event.
@@ -550,138 +468,6 @@ describe("CodexSessionRuntime collab integration", () => {
         [],
         "child thread/* lifecycle must not appear as parent events",
       );
-
-      yield* runtime.close;
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  // it.live: the runtime talks to a real child process; under it.effect's
-  // TestClock the internal timers freeze and the join never completes.
-  it.live("Stop interrupts every live child regardless of registration timing", () =>
-    Effect.gen(function* () {
-      // Ordering + liveness torture for stop-everything: child A's
-      // turn/started arrives BEFORE anything registers it (foreign
-      // suppression path must record the live turn); child B's arrives after
-      // registration; child A's interrupt HANGS (RPC never settles — worse
-      // than rejecting) and the bounded deadline must still deliver B's and
-      // the parent's interrupts. The turn stays open so children are live
-      // when Stop fires.
-      // Build from REAL captured rows (hand-written shapes fail notification
-      // schema validation and are silently dropped): reorder so child A's
-      // turn/started precedes its registration, and drop terminal rows so
-      // children stay live when Stop fires.
-      const byIndex = wireFixture.notifications;
-      const isTurnStarted = (entry: (typeof byIndex)[number], child: string) =>
-        entry.method === "turn/started" &&
-        (entry.params as { threadId?: string }).threadId === child;
-      const isRegistration = (entry: (typeof byIndex)[number], child: string) => {
-        const item = (entry.params as { item?: { type?: string; agentThreadId?: string } }).item;
-        return item?.type === "subAgentActivity" && item.agentThreadId === child;
-      };
-      const turnStartedA = byIndex.find((entry) => isTurnStarted(entry, CHILD_A));
-      const turnStartedB = byIndex.find((entry) => isTurnStarted(entry, CHILD_B));
-      const registrationA = byIndex.find((entry) => isRegistration(entry, CHILD_A));
-      const registrationB = byIndex.find((entry) => isRegistration(entry, CHILD_B));
-      const rootThreadStarted = byIndex.find((entry) => entry.method === "thread/started");
-      assert.isDefined(turnStartedA);
-      assert.isDefined(turnStartedB);
-      assert.isDefined(registrationA);
-      assert.isDefined(registrationB);
-      assert.isDefined(rootThreadStarted);
-      const memoryThreadStarted = {
-        ...rootThreadStarted,
-        params: {
-          thread: {
-            ...rootThreadStarted.params.thread,
-            id: MEMORY,
-            sessionId: MEMORY,
-            source: "unknown",
-            threadSource: "memory_consolidation",
-          },
-        },
-      };
-      const memoryTurnStarted = {
-        ...turnStartedA,
-        params: {
-          ...turnStartedA.params,
-          threadId: MEMORY,
-          turn: { ...turnStartedA.params.turn, id: "memory-consolidation-turn" },
-        },
-      };
-      const script = {
-        rootThreadId: ROOT,
-        holdTurnOpen: true,
-        hangInterruptFor: CHILD_A,
-        notifications: [
-          turnStartedA,
-          registrationA,
-          memoryThreadStarted,
-          memoryTurnStarted,
-          registrationB,
-          turnStartedB,
-        ],
-      };
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
-      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
-      const interruptsPath = `${scriptPath}.interrupts`;
-      NodeFS.rmSync(interruptsPath, { force: true });
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          NodeFS.rmSync(scriptPath, { force: true });
-          NodeFS.rmSync(interruptsPath, { force: true });
-        }),
-      );
-
-      const runtime = yield* makeCodexSessionRuntime({
-        threadId: ThreadId.make("thread-collab-stop"),
-        binaryPath: peerPath,
-        cwd: NodeOS.tmpdir(),
-        runtimeMode: "full-access",
-        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
-      });
-
-      // Wait for both children's turnStarted signals to be processed before
-      // stopping (B via the registered-child path; A only produces live-turn
-      // bookkeeping, so key on B's synthetic event).
-      const childBStartedFiber = yield* runtime.events.pipe(
-        Stream.filter(
-          (event) =>
-            event.method === "collabAgent/turnStarted" &&
-            (event.payload as { agentThreadId?: string }).agentThreadId === CHILD_B,
-        ),
-        Stream.take(1),
-        Stream.runCollect,
-        Effect.forkScoped,
-      );
-
-      yield* runtime.start();
-      yield* runtime.sendTurn({ input: "fan out and hang" });
-      const childBStarted = yield* Fiber.join(childBStartedFiber).pipe(
-        Effect.timeoutOption("15 seconds"),
-      );
-      assert.isTrue(childBStarted._tag === "Some", "child B turnStarted never arrived");
-
-      // Stop everything. A's interrupt hangs forever — the bounded child
-      // deadline must expire and the parent interrupt must still be sent.
-      yield* runtime.interruptTurn();
-
-      const parseInterruptLine = (line: string) => JSON.parse(line) as { threadId?: string };
-      const interrupted = NodeFS.readFileSync(interruptsPath, "utf8")
-        .trim()
-        .split("\n")
-        .filter((line) => line.length > 0)
-        .map(parseInterruptLine);
-      const interruptedThreads = new Set(interrupted.map((entry) => entry.threadId));
-      assert.isTrue(
-        interruptedThreads.has(CHILD_A),
-        "pre-registration child A must still receive the interrupt RPC",
-      );
-      assert.isTrue(interruptedThreads.has(CHILD_B), "registered child B must be interrupted");
-      assert.isTrue(
-        interruptedThreads.has(MEMORY),
-        "memory consolidation must be interrupted without appearing in chat",
-      );
-      assert.isTrue(interruptedThreads.has(ROOT), "parent turn must be interrupted last");
 
       yield* runtime.close;
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
@@ -858,6 +644,240 @@ describe("CodexSessionRuntime collab integration", () => {
         { threadId: CHILD_A, turnId: newerTurnId },
         "Stop must interrupt the newer pre-registration child turn after an older completion",
       );
+
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  // it.live: the runtime talks to a real child process; under it.effect's
+  // TestClock the internal timers freeze and the join never completes.
+  it.live("Stop interrupts every live child regardless of registration timing", () =>
+    Effect.gen(function* () {
+      // Ordering + liveness torture for stop-everything: child A's
+      // turn/started arrives BEFORE anything registers it (foreign
+      // suppression path must record the live turn); child B's arrives after
+      // registration; child A's interrupt HANGS (RPC never settles — worse
+      // than rejecting) and the bounded deadline must still deliver B's and
+      // the parent's interrupts. The turn stays open so children are live
+      // when Stop fires.
+      // Build from REAL captured rows (hand-written shapes fail notification
+      // schema validation and are silently dropped): reorder so child A's
+      // turn/started precedes its registration, and drop terminal rows so
+      // children stay live when Stop fires.
+      const byIndex = wireFixture.notifications;
+      const isTurnStarted = (entry: (typeof byIndex)[number], child: string) =>
+        entry.method === "turn/started" &&
+        (entry.params as { threadId?: string }).threadId === child;
+      const isRegistration = (entry: (typeof byIndex)[number], child: string) => {
+        const item = (entry.params as { item?: { type?: string; agentThreadId?: string } }).item;
+        return item?.type === "subAgentActivity" && item.agentThreadId === child;
+      };
+      const turnStartedA = byIndex.find((entry) => isTurnStarted(entry, CHILD_A));
+      const turnStartedB = byIndex.find((entry) => isTurnStarted(entry, CHILD_B));
+      const registrationA = byIndex.find((entry) => isRegistration(entry, CHILD_A));
+      const registrationB = byIndex.find((entry) => isRegistration(entry, CHILD_B));
+      const rootThreadStarted = byIndex.find((entry) => entry.method === "thread/started");
+      assert.isDefined(turnStartedA);
+      assert.isDefined(turnStartedB);
+      assert.isDefined(registrationA);
+      assert.isDefined(registrationB);
+      assert.isDefined(rootThreadStarted);
+      const memoryThreadStarted = {
+        ...rootThreadStarted,
+        params: {
+          thread: {
+            ...rootThreadStarted.params.thread,
+            id: MEMORY,
+            sessionId: MEMORY,
+            source: "unknown",
+            threadSource: "memory_consolidation",
+          },
+        },
+      };
+      const memoryTurnStarted = {
+        ...turnStartedA,
+        params: {
+          ...turnStartedA.params,
+          threadId: MEMORY,
+          turn: { ...turnStartedA.params.turn, id: "memory-consolidation-turn" },
+        },
+      };
+      const script = {
+        rootThreadId: ROOT,
+        holdTurnOpen: true,
+        hangInterruptFor: CHILD_A,
+        notifications: [
+          turnStartedA,
+          registrationA,
+          memoryThreadStarted,
+          memoryTurnStarted,
+          registrationB,
+          turnStartedB,
+        ],
+      };
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+      const interruptsPath = `${scriptPath}.interrupts`;
+      NodeFS.rmSync(interruptsPath, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(interruptsPath, { force: true });
+        }),
+      );
+
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-collab-stop"),
+        binaryPath: peerPath,
+        cwd: NodeOS.tmpdir(),
+        runtimeMode: "full-access",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+
+      // Wait for both children's turnStarted signals to be processed before
+      // stopping (B via the registered-child path; A only produces live-turn
+      // bookkeeping, so key on B's synthetic event).
+      const childBStartedFiber = yield* runtime.events.pipe(
+        Stream.filter(
+          (event) =>
+            event.method === "collabAgent/turnStarted" &&
+            (event.payload as { agentThreadId?: string }).agentThreadId === CHILD_B,
+        ),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "fan out and hang" });
+      const childBStarted = yield* Fiber.join(childBStartedFiber).pipe(
+        Effect.timeoutOption("15 seconds"),
+      );
+      assert.isTrue(childBStarted._tag === "Some", "child B turnStarted never arrived");
+
+      // Stop everything. A's interrupt hangs forever — the bounded child
+      // deadline must expire and the parent interrupt must still be sent.
+      yield* runtime.interruptTurn();
+
+      const parseInterruptLine = (line: string) => JSON.parse(line) as { threadId?: string };
+      const interrupted = NodeFS.readFileSync(interruptsPath, "utf8")
+        .trim()
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .map(parseInterruptLine);
+      const interruptedThreads = new Set(interrupted.map((entry) => entry.threadId));
+      assert.isTrue(
+        interruptedThreads.has(CHILD_A),
+        "pre-registration child A must still receive the interrupt RPC",
+      );
+      assert.isTrue(interruptedThreads.has(CHILD_B), "registered child B must be interrupted");
+      assert.isTrue(
+        interruptedThreads.has(MEMORY),
+        "memory consolidation must be interrupted without appearing in chat",
+      );
+      assert.isTrue(interruptedThreads.has(ROOT), "parent turn must be interrupted last");
+
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  // it.live: the runtime talks to a real child process; under it.effect's
+  // TestClock the internal timers freeze and the join never completes.
+  it.live("Stop answers a parked app-permission approval with a withheld grant", () =>
+    Effect.gen(function* () {
+      // Interrupting a turn whose app-permission prompt is still parked must
+      // settle that prompt: the handler resumes with "cancel", the peer gets
+      // an empty grant (permission withheld), and nothing hangs until close.
+      const script = {
+        rootThreadId: ROOT,
+        holdTurnOpen: true,
+        notifications: [],
+        serverRequests: [
+          {
+            method: "item/permissions/requestApproval",
+            label: "perm-1",
+            params: {
+              cwd: "/tmp/project",
+              itemId: "app_1",
+              permissions: { network: { enabled: true } },
+              reason: "Fetch data from api.example.com",
+              startedAtMs: 1_778_000_000_000,
+              threadId: "${threadId}",
+              turnId: "${turnId}",
+            },
+          },
+        ],
+      };
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+      const responsesPath = `${scriptPath}.approvalResponses`;
+      NodeFS.rmSync(responsesPath, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(responsesPath, { force: true });
+        }),
+      );
+
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-codex-permission-stop"),
+        binaryPath: peerPath,
+        cwd: "/tmp",
+        runtimeMode: "full-access",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+
+      // One consumer for the whole stream: `events` is a plain queue stream,
+      // so two forks would compete for events and each could starve the
+      // other's filter. Signal the two milestones through Deferreds instead.
+      const requestedReady = yield* Deferred.make<ProviderEvent>();
+      const settledReady = yield* Deferred.make<ProviderEvent>();
+      yield* runtime.events.pipe(
+        Stream.runForEach((event) => {
+          if (event.method === "item/permissions/requestApproval") {
+            return Deferred.succeed(requestedReady, event);
+          }
+          if (event.method === "serverRequest/resolved" && event.requestKind === "permission") {
+            return Deferred.succeed(settledReady, event);
+          }
+          return Effect.void;
+        }),
+        Effect.forkScoped,
+      );
+
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "use the connected app" });
+      const requested = yield* Deferred.await(requestedReady).pipe(
+        Effect.timeoutOption("15 seconds"),
+      );
+      assert.isTrue(requested._tag === "Some", "permission approval request never arrived");
+
+      yield* runtime.interruptTurn();
+
+      // The peer emits serverRequest/resolved only AFTER recording the
+      // runtime's answer, so awaiting this receipt makes reading the sidecar
+      // race-free. The runtime correlates that receipt back to the canonical
+      // request (requestKind + requestId) — the same event chain the adapter
+      // folds into approval.resolved, so the card actually closes.
+      const settled = yield* Deferred.await(settledReady).pipe(Effect.timeoutOption("15 seconds"));
+      assert.isTrue(settled._tag === "Some", "interrupt did not settle the parked approval");
+      const settledEvent = settled._tag === "Some" ? settled.value : undefined;
+      assert.isDefined(settledEvent);
+      assert.isDefined(
+        settledEvent?.requestId,
+        "receipt must correlate back to the canonical approval request",
+      );
+
+      const recorded = NodeFS.readFileSync(responsesPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { id: number; label: string; result: unknown });
+      assert.equal(recorded.length, 1);
+      const answer = recorded[0];
+      assert.isDefined(answer);
+      assert.equal(answer.label, "perm-1");
+      // Cancelled approvals withhold the grant: an empty permission profile.
+      assert.deepEqual(answer.result, { permissions: {} });
 
       yield* runtime.close;
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),

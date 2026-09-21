@@ -28,6 +28,7 @@ import {
   AndroidHeaderIconButton,
   AndroidSheetHeader,
 } from "../../../components/AndroidScreenHeader";
+import { AndroidAnchoredMenu } from "../../../components/AndroidAnchoredMenu";
 import { MaterialScreenContent } from "../../../components/MaterialScreenContent";
 import { useAdaptiveWorkspaceLayout } from "../../layout/AdaptiveWorkspaceLayout";
 import { AppText as Text } from "../../../components/AppText";
@@ -253,6 +254,7 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
 
   const content = (
     <ScrollView
+      alwaysBounceVertical
       className={Platform.OS === "android" ? "flex-1 bg-sheet-solid" : "flex-1 bg-screen"}
       contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
       showsVerticalScrollIndicator={false}
@@ -469,6 +471,30 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
     );
   }
 
+  const refreshMenu = (
+    <AndroidAnchoredMenu
+      title="Repository options"
+      actions={[
+        {
+          id: "refresh",
+          title: "Refresh repository status",
+          attributes: { disabled: busy || isPullRefreshing },
+        },
+      ]}
+      onPressAction={({ nativeEvent }) => {
+        if (nativeEvent.event === "refresh") void handlePullRefresh();
+      }}
+    >
+      {(open) => (
+        <AndroidHeaderIconButton
+          accessibilityLabel="Repository options"
+          icon="ellipsis"
+          onPress={open}
+        />
+      )}
+    </AndroidAnchoredMenu>
+  );
+
   return (
     <View
       collapsable={false}
@@ -503,14 +529,7 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
           }
         >
           {Platform.OS === "android" ? (
-            <View className="absolute right-3 top-4 z-[1]">
-              <AndroidHeaderIconButton
-                accessibilityLabel="Refresh repository status"
-                disabled={busy}
-                icon="arrow.clockwise"
-                onPress={() => void gitActions.refreshSelectedThreadGitStatus()}
-              />
-            </View>
+            <View className="absolute right-3 top-4 z-[1]">{refreshMenu}</View>
           ) : (
             <Pressable
               className={
@@ -544,14 +563,19 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
           hideBottomBorder={Platform.OS === "android"}
           subtitle={currentStatusSummary}
           onBack={() => navigation.goBack()}
-          actions={[
-            {
-              accessibilityLabel: "Refresh repository status",
-              disabled: busy,
-              icon: "arrow.clockwise",
-              onPress: () => void gitActions.refreshSelectedThreadGitStatus(),
-            },
-          ]}
+          trailing={Platform.OS === "android" ? refreshMenu : undefined}
+          actions={
+            Platform.OS === "android"
+              ? undefined
+              : [
+                  {
+                    accessibilityLabel: "Refresh repository status",
+                    disabled: busy,
+                    icon: "arrow.clockwise",
+                    onPress: () => void gitActions.refreshSelectedThreadGitStatus(),
+                  },
+                ]
+          }
         />
       )}
 

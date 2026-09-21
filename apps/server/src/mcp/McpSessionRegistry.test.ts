@@ -4,6 +4,7 @@ import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { HttpServer } from "effect/unstable/http";
+import * as NetAddress from "effect/unstable/net/NetAddress";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -16,7 +17,7 @@ const helperRoot = "/tmp/t3-mcp-registry-test/t3code";
 const helperProjectId = ProjectId.make("project-helper");
 const makeFakeHttpServer = (hostname: string, port = 43123) =>
   HttpServer.HttpServer.of({
-    address: { _tag: "TcpAddress", hostname, port },
+    address: NetAddress.inetAddressFromIpStringUnsafe(hostname, port),
     serve: (() => Effect.void) as HttpServer.HttpServer["Service"]["serve"],
   });
 const fakeHttpServer = makeFakeHttpServer("127.0.0.1");
@@ -128,7 +129,8 @@ it.effect("builds MCP endpoints from the bound server host", () =>
     const cases = [
       ["100.64.0.40", "http://100.64.0.40:43123/mcp"],
       ["0.0.0.0", "http://127.0.0.1:43123/mcp"],
-      ["localhost", "http://localhost:43123/mcp"],
+      ["::", "http://127.0.0.1:43123/mcp"],
+      ["::1", "http://[::1]:43123/mcp"],
       ["127.0.0.1", "http://127.0.0.1:43123/mcp"],
     ] as const;
 

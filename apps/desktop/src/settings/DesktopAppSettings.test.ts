@@ -36,6 +36,8 @@ const DesktopSettingsPatch = Schema.Struct({
   wslOnly: Schema.optionalKey(Schema.Boolean),
 });
 
+const encodeUnknownJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+
 const decodeDesktopSettingsPatch = Schema.decodeEffect(Schema.fromJsonString(DesktopSettingsPatch));
 const encodeDesktopSettingsPatch = Schema.encodeEffect(Schema.fromJsonString(DesktopSettingsPatch));
 
@@ -100,7 +102,7 @@ describe("DesktopSettings", () => {
         yield* fileSystem.makeDirectory(environment.stateDir, { recursive: true });
         yield* fileSystem.writeFileString(
           environment.desktopSettingsPath,
-          JSON.stringify({
+          yield* encodeUnknownJson({
             cloudflaredEnabled: true,
             cloudflaredConfigPath: "/tmp/tunnel.yml",
             tailscaleServeEnabled: true,

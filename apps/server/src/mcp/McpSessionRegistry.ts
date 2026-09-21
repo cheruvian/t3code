@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpServer } from "effect/unstable/http";
+import * as NetAddress from "effect/unstable/net/NetAddress";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -81,16 +82,12 @@ const bytesToHex = (bytes: Uint8Array): string =>
 
 const tokenFromBytes = (bytes: Uint8Array): string => Buffer.from(bytes).toString("base64url");
 
-const getHttpMcpEndpointHost = (hostname: string): string => {
-  const normalized = hostname.toLowerCase();
-  const endpointHostname =
-    normalized === "0.0.0.0" || normalized === "::" || normalized === "[::]"
-      ? "127.0.0.1"
-      : hostname;
-  return endpointHostname.includes(":") && !endpointHostname.startsWith("[")
-    ? `[${endpointHostname}]`
-    : endpointHostname;
-};
+// A wildcard bind is reachable on loopback, which is where the provider
+// subprocesses run; anything else is announced as the address it bound.
+const getHttpMcpEndpointHost = (address: NetAddress.IpAddress): string =>
+  NetAddress.isUnspecified(address)
+    ? "127.0.0.1"
+    : NetAddress.formatUrlHostString(NetAddress.formatIp(address));
 
 const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   options: McpSessionRegistryOptions = {},
@@ -104,10 +101,9 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const state = yield* SynchronizedRef.make<RegistryState>({ records: new Map() });
   const currentTimeMillis = options.now ? Effect.sync(options.now) : Clock.currentTimeMillis;
   const livenessWindowMs = options.livenessWindowMs ?? DEFAULT_LIVENESS_WINDOW_MS;
-  const endpointBase =
-    httpServer.address._tag === "TcpAddress"
-      ? `http://${getHttpMcpEndpointHost(httpServer.address.hostname)}:${httpServer.address.port}`
-      : "http://127.0.0.1";
+  const endpointBase = NetAddress.isInetAddress(httpServer.address)
+    ? `http://${getHttpMcpEndpointHost(httpServer.address.address)}:${httpServer.address.port}`
+    : "http://127.0.0.1";
 
   /**
    * A thread is a helper thread when its project is the one registered on the

@@ -104,6 +104,9 @@ import {
 } from "../../lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
 import ChatMarkdown, { ChatMarkdownAssetImage } from "../ChatMarkdown";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import type { Root, RootContent } from "mdast";
 import { T3Wordmark } from "../T3Wordmark";
 import {
   BotIcon,
@@ -152,6 +155,10 @@ import {
 } from "./SnapShotAttachmentDetails";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
+import { useAtomValue } from "@effect/atom-react";
+import { useFileContextMenuHandler } from "../../fileContextMenu";
+import { useProject, useThread } from "../../state/entities";
+import { serverEnvironment } from "../../state/server";
 import {
   CHAT_TIMELINE_ANCHOR_OFFSET,
   readTimelinePosition,
@@ -1773,7 +1780,7 @@ function QueuedMessageTimelineRow({
     <div className="flex flex-col items-end" data-queued-message-id={queuedMessage.id}>
       <div className="max-w-[80%] rounded-2xl border border-dashed border-border p-3 text-message-foreground/80">
         {text.length > 0 ? (
-          <div className="whitespace-pre-wrap break-words text-sm">{text}</div>
+          <UserMessageBody text={text} skills={ctx.skills} markdownCwd={ctx.markdownCwd} />
         ) : null}
         {attachmentCount > 0 || contextCount > 0 ? (
           <div className={cn("text-secondary-label text-xs", text.length > 0 && "mt-1.5")}>
@@ -2565,7 +2572,12 @@ function BackgroundWorktreeSetupChip({ snapshot }: { snapshot: WorktreeSetupSnap
         <Spinner className="size-3 shrink-0" />
         <span className="truncate">{scriptName}</span>
       </PopoverTrigger>
-      <PopoverPopup side="bottom" align="end" className="w-[32rem] max-w-[calc(100vw-2rem)] p-3">
+      <PopoverPopup
+        side="bottom"
+        align="end"
+        className="surface-glass! w-[28rem] max-w-[calc(100vw-2rem)]"
+        viewportClassName="py-3 [--viewport-inline-padding:--spacing(3)]"
+      >
         <WorktreeSetupCard
           snapshot={snapshot}
           embedded
@@ -2643,6 +2655,7 @@ function ActivityGroupTimelineRow({
         details.push(
           <ReasoningTraceBlock
             key={entry.id}
+            anchorKey={row.id}
             messages={messages}
             live={row.active && index === row.entries.length - 1}
             showHeader={work.length > 0}
@@ -2669,7 +2682,7 @@ function ActivityGroupTimelineRow({
           shimmer={thinking}
         />
       </button>
-      {row.expanded ? <div className="mt-2 space-y-2">{details}</div> : null}
+      {row.expanded ? <div className="mt-2">{details}</div> : null}
     </div>
   );
 }
@@ -2686,16 +2699,39 @@ function ThinkingTimelineRow() {
   );
 }
 
+function remarkThoughtPreview(fallback: string) {
+  return (tree: Root) => {
+    const plainText = (node: Root | RootContent): string => {
+      if (node.type === "html" || node.type === "definition") return "";
+      if ("alt" in node) return node.alt ?? "";
+      if ("value" in node) return node.value;
+      if ("children" in node) {
+        const separator = ["root", "blockquote", "list", "listItem", "table", "tableRow"].includes(
+          node.type,
+        )
+          ? " "
+          : "";
+        return node.children.map(plainText).join(separator);
+      }
+      return node.type === "break" ? " " : "";
+    };
+    tree.children = [
+      { type: "text", value: plainText(tree).replace(/\s+/g, " ").trim() || fallback },
+    ];
+  };
+}
+
 /**
- * Thinking inside an expanded activity group: the trace is already one click
- * deep, so the text renders under its "Thought" header without another toggle.
+ * Thinking inside a tool group has its own disclosure, preserved across recycling.
  * A group whose row already reads "Thought" (no visible tool) skips the header.
  */
 function ReasoningTraceBlock({
+  anchorKey,
   messages,
   live,
   showHeader,
 }: {
+  anchorKey: string;
   messages: ReadonlyArray<ChatMessage>;
   live: boolean;
   showHeader: boolean;
@@ -2703,6 +2739,7 @@ function ReasoningTraceBlock({
   const ctx = use(TimelineRowCtx);
   const { isWorking, unsettledTurnId } = use(TimelineRowActivityCtx);
   const first = messages[0]!;
+  const expanded = !showHeader || ctx.expandedReasoningMessageIds.has(first.id);
   const streaming =
     live &&
     messages.some((reasoningMessage) => reasoningMessage.streaming) &&
@@ -2716,10 +2753,23 @@ function ReasoningTraceBlock({
     return null;
   }
   const label = streaming ? "Thinking" : "Thought";
+  const collapsedPreview = messages.find((message) => message.text.trim().length > 0)?.text.trim();
+  const headerText = expanded ? (
+    label
+  ) : (
+    <ReactMarkdown remarkPlugins={[remarkGfm, [remarkThoughtPreview, label]]}>
+      {collapsedPreview ?? label}
+    </ReactMarkdown>
+  );
   return (
     <div className="flex flex-col">
       {showHeader ? (
-        <div className="flex min-h-6 select-none items-center gap-1.5 px-0.5 py-0.5 text-sm leading-relaxed">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => ctx.onToggleReasoning(first.id, !expanded, anchorKey)}
+          className="flex min-h-6 cursor-pointer select-none items-center gap-1.5 rounded-md px-0.5 text-start text-sm leading-relaxed transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+        >
           <span className="flex size-6 shrink-0 items-center justify-center text-icon-muted">
             <BrainIcon aria-hidden className="block size-4 shrink-0 stroke-[1.8] opacity-70" />
           </span>
@@ -2727,28 +2777,38 @@ function ReasoningTraceBlock({
             ref={streaming ? observeVisibleAnimation : undefined}
             className="relative min-w-0 flex-1 truncate text-secondary-label"
           >
-            {label}
-            {streaming ? <ActivityShimmerOverlay>{label}</ActivityShimmerOverlay> : null}
+            {headerText}
+            {streaming ? <ActivityShimmerOverlay>{headerText}</ActivityShimmerOverlay> : null}
           </span>
+          <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden>
+            <ChevronRightIcon
+              className={cn(
+                "size-3 shrink-0 text-icon-muted opacity-70 transition-transform duration-200",
+                expanded && "rotate-90",
+              )}
+            />
+          </span>
+        </button>
+      ) : null}
+      {expanded ? (
+        <div className="ms-7 flex max-h-96 flex-col gap-3 overflow-auto px-0.5 py-1 select-text">
+          {messages.map((reasoningMessage) => (
+            <ChatMarkdown
+              key={reasoningMessage.id}
+              className="text-foreground"
+              text={reasoningMessage.text}
+              cwd={ctx.markdownCwd}
+              threadRef={ctx.threadRef ?? undefined}
+              isStreaming={streaming && reasoningMessage.streaming}
+              lineBreaks
+              skills={ctx.skills}
+              headingLevelOffset={MESSAGE_HEADING_LEVEL}
+              onUseArtifactTemplate={ctx.onUseArtifactTemplate}
+              onImageExpand={ctx.onImageExpand}
+            />
+          ))}
         </div>
       ) : null}
-      <div className="ms-7 flex max-h-96 flex-col gap-3 overflow-auto px-0.5 py-1 select-text">
-        {messages.map((reasoningMessage) => (
-          <ChatMarkdown
-            key={reasoningMessage.id}
-            className="text-foreground"
-            text={reasoningMessage.text}
-            cwd={ctx.markdownCwd}
-            threadRef={ctx.threadRef ?? undefined}
-            isStreaming={streaming && reasoningMessage.streaming}
-            lineBreaks
-            skills={ctx.skills}
-            headingLevelOffset={MESSAGE_HEADING_LEVEL}
-            onUseArtifactTemplate={ctx.onUseArtifactTemplate}
-            onImageExpand={ctx.onImageExpand}
-          />
-        ))}
-      </div>
     </div>
   );
 }
@@ -3337,11 +3397,23 @@ function AssistantChangedFilesSectionInner({
   resolvedTheme: "light" | "dark";
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
 }) {
+  const ctx = use(TimelineRowCtx);
   const persistedExpanded = useUiStateStore(
     (store) => store.threadChangedFilesExpandedById[routeThreadKey]?.[turnSummary.turnId],
   );
   const setExpanded = useUiStateStore((store) => store.setThreadChangedFilesExpanded);
   const allDirectoriesExpanded = persistedExpanded ?? false;
+
+  const thread = useThread(ctx.threadRef);
+  const activeProject = useProject(
+    thread && thread.projectId
+      ? { environmentId: thread.environmentId, projectId: thread.projectId }
+      : null,
+  );
+  const serverConfig = useAtomValue(
+    serverEnvironment.configValueAtom(ctx.activeThreadEnvironmentId),
+  );
+  const onFileContextMenu = useFileContextMenuHandler(ctx.activeThreadEnvironmentId);
 
   return (
     <ChangedFilesCard
@@ -3353,6 +3425,20 @@ function AssistantChangedFilesSectionInner({
         setExpanded(routeThreadKey, turnSummary.turnId, !allDirectoriesExpanded)
       }
       onOpenTurnDiff={onOpenTurnDiff}
+      onFileContextMenu={(filePath, event) =>
+        onFileContextMenu(
+          {
+            environmentId: ctx.activeThreadEnvironmentId,
+            filePath,
+            workspaceRoot: ctx.workspaceRoot,
+            repositoryRoot:
+              thread?.worktreePath == null
+                ? activeProject?.repositoryIdentity?.rootPath
+                : undefined,
+          },
+          event,
+        )
+      }
     />
   );
 }
@@ -3429,12 +3515,13 @@ function UserMessagePullRequestContextChip(props: {
   copyMarkdown: string;
   toneClassName: string;
 }) {
-  const { openPullRequest } = use(TimelineRowCtx);
+  const { activeThreadEnvironmentId, openPullRequest } = use(TimelineRowCtx);
   const metadata = props.record.pullRequest;
   if (metadata === undefined) return null;
   return (
     <PullRequestChip
       metadata={metadata}
+      environmentId={activeThreadEnvironmentId}
       label={reviewCommentContextLabel(props.record)}
       kindLabel={pullRequestContextKindLabel(props.record)}
       className={cn(CHAT_INLINE_CHIP_CLASS_NAME, props.toneClassName)}
@@ -3988,7 +4075,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
 
 const UserMessageBody = memo(function UserMessageBody(props: {
   text: string;
-  renderContextReference: (reference: ChatMarkdownContextReference) => ReactNode;
+  renderContextReference?: (reference: ChatMarkdownContextReference) => ReactNode;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   markdownCwd: string | undefined;
 }) {

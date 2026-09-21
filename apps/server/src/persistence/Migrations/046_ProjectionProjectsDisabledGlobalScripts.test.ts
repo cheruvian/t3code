@@ -6,7 +6,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-const migrationLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const migrationLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 migrationLayer("046_ProjectionProjectsDisabledGlobalScripts", (it) => {
   it.effect("adds a non-null empty-array default for existing projects", () =>

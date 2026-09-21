@@ -29,7 +29,7 @@ describe("056_ProjectionThreadMessageContext", () => {
       }>`PRAGMA table_info(projection_thread_messages)`;
       assert.equal(columns.find((column) => column.name === "context_json")?.notnull, 0);
       assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 56 }), []);
-    }).pipe(Effect.provide(Layer.fresh(NodeSqliteClient.layerMemory()))),
+    }).pipe(Effect.provide(Layer.fresh(NodeSqliteClient.layer({ filename: ":memory:" })))),
   );
 
   it.effect("accepts context added by an earlier development migration", () =>
@@ -57,6 +57,6 @@ describe("056_ProjectionThreadMessageContext", () => {
       assert.equal(context?.name, "context_json");
       assert.equal(context?.notnull, 0);
       assert.equal(migrations.length, 1);
-    }).pipe(Effect.provide(Layer.fresh(NodeSqliteClient.layerMemory()))),
+    }).pipe(Effect.provide(Layer.fresh(NodeSqliteClient.layer({ filename: ":memory:" })))),
   );
 });
