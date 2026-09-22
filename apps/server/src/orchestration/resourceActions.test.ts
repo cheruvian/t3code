@@ -1,3 +1,6 @@
+import * as TestClock from "effect/testing/TestClock";
+import * as Duration from "effect/Duration";
+import { resourceActionLogs } from "@t3tools/shared/resourceActions";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import { resolveInheritedProjectScripts } from "@t3tools/shared/projectScripts";
 import * as Crypto from "effect/Crypto";
@@ -45,7 +48,7 @@ const script: ProjectScript = {
   },
 };
 const output = (code = 0): ProcessRunOutput => ({
-  stdout: "",
+  stdout: "script output",
   stderr: code ? "cleanup failed" : "",
   code: code as ProcessRunOutput["code"],
   timedOut: false,
@@ -63,8 +66,11 @@ const harness = Effect.gen(function* () {
   const events = yield* PubSub.unbounded<OrchestrationEvent>();
   const completions = yield* Queue.unbounded<OrchestrationCommand>();
   const prompts = yield* Queue.unbounded<OrchestrationCommand>();
+  const turnInterrupts = yield* Queue.unbounded<OrchestrationCommand>();
   const scripts = yield* Queue.unbounded<ProcessRunInput>();
   let scriptCode = 0;
+  let blockScript = false;
+  const interrupted = yield* Queue.unbounded<void>();
   const dispatch = Effect.fn(function* (command: OrchestrationCommand) {
     const result = yield* decideOrchestrationCommand({ readModel: state, command });
     for (const pending of Array.isArray(result) ? result : [result]) {
@@ -73,6 +79,7 @@ const harness = Effect.gen(function* () {
       yield* PubSub.publish(events, event);
     }
     if (command.type === "project.resource.complete") yield* Queue.offer(completions, command);
+    if (command.type === "thread.turn.interrupt") yield* Queue.offer(turnInterrupts, command);
     if (command.type === "thread.turn.start") yield* Queue.offer(prompts, command);
     return { sequence };
   });
@@ -100,7 +107,7 @@ const harness = Effect.gen(function* () {
       createdAt: now,
     });
   const request = (
-    action: "checkout" | "takeover" | "release" | "force-release",
+    action: "checkout" | "takeover" | "release" | "force-release" | "abort",
     threadId = owner,
     actionScript = script,
     expectedOperationId?: CommandId,
@@ -160,7 +167,18 @@ const harness = Effect.gen(function* () {
         }),
     }),
     Layer.mock(ProcessRunner)({
-      run: (input) => Queue.offer(scripts, input).pipe(Effect.map(() => output(scriptCode))),
+      run: (input) =>
+        Effect.gen(function* () {
+          yield* Queue.offer(scripts, input);
+          if (blockScript) {
+            input.onStdoutChunk?.(new TextEncoder().encode("Deployment in progress"));
+            input.onStderrChunk?.(new TextEncoder().encode("Retrying upload"));
+            return yield* Effect.never.pipe(
+              Effect.onInterrupt(() => Queue.offer(interrupted, undefined)),
+            );
+          }
+          return output(scriptCode);
+        }),
     }),
     Layer.succeed(HostProcessEnvironment, {}),
     Layer.succeed(HostProcessPlatform, "linux"),
@@ -174,7 +192,14 @@ const harness = Effect.gen(function* () {
     reactor,
     scripts,
     prompts,
+    turnInterrupts,
     completions,
+    interrupted,
+    holdScript: () => {
+      blockScript = true;
+    },
+    logs: () =>
+      resourceActionLogs(state.threads.find((thread) => thread.id === owner)?.activities ?? []),
     locks: () => state.projects[0]!.resourceLocks ?? [],
     failScript: () => {
       scriptCode = 1;
@@ -183,6 +208,67 @@ const harness = Effect.gen(function* () {
 });
 
 it.layer(NodeServices.layer)("resource actions", (it) => {
+  it.effect("aborts a resource prompt through the provider interrupt command", () =>
+    Effect.gen(function* () {
+      const h = yield* harness;
+      yield* h.reactor.start();
+      yield* h.request("checkout");
+      yield* Queue.take(h.prompts);
+      yield* h.session("running");
+      yield* h.request("abort", owner, script, h.locks()[0]!.operationId);
+      expect(yield* Queue.take(h.turnInterrupts)).toMatchObject({
+        type: "thread.turn.interrupt",
+        threadId: owner,
+      });
+      yield* Queue.take(h.completions);
+      yield* h.reactor.drain;
+      expect(h.logs()[0]).toMatchObject({
+        status: "failed",
+        error: expect.stringContaining("aborted"),
+      });
+      expect(h.locks()[0]?.phase).toBe("failed");
+    }),
+  );
+
+  it.effect(
+    "allows long scripts and aborts them while retaining captured output and ownership",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness;
+        h.holdScript();
+        yield* h.reactor.start();
+        yield* h.request("checkout");
+        const input = yield* Queue.take(h.scripts);
+        expect(Duration.isFinite(Duration.fromInputUnsafe(input.timeout!))).toBe(false);
+        yield* TestClock.adjust("20 minutes");
+        expect(h.locks()[0]?.phase).toBe("checkout");
+        const operation = h.locks()[0]!.operationId;
+        expect(
+          (yield* Effect.flip(h.request("abort", other, script, operation))).message,
+        ).toContain("held by thread");
+        expect(
+          (yield* Effect.flip(h.request("abort", owner, script, h.nextId()))).message,
+        ).toContain("finished or changed");
+        yield* h.request("abort", owner, script, operation);
+        yield* Queue.take(h.interrupted);
+        yield* Queue.take(h.completions);
+        yield* h.reactor.drain;
+        expect(h.locks()[0]).toMatchObject({
+          phase: "failed",
+          error: expect.stringContaining("aborted"),
+        });
+        expect(h.logs()[0]).toMatchObject({
+          status: "failed",
+          stdout: "Deployment in progress",
+          stderr: "Retrying upload",
+          error: expect.stringContaining("aborted"),
+        });
+        expect(
+          (yield* Effect.flip(h.request("abort", owner, script, operation))).message,
+        ).toContain("finished or changed");
+      }),
+  );
+
   it.effect("checks out and releases an inherited file resource", () =>
     Effect.gen(function* () {
       const h = yield* harness;
@@ -208,6 +294,18 @@ it.layer(NodeServices.layer)("resource actions", (it) => {
       yield* Queue.take(h.completions);
       yield* h.reactor.drain;
       expect(h.locks()).toEqual([]);
+      expect(h.logs()).toHaveLength(2);
+      expect(h.logs()[0]).toMatchObject({
+        action: "release",
+        status: "succeeded",
+        command: "release-device",
+        stdout: "script output",
+      });
+      expect(h.logs()[1]).toMatchObject({
+        action: "checkout",
+        status: "succeeded",
+        stdout: "script output",
+      });
     }),
   );
 
@@ -347,6 +445,12 @@ it.layer(NodeServices.layer)("resource actions", (it) => {
       ).toContain("Release");
       yield* h.request("force-release");
       expect(h.locks()).toEqual([]);
+      expect(h.logs()[0]).toMatchObject({
+        status: "failed",
+        stdout: "script output",
+        stderr: "cleanup failed",
+        error: expect.stringContaining("cleanup failed"),
+      });
     }),
   );
 
@@ -357,6 +461,10 @@ it.layer(NodeServices.layer)("resource actions", (it) => {
       yield* h.reactor.start();
       expect(h.locks()[0]).toMatchObject({
         phase: "failed",
+        error: expect.stringContaining("restarted"),
+      });
+      expect(h.logs()[0]).toMatchObject({
+        status: "failed",
         error: expect.stringContaining("restarted"),
       });
     }),

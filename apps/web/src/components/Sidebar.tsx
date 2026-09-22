@@ -1,3 +1,4 @@
+import { threadResourceColor } from "@t3tools/shared/resourceActions";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
@@ -1606,6 +1607,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     )
   ) : null;
 
+  const resourceColor = threadResourceColor(props.project?.resourceLocks, thread.id);
+  const resourceStyle = resourceColor ? { borderLeft: `3px solid ${resourceColor}` } : undefined;
   if (variant === "slim") {
     return (
       <li
@@ -1626,6 +1629,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 role="button"
                 tabIndex={0}
                 data-testid="sidebar-row-slim"
+                style={resourceStyle}
                 aria-busy={isRegeneratingTitle || undefined}
                 className={cn(rowSurfaceClassName, "flex h-[1.875rem] items-center gap-0.5 px-1.5")}
                 onClick={handleClick}
@@ -1784,6 +1788,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               role="button"
               tabIndex={0}
               data-testid="sidebar-row-card"
+              style={resourceStyle}
               aria-busy={isRegeneratingTitle || undefined}
               className={rowSurfaceClassName}
               onClick={handleClick}

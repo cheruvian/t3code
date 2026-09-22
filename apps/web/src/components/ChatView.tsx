@@ -9944,7 +9944,11 @@ export default function ChatView(props: ChatViewProps) {
         </WorkspacePageHeader>
 
         {activeProject && activeThreadId && (
-          <ThreadResources project={activeProject} threadId={activeThreadId} />
+          <ThreadResources
+            project={activeProject}
+            threadId={activeThreadId}
+            activities={threadActivities}
+          />
         )}
         {/* Main content area with optional plan sidebar */}
         <div className="flex min-h-0 min-w-0 flex-1">

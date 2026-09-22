@@ -123,7 +123,11 @@ On web or desktop, select a project in Settings, open its Actions, and add a
 **Resource action** for a device, port, staging environment, or other named resource.
 Choose a color and optional checkout and release scripts and agent prompts.
 Scripts run on the project's server in the thread's workspace, followed by the
-prompt in that thread.
+prompt in that thread. Resource scripts have no automatic timeout. Use **Abort**
+while checkout or release is running to stop the local process or interrupt its
+agent prompt. An aborted action keeps its reservation; release it explicitly
+when ready. Stopping a deployment command does not undo work already started in
+an external service.
 
 To share a resource action through Git, add its `resource` hooks to a script in
 `t3.json`. Use empty strings for hooks you don't need:
@@ -153,7 +157,14 @@ but reservations remain local to each project on each environment.
 Run the action from a thread to check out the resource. Only one thread in that
 project on that server can hold it at a time. The thread shows a colored indicator
 and a Release control; mobile can check out and release configured resources too.
-A release finishes automatically after its script and prompt complete.
+A release finishes automatically after its script and prompt complete. Resource
+colors also mark the owning thread in the thread list, including compact rows.
+
+Open **Resource logs** in the thread to see checkout and release results, commands,
+and output. Output is saved when the action finishes and remains available after
+release. Each output stream is limited to 16 KiB; longer output is marked as
+truncated. **Checking out** means the hooks are still running, **Checked out** means
+they succeeded, and **Failed** means the reservation needs attention.
 
 To move a reservation to another thread, run **Take over** there and confirm the
 current session name. This runs checkout hooks in the new thread without running

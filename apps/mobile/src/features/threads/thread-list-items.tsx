@@ -1,3 +1,6 @@
+import { useAtomValue } from "@effect/atom-react";
+import { threadResourceColor } from "@t3tools/shared/resourceActions";
+import { environmentProjects } from "../../state/projects";
 import type {
   EnvironmentProject,
   EnvironmentThreadShell,
@@ -502,6 +505,16 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
     typeof ThreadSwipeable
   >["simultaneousWithExternalGesture"];
 }) {
+  const resourceProject = useAtomValue(
+    environmentProjects.projectAtom({
+      environmentId: props.thread.environmentId,
+      projectId: props.thread.projectId,
+    }),
+  );
+  const resourceColor = threadResourceColor(resourceProject?.resourceLocks, props.thread.id);
+  const resourceStyle = resourceColor
+    ? { borderLeftWidth: 3, borderLeftColor: resourceColor }
+    : undefined;
   const { width: windowWidth } = useWindowDimensions();
   const { themeAppearance: colorScheme } = useAppearancePreferences();
   const compact = props.variant === "compact";
@@ -669,14 +682,15 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
         accessibilityLabel={threadAccessibilityLabel}
         accessibilityRole="button"
         className="bg-screen"
-        style={
+        style={[
+          resourceStyle,
           Platform.OS === "android"
             ? {
                 backgroundColor: visuallySelected ? selectedBackgroundColor : backgroundColor,
                 borderRadius: 20,
               }
-            : undefined
-        }
+            : undefined,
+        ]}
         onPress={() => {
           close();
           onSelectThread(thread);
@@ -755,6 +769,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
         style={{
           backgroundColor: visuallySelected ? selectedBackgroundColor : backgroundColor,
           borderRadius: Platform.OS === "android" ? 20 : SIDEBAR_ROW_RADIUS,
+          ...resourceStyle,
           minHeight: 64,
           justifyContent: "center",
           paddingHorizontal: 12,

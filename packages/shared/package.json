@@ -123,6 +123,10 @@
       "types": "./src/projectScripts.ts",
       "import": "./src/projectScripts.ts"
     },
+    "./resourceActions": {
+      "types": "./src/resourceActions.ts",
+      "import": "./src/resourceActions.ts"
+    },
     "./projectSettings": {
       "types": "./src/projectSettings.ts",
       "import": "./src/projectSettings.ts"

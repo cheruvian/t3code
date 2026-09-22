@@ -1,3 +1,5 @@
+import { threadResourceColor } from "@t3tools/shared/resourceActions";
+import { environmentProjects } from "../state/projects";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
 import { Spinner } from "~/components/ui/spinner";
@@ -697,6 +699,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     },
     [attemptArchiveThread, threadRef],
   );
+  const resourceProject = useAtomValue(
+    environmentProjects.projectAtom({
+      environmentId: thread.environmentId,
+      projectId: thread.projectId,
+    }),
+  );
+  const resourceColor = threadResourceColor(resourceProject?.resourceLocks, thread.id);
   const rowButtonRender = useMemo(() => <div role="button" tabIndex={0} />, []);
 
   return (
@@ -713,6 +722,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         size="sm"
         isActive={isActive}
         data-testid={`thread-row-${thread.id}`}
+        style={resourceColor ? { borderLeft: `3px solid ${resourceColor}` } : undefined}
         className={`${resolveThreadRowClassName({
           isActive,
           isSelected,

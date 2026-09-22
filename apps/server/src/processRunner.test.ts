@@ -80,6 +80,22 @@ const runWith =
     );
 
 describe("runProcess", () => {
+  it.effect("delivers stderr chunks even when buffered output is truncated", () =>
+    Effect.gen(function* () {
+      const chunks: string[] = [];
+      const spawner = makeSpawner(() => Effect.succeed(makeHandle({ stderr: "abcdefgh" })));
+      const result = yield* runWith(spawner)({
+        command: "fake",
+        args: [],
+        maxOutputBytes: 4,
+        outputMode: "truncate",
+        onStderrChunk: (chunk) => chunks.push(new TextDecoder().decode(chunk)),
+      });
+      expect(chunks.join("")).toBe("abcdefgh");
+      expect(result.stderrTruncated).toBe(true);
+    }),
+  );
+
   it.effect("collects stdout through an injected ChildProcessSpawner", () =>
     Effect.gen(function* () {
       const spawner = makeSpawner((command) =>

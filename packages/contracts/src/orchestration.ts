@@ -460,11 +460,25 @@ export const ProjectScript = Schema.Struct({
 );
 export type ProjectScript = typeof ProjectScript.Type;
 
+export const ResourceActionLog = Schema.Struct({
+  operationId: CommandId,
+  resourceName: Schema.String,
+  action: Schema.Literals(["checkout", "release"]),
+  status: Schema.Literals(["running", "succeeded", "failed"]),
+  command: Schema.String,
+  stdout: Schema.String,
+  stderr: Schema.String,
+  truncated: Schema.Boolean,
+  error: Schema.optional(Schema.String),
+});
+export type ResourceActionLog = typeof ResourceActionLog.Type;
+
 /** The action snapshot keeps cleanup available even if its definition is edited or removed. */
 export const ProjectResourceLock = Schema.Struct({
   script: ProjectScript,
   threadId: ThreadId,
   operationId: CommandId,
+  cancelRequested: Schema.optional(Schema.Boolean),
   phase: Schema.Literals(["checkout", "held", "release", "failed"]),
   error: Schema.optional(Schema.String),
 });
@@ -1141,7 +1155,7 @@ const ProjectResourceRequestCommand = Schema.Struct({
   projectId: ProjectId,
   threadId: ThreadId,
   script: ProjectScript,
-  action: Schema.Literals(["checkout", "takeover", "release", "force-release"]),
+  action: Schema.Literals(["checkout", "takeover", "release", "force-release", "abort"]),
   expectedOperationId: Schema.optional(CommandId),
 });
 

@@ -1,3 +1,4 @@
+import { threadResourceColor } from "@t3tools/shared/resourceActions";
 import {
   THREAD_LIST_V2_MONO_FONT as MONO_FONT,
   THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME,
@@ -1018,7 +1019,15 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           close();
           onSelectThread(thread);
         }}
-        style={rowAppearance.cardStyle}
+        style={[
+          rowAppearance.cardStyle,
+          threadResourceColor(props.project?.resourceLocks, thread.id)
+            ? {
+                borderLeftWidth: 3,
+                borderLeftColor: threadResourceColor(props.project?.resourceLocks, thread.id),
+              }
+            : undefined,
+        ]}
       >
         {sidebarPane ? (
           cardContent
@@ -1051,7 +1060,15 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           close();
           onSelectThread(thread);
         }}
-        style={rowAppearance.style}
+        style={[
+          rowAppearance.style,
+          threadResourceColor(props.project?.resourceLocks, thread.id)
+            ? {
+                borderLeftWidth: 3,
+                borderLeftColor: threadResourceColor(props.project?.resourceLocks, thread.id),
+              }
+            : undefined,
+        ]}
       >
         {/* Settled history recedes: dimmed favicon + muted title. */}
         <View

@@ -359,6 +359,33 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       ) {
         return yield* reject(`Resource is held by thread '${current.threadId}'.`);
       }
+      if (command.action === "abort") {
+        if (
+          !current ||
+          current.operationId !== command.expectedOperationId ||
+          (current.phase !== "checkout" && current.phase !== "release")
+        ) {
+          return yield* reject("Resource operation has already finished or changed.");
+        }
+        if (current.cancelRequested) return [];
+        const occurredAt = yield* nowIso;
+        return {
+          ...(yield* withEventBase({
+            aggregateKind: "project",
+            aggregateId: project.id,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "project.meta-updated",
+          payload: {
+            projectId: project.id,
+            resourceLocks: locks.map((lock) =>
+              lock === current ? { ...lock, cancelRequested: true } : lock,
+            ),
+            updatedAt: occurredAt,
+          },
+        };
+      }
       if (current && (current.phase === "checkout" || current.phase === "release")) {
         return yield* reject("Resource hooks are still running.");
       }

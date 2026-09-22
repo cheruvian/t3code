@@ -1,3 +1,4 @@
+import { ResourceActionLogs } from "./ResourceActionLogs";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -1085,6 +1086,28 @@ function ThreadRouteContent(
                   {lock.script.name} · {lock.phase === "held" ? "Checked out" : lock.phase}
                 </AppText>
                 {lock.error && <AppText className="text-xs">{lock.error}</AppText>}
+                {(lock.phase === "checkout" || lock.phase === "release") && (
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={lock.cancelRequested}
+                    onPress={() =>
+                      void requestResource({
+                        environmentId: selectedThread.environmentId,
+                        input: {
+                          projectId: selectedThreadProject.id,
+                          threadId: selectedThread.id,
+                          script: lock.script,
+                          action: "abort",
+                          expectedOperationId: lock.operationId,
+                        },
+                      })
+                    }
+                  >
+                    <AppText className="text-xs">
+                      {lock.cancelRequested ? "Aborting…" : "Abort"}
+                    </AppText>
+                  </Pressable>
+                )}
                 {(lock.phase === "held" || lock.phase === "failed") && (
                   <Pressable
                     accessibilityRole="button"
@@ -1113,6 +1136,7 @@ function ThreadRouteContent(
                 )}
               </View>
             ))}
+        <ResourceActionLogs activities={selectedThreadDetail?.activities ?? []} />
         <ThreadDetailScreen
           selectedThread={selectedThreadWithDraftSettings ?? selectedThread}
           contentPresentation={contentPresentation}
