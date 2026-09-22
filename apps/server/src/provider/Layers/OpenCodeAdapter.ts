@@ -44,6 +44,7 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
   buildOpenCodePermissionRules,
@@ -945,6 +946,7 @@ export function makeOpenCodeAdapter(
   return Effect.gen(function* () {
     const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("opencode");
     const serverConfig = yield* ServerConfig;
+    const serverSettingsService = yield* ServerSettingsService;
     const openCodeRuntime = yield* OpenCodeRuntime;
     const crypto = yield* Crypto.Crypto;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -3244,6 +3246,10 @@ export function makeOpenCodeAdapter(
           }
 
           let promptTimedOut = false;
+          const globalCustomInstructions = yield* serverSettingsService.getSettings.pipe(
+            Effect.map((settings) => settings.globalCustomInstructions),
+            Effect.catchCause(() => Effect.succeed("")),
+          );
           const submissionMethod = nativeCommand ? "session.command" : "session.promptAsync";
           // Native commands expand provider-owned templates. Their API does not
           // accept the per-turn system addendum supported by ordinary prompts.
@@ -3283,6 +3289,7 @@ export function makeOpenCodeAdapter(
                     system: buildRuntimeInstructions({
                       harness: "OpenCode",
                       model: `${parsedModel.providerID}/${parsedModel.modelID}`,
+                      customInstructions: globalCustomInstructions,
                     }),
                     parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
                   },

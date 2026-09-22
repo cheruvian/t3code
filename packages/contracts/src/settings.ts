@@ -1059,6 +1059,9 @@ export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
 export const ServerSettings = Schema.Struct({
   globalScripts: Schema.Array(ProjectScript).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  // Appended to the system/instruction prompt for every provider across every
+  // project in this environment.
+  globalCustomInstructions: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   worktreeCleanup: WorktreeCleanup.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   storageCleanup: StorageCleanupSettings.pipe(
     Schema.withDecodingDefault(
@@ -1436,6 +1439,7 @@ export const ServerSettingsPatch = Schema.Struct({
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
   globalScripts: Schema.optionalKey(Schema.Array(ProjectScript)),
+  globalCustomInstructions: Schema.optionalKey(TrimmedString),
   projectAgentBrowserAccessOverrides: Schema.optionalKey(
     Schema.Record(ProjectId, Schema.NullOr(Schema.Boolean)),
   ),

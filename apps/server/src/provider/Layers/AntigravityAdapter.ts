@@ -37,6 +37,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { ServerConfig } from "../../config.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import type { AntigravityAuth } from "../AntigravityAuth.ts";
 import {
@@ -211,6 +212,12 @@ interface SessionContext {
   stopped: boolean;
   closed: boolean;
   disconnected: boolean;
+  /** True only for a freshly created (not resumed) ACP session, until the
+   * first sendTurn fires. ACP has no session-level system prompt, so global
+   * custom instructions ride along with the first turn's prompt content and
+   * must not be resent on later turns or on a resumed session, whose agent
+   * history already has them. */
+  sendCustomInstructionsOnNextTurn: boolean;
 }
 
 const CLIENT_FILE_MAX_BYTES = 8 * 1024 * 1024;
@@ -310,6 +317,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig;
+  const serverSettingsService = yield* ServerSettingsService;
   const ownerScope = yield* Effect.scope;
   const makeNativeLoggers = yield* makeAcpNativeLoggerFactory();
   const sessions = new Map<ThreadId, SessionContext>();
@@ -883,6 +891,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
                 stopped: false,
                 closed: false,
                 disconnected: false,
+                sendCustomInstructionsOnNextTurn: Option.isNone(cursor),
               };
               const running = context;
               sessions.set(input.threadId, running);
@@ -1077,6 +1086,23 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
             ...(model ? { model } : {}),
             updatedAt: yield* nowIso,
           };
+          // Unlike the transient runtime-info block, custom instructions are
+          // standing user guidance: sent once on a fresh session's first
+          // turn, never resent afterward.
+          let customInstructionsPart: { type: "text"; text: string } | undefined;
+          if (context.sendCustomInstructionsOnNextTurn) {
+            context.sendCustomInstructionsOnNextTurn = false;
+            const globalCustomInstructions = yield* serverSettingsService.getSettings.pipe(
+              Effect.map((s) => s.globalCustomInstructions),
+              Effect.catchCause(() => Effect.succeed("")),
+            );
+            customInstructionsPart = globalCustomInstructions
+              ? {
+                  type: "text",
+                  text: `<user_custom_instructions>\n${globalCustomInstructions}\n</user_custom_instructions>`,
+                }
+              : undefined;
+          }
           const dispatched = yield* Deferred.make<void>();
           const fiber = yield* context.runtime
             .prompt(
@@ -1087,6 +1113,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
                     type: "text",
                     text: buildRuntimeInstructions({ harness: "Antigravity", model }),
                   },
+                  ...(customInstructionsPart ? [customInstructionsPart] : []),
                 ],
               },
               { dispatched },

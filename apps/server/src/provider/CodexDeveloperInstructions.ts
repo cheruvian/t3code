@@ -206,6 +206,7 @@ export function buildCodexDeveloperInstructions(
    * setting, so the prompt cannot claim tools the turn doesn't have.
    */
   browserToolsAvailable: boolean | T3CodeToolAvailability = true,
+  globalCustomInstructions?: string,
 ): string {
   const base =
     interactionMode === "plan"
@@ -213,5 +214,5 @@ export function buildCodexDeveloperInstructions(
       : codexDefaultModeDeveloperInstructions(browserToolsAvailable);
   return `${base}
 
-${buildRuntimeInstructions({ harness: "Codex", ...runtime })}`;
+${buildRuntimeInstructions({ harness: "Codex", ...runtime, customInstructions: globalCustomInstructions })}`;
 }

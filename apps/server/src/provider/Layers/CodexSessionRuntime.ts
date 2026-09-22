@@ -194,6 +194,8 @@ export interface CodexSessionRuntimeOptions {
   readonly appServerArgs?: ReadonlyArray<string>;
   /** Capabilities the session's `t3-code` MCP credential grants; drives the prompt blocks. */
   readonly mcpCapabilities?: ReadonlySet<string>;
+  /** Snapshotted at session start, same as `binaryPath`/`homePath` above. */
+  readonly globalCustomInstructions?: string;
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
@@ -602,6 +604,7 @@ function buildCodexCollaborationMode(input: {
   readonly model?: string;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly browserToolsAvailable?: boolean | T3CodeToolAvailability;
+  readonly globalCustomInstructions?: string;
 }): EffectCodexSchema.V2TurnStartParams__CollaborationMode | undefined {
   if (input.interactionMode === undefined) {
     return undefined;
@@ -617,6 +620,7 @@ function buildCodexCollaborationMode(input: {
         input.interactionMode,
         { model, reasoningEffort },
         input.browserToolsAvailable ?? true,
+        input.globalCustomInstructions,
       ),
     },
   };
@@ -640,6 +644,7 @@ export function buildTurnStartParams(input: {
   readonly interactionMode?: ProviderInteractionMode;
   /** Defaults to true so callers that predate the agent-access gate are unchanged. */
   readonly browserToolsAvailable?: boolean | T3CodeToolAvailability;
+  readonly globalCustomInstructions?: string;
 }): Effect.Effect<
   CodexTurnStartParamsWithCollaborationMode,
   CodexErrors.CodexAppServerProtocolParseError
@@ -661,6 +666,9 @@ export function buildTurnStartParams(input: {
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     browserToolsAvailable: input.browserToolsAvailable ?? true,
+    ...(input.globalCustomInstructions
+      ? { globalCustomInstructions: input.globalCustomInstructions }
+      : {}),
   });
 
   return decodeCodexTurnStartParamsWithCollaborationMode({
@@ -2638,6 +2646,9 @@ export const makeCodexSessionRuntime = (
             // Derived from the session's own credential rather than the
             // setting, so the prompt describes the tools this turn actually
             // has even if the setting changed after the session started.
+            ...(options.globalCustomInstructions
+              ? { globalCustomInstructions: options.globalCustomInstructions }
+              : {}),
             browserToolsAvailable: configuredMcpToolAvailability(
               options.appServerArgs,
               options.mcpCapabilities,

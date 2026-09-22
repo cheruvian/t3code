@@ -41,6 +41,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   ProviderAdapterProcessError,
@@ -175,6 +176,12 @@ interface GrokSessionContext {
   currentModelId: string | undefined;
   currentReasoningEffort: string | undefined;
   stopped: boolean;
+  /** True only for a freshly created (not resumed) ACP session, until the
+   * first sendTurn fires. ACP has no session-level system prompt, so global
+   * custom instructions ride along with the first turn's prompt content and
+   * must not be resent on later turns or on a resumed session, whose agent
+   * history already has them. */
+  sendCustomInstructionsOnNextTurn: boolean;
   /** Live monitor/shell identities and their originating turns. */
   readonly backgroundTasks: Map<string, GrokBackgroundTaskRecord>;
 }
@@ -350,6 +357,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
     const path = yield* Path.Path;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const serverConfig = yield* Effect.service(ServerConfig);
+    const serverSettingsService = yield* ServerSettingsService;
     const crypto = yield* Crypto.Crypto;
     const nativeEventLogger =
       options?.nativeEventLogger ??
@@ -1319,6 +1327,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 ? normalizeGrokReasoningEffort(requestedStartReasoningEffort)
                 : currentStartReasoningEffort,
             stopped: false,
+            sendCustomInstructionsOnNextTurn: resumeSessionId === undefined,
             backgroundTasks: new Map(),
           };
 
@@ -1650,6 +1659,21 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                       model: displayModel,
                       reasoningEffort: normalizeGrokReasoningEffort(requestedTurnReasoningEffort),
                     });
+              // Unlike the transient runtime-info block above, custom
+              // instructions are standing user guidance: sent once on a fresh
+              // session's first turn regardless of slash commands, never
+              // resent afterward.
+              let customInstructions: string | undefined;
+              if (ctx.sendCustomInstructionsOnNextTurn) {
+                ctx.sendCustomInstructionsOnNextTurn = false;
+                const globalCustomInstructions = yield* serverSettingsService.getSettings.pipe(
+                  Effect.map((settings) => settings.globalCustomInstructions),
+                  Effect.catchCause(() => Effect.succeed("")),
+                );
+                customInstructions = globalCustomInstructions
+                  ? `<user_custom_instructions>\n${globalCustomInstructions}\n</user_custom_instructions>`
+                  : undefined;
+              }
               for (let yieldAttempt = 0; yieldAttempt < 8; yieldAttempt += 1) {
                 yield* Effect.yieldNow;
               }
@@ -1706,6 +1730,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 displayModel,
                 promptParts,
                 runtimeInstructions,
+                customInstructions,
                 turnId,
                 promptEpoch,
                 promptLifecycle: ctx.promptLifecycle,
@@ -1768,6 +1793,9 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                       ...prepared.promptParts,
                       ...(prepared.runtimeInstructions
                         ? [{ type: "text" as const, text: prepared.runtimeInstructions }]
+                        : []),
+                      ...(prepared.customInstructions
+                        ? [{ type: "text" as const, text: prepared.customInstructions }]
                         : []),
                     ],
                   },

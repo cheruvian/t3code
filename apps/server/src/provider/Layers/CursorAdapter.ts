@@ -43,6 +43,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   ProviderAdapterProcessError,
@@ -149,6 +150,12 @@ interface CursorSessionContext {
    * >0 means a turn is actively running, so a new sendTurn is a steer that
    * continues it, and only the last remaining prompt settles the turn. */
   promptsInFlight: number;
+  /** True only for a freshly created (not resumed) ACP session, until the
+   * first sendTurn fires. ACP has no session-level system prompt, so global
+   * custom instructions ride along with the first turn's prompt content and
+   * must not be resent on later turns or on a resumed session, whose agent
+   * history already has them. */
+  sendCustomInstructionsOnNextTurn: boolean;
   assistantReply: CursorTransportFailure;
   stopped: boolean;
 }
@@ -333,6 +340,7 @@ export function makeCursorAdapter(
     const path = yield* Path.Path;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const serverConfig = yield* Effect.service(ServerConfig);
+    const serverSettingsService = yield* ServerSettingsService;
     const crypto = yield* Crypto.Crypto;
     const nativeEventLogger =
       options?.nativeEventLogger ??
@@ -805,6 +813,7 @@ export function makeCursorAdapter(
             promptsInFlight: 0,
             assistantReply: new CursorTransportFailure(),
             stopped: false,
+            sendCustomInstructionsOnNextTurn: resumeSessionId === undefined,
           };
 
           const nf = yield* Stream.runDrain(
@@ -1091,17 +1100,34 @@ export function makeCursorAdapter(
 
           // ACP commands parse the complete text. Extra context can turn an exact
           // command into an ordinary model prompt or change its arguments.
+          const runtimeInstructionsParts: Array<{ type: "text"; text: string }> =
+            /^\/[^\s/]+(?:\s|$)/.test(rawPrompt)
+              ? []
+              : [
+                  {
+                    type: "text",
+                    text: buildRuntimeInstructions({ harness: "Cursor", model: resolvedModel }),
+                  },
+                ];
+          // Unlike the transient runtime-info block above, custom instructions
+          // are standing user guidance: sent once on a fresh session's first
+          // turn regardless of slash commands, never resent afterward.
+          if (ctx.sendCustomInstructionsOnNextTurn) {
+            ctx.sendCustomInstructionsOnNextTurn = false;
+            const globalCustomInstructions = yield* serverSettingsService.getSettings.pipe(
+              Effect.map((settings) => settings.globalCustomInstructions),
+              Effect.catchCause(() => Effect.succeed("")),
+            );
+            if (globalCustomInstructions) {
+              runtimeInstructionsParts.push({
+                type: "text",
+                text: `<user_custom_instructions>\n${globalCustomInstructions}\n</user_custom_instructions>`,
+              });
+            }
+          }
           const result = yield* ctx.acp
             .prompt({
-              prompt: /^\/[^\s/]+(?:\s|$)/.test(rawPrompt)
-                ? promptParts
-                : [
-                    ...promptParts,
-                    {
-                      type: "text",
-                      text: buildRuntimeInstructions({ harness: "Cursor", model: resolvedModel }),
-                    },
-                  ],
+              prompt: [...promptParts, ...runtimeInstructionsParts],
             })
             .pipe(
               Effect.mapError((error) =>
