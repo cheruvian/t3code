@@ -1,3 +1,4 @@
+import { ResourceActionReactor } from "../ResourceActionReactor.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -24,10 +25,12 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const pullRequestSyncReactor = yield* PullRequestSyncReactor.PullRequestSyncReactor;
   const threadPullRequestReactor = yield* ThreadPullRequestReactor.ThreadPullRequestReactor;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
+  const resourceActions = yield* ResourceActionReactor;
   const storageCleanup = yield* StorageCleanup.StorageCleanup;
 
   const start: OrchestrationReactorShape["start"] = Effect.fn("start")(function* () {
     yield* checkpointReactor.start();
+    yield* resourceActions.start();
     yield* providerRuntimeIngestion.start();
     yield* providerCommandReactor.start();
     yield* threadDeletionReactor.start();

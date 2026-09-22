@@ -12,6 +12,7 @@ import {
   ProjectIconOverride,
   ProjectId,
   ProjectScript,
+  ProjectResourceLock,
   ThreadEnvMode,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -31,6 +32,7 @@ export const ProjectionProject = Schema.Struct({
   faviconPath: Schema.optional(Schema.NullOr(Schema.String)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   scripts: Schema.Array(ProjectScript),
+  resourceLocks: Schema.optional(Schema.Array(ProjectResourceLock)),
   disabledInheritedScriptIds: Schema.Array(Schema.String).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),

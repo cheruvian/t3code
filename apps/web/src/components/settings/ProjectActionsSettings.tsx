@@ -1,3 +1,4 @@
+import { ThreadResources } from "../ThreadResources";
 import {
   projectScriptsMatch,
   resolveInheritedProjectScripts,
@@ -226,6 +227,19 @@ export function ProjectActionsSettings() {
           </div>
         }
       />
+      {isProjectScope &&
+        scope.members.map((member) => (
+          <div key={`${member.environmentId}:${member.id}`}>
+            {[...new Set((member.resourceLocks ?? []).map((lock) => lock.threadId))].map(
+              (threadId) => (
+                <div key={threadId}>
+                  <p className="px-4 text-xs text-muted-foreground">Held by thread {threadId}</p>
+                  <ThreadResources project={member} threadId={threadId} />
+                </div>
+              ),
+            )}
+          </div>
+        ))}
       {mixed ? (
         <SettingsRow
           title="Different actions across environments"

@@ -1,3 +1,4 @@
+import { ResourceActionReactor } from "../ResourceActionReactor.ts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -32,6 +33,15 @@ describe("OrchestrationReactor", () => {
 
     runtime = ManagedRuntime.make(
       Layer.effect(OrchestrationReactor, makeOrchestrationReactor).pipe(
+        Layer.provide(
+          Layer.succeed(ResourceActionReactor, {
+            start: () => {
+              started.push("resource-actions");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
         Layer.provideMerge(
           Layer.succeed(StorageCleanup, {
             start: () => {
@@ -123,6 +133,7 @@ describe("OrchestrationReactor", () => {
 
     expect(started).toEqual([
       "checkpoint-reactor",
+      "resource-actions",
       "provider-runtime-ingestion",
       "provider-command-reactor",
       "thread-deletion-reactor",

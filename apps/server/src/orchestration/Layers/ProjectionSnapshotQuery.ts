@@ -1,3 +1,4 @@
+import { ProjectResourceLock } from "@t3tools/contracts";
 import {
   AgentSessionImportSource,
   ApprovalRequestId,
@@ -111,6 +112,7 @@ const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
     autoPull: Schema.Number,
     projectIcon: Schema.NullOr(Schema.fromJsonString(ProjectIconOverride)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
+    resourceLocks: Schema.fromJsonString(Schema.Array(ProjectResourceLock)),
   }),
 );
 const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
@@ -413,6 +415,7 @@ function mapProjectShellRow(
     faviconPath: row.faviconPath ?? null,
     projectIcon: row.projectIcon ?? null,
     scripts: row.scripts,
+    resourceLocks: row.resourceLocks,
     disabledInheritedScriptIds: row.disabledInheritedScriptIds,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -610,6 +613,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           favicon_path AS "faviconPath",
           project_icon_json AS "projectIcon",
           scripts_json AS "scripts",
+          resource_locks_json AS "resourceLocks",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -1205,6 +1209,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           favicon_path AS "faviconPath",
           project_icon_json AS "projectIcon",
           scripts_json AS "scripts",
+          resource_locks_json AS "resourceLocks",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -1231,6 +1236,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           favicon_path AS "faviconPath",
           project_icon_json AS "projectIcon",
           scripts_json AS "scripts",
+          resource_locks_json AS "resourceLocks",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -2389,6 +2395,7 @@ pending_approval_requests AS (
                 faviconPath: row.faviconPath ?? null,
                 projectIcon: row.projectIcon ?? null,
                 scripts: row.scripts,
+                resourceLocks: row.resourceLocks,
                 disabledInheritedScriptIds: row.disabledInheritedScriptIds,
                 createdAt: row.createdAt,
                 updatedAt: row.updatedAt,
@@ -2558,6 +2565,7 @@ pending_approval_requests AS (
                   faviconPath: row.faviconPath ?? null,
                   projectIcon: row.projectIcon ?? null,
                   scripts: row.scripts,
+                  resourceLocks: row.resourceLocks,
                   disabledInheritedScriptIds: row.disabledInheritedScriptIds,
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
@@ -3113,6 +3121,7 @@ pending_approval_requests AS (
                     faviconPath: option.value.faviconPath ?? null,
                     projectIcon: option.value.projectIcon ?? null,
                     scripts: option.value.scripts,
+                    resourceLocks: option.value.resourceLocks,
                     disabledInheritedScriptIds: option.value.disabledInheritedScriptIds,
                     createdAt: option.value.createdAt,
                     updatedAt: option.value.updatedAt,

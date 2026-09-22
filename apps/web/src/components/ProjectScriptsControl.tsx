@@ -1,3 +1,4 @@
+import type { ProjectResourceLock, ThreadId } from "@t3tools/contracts";
 import type {
   ProjectScript,
   ResolvedKeybindingsConfig,
@@ -42,6 +43,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 export type { NewProjectScriptInput, ProjectScriptActionResult };
 
+const NO_RESOURCE_LOCKS: readonly ProjectResourceLock[] = [];
 const NO_FILE_SCRIPTS: ReadonlyArray<T3ProjectFileScript> = [];
 const NO_INHERITED_SCRIPT_IDS: ReadonlySet<string> = new Set();
 
@@ -55,6 +57,9 @@ export function importableProjectFileScripts(
 }
 
 interface ProjectScriptsControlProps {
+  resourceActionsEnabled?: boolean;
+  resourceLocks?: readonly ProjectResourceLock[];
+  threadId?: ThreadId;
   presentation?: "toolbar" | "menu";
   onRequestMenuClose?: () => void;
   scripts: ReadonlyArray<ProjectScript>;
@@ -76,6 +81,9 @@ interface ProjectScriptsControlProps {
 }
 
 export default function ProjectScriptsControl({
+  resourceActionsEnabled = true,
+  resourceLocks = NO_RESOURCE_LOCKS,
+  threadId,
   presentation = "toolbar",
   onRequestMenuClose,
   scripts,
@@ -99,6 +107,22 @@ export default function ProjectScriptsControl({
     setActionsMenuOpen({ presentation, scripts: false, imports: false });
   }
   const [editorRequest, setEditorRequest] = useState<ProjectScriptEditorRequest | null>(null);
+
+  const resourceLabel = (script: ProjectScript) => {
+    if (!script.resource) return script.name;
+    const lock = resourceLocks.find((entry) => entry.script.id === script.id);
+    if (!lock) return `Check out ${script.name}`;
+    if (lock.threadId !== threadId) return `Take over ${script.name}`;
+    if (lock.phase === "checkout") return `${script.name} · Checking out…`;
+    if (lock.phase === "release") return `${script.name} · Releasing…`;
+    return `Release ${script.name}`;
+  };
+  const resourceBusy = (script: ProjectScript) =>
+    (Boolean(script.resource) && !resourceActionsEnabled) ||
+    resourceLocks.some(
+      (lock) =>
+        lock.script.id === script.id && (lock.phase === "checkout" || lock.phase === "release"),
+    );
 
   const primaryScript = useMemo(() => {
     if (preferredScriptId) {
@@ -195,11 +219,12 @@ export default function ProjectScriptsControl({
             density={presentation === "menu" ? "touch" : "default"}
             key={script.id}
             className={`group ${dropdownItemClassName}`}
+            disabled={resourceBusy(script)}
             onClick={() => onRunScript(script)}
           >
             <ScriptIcon icon={script.icon} className="size-4" />
             <MenuItemLabel className="truncate">
-              {script.runOnWorktreeCreate ? `${script.name} (setup)` : script.name}
+              {script.runOnWorktreeCreate ? `${script.name} (setup)` : resourceLabel(script)}
             </MenuItemLabel>
             <span className="relative ms-auto flex h-6 min-w-6 items-center justify-end">
               {shortcutLabel && (
@@ -277,10 +302,14 @@ export default function ProjectScriptsControl({
           {primaryScript && (
             <MenuItem
               density={presentation === "menu" ? "touch" : "default"}
+              disabled={resourceBusy(primaryScript)}
               onClick={() => onRunScript(primaryScript)}
             >
               <ScriptIcon icon={primaryScript.icon} className="size-4" />
-              <MenuItemLabel className="truncate">Run {primaryScript.name}</MenuItemLabel>
+              <MenuItemLabel className="truncate">
+                {primaryScript.resource ? "" : "Run "}
+                {resourceLabel(primaryScript)}
+              </MenuItemLabel>
               <MenuShortcut>
                 {inheritedScriptIds.has(primaryScript.id)
                   ? null
@@ -322,20 +351,24 @@ export default function ProjectScriptsControl({
                   size="xs"
                   variant="outline"
                   className="w-7 px-0 sm:w-6 @3xl/header-actions:w-auto! @3xl/header-actions:px-[calc(--spacing(2)-1px)]"
-                  aria-label={`Run ${primaryScript.name}`}
+                  aria-label={`${primaryScript.resource ? "" : "Run "}${resourceLabel(primaryScript)}`}
                   // The tooltip wrapper replaces data-slot="button", so themed
                   // toolbar styling needs its own hook.
                   data-toolbar-control=""
+                  disabled={resourceBusy(primaryScript)}
                   onClick={() => onRunScript(primaryScript)}
                 />
               }
             >
               <ScriptIcon icon={primaryScript.icon} />
               <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
-                {primaryScript.name}
+                {resourceLabel(primaryScript)}
               </span>
             </TooltipTrigger>
-            <TooltipPopup side="top">Run {primaryScript.name}</TooltipPopup>
+            <TooltipPopup side="top">
+              {primaryScript.resource ? "" : "Run "}
+              {resourceLabel(primaryScript)}
+            </TooltipPopup>
           </Tooltip>
           <GroupSeparator className="hidden @3xl/header-actions:block" />
           <Menu

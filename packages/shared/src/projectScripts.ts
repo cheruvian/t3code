@@ -76,7 +76,7 @@ export function projectScriptRuntimeEnv(
 }
 
 export function setupProjectScript(scripts: readonly ProjectScript[]): ProjectScript | null {
-  return scripts.find((script) => script.runOnWorktreeCreate) ?? null;
+  return scripts.find((script) => script.runOnWorktreeCreate && !script.resource) ?? null;
 }
 
 export function projectScriptsMatch(

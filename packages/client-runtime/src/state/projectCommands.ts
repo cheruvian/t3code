@@ -1,3 +1,7 @@
+import {
+  requestProjectResource,
+  type RequestProjectResourceInput,
+} from "../operations/commands.ts";
 import { type EnvironmentId, type ProjectReadFileResult, WS_METHODS } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import { Atom } from "effect/unstable/reactivity";
@@ -77,6 +81,12 @@ export function createProjectEnvironmentAtoms<R, E>(
     create: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:project:create",
       execute: (input: CreateProjectInput) => createProject(input),
+      scheduler: projectScheduler,
+      concurrency: projectConcurrency,
+    }),
+    resource: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:project:resource",
+      execute: (input: RequestProjectResourceInput) => requestProjectResource(input),
       scheduler: projectScheduler,
       concurrency: projectConcurrency,
     }),

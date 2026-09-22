@@ -116,3 +116,27 @@ Actions declared in `t3.json` run directly from the action menu without being im
 actions resolve in this order: project actions, `t3.json` actions, then global actions. Disabling an
 inherited action hides either a `t3.json` or global action; project actions are never disabled by
 that setting.
+
+## Reserve a resource for a thread
+
+On web or desktop, select a project in Settings, open its Actions, and add a
+**Resource action** for a device, port, staging environment, or other named resource.
+Choose a color and optional checkout and release scripts and agent prompts.
+Scripts run on the project's server in the thread's workspace, followed by the
+prompt in that thread.
+
+Run the action from a thread to check out the resource. Only one thread in that
+project on that server can hold it at a time. The thread shows a colored indicator
+and a Release control; mobile can check out and release configured resources too.
+A release finishes automatically after its script and prompt complete.
+
+To move a reservation to another thread, run **Take over** there and confirm the
+current session name. This runs checkout hooks in the new thread without running
+the previous thread’s release hooks. Wait for any running resource hooks to finish
+before taking over.
+
+Failed hooks keep the resource reserved. Retry Release, or use Force release to
+clear ownership without running cleanup. Restarting the server preserves ownership;
+interrupted hooks are marked failed instead of being run again. Release resources
+before archiving or deleting their thread. Project Actions also shows held resources,
+even when their action definition has been changed or removed.

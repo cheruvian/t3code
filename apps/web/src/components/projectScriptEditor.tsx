@@ -81,6 +81,7 @@ export function ScriptIcon({
 }
 
 export interface NewProjectScriptInput {
+  resource?: ProjectScript["resource"];
   name: string;
   command: string;
   icon: ProjectScriptIcon;
@@ -123,6 +124,7 @@ export function editorRequestForScript(
     scriptId: script.id,
     initial: {
       name: script.name,
+      ...(script.resource ? { resource: script.resource } : {}),
       command: script.command,
       icon: script.icon,
       runOnWorktreeCreate: script.runOnWorktreeCreate,
@@ -157,6 +159,7 @@ export function ProjectScriptEditorDialog({
   onClose: () => void;
 }) {
   const formId = React.useId();
+  const [resource, setResource] = useState<ProjectScript["resource"]>();
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
   const [icon, setIcon] = useState<ProjectScriptIcon>("play");
@@ -189,6 +192,7 @@ export function ProjectScriptEditorDialog({
   useEffect(() => {
     if (!request) return;
     setName(request.initial.name);
+    setResource(request.initial.resource);
     setCommand(request.initial.command);
     setIcon(request.initial.icon);
     setIconPickerOpen(false);
@@ -229,7 +233,7 @@ export function ProjectScriptEditorDialog({
       setValidationError("Name is required.");
       return;
     }
-    if (trimmedCommand.length === 0) {
+    if (trimmedCommand.length === 0 && !resource) {
       setValidationError("Command is required.");
       return;
     }
@@ -250,9 +254,10 @@ export function ProjectScriptEditorDialog({
       const trimmedPreviewUrl = previewUrl.trim();
       payload = {
         name: trimmedName,
+        ...(resource ? { resource } : {}),
         command: trimmedCommand,
         icon,
-        runOnWorktreeCreate,
+        runOnWorktreeCreate: resource ? false : runOnWorktreeCreate,
         waitForSetup: runOnWorktreeCreate && waitForSetup,
         keybinding: keybindingRule?.key ?? null,
         previewUrl: trimmedPreviewUrl.length > 0 ? trimmedPreviewUrl : null,
@@ -375,8 +380,30 @@ export function ProjectScriptEditorDialog({
                     environment-wide. Projects using the same action share its shortcut.
                   </p>
                 </div>
+                <label className="flex items-center justify-between gap-3 text-sm">
+                  <span>Resource action (one thread at a time)</span>
+                  <Switch
+                    aria-label="Resource action"
+                    checked={Boolean(resource)}
+                    onCheckedChange={(checked) => {
+                      setResource(
+                        checked
+                          ? {
+                              color: "#3b82f6",
+                              checkoutPrompt: "",
+                              releaseCommand: "",
+                              releasePrompt: "",
+                            }
+                          : undefined,
+                      );
+                      if (checked) setRunOnWorktreeCreate(false);
+                    }}
+                  />
+                </label>
                 <div className="space-y-1.5">
-                  <Label htmlFor="script-command">Command</Label>
+                  <Label htmlFor="script-command">
+                    {resource ? "Checkout script (optional)" : "Command"}
+                  </Label>
                   <Textarea
                     id="script-command"
                     placeholder="bun test"
@@ -384,49 +411,93 @@ export function ProjectScriptEditorDialog({
                     onChange={(event) => setCommand(event.target.value)}
                   />
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="script-preview-url">Preview URL (optional)</Label>
-                  <Input
-                    id="script-preview-url"
-                    placeholder="http://localhost:5173"
-                    value={previewUrl}
-                    onChange={(event) => setPreviewUrl(event.target.value)}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Open this URL in the in-app preview when this action runs.
-                  </p>
-                </div>
-                <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
-                  <span>Run automatically on worktree creation</span>
-                  <Switch
-                    checked={runOnWorktreeCreate}
-                    onCheckedChange={(checked) => setRunOnWorktreeCreate(Boolean(checked))}
-                  />
-                </label>
-                <label
-                  className={`flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035] ${
-                    runOnWorktreeCreate ? "" : "opacity-60"
-                  }`}
-                >
-                  <span>Wait for it to finish before the agent starts</span>
-                  <Switch
-                    checked={waitForSetup}
-                    disabled={!runOnWorktreeCreate}
-                    onCheckedChange={(checked) => setWaitForSetup(Boolean(checked))}
-                  />
-                </label>
-                <label
-                  className={`flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035] ${
-                    previewUrl.trim().length === 0 ? "opacity-60" : ""
-                  }`}
-                >
-                  <span>Open preview automatically when this action runs</span>
-                  <Switch
-                    checked={autoOpenPreview}
-                    disabled={previewUrl.trim().length === 0}
-                    onCheckedChange={(checked) => setAutoOpenPreview(Boolean(checked))}
-                  />
-                </label>
+                {resource && (
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="resource-color">Resource color</Label>
+                    <input
+                      id="resource-color"
+                      type="color"
+                      value={resource.color}
+                      onChange={(event) => setResource({ ...resource, color: event.target.value })}
+                    />
+                    <Label htmlFor="resource-checkout-prompt">Checkout prompt (optional)</Label>
+                    <Textarea
+                      id="resource-checkout-prompt"
+                      value={resource.checkoutPrompt}
+                      onChange={(event) =>
+                        setResource({ ...resource, checkoutPrompt: event.target.value })
+                      }
+                    />
+                    <Label htmlFor="resource-release-command">Release script (optional)</Label>
+                    <Textarea
+                      id="resource-release-command"
+                      value={resource.releaseCommand}
+                      onChange={(event) =>
+                        setResource({ ...resource, releaseCommand: event.target.value })
+                      }
+                    />
+                    <Label htmlFor="resource-release-prompt">Release prompt (optional)</Label>
+                    <Textarea
+                      id="resource-release-prompt"
+                      value={resource.releasePrompt}
+                      onChange={(event) =>
+                        setResource({ ...resource, releasePrompt: event.target.value })
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Scripts run first, then prompts run in the owning thread. Release completes
+                      automatically when the hooks finish.
+                    </p>
+                  </div>
+                )}
+                {!resource && (
+                  <>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="script-preview-url">Preview URL (optional)</Label>
+                      <Input
+                        id="script-preview-url"
+                        placeholder="http://localhost:5173"
+                        value={previewUrl}
+                        onChange={(event) => setPreviewUrl(event.target.value)}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Open this URL in the in-app preview when this action runs.
+                      </p>
+                    </div>
+                    <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035]">
+                      <span>Run automatically on worktree creation</span>
+                      <Switch
+                        checked={runOnWorktreeCreate}
+                        disabled={Boolean(resource)}
+                        onCheckedChange={(checked) => setRunOnWorktreeCreate(Boolean(checked))}
+                      />
+                    </label>
+                    <label
+                      className={`flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035] ${
+                        runOnWorktreeCreate ? "" : "opacity-60"
+                      }`}
+                    >
+                      <span>Wait for it to finish before the agent starts</span>
+                      <Switch
+                        checked={waitForSetup}
+                        disabled={!runOnWorktreeCreate}
+                        onCheckedChange={(checked) => setWaitForSetup(Boolean(checked))}
+                      />
+                    </label>
+                    <label
+                      className={`flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm dark:border-transparent dark:bg-white/[0.035] ${
+                        previewUrl.trim().length === 0 ? "opacity-60" : ""
+                      }`}
+                    >
+                      <span>Open preview automatically when this action runs</span>
+                      <Switch
+                        checked={autoOpenPreview}
+                        disabled={previewUrl.trim().length === 0}
+                        onCheckedChange={(checked) => setAutoOpenPreview(Boolean(checked))}
+                      />
+                    </label>
+                  </>
+                )}
                 {validationError && <p className="text-sm text-destructive">{validationError}</p>}
               </fieldset>
             </form>

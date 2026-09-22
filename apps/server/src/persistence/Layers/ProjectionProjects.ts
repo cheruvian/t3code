@@ -1,3 +1,4 @@
+import { ProjectResourceLock } from "@t3tools/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import * as Effect from "effect/Effect";
@@ -21,6 +22,7 @@ const ProjectionProjectDbRow = ProjectionProject.mapFields(
     autoPull: Schema.Number,
     projectIcon: Schema.NullOr(Schema.fromJsonString(ProjectIconOverride)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
+    resourceLocks: Schema.fromJsonString(Schema.Array(ProjectResourceLock)),
     disabledInheritedScriptIds: Schema.fromJsonString(Schema.Array(Schema.String)),
   }),
 );
@@ -42,6 +44,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           favicon_path,
           project_icon_json,
           scripts_json,
+          resource_locks_json,
           disabled_inherited_script_ids_json,
           created_at,
           updated_at,
@@ -57,6 +60,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           ${row.faviconPath ?? null},
           ${row.projectIcon ? JSON.stringify(row.projectIcon) : null},
           ${JSON.stringify(row.scripts)},
+          ${JSON.stringify(row.resourceLocks ?? [])},
           ${JSON.stringify(row.disabledInheritedScriptIds)},
           ${row.createdAt},
           ${row.updatedAt},
@@ -72,6 +76,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           favicon_path = excluded.favicon_path,
           project_icon_json = excluded.project_icon_json,
           scripts_json = excluded.scripts_json,
+          resource_locks_json = excluded.resource_locks_json,
           disabled_inherited_script_ids_json = excluded.disabled_inherited_script_ids_json,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
@@ -94,6 +99,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           favicon_path AS "faviconPath",
           project_icon_json AS "projectIcon",
           scripts_json AS "scripts",
+          resource_locks_json AS "resourceLocks",
           disabled_inherited_script_ids_json AS "disabledInheritedScriptIds",
           created_at AS "createdAt",
           updated_at AS "updatedAt",

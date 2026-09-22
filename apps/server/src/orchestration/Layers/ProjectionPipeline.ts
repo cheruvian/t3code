@@ -668,6 +668,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             faviconPath: event.payload.faviconPath ?? null,
             projectIcon: event.payload.projectIcon ?? null,
             scripts: event.payload.scripts,
+            resourceLocks: event.payload.resourceLocks ?? [],
             disabledInheritedScriptIds: event.payload.disabledInheritedScriptIds ?? [],
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
@@ -700,6 +701,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               : {}),
             ...(event.payload.projectIcon !== undefined
               ? { projectIcon: event.payload.projectIcon }
+              : {}),
+            ...(event.payload.resourceLocks !== undefined
+              ? { resourceLocks: event.payload.resourceLocks }
               : {}),
             ...(event.payload.scripts !== undefined ? { scripts: event.payload.scripts } : {}),
             ...(event.payload.disabledInheritedScriptIds !== undefined

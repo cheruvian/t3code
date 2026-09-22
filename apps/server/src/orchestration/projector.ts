@@ -367,6 +367,7 @@ export function projectEvent(
             faviconPath: payload.faviconPath ?? null,
             projectIcon: payload.projectIcon ?? null,
             scripts: payload.scripts,
+            resourceLocks: payload.resourceLocks ?? [],
             disabledInheritedScriptIds: payload.disabledInheritedScriptIds,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -408,6 +409,9 @@ export function projectEvent(
                     : {}),
                   ...(payload.projectIcon !== undefined
                     ? { projectIcon: payload.projectIcon }
+                    : {}),
+                  ...(payload.resourceLocks !== undefined
+                    ? { resourceLocks: payload.resourceLocks }
                     : {}),
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
                   ...(payload.disabledInheritedScriptIds !== undefined

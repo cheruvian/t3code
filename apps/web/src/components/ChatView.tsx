@@ -1,3 +1,4 @@
+import { ThreadResources } from "./ThreadResources";
 import { projectEnvironment } from "../state/projects";
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
@@ -350,7 +351,7 @@ import {
   serverEnvironment,
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
-import { threadEnvironment, useEnvironmentThread } from "../state/threads";
+import { environmentThreadShells, threadEnvironment, useEnvironmentThread } from "../state/threads";
 import {
   requestOlderThreadTurns,
   threadHasOlderTurns,
@@ -2162,6 +2163,7 @@ export default function ChatView(props: ChatViewProps) {
     [activeThread?.environmentId, activeThread?.projectId],
   );
   const activeProject = useProject(activeProjectRef);
+  const requestResource = useAtomCommand(projectEnvironment.resource);
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   // Environment settings with the active project's overrides applied.
   const activeProjectSettings = useMemo(
@@ -4252,6 +4254,43 @@ export default function ChatView(props: ChatViewProps) {
       },
     ) => {
       if (!activeThreadId || !activeProject || !activeThread) return;
+      if (script.resource) {
+        if (!isServerThread) return;
+        const lock = activeProject.resourceLocks?.find((entry) => entry.script.id === script.id);
+        const takingOver = lock !== undefined && lock.threadId !== activeThread.id;
+        if (takingOver) {
+          const owner = appAtomRegistry.get(
+            environmentThreadShells.threadShellAtom({
+              environmentId: activeProject.environmentId,
+              threadId: lock.threadId,
+            }),
+          );
+          const confirmed = await readLocalApi()?.dialogs.confirm(
+            `Taking over resource from ${owner?.title ?? lock.threadId}.`,
+            { variant: "destructive" },
+          );
+          if (!confirmed) return;
+        }
+        const result = await requestResource({
+          environmentId: activeProject.environmentId,
+          input: {
+            projectId: activeProject.id,
+            threadId: activeThread.id,
+            script,
+            action: takingOver ? "takeover" : lock ? "release" : "checkout",
+            ...(takingOver ? { expectedOperationId: lock.operationId } : {}),
+          },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          setThreadError(
+            activeThread.id,
+            error instanceof Error ? error.message : "Resource action failed.",
+          );
+        }
+        return;
+      }
+
       if (options?.rememberAsLastInvoked !== false) {
         setLastInvokedScriptByProjectId((current) => {
           if (current[activeProject.id] === script.id) return current;
@@ -4340,6 +4379,8 @@ export default function ChatView(props: ChatViewProps) {
       }
     },
     [
+      requestResource,
+      isServerThread,
       activeProject,
       activeThread,
       activeThreadId,
@@ -9843,6 +9884,13 @@ export default function ChatView(props: ChatViewProps) {
           "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
           rightPanelMaximized ? "w-0 flex-none" : "flex-1",
         )}
+        style={
+          activeProject?.resourceLocks?.some((lock) => lock.threadId === activeThreadId)
+            ? {
+                borderLeft: `3px solid ${activeProject.resourceLocks.find((lock) => lock.threadId === activeThreadId)?.script.resource?.color ?? "#3b82f6"}`,
+              }
+            : undefined
+        }
         data-chat-column-maximized-away={rightPanelMaximized ? "true" : "false"}
       >
         {/* Top bar */}
@@ -9895,6 +9943,9 @@ export default function ChatView(props: ChatViewProps) {
           />
         </WorkspacePageHeader>
 
+        {activeProject && activeThreadId && (
+          <ThreadResources project={activeProject} threadId={activeThreadId} />
+        )}
         {/* Main content area with optional plan sidebar */}
         <div className="flex min-h-0 min-w-0 flex-1">
           {/* Chat column */}

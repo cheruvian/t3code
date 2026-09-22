@@ -1,3 +1,8 @@
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import { AppText } from "../../components/AppText";
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
 import { enqueueThreadOutboxMessage } from "../../state/thread-outbox";
 import {
@@ -41,7 +46,7 @@ import {
   resolveInheritedProjectScripts,
 } from "@t3tools/shared/projectScripts";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
-import { Alert, Platform, ScrollView, View } from "react-native";
+import { Alert, Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMobileGitStatus } from "../../state/queries";
 import { useWorkspaceState } from "../../state/workspace";
@@ -84,7 +89,8 @@ import { useSelectedThreadGitState } from "../../state/use-selected-thread-git-s
 import { useSelectedThreadRequests } from "../../state/use-selected-thread-requests";
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
 import { useThreadComposerState } from "../../state/use-thread-composer-state";
-import { threadEnvironment } from "../../state/threads";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { serverEnvironment } from "../../state/server";
 import { projectEnvironment } from "../../state/projects";
 import { projectThreadContentPresentation } from "./threadContentPresentation";
@@ -400,6 +406,7 @@ function ThreadRouteContent(
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
+  const requestResource = useAtomCommand(projectEnvironment.resource, "resource action");
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
   const navigation = useNavigation();
   const isFocused = useIsFocused();
@@ -761,6 +768,51 @@ function ThreadRouteContent(
         return;
       }
 
+      if (script.resource) {
+        const lock = selectedThreadProject.resourceLocks?.find(
+          (entry) => entry.script.id === script.id,
+        );
+        const takingOver = lock !== undefined && lock.threadId !== selectedThread.id;
+        if (takingOver) {
+          const owner = appAtomRegistry.get(
+            environmentThreadShells.threadShellAtom({
+              environmentId: selectedThread.environmentId,
+              threadId: lock.threadId,
+            }),
+          );
+          const confirmed = await new Promise<boolean>((resolve) => {
+            Alert.alert(
+              "Take over resource",
+              `Taking over resource from ${owner?.title ?? lock.threadId}.`,
+              [
+                { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+                { text: "Take over", style: "destructive", onPress: () => resolve(true) },
+              ],
+              { cancelable: true, onDismiss: () => resolve(false) },
+            );
+          });
+          if (!confirmed) return;
+        }
+        const result = await requestResource({
+          environmentId: selectedThread.environmentId,
+          input: {
+            projectId: selectedThreadProject.id,
+            threadId: selectedThread.id,
+            script,
+            action: takingOver ? "takeover" : lock ? "release" : "checkout",
+            ...(takingOver ? { expectedOperationId: lock.operationId } : {}),
+          },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          Alert.alert(
+            "Resource action failed",
+            error instanceof Error ? error.message : "Try again.",
+          );
+        }
+        return;
+      }
+
       const targetTerminalId = resolveProjectScriptTerminalId({
         existingTerminalIds: terminalMenuSessions.map((session) => session.terminalId),
         hasRunningTerminal: terminalMenuSessions.some(
@@ -806,6 +858,7 @@ function ThreadRouteContent(
       });
     },
     [
+      requestResource,
       navigation,
       selectedThread,
       selectedThreadDetailWorktreePath,
@@ -833,6 +886,7 @@ function ThreadRouteContent(
     canOpenTerminal: Boolean(selectedThreadProject?.workspaceRoot),
     canOpenFiles: Boolean(selectedThreadProject?.workspaceRoot),
     projectScripts,
+    resourceLocks: selectedThreadProject?.resourceLocks ?? [],
     terminalSessions: terminalMenuSessions,
     showDirectFileControl: layout.usesSplitView,
     onOpenTerminal: handleOpenTerminal,
@@ -1018,6 +1072,47 @@ function ThreadRouteContent(
             : undefined
         }
       >
+        {selectedThread &&
+          selectedThreadProject?.resourceLocks
+            ?.filter((lock) => lock.threadId === selectedThread.id)
+            .map((lock) => (
+              <View
+                key={lock.script.id}
+                style={{ borderLeftWidth: 3, borderColor: lock.script.resource?.color }}
+                className="flex-row flex-wrap items-center gap-3 px-4 py-2"
+              >
+                <AppText className="text-xs">
+                  {lock.script.name} · {lock.phase === "held" ? "Checked out" : lock.phase}
+                </AppText>
+                {lock.error && <AppText className="text-xs">{lock.error}</AppText>}
+                {(lock.phase === "held" || lock.phase === "failed") && (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => void handleRunProjectScript(lock.script)}
+                  >
+                    <AppText className="text-xs">Release</AppText>
+                  </Pressable>
+                )}
+                {lock.phase === "failed" && (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() =>
+                      void requestResource({
+                        environmentId: selectedThread.environmentId,
+                        input: {
+                          projectId: selectedThreadProject.id,
+                          threadId: selectedThread.id,
+                          script: lock.script,
+                          action: "force-release",
+                        },
+                      })
+                    }
+                  >
+                    <AppText className="text-xs">Force release</AppText>
+                  </Pressable>
+                )}
+              </View>
+            ))}
         <ThreadDetailScreen
           selectedThread={selectedThreadWithDraftSettings ?? selectedThread}
           contentPresentation={contentPresentation}

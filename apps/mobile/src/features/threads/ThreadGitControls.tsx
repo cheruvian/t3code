@@ -1,3 +1,4 @@
+import type { ProjectResourceLock } from "@t3tools/contracts";
 import { createNativeHeaderMenu } from "../../components/nativeHeaderMenu.ios";
 import type { ScreenHeaderMenu } from "../../components/ScreenHeader.types";
 import {
@@ -76,6 +77,7 @@ type ThreadGitControlsProps = ThreadGitMenuProps & {
   };
   readonly canOpenTerminal: boolean;
   readonly canOpenFiles: boolean;
+  readonly resourceLocks?: readonly ProjectResourceLock[];
   readonly projectScripts: ReadonlyArray<ProjectScript>;
   readonly terminalSessions: ReadonlyArray<TerminalMenuSession>;
   readonly showActionControls?: boolean;
@@ -84,6 +86,16 @@ type ThreadGitControlsProps = ThreadGitMenuProps & {
   readonly onOpenNewTerminal: () => void;
   readonly onRunProjectScript: (script: ProjectScript) => Promise<void>;
 };
+
+function resourceScriptLabel(script: ProjectScript, props: ThreadGitControlsProps) {
+  if (!script.resource) return projectScriptMenuLabel(script);
+  const lock = props.resourceLocks?.find((entry) => entry.script.id === script.id);
+  if (!lock) return `Check out ${script.name}`;
+  if (lock.threadId !== props.threadId) return `Take over ${script.name}`;
+  return lock.phase === "held" || lock.phase === "failed"
+    ? `Release ${script.name}`
+    : `${script.name} · ${lock.phase}`;
+}
 
 function useThreadGitControlModel(props: ThreadGitMenuProps) {
   const navigation = useNavigation();
@@ -244,7 +256,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
             ...props.projectScripts.map((script) => ({
               description: script.command,
               icon: { name: projectScriptMenuIcon(script.icon), type: "sfSymbol" as const },
-              label: projectScriptMenuLabel(script),
+              label: resourceScriptLabel(script, props),
               onPress: () => void props.onRunProjectScript(script),
               type: "action" as const,
             })),
@@ -367,6 +379,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
       props.onOpenTerminal,
       props.onRunProjectScript,
       props.projectScripts,
+      props.resourceLocks,
       props.terminalSessions,
     ],
   );
@@ -422,7 +435,7 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
                 subtitle={script.command}
               >
                 <NativeHeaderToolbar.Label>
-                  {projectScriptMenuLabel(script)}
+                  {resourceScriptLabel(script, props)}
                 </NativeHeaderToolbar.Label>
               </NativeHeaderToolbar.MenuAction>
             ))

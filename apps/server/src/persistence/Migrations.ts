@@ -76,6 +76,7 @@ import Migration0054 from "./Migrations/054_ProjectionThreadsActiveOrderKey.ts";
 import Migration0056 from "./Migrations/056_ProjectionThreadMessageContext.ts";
 import Migration0055 from "./Migrations/055_ProjectionThreadPullRequests.ts";
 import Migration0057 from "./Migrations/057_ProjectionThreadTitleState.ts";
+import Migration0059 from "./Migrations/059_ProjectResourceLocks.ts";
 import Migration0058 from "./Migrations/058_PullRequestFilesViewed.ts";
 
 /**
@@ -147,6 +148,7 @@ export const migrationEntries = [
   [56, "ProjectionThreadMessageContext", Migration0056],
   [57, "ProjectionThreadTitleState", Migration0057],
   [58, "PullRequestFilesViewed", Migration0058],
+  [59, "ProjectResourceLocks", Migration0059],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

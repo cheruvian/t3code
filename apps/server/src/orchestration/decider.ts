@@ -328,7 +328,113 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "project.resource.request": {
+      const project = yield* requireProject({ readModel, command, projectId: command.projectId });
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const locks = project.resourceLocks ?? [];
+      const current = locks.find((lock) => lock.script.id === command.script.id);
+      const reject = (detail: string) =>
+        new OrchestrationCommandInvariantError({ commandType: command.type, detail });
+      if (
+        project.deletedAt !== null ||
+        thread.deletedAt !== null ||
+        thread.projectId !== project.id
+      ) {
+        return yield* reject("Resource actions require an active thread in this project.");
+      }
+      if (!command.script.resource) return yield* reject("This action is not a resource.");
+      if (
+        command.action === "takeover" &&
+        (!current ||
+          current.threadId === thread.id ||
+          current.operationId !== command.expectedOperationId)
+      ) {
+        return yield* reject("Resource ownership changed. Confirm takeover again.");
+      }
+      if (
+        current &&
+        current.threadId !== thread.id &&
+        command.action !== "force-release" &&
+        command.action !== "takeover"
+      ) {
+        return yield* reject(`Resource is held by thread '${current.threadId}'.`);
+      }
+      if (current && (current.phase === "checkout" || current.phase === "release")) {
+        return yield* reject("Resource hooks are still running.");
+      }
+      if (command.action === "checkout" && current && current.phase !== "failed") {
+        return yield* reject("This thread already holds the resource.");
+      }
+      if (command.action !== "checkout" && !current)
+        return yield* reject("Resource is already available.");
+      if (
+        command.action !== "force-release" &&
+        (thread.session?.status === "running" ||
+          thread.session?.status === "starting" ||
+          hasQueuedTurnStartForThread(thread, yield* nowIso) ||
+          locks.some(
+            (lock) =>
+              lock.threadId === thread.id &&
+              (lock.phase === "checkout" || lock.phase === "release"),
+          ))
+      )
+        return yield* reject(
+          "Wait for this thread's current work to finish before running resource hooks.",
+        );
+      const next = locks.filter((lock) => lock.script.id !== command.script.id);
+      if (command.action !== "force-release")
+        next.push({
+          script: current?.script ?? command.script,
+          threadId: thread.id,
+          operationId: command.commandId,
+          phase: command.action === "takeover" ? "checkout" : command.action,
+        });
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "project",
+          aggregateId: project.id,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "project.meta-updated",
+        payload: { projectId: project.id, resourceLocks: next, updatedAt: occurredAt },
+      };
+    }
+
+    case "project.resource.complete": {
+      const project = yield* requireProject({ readModel, command, projectId: command.projectId });
+      const locks = project.resourceLocks ?? [];
+      const current = locks.find((lock) => lock.operationId === command.operationId);
+      if (!current || (current.phase !== "checkout" && current.phase !== "release")) return [];
+      const next = locks.filter((lock) => lock !== current);
+      if (command.error !== undefined)
+        next.push({ ...current, phase: "failed", error: command.error });
+      else if (current.phase === "checkout") next.push({ ...current, phase: "held" });
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "project",
+          aggregateId: project.id,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "project.meta-updated",
+        payload: { projectId: project.id, resourceLocks: next, updatedAt: occurredAt },
+      };
+    }
+
     case "project.delete": {
+      if (
+        readModel.projects.find((project) => project.id === command.projectId)?.resourceLocks
+          ?.length
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Release the project's resources before deleting it.",
+        });
+      }
+
       yield* requireProject({
         readModel,
         command,
@@ -415,6 +521,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.delete": {
+      if (
+        readModel.projects.some((project) =>
+          project.resourceLocks?.some((lock) => lock.threadId === command.threadId),
+        )
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Release this thread's resources before removing it.",
+        });
+      }
+
       yield* requireThread({
         readModel,
         command,
@@ -437,6 +554,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.archive": {
+      if (
+        readModel.projects.some((project) =>
+          project.resourceLocks?.some((lock) => lock.threadId === command.threadId),
+        )
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Release this thread's resources before removing it.",
+        });
+      }
+
       yield* requireThreadNotArchived({
         readModel,
         command,
@@ -1370,6 +1498,23 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.start": {
+      const pendingResource = readModel.projects
+        .flatMap((project) => project.resourceLocks ?? [])
+        .find(
+          (lock) =>
+            lock.threadId === command.threadId &&
+            (lock.phase === "checkout" || lock.phase === "release"),
+        );
+      if (
+        pendingResource &&
+        command.message.messageId !== `resource-${pendingResource.operationId}`
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Wait for the resource hooks to finish.",
+        });
+      }
+
       if (isImportedAgentSessionMessageId(command.message.messageId)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,

@@ -419,10 +419,19 @@ export const ProjectScriptIcon = Schema.Literals([
 ]);
 export type ProjectScriptIcon = typeof ProjectScriptIcon.Type;
 
+export const ResourceActionHooks = Schema.Struct({
+  color: Schema.String.check(Schema.isPattern(/^#[0-9a-fA-F]{6}$/)),
+  checkoutPrompt: Schema.String,
+  releaseCommand: Schema.String,
+  releasePrompt: Schema.String,
+});
+export type ResourceActionHooks = typeof ResourceActionHooks.Type;
+
 export const ProjectScript = Schema.Struct({
   id: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
-  command: TrimmedNonEmptyString,
+  command: TrimmedString,
+  resource: Schema.optional(ResourceActionHooks),
   icon: ProjectScriptIcon,
   runOnWorktreeCreate: Schema.Boolean,
   /**
@@ -442,8 +451,24 @@ export const ProjectScript = Schema.Struct({
    * the moment this script starts. Ignored without `previewUrl` or on web.
    */
   autoOpenPreview: Schema.optional(Schema.Boolean),
-});
+}).check(
+  Schema.makeFilter((script) =>
+    script.resource
+      ? !script.runOnWorktreeCreate || "Resource actions cannot run on worktree creation."
+      : script.command.trim().length > 0 || "Command is required.",
+  ),
+);
 export type ProjectScript = typeof ProjectScript.Type;
+
+/** The action snapshot keeps cleanup available even if its definition is edited or removed. */
+export const ProjectResourceLock = Schema.Struct({
+  script: ProjectScript,
+  threadId: ThreadId,
+  operationId: CommandId,
+  phase: Schema.Literals(["checkout", "held", "release", "failed"]),
+  error: Schema.optional(Schema.String),
+});
+export type ProjectResourceLock = typeof ProjectResourceLock.Type;
 
 export const ProjectFaviconPath = TrimmedNonEmptyString.check(
   Schema.isMaxLength(1024),
@@ -553,6 +578,7 @@ export const OrchestrationProject = Schema.Struct({
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
+  resourceLocks: Schema.optional(Schema.Array(ProjectResourceLock)),
   scripts: Schema.Array(ProjectScript),
   // Optional on the wire so cached snapshots from older servers still decode.
   disabledInheritedScriptIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
@@ -873,6 +899,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
+  resourceLocks: Schema.optional(Schema.Array(ProjectResourceLock)),
   scripts: Schema.Array(ProjectScript),
   disabledInheritedScriptIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   createdAt: IsoDateTime,
@@ -1106,6 +1133,24 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   disabledInheritedScriptIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+});
+
+const ProjectResourceRequestCommand = Schema.Struct({
+  type: Schema.Literal("project.resource.request"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  threadId: ThreadId,
+  script: ProjectScript,
+  action: Schema.Literals(["checkout", "takeover", "release", "force-release"]),
+  expectedOperationId: Schema.optional(CommandId),
+});
+
+const ProjectResourceCompleteCommand = Schema.Struct({
+  type: Schema.Literal("project.resource.complete"),
+  commandId: CommandId,
+  projectId: ProjectId,
+  operationId: CommandId,
+  error: Schema.optional(Schema.String),
 });
 
 const ProjectDeleteCommand = Schema.Struct({
@@ -1420,6 +1465,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
+  ProjectResourceRequestCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
@@ -1453,6 +1499,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
+  ProjectResourceRequestCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
@@ -1649,6 +1696,7 @@ const ThreadPullRequestLinkSyncCommand = Schema.Struct({
 });
 
 const InternalOrchestrationCommand = Schema.Union([
+  ProjectResourceCompleteCommand,
   ThreadAutoSettleCommand,
   ThreadPullRequestSyncCommand,
   ThreadPullRequestLinkSyncCommand,
@@ -1726,6 +1774,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   // Optional so persisted events from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
+  resourceLocks: Schema.optional(Schema.Array(ProjectResourceLock)),
   scripts: Schema.Array(ProjectScript),
   disabledInheritedScriptIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   createdAt: IsoDateTime,
@@ -1742,6 +1791,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   autoPull: Schema.optional(Schema.Boolean),
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
+  resourceLocks: Schema.optional(Schema.Array(ProjectResourceLock)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   disabledInheritedScriptIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   updatedAt: IsoDateTime,

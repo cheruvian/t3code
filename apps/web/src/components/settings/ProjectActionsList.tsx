@@ -33,6 +33,14 @@ export function ProjectActionsList({
           <span className="flex min-w-0 items-center gap-2">
             <ScriptIcon icon={script.icon} className="size-4 shrink-0 text-muted-foreground" />
             <span className="min-w-0 truncate">{script.name}</span>
+            {script.resource && (
+              <span
+                className="shrink-0 rounded-sm border px-1.5 py-px text-[11px] font-normal"
+                style={{ borderColor: script.resource.color }}
+              >
+                resource
+              </span>
+            )}
             {script.runOnWorktreeCreate ? (
               <span className="shrink-0 rounded-sm border border-border/60 px-1.5 py-px text-[11px] font-normal text-muted-foreground">
                 setup

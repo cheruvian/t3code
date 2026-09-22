@@ -377,3 +377,14 @@ export const stopThreadSession: (input: StopThreadSessionInput) => CommandEffect
     createdAt: metadata.createdAt,
   });
 });
+
+export type RequestProjectResourceInput = CommandInput<"project.resource.request">;
+export const requestProjectResource = Effect.fn("EnvironmentCommands.requestProjectResource")(
+  function* (input: RequestProjectResourceInput) {
+    return yield* dispatch({
+      ...input,
+      type: "project.resource.request",
+      commandId: yield* commandId(input),
+    });
+  },
+);

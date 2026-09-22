@@ -392,6 +392,9 @@ export const ChatHeader = memo(function ChatHeader({
             onRequestMenuClose={() => setActionsOpen(false)}
             presentation={actionsCollapsed ? "menu" : "toolbar"}
             scripts={resolvedProjectScripts}
+            resourceActionsEnabled={isServerThread}
+            resourceLocks={activeProject?.resourceLocks ?? []}
+            threadId={activeThreadId}
             {...(activeProjectScriptIds ? { editableScriptIds: activeProjectScriptIds } : {})}
             inheritedScriptIds={inheritedScriptIds}
             onSetInheritedDisabled={onSetInheritedProjectScriptDisabled}

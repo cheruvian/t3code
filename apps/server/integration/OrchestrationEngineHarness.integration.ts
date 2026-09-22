@@ -1,3 +1,4 @@
+import { ResourceActionReactor } from "../src/orchestration/ResourceActionReactor.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
 
@@ -382,6 +383,9 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(VcsProcess.layer),
     );
     const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
+      Layer.provide(
+        Layer.succeed(ResourceActionReactor, { start: () => Effect.void, drain: Effect.void }),
+      ),
       Layer.provideMerge(
         Layer.succeed(StorageCleanup.StorageCleanup, {
           start: () => Effect.void,

@@ -1,5 +1,6 @@
 import {
   ProjectId,
+  CommandId,
   ThreadId,
   TurnId,
   ProviderInstanceId,
@@ -36,6 +37,51 @@ const projectionRepositoriesLayer = it.layer(
 );
 
 projectionRepositoriesLayer("Projection repositories", (it) => {
+  it.effect("round-trips resource ownership and the cleanup snapshot", () =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectionProjectRepository;
+      const resourceLocks = [
+        {
+          script: {
+            id: "device",
+            name: "Device",
+            command: "",
+            icon: "configure" as const,
+            runOnWorktreeCreate: false,
+            resource: {
+              color: "#3b82f6",
+              checkoutPrompt: "Prepare",
+              releaseCommand: "cleanup",
+              releasePrompt: "Finish",
+            },
+          },
+          threadId: ThreadId.make("owner"),
+          operationId: CommandId.make("checkout"),
+          phase: "held" as const,
+        },
+      ];
+      const projectId = ProjectId.make("resource-project");
+      yield* projects.upsert({
+        projectId,
+        title: "Resources",
+        workspaceRoot: "/resources",
+        defaultModelSelection: null,
+        defaultThreadEnvMode: null,
+        autoPull: false,
+        scripts: [],
+        resourceLocks,
+        disabledInheritedScriptIds: [],
+        createdAt: "2026-09-21T00:00:00.000Z",
+        updatedAt: "2026-09-21T00:00:00.000Z",
+        deletedAt: null,
+      });
+      const loaded = Option.getOrThrow(yield* projects.getById({ projectId }));
+      assert.deepEqual(loaded.resourceLocks, resourceLocks);
+      yield* projects.upsert({ ...loaded, resourceLocks: [] });
+      assert.deepEqual(Option.getOrThrow(yield* projects.getById({ projectId })).resourceLocks, []);
+    }),
+  );
+
   it.effect("selects the latest-turn plan before checking implementation status", () =>
     Effect.gen(function* () {
       const plans = yield* ProjectionThreadProposedPlanRepository;

@@ -1,4 +1,8 @@
 import {
+  resolveProjectScripts,
+  resolveInheritedProjectScripts,
+} from "@t3tools/shared/projectScripts";
+import {
   sameUsageLimitCommandCoverage,
   withUsageLimitsCommands,
 } from "@t3tools/shared/usageLimits";
@@ -1765,7 +1769,38 @@ const makeWsRpcLayer = (
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
               yield* ProjectCloneTracker.rejectCommandsDuringClone(projectCloneTracker, command);
-              const normalizedCommand = yield* normalizeDispatchCommand(command);
+              let normalizedCommand = yield* normalizeDispatchCommand(command);
+              if (
+                normalizedCommand.type === "project.resource.request" &&
+                (normalizedCommand.action === "checkout" || normalizedCommand.action === "takeover")
+              ) {
+                const resourceId = normalizedCommand.script.id;
+                const project = yield* projectionSnapshotQuery
+                  .getProjectShellById(normalizedCommand.projectId)
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      toDispatchCommandError(cause, "Failed to read project resources"),
+                    ),
+                  );
+                const settings = yield* serverSettings.getSettings.pipe(
+                  Effect.mapError((cause) =>
+                    toDispatchCommandError(cause, "Failed to read project actions"),
+                  ),
+                );
+                const script = Option.isSome(project)
+                  ? resolveInheritedProjectScripts(
+                      resolveProjectScripts(settings, project.value),
+                      [],
+                      settings.globalScripts,
+                      project.value.disabledInheritedScriptIds ?? [],
+                    ).find((entry) => entry.id === resourceId)
+                  : undefined;
+                if (!script?.resource)
+                  return yield* new OrchestrationDispatchCommandError({
+                    message: "Resource action no longer exists in this project.",
+                  });
+                normalizedCommand = { ...normalizedCommand, script };
+              }
               // Archive removes the thread from the client, so this transport
               // closes its session and terminals after the command lands.
               // Settlement cleanup is driven by thread.settled events in the
