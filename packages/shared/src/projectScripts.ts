@@ -91,6 +91,7 @@ export function fileScriptToProjectScript(fileScript: T3ProjectFileScript): Proj
     id: `file:${fileScript.name.trim().toLowerCase()}`,
     name: fileScript.name,
     command: fileScript.command,
+    ...(fileScript.resource ? { resource: fileScript.resource } : {}),
     icon: fileScript.icon ?? "play",
     runOnWorktreeCreate: fileScript.runOnWorktreeCreate ?? false,
     ...(fileScript.previewUrl === undefined ? {} : { previewUrl: fileScript.previewUrl }),

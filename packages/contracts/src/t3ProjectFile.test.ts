@@ -61,3 +61,19 @@ describe("T3ProjectFile", () => {
     expect(() => decode({ defaultThreadEnvMode: "remote" })).toThrow();
   });
 });
+
+it("preserves resource hooks, allows prompt-only checkout, and rejects automatic resource setup", () => {
+  const resource = {
+    color: "#3b82f6",
+    checkoutPrompt: "Prepare",
+    releaseCommand: "",
+    releasePrompt: "",
+  };
+  const action = { name: "Sandbox", command: "", resource };
+  expect(decode({ scripts: [action] }).scripts?.[0]).toEqual(action);
+  expect(() => decode({ scripts: [{ ...action, runOnWorktreeCreate: true }] })).toThrow();
+  expect(() => decode({ scripts: [{ name: "Empty", command: " " }] })).toThrow();
+  expect(() =>
+    decode({ scripts: [{ ...action, resource: { ...resource, color: "invalid" } }] }),
+  ).toThrow();
+});

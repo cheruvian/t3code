@@ -1,3 +1,5 @@
+import { T3_PROJECT_FILE_NAME } from "@t3tools/contracts";
+import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import {
   resolveProjectScripts,
   resolveInheritedProjectScripts,
@@ -1787,10 +1789,23 @@ const makeWsRpcLayer = (
                     toDispatchCommandError(cause, "Failed to read project actions"),
                   ),
                 );
+                const file = Option.isSome(project)
+                  ? yield* workspaceFileSystem
+                      .readFile({
+                        cwd: project.value.workspaceRoot,
+                        relativePath: T3_PROJECT_FILE_NAME,
+                      })
+                      .pipe(
+                        Effect.map((result) =>
+                          result.truncated ? null : parseT3ProjectFile(result.contents),
+                        ),
+                        Effect.catch(() => Effect.succeed(null)),
+                      )
+                  : null;
                 const script = Option.isSome(project)
                   ? resolveInheritedProjectScripts(
                       resolveProjectScripts(settings, project.value),
-                      [],
+                      file?.scripts ?? [],
                       settings.globalScripts,
                       project.value.disabledInheritedScriptIds ?? [],
                     ).find((entry) => entry.id === resourceId)

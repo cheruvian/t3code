@@ -2,7 +2,8 @@ import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import { ThreadEnvMode } from "./environment.ts";
-import { ProjectScriptIcon } from "./orchestration.ts";
+import { TrimmedString } from "./baseSchemas.ts";
+import { ProjectScriptIcon, ResourceActionHooks } from "./orchestration.ts";
 
 /** File name of the checked-in T3 project file, resolved at the workspace root. */
 export const T3_PROJECT_FILE_NAME = "t3.json";
@@ -28,9 +29,10 @@ export const T3ProjectFileScript = Schema.Struct({
   name: trimmedNonEmpty({
     description: "Display name for the script, shown in the T3 Code scripts menu.",
   }),
-  command: trimmedNonEmpty({
-    description: "Shell command executed in a T3 Code terminal at the project root.",
+  command: TrimmedString.annotate({
+    description: "Shell command executed in the checkout. May be empty for a resource action.",
   }),
+  resource: Schema.optionalKey(ResourceActionHooks),
   icon: Schema.optionalKey(
     ProjectScriptIcon.annotate({
       description: 'Icon shown next to the script in the scripts menu. Defaults to "play".',
@@ -60,9 +62,17 @@ export const T3ProjectFileScript = Schema.Struct({
         "When true, automatically open the preview panel at `previewUrl` the moment the script starts.",
     }),
   ),
-}).annotate({
-  description: "A project script that team members can import into T3 Code.",
-});
+})
+  .check(
+    Schema.makeFilter((script) =>
+      script.resource
+        ? !script.runOnWorktreeCreate || "Resource actions cannot run on worktree creation."
+        : script.command.trim().length > 0 || "Command is required.",
+    ),
+  )
+  .annotate({
+    description: "A project action shared through t3.json.",
+  });
 export type T3ProjectFileScript = typeof T3ProjectFileScript.Type;
 
 export const T3ProjectFile = Schema.Struct({

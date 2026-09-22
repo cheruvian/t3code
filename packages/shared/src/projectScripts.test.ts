@@ -89,3 +89,28 @@ describe("resolveInheritedProjectScripts", () => {
     });
   });
 });
+
+it("makes file resource hooks available to checkout without importing", () => {
+  const resource = {
+    color: "#3b82f6",
+    checkoutPrompt: "Prepare",
+    releaseCommand: "cleanup",
+    releasePrompt: "Finish",
+  };
+  const actions = resolveInheritedProjectScripts(
+    [],
+    [{ name: "Sandbox", command: "deploy", resource }],
+    [],
+    [],
+  );
+  expect(actions).toEqual([
+    {
+      id: "file:sandbox",
+      name: "Sandbox",
+      command: "deploy",
+      resource,
+      icon: "play",
+      runOnWorktreeCreate: false,
+    },
+  ]);
+});

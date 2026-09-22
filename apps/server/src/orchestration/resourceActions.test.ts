@@ -1,3 +1,5 @@
+import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
+import { resolveInheritedProjectScripts } from "@t3tools/shared/projectScripts";
 import * as Crypto from "effect/Crypto";
 import {
   CommandId,
@@ -181,6 +183,34 @@ const harness = Effect.gen(function* () {
 });
 
 it.layer(NodeServices.layer)("resource actions", (it) => {
+  it.effect("checks out and releases an inherited file resource", () =>
+    Effect.gen(function* () {
+      const h = yield* harness;
+      const file = parseT3ProjectFile(`{
+        "scripts": [{
+          "name": "File device", "command": "checkout-device",
+          "resource": { "color": "#3b82f6", "checkoutPrompt": "", "releaseCommand": "release-device", "releasePrompt": "" }
+        }]
+      }`);
+      const action = resolveInheritedProjectScripts([], file?.scripts ?? [], [], [])[0]!;
+      yield* h.reactor.start();
+      yield* h.request("checkout", owner, action);
+      expect((yield* Queue.take(h.scripts)).args).toEqual(["-lc", "checkout-device"]);
+      yield* Queue.take(h.completions);
+      yield* h.reactor.drain;
+      expect(h.locks()[0]).toMatchObject({
+        threadId: owner,
+        phase: "held",
+        script: { id: "file:file device" },
+      });
+      yield* h.request("release", owner, action);
+      expect((yield* Queue.take(h.scripts)).args).toEqual(["-lc", "release-device"]);
+      yield* Queue.take(h.completions);
+      yield* h.reactor.drain;
+      expect(h.locks()).toEqual([]);
+    }),
+  );
+
   it.effect(
     "holds exclusive ownership, preserves cleanup after edits, and rejects stale completions",
     () =>

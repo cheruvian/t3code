@@ -143,6 +143,7 @@ export function ProjectActionsSettings() {
       const payload: NewProjectScriptInput = {
         name: fileScript.name,
         command: fileScript.command,
+        ...(fileScript.resource ? { resource: fileScript.resource } : {}),
         icon: fileScript.icon ?? "play",
         runOnWorktreeCreate: fileScript.runOnWorktreeCreate ?? false,
         waitForSetup: fileScript.runOnWorktreeCreate === true && fileScript.async === false,

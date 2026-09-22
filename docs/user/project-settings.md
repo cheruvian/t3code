@@ -125,6 +125,31 @@ Choose a color and optional checkout and release scripts and agent prompts.
 Scripts run on the project's server in the thread's workspace, followed by the
 prompt in that thread.
 
+To share a resource action through Git, add its `resource` hooks to a script in
+`t3.json`. Use empty strings for hooks you don't need:
+
+```json
+{
+  "scripts": [
+    {
+      "name": "SANDBOX",
+      "command": "bash scripts/deploy-slownet.sh",
+      "resource": {
+        "color": "#3b82f6",
+        "checkoutPrompt": "",
+        "releaseCommand": "",
+        "releasePrompt": ""
+      }
+    }
+  ]
+}
+```
+
+The action appears when each environment pulls the file; no import is required.
+A saved project action with the same name or command takes precedence, so remove
+that override to use the file's definition. Definitions are shared through Git,
+but reservations remain local to each project on each environment.
+
 Run the action from a thread to check out the resource. Only one thread in that
 project on that server can hold it at a time. The thread shows a colored indicator
 and a Release control; mobile can check out and release configured resources too.
