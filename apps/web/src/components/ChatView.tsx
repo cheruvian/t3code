@@ -1,4 +1,5 @@
 import { ThreadResources } from "./ThreadResources";
+import { groupedResourceLocks } from "@t3tools/client-runtime/state/resource-lock-grouping";
 import { projectEnvironment } from "../state/projects";
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
@@ -2377,6 +2378,38 @@ export default function ChatView(props: ChatViewProps) {
   // drive the environment picker in BranchToolbar.
   const allProjects = useProjects();
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
+  const activeGroupedResourceLocks = useMemo(
+    () =>
+      activeProject
+        ? groupedResourceLocks({
+            activeProject,
+            projects: allProjects,
+            settings: projectGroupingSettings,
+            primaryEnvironmentId,
+            connectedEnvironmentIds: new Set(
+              environments
+                .filter((candidate) => candidate.connection.phase === "connected")
+                .map((candidate) => candidate.environmentId),
+            ),
+          })
+        : [],
+    [activeProject, allProjects, projectGroupingSettings, primaryEnvironmentId, environments],
+  );
+  const resourceOwnerLabels = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const { project, lock } of activeGroupedResourceLocks) {
+      const owner = appAtomRegistry.get(
+        environmentThreadShells.threadShellAtom({
+          environmentId: project.environmentId,
+          threadId: lock.threadId,
+        }),
+      );
+      const environmentLabel =
+        environmentById.get(project.environmentId)?.label ?? project.environmentId;
+      labels.set(lock.script.id, `${owner?.title ?? lock.threadId} on ${environmentLabel}`);
+    }
+    return labels;
+  }, [activeGroupedResourceLocks, environmentById]);
   useEffect(() => {
     if (!activeThreadRef || !activeProjectRef) return;
     registerFaviconProjectForThread(activeThreadRef, activeProjectRef);
@@ -4256,20 +4289,69 @@ export default function ChatView(props: ChatViewProps) {
       if (!activeThreadId || !activeProject || !activeThread) return;
       if (script.resource) {
         if (!isServerThread) return;
-        const lock = activeProject.resourceLocks?.find((entry) => entry.script.id === script.id);
-        const takingOver = lock !== undefined && lock.threadId !== activeThread.id;
+        const owners = activeGroupedResourceLocks.filter(
+          (entry) => entry.lock.script.id === script.id,
+        );
+        const local = owners.find(
+          (entry) =>
+            entry.project.environmentId === activeProject.environmentId &&
+            entry.project.id === activeProject.id,
+        );
+        const remote = owners.find((entry) => entry !== local);
+        if (owners.length > 1 && local?.lock.threadId !== activeThread.id) {
+          setThreadError(
+            activeThread.id,
+            `Multiple threads hold ${script.name}. Release the conflicting checkouts first.`,
+          );
+          return;
+        }
+        const lock = local?.lock ?? remote?.lock;
+        const takingOver =
+          lock !== undefined &&
+          ((remote !== undefined && !local) || lock.threadId !== activeThread.id);
+        if (lock && (lock.phase === "checkout" || lock.phase === "release")) {
+          setThreadError(activeThread.id, "Resource hooks are still running.");
+          return;
+        }
         if (takingOver) {
+          const ownerProject = local?.project ?? remote?.project;
           const owner = appAtomRegistry.get(
             environmentThreadShells.threadShellAtom({
-              environmentId: activeProject.environmentId,
+              environmentId: ownerProject?.environmentId ?? activeProject.environmentId,
               threadId: lock.threadId,
             }),
           );
+          const environmentLabel =
+            ownerProject && ownerProject.environmentId !== activeProject.environmentId
+              ? ` on ${environmentById.get(ownerProject.environmentId)?.label ?? ownerProject.environmentId}`
+              : "";
           const confirmed = await readLocalApi()?.dialogs.confirm(
-            `Taking over resource from ${owner?.title ?? lock.threadId}.`,
+            `Taking over resource from ${owner?.title ?? lock.threadId}${environmentLabel}.`,
             { variant: "destructive" },
           );
           if (!confirmed) return;
+        }
+        if (remote && !local) {
+          const released = await requestResource({
+            environmentId: remote.project.environmentId,
+            input: {
+              projectId: remote.project.id,
+              threadId: remote.lock.threadId,
+              script: remote.lock.script,
+              action: "force-release",
+              expectedOperationId: remote.lock.operationId,
+            },
+          });
+          if (released._tag === "Failure") {
+            if (!isAtomCommandInterrupted(released)) {
+              const error = squashAtomCommandFailure(released);
+              setThreadError(
+                activeThread.id,
+                error instanceof Error ? error.message : "Could not release the other checkout.",
+              );
+            }
+            return;
+          }
         }
         const result = await requestResource({
           environmentId: activeProject.environmentId,
@@ -4277,8 +4359,8 @@ export default function ChatView(props: ChatViewProps) {
             projectId: activeProject.id,
             threadId: activeThread.id,
             script,
-            action: takingOver ? "takeover" : lock ? "release" : "checkout",
-            ...(takingOver ? { expectedOperationId: lock.operationId } : {}),
+            action: local ? (takingOver ? "takeover" : "release") : "checkout",
+            ...(local && takingOver ? { expectedOperationId: local.lock.operationId } : {}),
           },
         });
         if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
@@ -4380,6 +4462,8 @@ export default function ChatView(props: ChatViewProps) {
     },
     [
       requestResource,
+      activeGroupedResourceLocks,
+      environmentById,
       isServerThread,
       activeProject,
       activeThread,
@@ -9917,6 +10001,8 @@ export default function ChatView(props: ChatViewProps) {
             activeThreadTitle={activeThread.title}
             isServerThread={isServerThread}
             activeProject={activeProject}
+            resourceLocks={activeGroupedResourceLocks}
+            resourceOwnerLabels={resourceOwnerLabels}
             openInCwd={gitCwd}
             activeProjectScripts={activeProjectScripts}
             activeGlobalScripts={settings.globalScripts}

@@ -1,4 +1,5 @@
-import type { ProjectResourceLock, ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@t3tools/contracts";
+import type { GroupedResourceLock } from "@t3tools/client-runtime/state/resource-lock-grouping";
 import type {
   ProjectScript,
   ResolvedKeybindingsConfig,
@@ -43,7 +44,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 export type { NewProjectScriptInput, ProjectScriptActionResult };
 
-const NO_RESOURCE_LOCKS: readonly ProjectResourceLock[] = [];
+const NO_RESOURCE_LOCKS: readonly GroupedResourceLock[] = [];
 const NO_FILE_SCRIPTS: ReadonlyArray<T3ProjectFileScript> = [];
 const NO_INHERITED_SCRIPT_IDS: ReadonlySet<string> = new Set();
 
@@ -58,7 +59,9 @@ export function importableProjectFileScripts(
 
 interface ProjectScriptsControlProps {
   resourceActionsEnabled?: boolean;
-  resourceLocks?: readonly ProjectResourceLock[];
+  resourceLocks?: readonly GroupedResourceLock[];
+  resourceOwnerLabels?: ReadonlyMap<string, string>;
+  environmentId?: string;
   threadId?: ThreadId;
   presentation?: "toolbar" | "menu";
   onRequestMenuClose?: () => void;
@@ -83,6 +86,8 @@ interface ProjectScriptsControlProps {
 export default function ProjectScriptsControl({
   resourceActionsEnabled = true,
   resourceLocks = NO_RESOURCE_LOCKS,
+  resourceOwnerLabels,
+  environmentId,
   threadId,
   presentation = "toolbar",
   onRequestMenuClose,
@@ -108,11 +113,20 @@ export default function ProjectScriptsControl({
   }
   const [editorRequest, setEditorRequest] = useState<ProjectScriptEditorRequest | null>(null);
 
-  const resourceLabel = (script: ProjectScript) => {
+  const resourceLabel = (script: ProjectScript, includeOwner = true) => {
     if (!script.resource) return script.name;
-    const lock = resourceLocks.find((entry) => entry.script.id === script.id);
-    if (!lock) return `Check out ${script.name}`;
-    if (lock.threadId !== threadId) return `Take over ${script.name}`;
+    const owners = resourceLocks.filter((entry) => entry.lock.script.id === script.id);
+    const owner =
+      owners.find(
+        (entry) =>
+          entry.project.environmentId === environmentId && entry.lock.threadId === threadId,
+      ) ?? owners[0];
+    if (!owner) return `Check out ${script.name}`;
+    if (owners.length > 1 && owner.lock.threadId !== threadId)
+      return `${script.name} · Conflicting checkouts`;
+    const lock = owner.lock;
+    if (owner.project.environmentId !== environmentId || lock.threadId !== threadId)
+      return `Take over ${script.name}${includeOwner && resourceOwnerLabels?.get(script.id) ? ` · ${resourceOwnerLabels.get(script.id)}` : ""}`;
     if (lock.phase === "checkout") return `${script.name} · Checking out…`;
     if (lock.phase === "release") return `${script.name} · Releasing…`;
     return `Release ${script.name}`;
@@ -121,7 +135,8 @@ export default function ProjectScriptsControl({
     (Boolean(script.resource) && !resourceActionsEnabled) ||
     resourceLocks.some(
       (lock) =>
-        lock.script.id === script.id && (lock.phase === "checkout" || lock.phase === "release"),
+        lock.lock.script.id === script.id &&
+        (lock.lock.phase === "checkout" || lock.lock.phase === "release"),
     );
 
   const primaryScript = useMemo(() => {
@@ -363,7 +378,7 @@ export default function ProjectScriptsControl({
             >
               <ScriptIcon icon={primaryScript.icon} />
               <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
-                {resourceLabel(primaryScript)}
+                {resourceLabel(primaryScript, false)}
               </span>
             </TooltipTrigger>
             <TooltipPopup side="top">

@@ -7,6 +7,7 @@ import {
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import type { GroupedResourceLock } from "@t3tools/client-runtime/state/resource-lock-grouping";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -62,6 +63,8 @@ interface ChatHeaderProps {
   /** Drafts have no server thread yet, so the title carries no action menu. */
   isServerThread: boolean;
   activeProject: EnvironmentProject | null;
+  resourceLocks: ReadonlyArray<GroupedResourceLock>;
+  resourceOwnerLabels: ReadonlyMap<string, string>;
   openInCwd: string | null;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
   activeGlobalScripts: ReadonlyArray<ProjectScript>;
@@ -135,6 +138,8 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadTitle,
   isServerThread,
   activeProject,
+  resourceLocks,
+  resourceOwnerLabels,
   openInCwd,
   activeProjectScripts,
   activeGlobalScripts,
@@ -393,7 +398,9 @@ export const ChatHeader = memo(function ChatHeader({
             presentation={actionsCollapsed ? "menu" : "toolbar"}
             scripts={resolvedProjectScripts}
             resourceActionsEnabled={isServerThread}
-            resourceLocks={activeProject?.resourceLocks ?? []}
+            resourceLocks={resourceLocks}
+            resourceOwnerLabels={resourceOwnerLabels}
+            environmentId={activeThreadEnvironmentId}
             threadId={activeThreadId}
             {...(activeProjectScriptIds ? { editableScriptIds: activeProjectScriptIds } : {})}
             inheritedScriptIds={inheritedScriptIds}

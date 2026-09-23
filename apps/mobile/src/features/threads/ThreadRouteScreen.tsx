@@ -1,4 +1,8 @@
 import { ResourceActionLogs } from "./ResourceActionLogs";
+import { groupedResourceLocks } from "@t3tools/client-runtime/state/resource-lock-grouping";
+import { useProjects } from "../../state/entities";
+import { useEnvironments } from "../../state/environments";
+import { useMobileProjectGroupingSettings } from "../../state/project-grouping";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -350,6 +354,45 @@ function ThreadRouteContent(
     selectedThreadProject,
     selectedEnvironmentConnection,
   } = useThreadSelection();
+  const projects = useProjects();
+  const { environments } = useEnvironments();
+  const groupingSettings = useMobileProjectGroupingSettings();
+  const groupedLocks = useMemo(
+    () =>
+      selectedThreadProject
+        ? groupedResourceLocks({
+            activeProject: selectedThreadProject,
+            projects,
+            settings: {
+              sidebarProjectGroupingMode: groupingSettings.sidebarProjectGroupingMode,
+              sidebarProjectGroupingOverrides: {},
+            },
+            primaryEnvironmentId: null,
+            connectedEnvironmentIds: new Set(
+              environments
+                .filter((entry) => entry.connection.phase === "connected")
+                .map((entry) => entry.environmentId),
+            ),
+          })
+        : [],
+    [selectedThreadProject, projects, groupingSettings.sidebarProjectGroupingMode, environments],
+  );
+  const resourceOwnerLabels = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const { project, lock } of groupedLocks) {
+      const owner = appAtomRegistry.get(
+        environmentThreadShells.threadShellAtom({
+          environmentId: project.environmentId,
+          threadId: lock.threadId,
+        }),
+      );
+      labels.set(
+        lock.script.id,
+        `${owner?.title ?? lock.threadId} on ${environments.find((entry) => entry.environmentId === project.environmentId)?.label ?? project.environmentId}`,
+      );
+    }
+    return labels;
+  }, [groupedLocks, environments]);
   const selectedServerSettings = useAtomValue(
     serverEnvironment.settingsValueAtom(
       selectedThread?.environmentId ?? EnvironmentId.make("unavailable"),
@@ -770,21 +813,44 @@ function ThreadRouteContent(
       }
 
       if (script.resource) {
-        const lock = selectedThreadProject.resourceLocks?.find(
-          (entry) => entry.script.id === script.id,
+        const owners = groupedLocks.filter((entry) => entry.lock.script.id === script.id);
+        const local = owners.find(
+          (entry) =>
+            entry.project.environmentId === selectedThreadProject.environmentId &&
+            entry.project.id === selectedThreadProject.id,
         );
-        const takingOver = lock !== undefined && lock.threadId !== selectedThread.id;
+        const remote = owners.find((entry) => entry !== local);
+        if (owners.length > 1 && local?.lock.threadId !== selectedThread.id) {
+          Alert.alert(
+            "Resource conflict",
+            `Multiple threads hold ${script.name}. Release the conflicting checkouts first.`,
+          );
+          return;
+        }
+        const lock = local?.lock ?? remote?.lock;
+        if (lock && (lock.phase === "checkout" || lock.phase === "release")) {
+          Alert.alert("Resource busy", "Resource hooks are still running.");
+          return;
+        }
+        const takingOver =
+          lock !== undefined &&
+          ((remote !== undefined && !local) || lock.threadId !== selectedThread.id);
         if (takingOver) {
+          const ownerProject = local?.project ?? remote?.project;
           const owner = appAtomRegistry.get(
             environmentThreadShells.threadShellAtom({
-              environmentId: selectedThread.environmentId,
+              environmentId: ownerProject?.environmentId ?? selectedThread.environmentId,
               threadId: lock.threadId,
             }),
           );
+          const environmentLabel =
+            ownerProject && ownerProject.environmentId !== selectedThread.environmentId
+              ? ` on ${environments.find((entry) => entry.environmentId === ownerProject.environmentId)?.label ?? ownerProject.environmentId}`
+              : "";
           const confirmed = await new Promise<boolean>((resolve) => {
             Alert.alert(
               "Take over resource",
-              `Taking over resource from ${owner?.title ?? lock.threadId}.`,
+              `Taking over resource from ${owner?.title ?? lock.threadId}${environmentLabel}.`,
               [
                 { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
                 { text: "Take over", style: "destructive", onPress: () => resolve(true) },
@@ -794,14 +860,36 @@ function ThreadRouteContent(
           });
           if (!confirmed) return;
         }
+        if (remote && !local) {
+          const released = await requestResource({
+            environmentId: remote.project.environmentId,
+            input: {
+              projectId: remote.project.id,
+              threadId: remote.lock.threadId,
+              script: remote.lock.script,
+              action: "force-release",
+              expectedOperationId: remote.lock.operationId,
+            },
+          });
+          if (released._tag === "Failure") {
+            if (!isAtomCommandInterrupted(released)) {
+              const error = squashAtomCommandFailure(released);
+              Alert.alert(
+                "Resource action failed",
+                error instanceof Error ? error.message : "Could not release the other checkout.",
+              );
+            }
+            return;
+          }
+        }
         const result = await requestResource({
           environmentId: selectedThread.environmentId,
           input: {
             projectId: selectedThreadProject.id,
             threadId: selectedThread.id,
             script,
-            action: takingOver ? "takeover" : lock ? "release" : "checkout",
-            ...(takingOver ? { expectedOperationId: lock.operationId } : {}),
+            action: local ? (takingOver ? "takeover" : "release") : "checkout",
+            ...(local && takingOver ? { expectedOperationId: local.lock.operationId } : {}),
           },
         });
         if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
@@ -864,6 +952,8 @@ function ThreadRouteContent(
       selectedThread,
       selectedThreadDetailWorktreePath,
       selectedThreadProject,
+      groupedLocks,
+      environments,
       terminalMenuSessions,
     ],
   );
@@ -887,7 +977,8 @@ function ThreadRouteContent(
     canOpenTerminal: Boolean(selectedThreadProject?.workspaceRoot),
     canOpenFiles: Boolean(selectedThreadProject?.workspaceRoot),
     projectScripts,
-    resourceLocks: selectedThreadProject?.resourceLocks ?? [],
+    resourceLocks: groupedLocks,
+    resourceOwnerLabels,
     terminalSessions: terminalMenuSessions,
     showDirectFileControl: layout.usesSplitView,
     onOpenTerminal: handleOpenTerminal,

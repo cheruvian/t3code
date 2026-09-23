@@ -152,7 +152,7 @@ To share a resource action through Git, add its `resource` hooks to a script in
 The action appears when each environment pulls the file; no import is required.
 A saved project action with the same name or command takes precedence, so remove
 that override to use the file's definition. Definitions are shared through Git,
-but reservations remain local to each project on each environment.
+but each environment stores its own reservations.
 
 Run the action from a thread to check out the resource. Only one thread in that
 project on that server can hold it at a time. The thread shows a colored indicator
@@ -161,8 +161,8 @@ A release finishes automatically after its script and prompt complete. Resource
 colors also mark the owning thread in the thread list, including compact rows.
 
 Open **Resource logs** in the thread to see checkout and release results, commands,
-and output. Output is saved when the action finishes and remains available after
-release. Each output stream is limited to 16 KiB; longer output is marked as
+and output. Output updates about once a second while the action runs and remains available after
+release. Each output stream keeps its latest 16 KiB; longer output is marked as
 truncated. **Checking out** means the hooks are still running, **Checked out** means
 they succeeded, and **Failed** means the reservation needs attention.
 
@@ -170,6 +170,13 @@ To move a reservation to another thread, run **Take over** there and confirm the
 current session name. This runs checkout hooks in the new thread without running
 the previous thread’s release hooks. Wait for any running resource hooks to finish
 before taking over.
+
+Connected environments with checkouts in the same project
+group also show each other's reservations for actions with the same ID. The
+action menu names the owning thread and environment. Taking over there clears
+the other environment's reservation before checking out locally. This relies
+on connected clients seeing current lock state; simultaneous checkouts and
+disconnected environments can still conflict.
 
 Failed hooks keep the resource reserved. Retry Release, or use Force release to
 clear ownership without running cleanup. Restarting the server preserves ownership;

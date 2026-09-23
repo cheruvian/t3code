@@ -344,6 +344,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       }
       if (!command.script.resource) return yield* reject("This action is not a resource.");
       if (
+        command.action === "force-release" &&
+        command.expectedOperationId !== undefined &&
+        current?.operationId !== command.expectedOperationId
+      ) {
+        return yield* reject("Resource ownership changed. Confirm takeover again.");
+      }
+      if (
         command.action === "takeover" &&
         (!current ||
           current.threadId === thread.id ||
@@ -394,8 +401,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       }
       if (command.action !== "checkout" && !current)
         return yield* reject("Resource is already available.");
+      const releaseWithoutHooks =
+        command.action === "release" &&
+        current?.script.resource !== undefined &&
+        !current.script.resource.releaseCommand.trim() &&
+        !current.script.resource.releasePrompt.trim();
       if (
         command.action !== "force-release" &&
+        !releaseWithoutHooks &&
         (thread.session?.status === "running" ||
           thread.session?.status === "starting" ||
           hasQueuedTurnStartForThread(thread, yield* nowIso) ||

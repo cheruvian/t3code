@@ -39,7 +39,7 @@ describe("resource action presentation", () => {
       { ...activity("running"), payload: null },
     ]);
     expect(logs).toEqual([{ ...log, status: "succeeded" }]);
-    expect(formatResourceActionLog(logs[0]!)).toContain("[Output truncated]");
+    expect(formatResourceActionLog(logs[0]!)).toContain("showing the latest output");
     expect(formatResourceActionLog(logs[0]!)).toContain("stderr:\nwarning");
   });
   it("marks only the owning thread, including failed reservations", () => {

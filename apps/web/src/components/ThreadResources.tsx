@@ -34,8 +34,7 @@ export function ThreadResources({
             <DialogPopup className="max-w-3xl space-y-4 p-6">
               <DialogTitle>Resource action logs</DialogTitle>
               <DialogDescription>
-                Checkout and release results for this thread. Output is available when the action
-                finishes.
+                Checkout and release results for this thread. Output updates while the action runs.
               </DialogDescription>
               <div className="max-h-[65vh] overflow-auto space-y-3">
                 {logs.map((log, index) => (

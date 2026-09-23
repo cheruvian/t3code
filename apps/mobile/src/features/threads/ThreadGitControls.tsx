@@ -1,4 +1,4 @@
-import type { ProjectResourceLock } from "@t3tools/contracts";
+import type { GroupedResourceLock } from "@t3tools/client-runtime/state/resource-lock-grouping";
 import { createNativeHeaderMenu } from "../../components/nativeHeaderMenu.ios";
 import type { ScreenHeaderMenu } from "../../components/ScreenHeader.types";
 import {
@@ -77,7 +77,8 @@ type ThreadGitControlsProps = ThreadGitMenuProps & {
   };
   readonly canOpenTerminal: boolean;
   readonly canOpenFiles: boolean;
-  readonly resourceLocks?: readonly ProjectResourceLock[];
+  readonly resourceLocks?: readonly GroupedResourceLock[];
+  readonly resourceOwnerLabels?: ReadonlyMap<string, string>;
   readonly projectScripts: ReadonlyArray<ProjectScript>;
   readonly terminalSessions: ReadonlyArray<TerminalMenuSession>;
   readonly showActionControls?: boolean;
@@ -89,9 +90,19 @@ type ThreadGitControlsProps = ThreadGitMenuProps & {
 
 function resourceScriptLabel(script: ProjectScript, props: ThreadGitControlsProps) {
   if (!script.resource) return projectScriptMenuLabel(script);
-  const lock = props.resourceLocks?.find((entry) => entry.script.id === script.id);
-  if (!lock) return `Check out ${script.name}`;
-  if (lock.threadId !== props.threadId) return `Take over ${script.name}`;
+  const owners = props.resourceLocks?.filter((entry) => entry.lock.script.id === script.id) ?? [];
+  const owner =
+    owners.find(
+      (entry) =>
+        entry.project.environmentId === props.environmentId &&
+        entry.lock.threadId === props.threadId,
+    ) ?? owners[0];
+  if (!owner) return `Check out ${script.name}`;
+  if (owners.length > 1 && owner.lock.threadId !== props.threadId)
+    return `${script.name} · Conflicting checkouts`;
+  const lock = owner.lock;
+  if (owner.project.environmentId !== props.environmentId || lock.threadId !== props.threadId)
+    return `Take over ${script.name}${props.resourceOwnerLabels?.get(script.id) ? ` · ${props.resourceOwnerLabels.get(script.id)}` : ""}`;
   return lock.phase === "held" || lock.phase === "failed"
     ? `Release ${script.name}`
     : `${script.name} · ${lock.phase}`;
@@ -380,6 +391,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
       props.onRunProjectScript,
       props.projectScripts,
       props.resourceLocks,
+      props.resourceOwnerLabels,
       props.terminalSessions,
     ],
   );

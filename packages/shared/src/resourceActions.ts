@@ -35,9 +35,9 @@ export function formatResourceActionLog(log: ResourceActionLog) {
     log.command ? `$ ${log.command}` : "No shell script configured.",
     log.stdout,
     log.stderr ? `stderr:\n${log.stderr}` : "",
-    log.truncated ? "[Output truncated]" : "",
+    log.truncated ? "[Output truncated — showing the latest output]" : "",
     log.error ?? "",
-    log.status === "running" ? "Output will be available when the action finishes." : "",
+    log.status === "running" ? "Output updates while the action runs." : "",
   ]
     .filter(Boolean)
     .join("\n\n");

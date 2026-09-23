@@ -16,6 +16,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -58,11 +59,14 @@ export const make = Effect.gen(function* () {
   const recordLog = Effect.fn("ResourceActionReactor.recordLog")(function* (
     work: Work,
     log: ResourceActionLog,
+    revision?: number,
   ) {
     const createdAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
     yield* engine.dispatch({
       type: "thread.activity.append",
-      commandId: CommandId.make(`resource-log-${log.operationId}-${log.status}`),
+      commandId: CommandId.make(
+        `resource-log-${log.operationId}-${log.status}${revision === undefined ? "" : `-${revision}`}`,
+      ),
       threadId: work.lock.threadId,
       createdAt,
       activity: {
@@ -80,6 +84,7 @@ export const make = Effect.gen(function* () {
   const run = Effect.fn("ResourceActionReactor.run")(function* (
     work: Work,
     output: { stdout: string; stderr: string; truncated: boolean; promptStarted: boolean },
+    notifyOutput: () => void,
   ) {
     const { lock } = work;
     const project = yield* snapshots.getProjectShellById(work.projectId);
@@ -94,13 +99,16 @@ export const make = Effect.gen(function* () {
     if (command.trim()) {
       const captured = { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
       const capture = (stream: "stdout" | "stderr") => (chunk: Uint8Array) => {
-        const remaining = 16_384 - captured[stream].length;
-        if (chunk.length > remaining) output.truncated = true;
-        captured[stream] = Buffer.concat([
-          captured[stream],
-          chunk.subarray(0, Math.max(0, remaining)),
-        ]);
+        const combined = Buffer.concat([captured[stream], chunk]);
+        let start = Math.max(0, combined.length - 16_384);
+        if (start > 0) {
+          output.truncated = true;
+          // Do not start the retained tail in the middle of a UTF-8 character.
+          while (start < combined.length && (combined[start]! & 0xc0) === 0x80) start++;
+        }
+        captured[stream] = Buffer.from(combined.subarray(start));
         output[stream] = captured[stream].toString("utf8");
+        notifyOutput();
       };
       const result = yield* runner.run({
         command: platform === "win32" ? "powershell.exe" : env.SHELL || "/bin/sh",
@@ -120,9 +128,9 @@ export const make = Effect.gen(function* () {
         maxOutputBytes: 16_384,
         outputMode: "truncate",
       });
-      output.stdout = result.stdout;
-      output.stderr = result.stderr;
-      output.truncated = result.stdoutTruncated || result.stderrTruncated;
+      if (captured.stdout.length === 0) output.stdout = result.stdout;
+      if (captured.stderr.length === 0) output.stderr = result.stderr;
+      output.truncated ||= result.stdoutTruncated || result.stderrTruncated;
       if (result.code !== 0)
         return yield* new ResourceHookError({
           message: `Resource script exited with ${result.code}: ${result.stderr || result.stdout}`,
@@ -224,7 +232,39 @@ export const make = Effect.gen(function* () {
           ...output,
         };
         yield* recordLog(work, log);
-        yield* Effect.raceFirst(alreadyAborted ? abort : run(work, output), abort).pipe(
+        // Reuse the activity ID so clients retain one running log, with batched snapshots.
+        // Scope the publisher to the hook so no running update can follow its final result.
+        const execution = Effect.scoped(
+          Effect.gen(function* () {
+            const changes = yield* Queue.sliding<void>(1);
+            let revision = 0;
+            let published = log;
+            yield* Effect.gen(function* () {
+              while (true) {
+                yield* Queue.take(changes);
+                yield* Effect.sleep("1 second");
+                const current = { ...log, ...output };
+                if (
+                  current.stdout === published.stdout &&
+                  current.stderr === published.stderr &&
+                  current.truncated === published.truncated
+                )
+                  continue;
+                yield* recordLog(work, current, ++revision);
+                published = current;
+              }
+            }).pipe(Effect.forkScoped);
+            yield* Effect.raceFirst(
+              alreadyAborted
+                ? abort
+                : run(work, output, () => {
+                    Queue.offerUnsafe(changes, undefined);
+                  }),
+              abort,
+            );
+          }),
+        );
+        yield* execution.pipe(
           Effect.matchEffect({
             onSuccess: () =>
               recordLog(work, { ...log, ...output, status: "succeeded" }).pipe(

@@ -13,6 +13,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   type ProjectScript,
+  type ResourceActionLog,
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -64,6 +65,7 @@ const harness = Effect.gen(function* () {
   let sequence = 0;
   let id = 0;
   const events = yield* PubSub.unbounded<OrchestrationEvent>();
+  const logUpdates = yield* Queue.unbounded<ResourceActionLog>();
   const completions = yield* Queue.unbounded<OrchestrationCommand>();
   const prompts = yield* Queue.unbounded<OrchestrationCommand>();
   const turnInterrupts = yield* Queue.unbounded<OrchestrationCommand>();
@@ -77,6 +79,9 @@ const harness = Effect.gen(function* () {
       const event = { ...pending, sequence: ++sequence };
       state = yield* projectEvent(state, event);
       yield* PubSub.publish(events, event);
+    }
+    if (command.type === "thread.activity.append" && command.activity.kind === "resource.action") {
+      yield* Queue.offer(logUpdates, command.activity.payload as ResourceActionLog);
     }
     if (command.type === "project.resource.complete") yield* Queue.offer(completions, command);
     if (command.type === "thread.turn.interrupt") yield* Queue.offer(turnInterrupts, command);
@@ -195,6 +200,8 @@ const harness = Effect.gen(function* () {
     turnInterrupts,
     completions,
     interrupted,
+    logUpdates,
+    activities: () => state.threads.find((thread) => thread.id === owner)?.activities ?? [],
     holdScript: () => {
       blockScript = true;
     },
@@ -208,6 +215,92 @@ const harness = Effect.gen(function* () {
 });
 
 it.layer(NodeServices.layer)("resource actions", (it) => {
+  it.effect("streams bounded output before completion and keeps the final abort result", () =>
+    Effect.gen(function* () {
+      const h = yield* harness;
+      h.holdScript();
+      yield* h.reactor.start();
+      yield* h.request("checkout");
+      const input = yield* Queue.take(h.scripts);
+      expect((yield* Queue.take(h.logUpdates)).status).toBe("running");
+      yield* TestClock.adjust("1 second");
+      expect(yield* Queue.take(h.logUpdates)).toMatchObject({
+        status: "running",
+        stdout: "Deployment in progress",
+        stderr: "Retrying upload",
+      });
+      expect(h.logs()[0]?.stdout).toBe("Deployment in progress");
+      input.onStdoutChunk?.(new TextEncoder().encode("x".repeat(20_000)));
+      input.onStdoutChunk?.(new TextEncoder().encode("\nLatest deployment progress"));
+      input.onStderrChunk?.(new TextEncoder().encode("\nLatest warning"));
+      yield* TestClock.adjust("1 second");
+      const live = yield* Queue.take(h.logUpdates);
+      expect(live.status).toBe("running");
+      expect(live.stdout.endsWith("Latest deployment progress")).toBe(true);
+      expect(Buffer.byteLength(live.stdout)).toBeLessThanOrEqual(16_384);
+      expect(live.stderr).toBe("Retrying upload\nLatest warning");
+      expect(live.truncated).toBe(true);
+      expect(h.activities().filter((activity) => activity.kind === "resource.action")).toHaveLength(
+        1,
+      );
+      expect(h.locks()[0]?.phase).toBe("checkout");
+      input.onStdoutChunk?.(new TextEncoder().encode("\nLast line before abort"));
+      yield* h.request("abort", owner, script, h.locks()[0]!.operationId);
+      yield* Queue.take(h.completions);
+      yield* h.reactor.drain;
+      expect((yield* Queue.take(h.logUpdates)).status).toBe("failed");
+      expect(h.logs()[0]?.stdout.endsWith("Last line before abort")).toBe(true);
+      yield* TestClock.adjust("5 seconds");
+      expect(h.logs()[0]?.status).toBe("failed");
+      expect(yield* Queue.size(h.logUpdates)).toBe(0);
+    }),
+  );
+
+  it.effect("releases without hooks while the owner's agent is running", () =>
+    Effect.gen(function* () {
+      const h = yield* harness;
+      const action = {
+        ...script,
+        resource: {
+          ...script.resource!,
+          checkoutPrompt: "",
+          releaseCommand: "",
+          releasePrompt: "",
+        },
+      };
+      yield* h.reactor.start();
+      yield* h.request("checkout", owner, action);
+      yield* Queue.take(h.scripts);
+      yield* Queue.take(h.completions);
+      yield* h.reactor.drain;
+      yield* h.session("running");
+      yield* h.request("release", owner, action);
+      yield* Queue.take(h.completions);
+      yield* h.reactor.drain;
+      expect(h.locks()).toEqual([]);
+      expect(h.logs()[0]).toMatchObject({ action: "release", status: "succeeded", command: "" });
+      expect(yield* Queue.size(h.scripts)).toBe(0);
+      expect(yield* Queue.size(h.prompts)).toBe(0);
+      expect(yield* Queue.size(h.turnInterrupts)).toBe(0);
+    }),
+  );
+
+  it.effect("still rejects release hooks while the owner's agent is running", () =>
+    Effect.gen(function* () {
+      const h = yield* harness;
+      const action = { ...script, resource: { ...script.resource!, checkoutPrompt: "" } };
+      yield* h.reactor.start();
+      yield* h.request("checkout", owner, action);
+      yield* Queue.take(h.completions);
+      yield* h.reactor.drain;
+      yield* h.session("running");
+      expect((yield* Effect.flip(h.request("release", owner, action))).message).toContain(
+        "current work",
+      );
+      expect(h.locks()[0]?.phase).toBe("held");
+    }),
+  );
+
   it.effect("aborts a resource prompt through the provider interrupt command", () =>
     Effect.gen(function* () {
       const h = yield* harness;
@@ -392,6 +485,27 @@ it.layer(NodeServices.layer)("resource actions", (it) => {
       expect((yield* Effect.flip(h.request("release", owner))).message).toContain("held by thread");
       yield* h.request("release", other);
       expect(h.locks()[0]).toMatchObject({ threadId: other, phase: "release" });
+    }),
+  );
+
+  it.effect("force releases only the confirmed reservation", () =>
+    Effect.gen(function* () {
+      const h = yield* harness;
+      yield* h.request("checkout");
+      const original = h.locks()[0]!;
+      yield* h.dispatch({
+        type: "project.resource.complete",
+        commandId: h.nextId(),
+        projectId,
+        operationId: original.operationId,
+      });
+      expect(
+        (yield* Effect.flip(h.request("force-release", owner, script, CommandId.make("stale"))))
+          .message,
+      ).toContain("ownership changed");
+      expect(h.locks()[0]?.operationId).toBe(original.operationId);
+      yield* h.request("force-release", owner, script, original.operationId);
+      expect(h.locks()).toEqual([]);
     }),
   );
 
