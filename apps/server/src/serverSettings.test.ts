@@ -113,6 +113,27 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect(
+    "persists global custom instructions and strips the empty default from settings.json",
+    () =>
+      Effect.gen(function* () {
+        const serverConfig = yield* ServerConfig.ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+
+        const updated = yield* serverSettings.updateSettings({
+          globalCustomInstructions: "Always write tests.",
+        });
+        assert.strictEqual(updated.globalCustomInstructions, "Always write tests.");
+
+        yield* serverSettings.updateSettings({ globalCustomInstructions: "" });
+        const persisted = yield* decodeJsonObject(
+          yield* fileSystem.readFileString(serverConfig.settingsPath),
+        );
+        assert.notProperty(persisted, "globalCustomInstructions");
+      }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("preserves context when reading a provider environment secret fails", () => {
     const platformCause = PlatformError.systemError({
       _tag: "PermissionDenied",

@@ -169,6 +169,7 @@ import {
 } from "../ui/number-field";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
+import { Textarea } from "../ui/textarea";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { newProjectId } from "../../lib/utils";
@@ -2211,6 +2212,7 @@ export function GeneralSettingsPanel() {
   );
   const [tokenStreamingWarningOpen, setTokenStreamingWarningOpen] = useState(false);
   const mixedResponseStreamingMode = useScopedSettingsMixed(["responseStreamingMode"]);
+  const mixedGlobalCustomInstructions = useScopedSettingsMixed(["globalCustomInstructions"]);
   const lastEnabledProjectGroupingMode = useRef<SidebarProjectGroupingMode>(
     readLastEnabledProjectGroupingMode(),
   );
@@ -2388,6 +2390,33 @@ export function GeneralSettingsPanel() {
               />
             ))
           )}
+        </SettingsSection>
+      ) : null}
+      {scope.kind === "all" || scope.kind === "environment" ? (
+        <SettingsSection title="Custom instructions">
+          <SettingsRow
+            serverScoped
+            settingKeys={["globalCustomInstructions"]}
+            mixed={mixedGlobalCustomInstructions}
+            title="Instructions for every project"
+            description="Appended to the system prompt for every provider across every project on this environment."
+          >
+            <div className="mt-3 max-w-2xl pb-3.5">
+              <Textarea
+                key={settings.globalCustomInstructions}
+                defaultValue={settings.globalCustomInstructions}
+                onBlur={(event) => {
+                  const globalCustomInstructions = event.target.value.trim();
+                  if (globalCustomInstructions !== settings.globalCustomInstructions) {
+                    updateSettings({ globalCustomInstructions });
+                  }
+                }}
+                rows={4}
+                placeholder="e.g. Always write tests for new features. Prefer functional components."
+                aria-label="Custom instructions for every project"
+              />
+            </div>
+          </SettingsRow>
         </SettingsSection>
       ) : null}
       <ProjectDefaultsSettings category="general" />

@@ -5165,6 +5165,7 @@ describe("ProviderRuntimeIngestion", () => {
           Layer.mergeAll(
             Layer.succeed(Scope.Scope, providerScope),
             ServerConfig.layerTest(process.cwd(), process.cwd()),
+            makeTestServerSettingsLayer(),
           ).pipe(Layer.provideMerge(NodeServices.layer)),
         ),
       );

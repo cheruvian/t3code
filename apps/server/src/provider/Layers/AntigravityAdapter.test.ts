@@ -23,6 +23,7 @@ import * as AcpErrors from "effect-acp/errors";
 import type * as AcpSchema from "effect-acp/schema";
 
 import { ServerConfig } from "../../config.ts";
+import { layerTest as serverSettingsLayerTest } from "../../serverSettings.ts";
 import { ANTIGRAVITY_SIGN_IN_REQUIRED_MESSAGE } from "../antigravityAuthSupport.ts";
 import type { AcpSessionRuntimeEvent } from "../acp/AcpSessionRuntime.ts";
 import { makeAntigravityAcpRuntime } from "../acp/AntigravityAcpSupport.ts";
@@ -299,7 +300,7 @@ const makeHarness = Effect.fn("makeAntigravityAdapterHarness")(function* (option
 
 const layer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-antigravity-adapter-test-",
-}).pipe(Layer.provideMerge(NodeServices.layer));
+}).pipe(Layer.provideMerge(NodeServices.layer), Layer.provideMerge(serverSettingsLayerTest()));
 
 it.layer(layer)("AntigravityAdapter", (it) => {
   it.effect(

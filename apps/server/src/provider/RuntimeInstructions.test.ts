@@ -25,4 +25,19 @@ describe("buildRuntimeInstructions", () => {
     expect(instructions).toContain("through the Cursor harness.");
     expect(instructions).not.toContain("reasoning effort");
   });
+
+  it("appends custom instructions when provided", () => {
+    const instructions = buildRuntimeInstructions({
+      harness: "Codex",
+      customInstructions: "Always write tests.",
+    });
+    expect(instructions).toContain(
+      "<user_custom_instructions>\nAlways write tests.\n</user_custom_instructions>",
+    );
+  });
+
+  it.each([undefined, "", "   "])("omits the custom instructions block for %s", (value) => {
+    const instructions = buildRuntimeInstructions({ harness: "Codex", customInstructions: value });
+    expect(instructions).not.toContain("user_custom_instructions");
+  });
 });
