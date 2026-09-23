@@ -163,6 +163,16 @@ describe("resolveThreadListV2Status", () => {
     expect(resolveThreadListV2Status(thread)).toBe("approval");
   });
 
+  it("reads background liveness after the turn ends", () => {
+    const base = { id: ThreadId.make("t"), title: "t" };
+    expect(resolveThreadListV2Status(makeThread({ ...base, backgroundLiveness: "working" }))).toBe(
+      "working",
+    );
+    expect(
+      resolveThreadListV2Status(makeThread({ ...base, backgroundLiveness: "monitoring" })),
+    ).toBe("monitoring");
+  });
+
   it("resolves ready for quiescent threads", () => {
     expect(resolveThreadListV2Status(makeThread({ id: ThreadId.make("t"), title: "t" }))).toBe(
       "ready",

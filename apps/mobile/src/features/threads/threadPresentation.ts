@@ -7,6 +7,7 @@ export type ThreadStatusKind =
   | "awaiting-input"
   | "working"
   | "connecting"
+  | "monitoring"
   | "error"
   | "plan-ready";
 
@@ -94,6 +95,26 @@ export function resolveThreadStatus(
       label: "Plan Ready",
       pillClassName: "bg-adaptive-violet-500-a12-a16",
       textClassName: "text-adaptive-violet-600-400",
+      pulse: false,
+    };
+  }
+
+  if (thread.backgroundLiveness === "working") {
+    return {
+      kind: "working",
+      label: "Working",
+      pillClassName: "bg-adaptive-sky-500-a12-a16",
+      textClassName: "text-adaptive-sky-600-400",
+      pulse: true,
+    };
+  }
+
+  if (thread.backgroundLiveness === "monitoring") {
+    return {
+      kind: "monitoring",
+      label: "Monitoring",
+      pillClassName: "bg-subtle",
+      textClassName: "text-foreground-muted",
       pulse: false,
     };
   }
