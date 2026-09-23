@@ -935,8 +935,10 @@ export function shouldRecedeSidebarThread(input: {
   isSelected: boolean;
 }): boolean {
   if (input.isActive || input.isSelected || input.status === "input") return false;
-  if (input.status === "working" || input.status === "monitoring") return true;
-  if (input.status === "ready" || input.status === "approval") {
+  if (input.status === "working") return true;
+  // A turn that finished with only watch loops left is done from the user's
+  // point of view, so it keeps unread prominence like a ready thread.
+  if (input.status === "ready" || input.status === "monitoring" || input.status === "approval") {
     return !input.isUnread && !input.isWoke;
   }
   return false;
@@ -1219,11 +1221,13 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (thread.backgroundLiveness === "monitoring") {
+  // An unseen completion outranks Monitoring: a dev server left running must
+  // not hide that the agent finished.
+  if (thread.backgroundLiveness === "monitoring" && !hasUnseenCompletion(thread)) {
     return {
       label: "Monitoring",
       colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      dotClass: "ring-1 ring-inset ring-sky-500 dark:ring-sky-300/80",
       pulse: false,
     };
   }

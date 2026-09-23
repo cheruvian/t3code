@@ -357,22 +357,31 @@ describe("hasUnseenCompletion", () => {
 });
 
 describe("shouldRecedeSidebarThread", () => {
-  it.each(["working", "monitoring"] as const)(
-    "recedes an inactive %s thread even when it is unread and woke",
-    (status) => {
-      expect(
-        shouldRecedeSidebarThread({
-          status,
-          isUnread: true,
-          isWoke: true,
-          isActive: false,
-          isSelected: false,
-        }),
-      ).toBe(true);
-    },
-  );
+  it("recedes an inactive working thread even when it is unread and woke", () => {
+    expect(
+      shouldRecedeSidebarThread({
+        status: "working",
+        isUnread: true,
+        isWoke: true,
+        isActive: false,
+        isSelected: false,
+      }),
+    ).toBe(true);
+  });
 
-  it.each(["ready", "approval", "input"] as const)(
+  it("recedes a read monitoring thread", () => {
+    expect(
+      shouldRecedeSidebarThread({
+        status: "monitoring",
+        isUnread: false,
+        isWoke: false,
+        isActive: false,
+        isSelected: false,
+      }),
+    ).toBe(true);
+  });
+
+  it.each(["ready", "monitoring", "approval", "input"] as const)(
     "keeps an unread %s thread prominent",
     (status) => {
       expect(
@@ -2201,6 +2210,26 @@ describe("resolveThreadStatusPill", () => {
         },
       }),
     ).toMatchObject({ label: "Completed", pulse: false });
+  });
+
+  it("shows completed over monitoring until the completion is seen", () => {
+    const thread = {
+      ...baseThread,
+      interactionMode: "default" as const,
+      latestTurn: makeLatestTurn(),
+      backgroundLiveness: "monitoring" as const,
+      session: { ...baseThread.session, status: "ready" as const, activeTurnId: null },
+    };
+    expect(
+      resolveThreadStatusPill({
+        thread: { ...thread, lastVisitedAt: "2026-03-09T10:04:00.000Z" },
+      }),
+    ).toMatchObject({ label: "Completed" });
+    expect(
+      resolveThreadStatusPill({
+        thread: { ...thread, lastVisitedAt: "2026-03-09T10:10:00.000Z" },
+      }),
+    ).toMatchObject({ label: "Monitoring" });
   });
 });
 

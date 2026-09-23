@@ -117,7 +117,7 @@ function EnvironmentNotifications({
           : null;
       const completedAt = Date.parse(thread.latestTurn?.completedAt ?? "");
       const completion =
-        status === "ready" &&
+        (status === "ready" || status === "monitoring") &&
         thread.latestTurn?.state === "completed" &&
         Number.isFinite(completedAt)
           ? completedAt

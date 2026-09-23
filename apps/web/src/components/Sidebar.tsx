@@ -1144,7 +1144,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // Ready and action-required rows keep their unread and wake prominence.
   const shouldRecede = shouldRecedeSidebarThread({
     status,
-    isUnread,
+    isUnread: isUnread || unreadState.hasUnreadCompletion,
     isWoke,
     isActive: props.isActive,
     isSelected,
@@ -1161,7 +1161,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           // full of them (and repaints every vsync on high-refresh displays).
           className: "text-sky-600 dark:text-sky-400",
         }
-      : status === "monitoring"
+      : status === "monitoring" && !unreadState.hasUnreadCompletion
         ? {
             // Monitoring is calm background presence, not active progress
             // (monitoring-pill D6), so it keeps the label at full strength.
@@ -1204,17 +1204,20 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const compactStatusDotClassName =
     topStatus === null
       ? "bg-muted-foreground/35"
-      : topStatus.icon === "working" || topStatus.label === "Monitoring"
+      : topStatus.icon === "working"
         ? "bg-sky-500 dark:bg-sky-400"
-        : topStatus.label === "Approval"
-          ? "bg-amber-500 dark:bg-amber-400"
-          : topStatus.label === "Input"
-            ? "bg-indigo-500 dark:bg-indigo-400"
-            : topStatus.label === "Failed"
-              ? "bg-red-500 dark:bg-red-400"
-              : topStatus.icon === "woke"
-                ? "bg-amber-500 dark:bg-amber-400"
-                : "bg-emerald-500 dark:bg-emerald-400";
+        : topStatus.icon === "monitoring"
+          ? // Hollow: something still runs, but the agent is not working.
+            "ring-1 ring-inset ring-sky-500 dark:ring-sky-400"
+          : topStatus.label === "Approval"
+            ? "bg-amber-500 dark:bg-amber-400"
+            : topStatus.label === "Input"
+              ? "bg-indigo-500 dark:bg-indigo-400"
+              : topStatus.label === "Failed"
+                ? "bg-red-500 dark:bg-red-400"
+                : topStatus.icon === "woke"
+                  ? "bg-amber-500 dark:bg-amber-400"
+                  : "bg-emerald-500 dark:bg-emerald-400";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
     effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
