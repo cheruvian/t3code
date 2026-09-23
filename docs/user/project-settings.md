@@ -172,7 +172,7 @@ the previous thread’s release hooks. Wait for any running resource hooks to fi
 before taking over.
 
 Connected environments with checkouts in the same project
-group also show each other's reservations for actions with the same ID. The
+group also show each other's reservations for resources with the same name. The
 action menu names the owning thread and environment. Taking over there clears
 the other environment's reservation before checking out locally. This relies
 on connected clients seeing current lock state; simultaneous checkouts and

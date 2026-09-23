@@ -8,11 +8,23 @@ import {
 } from "@t3tools/contracts";
 import {
   resourceActionLogs,
+  resourceActionKey,
+  resourceActionsMatch,
   formatResourceActionLog,
   threadResourceColor,
 } from "./resourceActions.ts";
 
 describe("resource action presentation", () => {
+  it("identifies named resources across saved and file action IDs", () => {
+    expect(
+      resourceActionsMatch(
+        { id: "sandbox", name: "SANDBOX" },
+        { id: "file:sandbox", name: " sandbox " },
+      ),
+    ).toBe(true);
+    expect(resourceActionKey({ name: " SANDBOX " })).toBe("sandbox");
+    expect(resourceActionsMatch({ name: "SANDBOX" }, { name: "EXPORT" })).toBe(false);
+  });
   it("keeps the final result per operation and reports truncation", () => {
     const log = {
       operationId: CommandId.make("op"),

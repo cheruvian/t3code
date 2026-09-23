@@ -21,6 +21,7 @@ import {
   threadPullRequestKeysEqual,
 } from "@t3tools/shared/threadPullRequests";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
+import { resourceActionsMatch } from "@t3tools/shared/resourceActions";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -332,7 +333,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const project = yield* requireProject({ readModel, command, projectId: command.projectId });
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
       const locks = project.resourceLocks ?? [];
-      const current = locks.find((lock) => lock.script.id === command.script.id);
+      const namedLocks = locks.filter((lock) => resourceActionsMatch(lock.script, command.script));
+      const current =
+        namedLocks.find((lock) => lock.operationId === command.expectedOperationId) ??
+        namedLocks.find((lock) => lock.script.id === command.script.id) ??
+        namedLocks[0];
       const reject = (detail: string) =>
         new OrchestrationCommandInvariantError({ commandType: command.type, detail });
       if (
@@ -343,6 +348,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* reject("Resource actions require an active thread in this project.");
       }
       if (!command.script.resource) return yield* reject("This action is not a resource.");
+      if (namedLocks.length > 1 && (command.action === "checkout" || command.action === "takeover"))
+        return yield* reject(
+          "Multiple threads hold this resource. Release the conflicting checkouts.",
+        );
       if (
         command.action === "force-release" &&
         command.expectedOperationId !== undefined &&
@@ -421,7 +430,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* reject(
           "Wait for this thread's current work to finish before running resource hooks.",
         );
-      const next = locks.filter((lock) => lock.script.id !== command.script.id);
+      const next = locks.filter((lock) => lock !== current);
       if (command.action !== "force-release")
         next.push({
           script: current?.script ?? command.script,

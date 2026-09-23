@@ -1,5 +1,9 @@
 import { ResourceActionLogs } from "./ResourceActionLogs";
-import { groupedResourceLocks } from "@t3tools/client-runtime/state/resource-lock-grouping";
+import {
+  groupedResourceLocks,
+  resourceOwnersForAction,
+} from "@t3tools/client-runtime/state/resource-lock-grouping";
+import { resourceActionKey } from "@t3tools/shared/resourceActions";
 import { useProjects } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { useMobileProjectGroupingSettings } from "../../state/project-grouping";
@@ -387,7 +391,7 @@ function ThreadRouteContent(
         }),
       );
       labels.set(
-        lock.script.id,
+        resourceActionKey(lock.script),
         `${owner?.title ?? lock.threadId} on ${environments.find((entry) => entry.environmentId === project.environmentId)?.label ?? project.environmentId}`,
       );
     }
@@ -813,7 +817,7 @@ function ThreadRouteContent(
       }
 
       if (script.resource) {
-        const owners = groupedLocks.filter((entry) => entry.lock.script.id === script.id);
+        const owners = resourceOwnersForAction(groupedLocks, script);
         const local = owners.find(
           (entry) =>
             entry.project.environmentId === selectedThreadProject.environmentId &&

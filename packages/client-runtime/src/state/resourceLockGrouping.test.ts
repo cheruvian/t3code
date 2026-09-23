@@ -2,7 +2,7 @@ import { CommandId, EnvironmentId, ProjectId, ThreadId } from "@t3tools/contract
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
 import { describe, expect, it } from "vite-plus/test";
 
-import { groupedResourceLocks } from "./resourceLockGrouping.ts";
+import { groupedResourceLocks, resourceOwnersForAction } from "./resourceLockGrouping.ts";
 
 const localId = EnvironmentId.make("local");
 const remoteId = EnvironmentId.make("remote");
@@ -61,6 +61,18 @@ describe("grouped resource locks", () => {
     expect(
       groupedResourceLocks({ ...input, connectedEnvironmentIds: new Set([localId, remoteId]) }),
     ).toEqual([{ project: remote, lock }]);
+    expect(
+      resourceOwnersForAction(
+        groupedResourceLocks({ ...input, connectedEnvironmentIds: new Set([localId, remoteId]) }),
+        { id: "sandbox", name: "SANDBOX" },
+      ),
+    ).toEqual([{ project: remote, lock }]);
+    expect(
+      resourceOwnersForAction(
+        groupedResourceLocks({ ...input, connectedEnvironmentIds: new Set([localId, remoteId]) }),
+        { id: "export", name: "EXPORT" },
+      ),
+    ).toEqual([]);
     expect(groupedResourceLocks({ ...input, connectedEnvironmentIds: new Set([localId]) })).toEqual(
       [],
     );

@@ -1,5 +1,9 @@
 import { ThreadResources } from "./ThreadResources";
-import { groupedResourceLocks } from "@t3tools/client-runtime/state/resource-lock-grouping";
+import {
+  groupedResourceLocks,
+  resourceOwnersForAction,
+} from "@t3tools/client-runtime/state/resource-lock-grouping";
+import { resourceActionKey } from "@t3tools/shared/resourceActions";
 import { projectEnvironment } from "../state/projects";
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
@@ -2406,7 +2410,10 @@ export default function ChatView(props: ChatViewProps) {
       );
       const environmentLabel =
         environmentById.get(project.environmentId)?.label ?? project.environmentId;
-      labels.set(lock.script.id, `${owner?.title ?? lock.threadId} on ${environmentLabel}`);
+      labels.set(
+        resourceActionKey(lock.script),
+        `${owner?.title ?? lock.threadId} on ${environmentLabel}`,
+      );
     }
     return labels;
   }, [activeGroupedResourceLocks, environmentById]);
@@ -4289,9 +4296,7 @@ export default function ChatView(props: ChatViewProps) {
       if (!activeThreadId || !activeProject || !activeThread) return;
       if (script.resource) {
         if (!isServerThread) return;
-        const owners = activeGroupedResourceLocks.filter(
-          (entry) => entry.lock.script.id === script.id,
-        );
+        const owners = resourceOwnersForAction(activeGroupedResourceLocks, script);
         const local = owners.find(
           (entry) =>
             entry.project.environmentId === activeProject.environmentId &&

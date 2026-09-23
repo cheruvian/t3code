@@ -488,6 +488,35 @@ it.layer(NodeServices.layer)("resource actions", (it) => {
     }),
   );
 
+  it.effect("treats saved and file actions with the same resource name as one lock", () =>
+    Effect.gen(function* () {
+      const h = yield* harness;
+      const fileAction = { ...script, id: "file:test device", name: "test device" };
+      yield* h.request("checkout");
+      const original = h.locks()[0]!;
+      yield* h.dispatch({
+        type: "project.resource.complete",
+        commandId: h.nextId(),
+        projectId,
+        operationId: original.operationId,
+      });
+      expect((yield* Effect.flip(h.request("checkout", other, fileAction))).message).toContain(
+        "held by thread",
+      );
+      yield* h.request("takeover", other, fileAction, original.operationId);
+      expect(h.locks()).toHaveLength(1);
+      expect(h.locks()[0]?.threadId).toBe(other);
+      yield* h.dispatch({
+        type: "project.resource.complete",
+        commandId: h.nextId(),
+        projectId,
+        operationId: h.locks()[0]!.operationId,
+      });
+      yield* h.request("release", other, fileAction);
+      expect(h.locks()[0]?.phase).toBe("release");
+    }),
+  );
+
   it.effect("force releases only the confirmed reservation", () =>
     Effect.gen(function* () {
       const h = yield* harness;

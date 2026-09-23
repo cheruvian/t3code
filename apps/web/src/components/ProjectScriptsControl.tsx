@@ -1,5 +1,7 @@
 import type { ThreadId } from "@t3tools/contracts";
 import type { GroupedResourceLock } from "@t3tools/client-runtime/state/resource-lock-grouping";
+import { resourceOwnersForAction } from "@t3tools/client-runtime/state/resource-lock-grouping";
+import { resourceActionKey } from "@t3tools/shared/resourceActions";
 import type {
   ProjectScript,
   ResolvedKeybindingsConfig,
@@ -115,29 +117,34 @@ export default function ProjectScriptsControl({
 
   const resourceLabel = (script: ProjectScript, includeOwner = true) => {
     if (!script.resource) return script.name;
-    const owners = resourceLocks.filter((entry) => entry.lock.script.id === script.id);
+    const owners = resourceOwnersForAction(resourceLocks, script);
     const owner =
       owners.find(
         (entry) =>
           entry.project.environmentId === environmentId && entry.lock.threadId === threadId,
       ) ?? owners[0];
     if (!owner) return `Check out ${script.name}`;
-    if (owners.length > 1 && owner.lock.threadId !== threadId)
-      return `${script.name} · Conflicting checkouts`;
+    if (owners.length > 1)
+      return owner.project.environmentId === environmentId && owner.lock.threadId === threadId
+        ? `Release ${script.name} · Conflicting checkouts`
+        : `${script.name} · Conflicting checkouts`;
     const lock = owner.lock;
     if (owner.project.environmentId !== environmentId || lock.threadId !== threadId)
-      return `Take over ${script.name}${includeOwner && resourceOwnerLabels?.get(script.id) ? ` · ${resourceOwnerLabels.get(script.id)}` : ""}`;
+      return `Take over ${script.name}${includeOwner && resourceOwnerLabels?.get(resourceActionKey(script)) ? ` · ${resourceOwnerLabels.get(resourceActionKey(script))}` : ""}`;
     if (lock.phase === "checkout") return `${script.name} · Checking out…`;
     if (lock.phase === "release") return `${script.name} · Releasing…`;
     return `Release ${script.name}`;
   };
-  const resourceBusy = (script: ProjectScript) =>
-    (Boolean(script.resource) && !resourceActionsEnabled) ||
-    resourceLocks.some(
-      (lock) =>
-        lock.lock.script.id === script.id &&
-        (lock.lock.phase === "checkout" || lock.lock.phase === "release"),
+  const resourceBusy = (script: ProjectScript) => {
+    if (!script.resource) return false;
+    if (!resourceActionsEnabled) return true;
+    const owners = resourceOwnersForAction(resourceLocks, script);
+    const own = owners.find(
+      (entry) => entry.project.environmentId === environmentId && entry.lock.threadId === threadId,
     );
+    const relevant = own ? [own] : owners;
+    return relevant.some(({ lock }) => lock.phase === "checkout" || lock.phase === "release");
+  };
 
   const primaryScript = useMemo(() => {
     if (preferredScriptId) {

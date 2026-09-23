@@ -7,6 +7,18 @@ import {
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 
+/** Saved and t3.json actions can reserve the same named resource with different IDs. */
+export function resourceActionKey(action: { readonly name: string }): string {
+  return action.name.trim().toLowerCase();
+}
+
+export function resourceActionsMatch(
+  left: { readonly name: string },
+  right: { readonly name: string },
+): boolean {
+  return resourceActionKey(left) === resourceActionKey(right);
+}
+
 const decodeLog = Schema.decodeUnknownOption(ResourceActionLog);
 
 export function resourceActionLogs(activities: readonly OrchestrationThreadActivity[]) {

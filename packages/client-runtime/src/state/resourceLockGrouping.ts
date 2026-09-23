@@ -5,10 +5,18 @@ import {
   type ProjectGroupingSettings,
 } from "./projectGrouping.ts";
 import type { EnvironmentId, ProjectResourceLock } from "@t3tools/contracts";
+import { resourceActionsMatch } from "@t3tools/shared/resourceActions";
 
 export interface GroupedResourceLock {
   readonly project: EnvironmentProject;
   readonly lock: ProjectResourceLock;
+}
+
+export function resourceOwnersForAction(
+  locks: ReadonlyArray<GroupedResourceLock>,
+  action: { readonly name: string },
+): ReadonlyArray<GroupedResourceLock> {
+  return locks.filter(({ lock }) => resourceActionsMatch(lock.script, action));
 }
 
 /** Uses the same project groups as the sidebar, including its per-project overrides. */
