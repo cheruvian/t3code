@@ -728,7 +728,125 @@ function codexTurnEvent(method: "turn/started" | "turn/completed", turnId: strin
   };
 }
 
+function codexExecEvent(
+  method: "item/started" | "item/completed",
+  itemId: string,
+  turnId: string,
+): ProviderEvent {
+  return {
+    id: asEventId(`evt-${method}-${itemId}`),
+    kind: "notification",
+    provider: ProviderDriverKind.make("codex"),
+    threadId: asThreadId("thread-1"),
+    turnId: asTurnId(turnId),
+    itemId: asItemId(itemId),
+    createdAt: "2026-01-01T00:00:00.000Z",
+    method,
+    payload: {
+      threadId: "thread-1",
+      turnId,
+      ...(method === "item/completed"
+        ? { completedAtMs: 1_778_000_000_000 }
+        : { startedAtMs: 1_778_000_000_000 }),
+      item: {
+        type: "commandExecution",
+        id: itemId,
+        command: `run ${itemId}`,
+        commandActions: [],
+        cwd: "/tmp",
+        processId: "1234",
+        source: "unifiedExecStartup",
+        status: method === "item/started" ? "inProgress" : "completed",
+      },
+    },
+  };
+}
+
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("tracks execs still running at turn end as background shell tasks", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const tasksFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "task.started" || event.type === "task.completed"),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* runtime.emit(codexTurnEvent("turn/started", "turn-bg"));
+      yield* runtime.emit(codexExecEvent("item/started", "exec-server", "turn-bg"));
+      yield* runtime.emit(codexExecEvent("item/started", "exec-quick", "turn-bg"));
+      yield* runtime.emit(codexExecEvent("item/completed", "exec-quick", "turn-bg"));
+      yield* runtime.emit(codexTurnEvent("turn/completed", "turn-bg"));
+      yield* runtime.emit(codexExecEvent("item/completed", "exec-server", "turn-bg"));
+
+      const tasks = Array.from(yield* Fiber.join(tasksFiber));
+      NodeAssert.deepStrictEqual(
+        tasks.map((event) => ({
+          type: event.type,
+          turnId: event.turnId,
+          payload: event.payload,
+        })),
+        [
+          {
+            type: "task.started",
+            turnId: "turn-bg",
+            payload: {
+              taskId: "exec-server",
+              taskType: "shell",
+              toolUseId: "exec-server",
+              description: "run exec-server",
+            },
+          },
+          {
+            type: "task.completed",
+            turnId: "turn-bg",
+            payload: {
+              taskId: "exec-server",
+              taskType: "shell",
+              toolUseId: "exec-server",
+              status: "completed",
+            },
+          },
+        ],
+      );
+    }),
+  );
+
+  it.effect("stops an idle session to stop its background terminals", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const startedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "task.started"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* runtime.emit(codexExecEvent("item/started", "exec-dev", "turn-dev"));
+      yield* runtime.emit(codexTurnEvent("turn/completed", "turn-dev"));
+      yield* Fiber.join(startedFiber);
+
+      const stopFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) => event.type === "task.completed" || event.type === "session.exited",
+        ),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.interruptTurn(asThreadId("thread-1"));
+
+      const events = Array.from(yield* Fiber.join(stopFiber));
+      NodeAssert.deepStrictEqual(
+        events.map((event) =>
+          event.type === "task.completed" ? [event.type, event.payload.status] : [event.type],
+        ),
+        [["task.completed", "stopped"], ["session.exited"]],
+      );
+      NodeAssert.equal(runtime.interruptTurnImpl.mock.calls.length, 0);
+      NodeAssert.equal(yield* adapter.hasSession(asThreadId("thread-1")), false);
+    }),
+  );
+
   it.effect("calculates one Codex turn total from cumulative counters", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

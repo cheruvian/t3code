@@ -113,6 +113,7 @@ interface CodexAdapterSessionContext {
   readonly progress: CodexProgressCoalescer<string, ProviderRuntimeEvent>;
   readonly eventFiber: Fiber.Fiber<void, never>;
   readonly turnTokenUsage: CodexTurnTokenUsageState;
+  readonly backgroundTerminals: CodexBackgroundTerminalTracker;
   stopped: boolean;
 }
 
@@ -1042,6 +1043,106 @@ function mapItemLifecycle(
       ...(event.payload !== undefined ? { data: event.payload } : {}),
     },
   };
+}
+
+interface CodexExecItem {
+  readonly turnId: ProviderEvent["turnId"];
+  readonly command: string;
+}
+
+export interface CodexBackgroundTerminalTracker {
+  /** Returns the task events to emit after the event's own runtime events. */
+  readonly observe: (event: ProviderEvent) => ReadonlyArray<ProviderRuntimeEvent>;
+  /** Settles every promoted terminal as stopped, e.g. before closing the session. */
+  readonly stopAll: (event: ProviderEvent) => ReadonlyArray<ProviderRuntimeEvent>;
+  readonly hasLive: () => boolean;
+}
+
+/**
+ * Codex keeps a `commandExecution` item open until its process exits, so an
+ * exec still open when the turn ends is a background terminal (dev server,
+ * watcher). Those become `shell` tasks, which thread liveness reads as
+ * Monitoring, until the late `item/completed` reports the exit.
+ */
+export function makeCodexBackgroundTerminalTracker(): CodexBackgroundTerminalTracker {
+  const open = new Map<string, CodexExecItem>();
+  const promoted = new Map<string, CodexExecItem>();
+
+  const taskEvent = (
+    event: ProviderEvent,
+    itemId: string,
+    exec: CodexExecItem,
+    status: "started" | "completed" | "failed" | "stopped",
+  ): ProviderRuntimeEvent => {
+    const { itemId: _itemId, ...base } = runtimeEventBase(event, event.threadId);
+    const common = {
+      ...base,
+      eventId: EventId.make(`${event.id}:background-terminal:${itemId}`),
+      ...(exec.turnId ? { turnId: exec.turnId } : {}),
+    };
+    const linkage = { taskId: RuntimeTaskId.make(itemId), taskType: "shell", toolUseId: itemId };
+    return status === "started"
+      ? {
+          ...common,
+          type: "task.started",
+          payload: { ...linkage, ...(exec.command ? { description: exec.command } : {}) },
+        }
+      : { ...common, type: "task.completed", payload: { ...linkage, status } };
+  };
+
+  const stopAll = (event: ProviderEvent) => {
+    const stopped = Array.from(promoted, ([itemId, exec]) =>
+      taskEvent(event, itemId, exec, "stopped"),
+    );
+    open.clear();
+    promoted.clear();
+    return stopped;
+  };
+
+  const observe = (event: ProviderEvent): ReadonlyArray<ProviderRuntimeEvent> => {
+    switch (event.method) {
+      case "item/started": {
+        const item = readPayload(EffectCodexSchema.V2ItemStartedNotification, event.payload)?.item;
+        if (item?.type === "commandExecution") {
+          open.set(item.id, { turnId: event.turnId, command: item.command.trim() });
+        }
+        return [];
+      }
+      case "item/completed": {
+        const item = readPayload(
+          EffectCodexSchema.V2ItemCompletedNotification,
+          event.payload,
+        )?.item;
+        if (item?.type !== "commandExecution") return [];
+        open.delete(item.id);
+        const exec = promoted.get(item.id);
+        if (!exec) return [];
+        promoted.delete(item.id);
+        return [
+          taskEvent(event, item.id, exec, item.status === "completed" ? "completed" : "failed"),
+        ];
+      }
+      case "turn/completed":
+      case "turn/aborted": {
+        const started = Array.from(open, ([itemId, exec]) => {
+          promoted.set(itemId, exec);
+          return taskEvent(event, itemId, exec, "started");
+        });
+        open.clear();
+        return started;
+      }
+      case "session/exited":
+      case "session/closed":
+        // Liveness clears on session exit; the processes died with the app-server.
+        open.clear();
+        promoted.clear();
+        return [];
+      default:
+        return [];
+    }
+  };
+
+  return { observe, stopAll, hasLive: () => promoted.size > 0 };
 }
 
 /**
@@ -2486,6 +2587,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           Map<string | undefined, Map<string, CollabItemProgress>>
         >();
         const liveCollabTurns = new Map<string, string>();
+        const backgroundTerminals = makeCodexBackgroundTerminalTracker();
 
         const itemMapFor = (childThreadId: string, childTurnId: string | undefined) => {
           const turns = liveCollabItems.get(childThreadId) ?? new Map();
@@ -2647,9 +2749,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               }
               return runtimeEvent;
             });
-            const runtimeEvents = usageLimitError
-              ? [usageLimitError, ...mappedEvents]
-              : mappedEvents;
+            const runtimeEvents = [
+              ...(usageLimitError ? [usageLimitError] : []),
+              ...mappedEvents,
+              ...backgroundTerminals.observe(event),
+            ];
             if (runtimeEvents.length === 0) {
               yield* Effect.logDebug("ignoring unhandled Codex provider event", {
                 method: event.method,
@@ -2772,6 +2876,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           progress,
           eventFiber,
           turnTokenUsage,
+          backgroundTerminals,
           stopped: false,
         });
         sessionScopeTransferred = true;
@@ -2853,13 +2958,52 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const interruptTurn: CodexAdapterShape["interruptTurn"] = (threadId, turnId) =>
     requireSession(threadId).pipe(
-      Effect.flatMap((session) => session.runtime.interruptTurn(turnId)),
+      Effect.flatMap((session) =>
+        Effect.gen(function* () {
+          const snapshot = yield* session.runtime.getSession;
+          if (
+            turnId === undefined &&
+            snapshot.activeTurnId === undefined &&
+            session.backgroundTerminals.hasLive()
+          ) {
+            return yield* stopBackgroundTerminals(session);
+          }
+          return yield* session.runtime.interruptTurn(turnId);
+        }),
+      ),
       Effect.mapError((cause) =>
         cause._tag === "ProviderAdapterSessionNotFoundError"
           ? cause
           : mapCodexRuntimeError(threadId, "turn/interrupt", cause),
       ),
     );
+
+  /**
+   * The app-server exposes no way to kill an agent's background terminal, but
+   * exiting takes them down with it. An idle thread resumes on its next turn,
+   * the same as after the idle session reaper.
+   */
+  const stopBackgroundTerminals = Effect.fn("stopBackgroundTerminals")(function* (
+    session: CodexAdapterSessionContext,
+  ) {
+    const createdAt = new Date().toISOString();
+    const trigger: ProviderEvent = {
+      id: EventId.make(`codex-stop-background:${session.threadId}:${createdAt}`),
+      kind: "session",
+      provider: PROVIDER,
+      threadId: session.threadId,
+      createdAt,
+      method: "session/closed",
+      message: "Stopped background terminals",
+    };
+    // Settle first: the runtime's own session/closed would clear the tracker.
+    const events = [
+      ...session.backgroundTerminals.stopAll(trigger),
+      ...mapToRuntimeEvents(trigger, session.threadId),
+    ];
+    yield* stopSessionInternal(session);
+    yield* Queue.offerAll(runtimeEventQueue, events);
+  });
 
   const compactThread = Effect.fn("compactThread")(function* (threadId: ThreadId) {
     const session = yield* requireSession(threadId);
