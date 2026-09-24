@@ -1551,6 +1551,32 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("starts a fresh session without a saved cursor and stops the previous runtime", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("fresh-session-handoff");
+      const input = {
+        threadId,
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        runtimeMode: "full-access" as const,
+      };
+      yield* provider.startSession(threadId, input);
+      routing.codex.startSession.mockClear();
+      routing.codex.stopSession.mockClear();
+      yield* provider.startSession(threadId, {
+        ...input,
+        freshSession: true,
+        resumeCursor: { stale: true },
+      });
+      assert.equal(routing.codex.stopSession.mock.calls.length, 1);
+      assert.isUndefined(routing.codex.startSession.mock.calls[0]?.[0].resumeCursor);
+      yield* provider.stopSession({ threadId });
+      routing.codex.startSession.mockClear();
+      routing.codex.stopSession.mockClear();
+    }),
+  );
+
   it.effect.each([CODEX_DRIVER, CLAUDE_AGENT_DRIVER, CURSOR_DRIVER])(
     "rejects missing, file, and saved workspace paths before starting %s",
     (driver) =>

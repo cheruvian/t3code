@@ -3458,6 +3458,126 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.runtimeMode).toBe("full-access");
   });
 
+  it("hands the full conversation to a fresh destination session without resuming the source", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.make("thread-1");
+    const now = "2026-01-01T00:00:00.000Z";
+    const send = (id: string, text: string, handoff = false) =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(id),
+          threadId,
+          message: { messageId: asMessageId(id), role: "user", text, attachments: [] },
+          ...(handoff
+            ? {
+                sessionHandoff: "summarize" as const,
+                modelSelection: {
+                  instanceId: ProviderInstanceId.make("claudeAgent"),
+                  model: "claude-opus-4-6",
+                },
+              }
+            : {}),
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          createdAt: now,
+        }),
+      );
+    await send("original-goal", "Keep the user's earlier constraints.");
+    await harness.drain();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("compaction-marker"),
+        threadId,
+        activity: {
+          id: EventId.make("compaction-marker"),
+          tone: "info",
+          kind: "context-compaction",
+          summary: "Context compacted",
+          payload: {},
+          turnId: null,
+          createdAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await send("handoff", "Summarize and continue", true);
+    await harness.drain();
+    expect(harness.startSession).toHaveBeenLastCalledWith(
+      threadId,
+      expect.objectContaining({
+        provider: "claudeAgent",
+        freshSession: true,
+      }),
+    );
+    expect(harness.startSession.mock.calls.at(-1)?.[1]).not.toHaveProperty("resumeCursor");
+    const files = NodeFS.readdirSync(NodePath.join(harness.stateDir, "session-handoffs"));
+    expect(files).toHaveLength(1);
+    const transcript = JSON.parse(
+      NodeFS.readFileSync(NodePath.join(harness.stateDir, "session-handoffs", files[0]!), "utf8"),
+    );
+    expect(transcript.messages.map((message: { text: string }) => message.text)).toEqual([
+      "Keep the user's earlier constraints.",
+    ]);
+    expect(harness.sendTurn.mock.calls.at(-1)?.[0]).toMatchObject({
+      input: expect.stringContaining(files[0]!),
+    });
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.modelSelection.instanceId).toBe("claudeAgent");
+    expect(thread?.messages).toHaveLength(2);
+    const startsBeforeFollowup = harness.startSession.mock.calls.length;
+    await send("followup", "Continue on the destination.");
+    await harness.drain();
+    expect(harness.startSession.mock.calls.length).toBe(startsBeforeFollowup);
+    expect(harness.sendTurn.mock.calls.at(-1)?.[0]).toMatchObject({
+      input: "Continue on the destination.",
+    });
+  });
+
+  it("preserves the source model and transcript when destination startup fails", async () => {
+    const harness = await createHarness({
+      startSessionEffect: () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "claudeAgent",
+            method: "startSession",
+            detail: "Destination unavailable",
+          }),
+        ),
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("failed-handoff"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("failed-handoff"),
+          role: "user",
+          text: "Summarize and switch",
+          attachments: [],
+        },
+        sessionHandoff: "summarize",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-opus-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === "thread-1");
+    expect(thread?.modelSelection.instanceId).toBe("codex");
+    expect(thread?.messages).toHaveLength(1);
+    expect(thread?.activities).toContainEqual(
+      expect.objectContaining({ kind: "provider.turn.start.failed" }),
+    );
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
   it("rejects provider changes after a thread is already bound to a session provider", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

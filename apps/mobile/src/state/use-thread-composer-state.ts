@@ -137,6 +137,8 @@ export function useThreadComposerState() {
   const [feedbackSubmissionsByThreadKey, setFeedbackSubmissionsByThreadKey] = useState<
     Record<string, ReadonlyArray<CodexFeedbackSubmission>>
   >({});
+  const startHandoffTurn = useAtomCommand(threadEnvironment.startTurn);
+  const handoffInFlight = useRef(false);
   const uploadThreadFeedback = useAtomCommand(threadEnvironment.uploadFeedback, {
     reportFailure: false,
   });
@@ -244,6 +246,19 @@ export function useThreadComposerState() {
   const draftAttachments = selectedDraft?.attachments ?? [];
   const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
   const selectedThread = selectedThreadDetail ?? selectedThreadShell;
+  const previousServerModel = useRef<{ threadKey: string; model: ModelSelection } | null>(null);
+  useEffect(() => {
+    if (!selectedThreadKey || !selectedThread) return;
+    const previous = previousServerModel.current;
+    const model = selectedThread.modelSelection;
+    if (
+      previous?.threadKey === selectedThreadKey &&
+      (previous.model.instanceId !== model.instanceId || previous.model.model !== model.model)
+    ) {
+      updateComposerDraftSettings(selectedThreadKey, { modelSelection: model });
+    }
+    previousServerModel.current = { threadKey: selectedThreadKey, model };
+  }, [selectedThread, selectedThreadKey]);
   const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
   const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
   const selectedProvider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
@@ -757,6 +772,53 @@ export function useThreadComposerState() {
       const provider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
         (candidate) => candidate.instanceId === value.instanceId,
       );
+      const currentProvider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
+        (candidate) => candidate.instanceId === selectedThreadShell?.session?.providerInstanceId,
+      );
+      const current = selectedThreadShell?.modelSelection;
+      if (
+        selectedThreadShell?.session &&
+        current &&
+        (current.instanceId !== value.instanceId ||
+          (current.model !== value.model &&
+            (provider?.requiresNewThreadForModelChange ||
+              currentProvider?.requiresNewThreadForModelChange)))
+      ) {
+        const thread = selectedThreadShell;
+        Alert.alert(
+          "Summarize and switch?",
+          "The current agent session will stop. Running tasks and monitors will not transfer. The new agent will read this conversation, summarize it, and continue in the same workspace.",
+          [
+            { text: "Cancel", style: "cancel" },
+            {
+              text: "Summarize and switch",
+              onPress: () => {
+                if (handoffInFlight.current) return;
+                handoffInFlight.current = true;
+                void startHandoffTurn({
+                  environmentId: thread.environmentId,
+                  input: {
+                    threadId: thread.id,
+                    message: {
+                      messageId: MessageId.make(uuidv4()),
+                      role: "user",
+                      text: `Summarize this conversation and continue with ${provider?.displayName ?? value.instanceId} / ${value.model}.`,
+                      attachments: [],
+                    },
+                    modelSelection: value,
+                    sessionHandoff: "summarize",
+                    runtimeMode: thread.runtimeMode,
+                    interactionMode: thread.interactionMode,
+                  },
+                }).finally(() => {
+                  handoffInFlight.current = false;
+                });
+              },
+            },
+          ],
+        );
+        return;
+      }
       updateComposerDraftSettings(selectedThreadKey, {
         modelSelection: value,
         ...(provider?.showInteractionModeToggle === false
@@ -764,7 +826,12 @@ export function useThreadComposerState() {
           : {}),
       });
     },
-    [selectedEnvironmentRuntime?.serverConfig, selectedThreadKey],
+    [
+      selectedEnvironmentRuntime?.serverConfig,
+      selectedThreadKey,
+      selectedThreadShell,
+      startHandoffTurn,
+    ],
   );
 
   const onUpdateRuntimeMode = useCallback(

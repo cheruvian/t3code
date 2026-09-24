@@ -1,3 +1,5 @@
+import { ServerConfig } from "../../config.ts";
+import { buildSessionHandoffPrompt, serializeSessionHandoff } from "../sessionHandoff.ts";
 import { withWorkspaceLease } from "../../workspace/workspaceLease.ts";
 import {
   type ChatAttachment,
@@ -212,6 +214,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 
 const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
+  const serverConfig = yield* ServerConfig;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerAuthService = yield* ProviderAuthService;
@@ -566,6 +569,7 @@ const make = Effect.gen(function* () {
     options?: {
       readonly modelSelection?: ModelSelection;
       readonly pendingTurnStart?: boolean;
+      readonly freshSession?: boolean;
       readonly thread?: OrchestrationThreadShell;
     },
   ) {
@@ -652,7 +656,7 @@ const make = Effect.gen(function* () {
         createdAt,
       });
     }
-    if (thread.session !== null) {
+    if (thread.session !== null && !options?.freshSession) {
       yield* rejectStartedThreadModelChangeIfRequired({
         threadId,
         currentModelSelection:
@@ -667,6 +671,7 @@ const make = Effect.gen(function* () {
       });
     }
     if (
+      !options?.freshSession &&
       thread.session !== null &&
       requestedModelSelection !== undefined &&
       requestedModelSelection.instanceId !== currentInstanceId
@@ -712,6 +717,7 @@ const make = Effect.gen(function* () {
           ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
           ...(thread.title ? { title: thread.title } : {}),
           modelSelection: desiredModelSelection,
+          ...(options?.freshSession ? { freshSession: true } : {}),
           ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
           runtimeMode: desiredRuntimeMode,
         })
@@ -745,6 +751,18 @@ const make = Effect.gen(function* () {
           createdAt,
         });
       });
+
+    if (options?.freshSession) {
+      const session = yield* startProviderSession();
+      yield* bindSessionToThread(session);
+      yield* orchestrationEngine.dispatch({
+        type: "thread.meta.update",
+        commandId: yield* serverCommandId("session-handoff-model"),
+        threadId,
+        modelSelection: desiredModelSelection,
+      });
+      return session;
+    }
 
     const existingSessionThreadId =
       thread.session && thread.session.status !== "stopped" && activeSession ? thread.id : null;
@@ -822,6 +840,8 @@ const make = Effect.gen(function* () {
   const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly messageText: string;
+    readonly sessionHandoff?: "summarize";
+    readonly messageId?: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
     readonly interactionMode?: "default" | "plan";
@@ -833,15 +853,31 @@ const make = Effect.gen(function* () {
         new Error(`Thread '${input.threadId}' was not found in read model.`),
       );
     }
+    let messageText = input.messageText;
+    if (input.sessionHandoff === "summarize") {
+      const detail = yield* projectionSnapshotQuery.getThreadDetailById(input.threadId);
+      if (Option.isNone(detail)) {
+        return yield* Effect.die(new Error("Conversation history is unavailable."));
+      }
+      const directory = path.join(serverConfig.stateDir, "session-handoffs");
+      yield* fileSystem.makeDirectory(directory, { recursive: true });
+      const transcriptPath = path.join(directory, `${yield* crypto.randomUUIDv4}.json`);
+      yield* fileSystem.writeFileString(
+        transcriptPath,
+        serializeSessionHandoff(detail.value, input.messageId),
+      );
+      messageText = buildSessionHandoffPrompt(transcriptPath, input.messageText);
+    }
     const activeSession = yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       pendingTurnStart: true,
+      ...(input.sessionHandoff ? { freshSession: true } : {}),
       thread,
     });
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(input.messageText);
+    const normalizedInput = toNonEmptyProviderInput(messageText);
     const normalizedAttachments = input.attachments ?? [];
     const sessionModelSwitch =
       activeSession.providerInstanceId === undefined
@@ -1468,6 +1504,8 @@ const make = Effect.gen(function* () {
     }
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
+      ...(event.payload.sessionHandoff ? { sessionHandoff: event.payload.sessionHandoff } : {}),
+      messageId: event.payload.messageId,
       messageText: projectComposerContextForProvider({
         text: message.text,
         records: message.context?.records ?? [],

@@ -9435,52 +9435,45 @@ export default function ChatView(props: ChatViewProps) {
     composerRef,
   ]);
 
-  const getModelDisabledReason = useCallback(
-    (instanceId: ProviderInstanceId, model: string): string | null => {
-      if (!activeThread) {
-        return null;
-      }
-      const reason = getStartedThreadModelChangeBlockReason({
-        providers: providerStatuses,
-        hasStartedSession: activeThread.session !== null,
-        currentModelSelection: activeThread.modelSelection,
-        currentProviderInstanceId: activeThread.session?.providerInstanceId ?? null,
-        nextModelSelection: { instanceId, model },
-      });
-      return reason ? `${reason.description} Start a new thread to use this model.` : null;
-    },
-    [activeThread, providerStatuses],
-  );
+  const previousServerModel = useRef<{ threadKey: string; model: ModelSelection } | null>(null);
+  useEffect(() => {
+    if (!activeThread) return;
+    const threadKey = `${activeThread.environmentId}:${activeThread.id}`;
+    const previous = previousServerModel.current;
+    const model = activeThread.modelSelection;
+    if (
+      previous?.threadKey === threadKey &&
+      (previous.model.instanceId !== model.instanceId || previous.model.model !== model.model)
+    ) {
+      setComposerDraftModelSelection(
+        scopeThreadRef(activeThread.environmentId, activeThread.id),
+        model,
+      );
+    }
+    previousServerModel.current = { threadKey, model };
+  }, [activeThread, setComposerDraftModelSelection]);
 
   const onProviderModelSelect = useCallback(
-    (instanceId: ProviderInstanceId, model: string, options?: { focusComposer?: boolean }) => {
+    async (
+      instanceId: ProviderInstanceId,
+      model: string,
+      options?: { focusComposer?: boolean },
+    ) => {
       if (!activeThread) return;
       // Look up the configured instance so model normalization and custom
       // model lookup stay scoped to that exact instance. Unknown instance ids
       // are rejected by returning early; the server remains authoritative too.
       const entry = providerStatuses.find((snapshot) => snapshot.instanceId === instanceId);
       const resolvedDriverKind = entry?.driver ?? null;
-      if (
+      const currentEntry = providerStatuses.find(
+        (snapshot) => snapshot.instanceId === activeThread.session?.providerInstanceId,
+      );
+      const needsHandoff =
         lockedProvider !== null &&
-        resolvedDriverKind !== null &&
-        resolvedDriverKind !== lockedProvider
-      ) {
-        if (options?.focusComposer !== false) scheduleComposerFocus();
-        return;
-      }
-      if (lockedProvider !== null && activeThread.session?.providerInstanceId) {
-        const currentEntry = providerStatuses.find(
-          (snapshot) => snapshot.instanceId === activeThread.session?.providerInstanceId,
-        );
-        if (
-          currentEntry?.continuation?.groupKey &&
-          entry?.continuation?.groupKey &&
-          currentEntry.continuation.groupKey !== entry.continuation.groupKey
-        ) {
-          if (options?.focusComposer !== false) scheduleComposerFocus();
-          return;
-        }
-      }
+        (resolvedDriverKind !== lockedProvider ||
+          (currentEntry?.continuation?.groupKey !== undefined &&
+            entry?.continuation?.groupKey !== undefined &&
+            currentEntry.continuation.groupKey !== entry.continuation.groupKey));
       const resolvedModel = resolveAppModelSelectionForInstance(
         instanceId,
         settings,
@@ -9502,13 +9495,41 @@ export default function ChatView(props: ChatViewProps) {
         currentProviderInstanceId: activeThread.session?.providerInstanceId ?? null,
         nextModelSelection,
       });
-      if (modelChangeBlockReason) {
-        toastManager.add({
-          type: "warning",
-          title: modelChangeBlockReason.title,
-          description: modelChangeBlockReason.description,
-        });
-        if (options?.focusComposer !== false) scheduleComposerFocus();
+      if (needsHandoff || modelChangeBlockReason) {
+        if (sendInFlightRef.current) return;
+        sendInFlightRef.current = true;
+        try {
+          const confirmed = await readLocalApi()?.dialogs.confirm(
+            `Summarize and switch to ${entry?.displayName ?? instanceId} / ${resolvedModel}? The current agent session will stop. Running tasks and monitors will not transfer. The new agent will read this conversation, summarize it, and continue in the same workspace.`,
+          );
+          if (!confirmed) return;
+          const result = await startThreadTurn({
+            environmentId: activeThread.environmentId,
+            input: {
+              threadId: activeThread.id,
+              message: {
+                messageId: newMessageId(),
+                role: "user",
+                text: `Summarize this conversation and continue with ${entry?.displayName ?? instanceId} / ${resolvedModel}.`,
+                attachments: [],
+              },
+              modelSelection: nextModelSelection,
+              sessionHandoff: "summarize",
+              runtimeMode: activeThread.runtimeMode,
+              interactionMode: activeThread.interactionMode,
+              createdAt: new Date().toISOString(),
+            },
+          });
+          if (result._tag === "Failure") {
+            toastManager.add({
+              type: "error",
+              title: "Could not switch provider",
+              description: String(squashAtomCommandFailure(result)),
+            });
+          }
+        } finally {
+          sendInFlightRef.current = false;
+        }
         return;
       }
       setComposerDraftModelSelection(
@@ -9521,6 +9542,7 @@ export default function ChatView(props: ChatViewProps) {
     },
     [
       activeThread,
+      startThreadTurn,
       lockedProvider,
       scheduleComposerFocus,
       setComposerDraftModelSelection,
@@ -10375,7 +10397,6 @@ export default function ChatView(props: ChatViewProps) {
                             }
                             onProviderModelSelect={onProviderModelSelect}
                             onOpenProviderSetup={openProviderSetup}
-                            getModelDisabledReason={getModelDisabledReason}
                             toggleInteractionMode={toggleInteractionMode}
                             handleRuntimeModeChange={handleRuntimeModeChange}
                             handleInteractionModeChange={handleInteractionModeChange}

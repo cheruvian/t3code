@@ -63,6 +63,18 @@ On web and desktop, use Settings → Providers → **Models** to add an unlisted
 name and options. Only options supported by the provider integration affect turns. Antigravity
 uses its account catalog and does not support custom models.
 
+## Switch providers in a conversation
+
+Choose a model from another provider in the conversation's model picker, then
+confirm the summarize-and-switch prompt. On mobile, choose the model in the thread's
+settings. The new agent reads the recorded conversation, summarizes the work,
+and continues in the same workspace. This does not require an available
+allowance on the previous provider.
+
+Switching stops the current agent session. Running tasks, monitors, pending
+approvals, and subagents do not transfer. Your messages and workspace files
+remain in place. You can switch again using the same process.
+
 ## Model defaults
 
 T3 Code remembers your provider, model, and model options for new threads. A
