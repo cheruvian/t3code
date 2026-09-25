@@ -683,6 +683,10 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     slashCommands: [
       COMPACT_SLASH_COMMAND,
       {
+        name: "clear",
+        description: "Start a fresh Codex conversation in this thread and workspace",
+      },
+      {
         name: "feedback",
         description: "Send this thread and Codex logs to OpenAI",
         input: { hint: "Describe the issue (optional)" },

@@ -99,6 +99,10 @@ const isCompactCommandMessage = (message: ThreadTitleMessage): boolean =>
   message.role === "user" &&
   (message.attachments?.length ?? 0) === 0 &&
   message.text.trim().toLowerCase() === "/compact";
+const isClearCommandMessage = (message: ThreadTitleMessage): boolean =>
+  message.role === "user" &&
+  (message.attachments?.length ?? 0) === 0 &&
+  message.text.trim().toLowerCase() === "/clear";
 function mapProviderSessionStatusToOrchestrationStatus(
   status: "connecting" | "ready" | "running" | "error" | "closed",
 ): OrchestrationSession["status"] {
@@ -1357,7 +1361,15 @@ const make = Effect.gen(function* () {
     yield* ensureThreadWorktree(thread);
 
     const isCompactCommand = isCompactCommandMessage(message);
-    if (!hasOtherUserMessages && !isCompactCommand) {
+    const currentInstanceId =
+      thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+    const desiredInstanceId = event.payload.modelSelection?.instanceId ?? currentInstanceId;
+    const isCodexClearCommand =
+      event.payload.sessionHandoff === undefined &&
+      isClearCommandMessage(message) &&
+      (yield* providerService.getInstanceInfo(currentInstanceId)).driverKind === "codex" &&
+      (yield* providerService.getInstanceInfo(desiredInstanceId)).driverKind === "codex";
+    if (!hasOtherUserMessages && !isCompactCommand && !isCodexClearCommand) {
       const project = yield* resolveProject(thread.projectId);
       const generationCwd =
         resolveThreadWorkspaceCwd({
@@ -1500,6 +1512,15 @@ const make = Effect.gen(function* () {
       const queued = turnsAfterCompaction.get(event.payload.threadId) ?? [];
       queued.push(event);
       turnsAfterCompaction.set(event.payload.threadId, queued);
+      return;
+    }
+    if (isCodexClearCommand) {
+      yield* ensureSessionForThread(event.payload.threadId, event.payload.createdAt, {
+        ...(event.payload.modelSelection !== undefined
+          ? { modelSelection: event.payload.modelSelection }
+          : {}),
+        freshSession: true,
+      }).pipe(Effect.catchCause(recoverTurnStartFailure));
       return;
     }
     const sendTurnRequest = yield* buildSendTurnRequestForThread({

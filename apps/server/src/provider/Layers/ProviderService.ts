@@ -1529,7 +1529,18 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           }
         }
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
-        if (input.freshSession && persistedBinding) {
+        const activeSession =
+          input.freshSession &&
+          adapter.capabilities.freshConversationInPlace === true &&
+          persistedBinding?.providerInstanceId === resolvedInstanceId &&
+          adapter.getSession
+            ? Option.getOrUndefined(yield* adapter.getSession(threadId))
+            : undefined;
+        const freshConversationInPlace =
+          activeSession?.status === "ready" &&
+          activeSession.cwd === effectiveCwd &&
+          activeSession.runtimeMode === input.runtimeMode;
+        if (input.freshSession && persistedBinding && !freshConversationInPlace) {
           yield* stopSession({ threadId });
         }
         // Instances sharing a continuation key resume the same native thread,
@@ -1539,7 +1550,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           yield* stopStaleSessionsForThread({ threadId, currentInstanceId: resolvedInstanceId });
         }
         yield* clearTurnAnalyticsSession(resolvedInstanceId, threadId);
-        yield* prepareMcpSession(threadId, resolvedInstanceId);
+        if (!freshConversationInPlace) {
+          yield* prepareMcpSession(threadId, resolvedInstanceId);
+        }
         const session = yield* adapter
           .startSession({
             ...input,
@@ -1547,7 +1560,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
             resumeCursor: effectiveResumeCursor,
           })
-          .pipe(Effect.onError(() => clearMcpSession(threadId)));
+          .pipe(
+            Effect.onError(() =>
+              freshConversationInPlace ? Effect.void : clearMcpSession(threadId),
+            ),
+          );
 
         if (session.provider !== adapter.provider) {
           yield* clearMcpSession(threadId);

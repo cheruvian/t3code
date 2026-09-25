@@ -95,6 +95,19 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
       }),
   );
 
+  public readonly startFreshThreadImpl = vi.fn((_input: { readonly model?: string }) =>
+    Promise.resolve({
+      provider: ProviderDriverKind.make("codex"),
+      status: "ready" as const,
+      runtimeMode: this.options.runtimeMode,
+      threadId: this.options.threadId,
+      cwd: this.options.cwd,
+      resumeCursor: { threadId: "provider-thread-fresh" },
+      createdAt: this.now,
+      updatedAt: this.now,
+    } satisfies ProviderSession),
+  );
+
   public readonly compactThread = Effect.void;
 
   public readonly interruptTurnImpl = vi.fn((_turnId?: TurnId): Promise<void> =>
@@ -139,6 +152,10 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
 
   start() {
     return Effect.promise(() => this.startImpl());
+  }
+
+  startFreshThread(input: { readonly model?: string }) {
+    return Effect.promise(() => this.startFreshThreadImpl(input));
   }
 
   getSession = Effect.promise(() => this.startImpl());
@@ -330,6 +347,30 @@ const sessionErrorLayer = it.layer(
 );
 
 sessionErrorLayer("CodexAdapterLive session errors", (it) => {
+  it.effect("starts a fresh Codex thread without closing the app-server runtime", () =>
+    Effect.gen(function* () {
+      sessionRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-clear-in-place");
+      const input = {
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access" as const,
+      };
+      yield* adapter.startSession(input);
+      const runtime = sessionRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+
+      const fresh = yield* adapter.startSession({ ...input, freshSession: true });
+
+      NodeAssert.equal(sessionRuntimeFactory.factory.mock.calls.length, 1);
+      NodeAssert.equal(runtime.startFreshThreadImpl.mock.calls.length, 1);
+      NodeAssert.equal(runtime.closeImpl.mock.calls.length, 0);
+      NodeAssert.deepStrictEqual(fresh.resumeCursor, { threadId: "provider-thread-fresh" });
+    }),
+  );
+
   it.effect("maps missing adapter sessions to ProviderAdapterSessionNotFoundError", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

@@ -803,6 +803,83 @@ describe("ProviderCommandReactor", () => {
     }),
   );
 
+  it("starts a fresh Codex session for /clear and keeps the same thread", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.make("thread-1");
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const send = (id: string, text: string) =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(id),
+          threadId,
+          message: { messageId: asMessageId(id), role: "user", text, attachments: [] },
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          createdAt,
+        }),
+      );
+
+    await send("remember-marker", "Remember GOLDEN-FERN-219.");
+    await harness.drain();
+    const previousCursor = harness.runtimeSessions.at(-1)?.resumeCursor;
+    const sendsBeforeClear = harness.sendTurn.mock.calls.length;
+
+    await send("clear-context", "/clear");
+    await harness.drain();
+
+    expect(harness.startSession).toHaveBeenLastCalledWith(
+      threadId,
+      expect.objectContaining({ provider: "codex", freshSession: true }),
+    );
+    expect(harness.startSession.mock.calls.at(-1)?.[1]).not.toHaveProperty("resumeCursor");
+    expect(harness.sendTurn).toHaveBeenCalledTimes(sendsBeforeClear);
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session?.status).toBe("ready");
+    expect(thread?.messages.map((message) => message.text)).toEqual(
+      expect.arrayContaining(["Remember GOLDEN-FERN-219.", "/clear"]),
+    );
+    expect(harness.runtimeSessions.at(-1)?.resumeCursor).not.toEqual(previousCursor);
+
+    const startsBeforeFollowup = harness.startSession.mock.calls.length;
+    await send("ask-marker", "What is the marker?");
+    await harness.drain();
+    expect(harness.startSession).toHaveBeenCalledTimes(startsBeforeFollowup);
+    expect(harness.sendTurn.mock.calls.at(-1)?.[0]).toMatchObject({
+      input: "What is the marker?",
+    });
+  });
+
+  it("passes /clear to providers with their own command handling", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-opus-4-6",
+      },
+    });
+    const threadId = ThreadId.make("thread-1");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("claude-clear"),
+        threadId,
+        message: {
+          messageId: asMessageId("claude-clear"),
+          role: "user",
+          text: "/clear",
+          attachments: [],
+        },
+        interactionMode: "default",
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    await harness.drain();
+
+    expect(harness.sendTurn).toHaveBeenCalledWith(expect.objectContaining({ input: "/clear" }));
+    expect(harness.startSession.mock.calls.at(-1)?.[1]).not.toHaveProperty("freshSession");
+  });
+
   effectIt.effect.each([
     { label: "a command mention", text: "What does /logout do?", attachments: [] },
     {

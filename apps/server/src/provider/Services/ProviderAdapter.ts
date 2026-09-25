@@ -53,6 +53,8 @@ export interface ProviderAdapterCapabilities {
   readonly promptlessTurnContinuation?: boolean;
   /** False when native conversation history cannot be rewound. */
   readonly supportsConversationRollback?: boolean;
+  /** A fresh conversation can reuse the active provider process. */
+  readonly freshConversationInPlace?: boolean;
 }
 
 export interface ProviderThreadTurnSnapshot {

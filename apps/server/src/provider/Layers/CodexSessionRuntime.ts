@@ -222,6 +222,10 @@ export interface CodexThreadSnapshot {
 
 export interface CodexSessionRuntimeShape {
   readonly start: () => Effect.Effect<ProviderSession, CodexSessionRuntimeError>;
+  readonly startFreshThread: (input: {
+    readonly model?: string;
+    readonly serviceTier?: CodexServiceTier;
+  }) => Effect.Effect<ProviderSession, CodexSessionRuntimeError>;
   readonly getSession: Effect.Effect<ProviderSession>;
   readonly sendTurn: (
     input: CodexSessionRuntimeSendTurnInput,
@@ -2622,6 +2626,32 @@ export const makeCodexSessionRuntime = (
 
     return {
       start,
+      startFreshThread: (input) =>
+        Effect.gen(function* () {
+          const current = yield* Ref.get(sessionRef);
+          const requestedModel = normalizeCodexModelSlug(input.model ?? current.model);
+          const opened = yield* client.request(
+            "thread/start",
+            buildThreadStartParams({
+              cwd: current.cwd ?? options.cwd,
+              runtimeMode: current.runtimeMode,
+              model: requestedModel,
+              serviceTier: input.serviceTier ?? options.serviceTier,
+            }),
+          );
+          const session = {
+            ...current,
+            status: "ready" as const,
+            activeTurnId: undefined,
+            cwd: opened.cwd,
+            model: opened.model,
+            resumeCursor: { threadId: opened.thread.id },
+            updatedAt: yield* nowIso,
+          } satisfies ProviderSession;
+          yield* Ref.set(sessionRef, session);
+          yield* emitSessionEvent("session/ready", "Codex conversation ready.");
+          return session;
+        }),
       getSession: Ref.get(sessionRef),
       compactThread: Effect.gen(function* () {
         const providerThreadId = yield* readProviderThreadId;

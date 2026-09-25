@@ -2502,14 +2502,39 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         }
 
         const existing = sessions.get(input.threadId);
-        if (existing && !existing.stopped) {
-          yield* Effect.suspend(() => stopSessionInternal(existing));
-        }
-
         const serviceTier =
           input.modelSelection?.instanceId === boundInstanceId
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
+        if (existing && !existing.stopped && input.freshSession) {
+          const current = yield* existing.runtime.getSession;
+          if (
+            current.cwd === (input.cwd ?? process.cwd()) &&
+            current.runtimeMode === input.runtimeMode
+          ) {
+            return yield* existing.runtime
+              .startFreshThread({
+                ...(input.modelSelection?.instanceId === boundInstanceId
+                  ? { model: input.modelSelection.model }
+                  : {}),
+                ...(serviceTier ? { serviceTier } : {}),
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapterProcessError({
+                      provider: PROVIDER,
+                      threadId: input.threadId,
+                      detail: cause.message,
+                      cause,
+                    }),
+                ),
+              );
+          }
+        }
+        if (existing && !existing.stopped) {
+          yield* Effect.suspend(() => stopSessionInternal(existing));
+        }
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
         const globalCustomInstructions = yield* serverSettingsService.getSettings.pipe(
           Effect.map((settings) => settings.globalCustomInstructions),
@@ -3162,6 +3187,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     capabilities: {
       sessionModelSwitch: "in-session",
       promptlessTurnContinuation: true,
+      freshConversationInPlace: true,
     },
     startSession,
     sendTurn,
