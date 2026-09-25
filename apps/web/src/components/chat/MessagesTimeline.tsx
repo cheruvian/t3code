@@ -553,6 +553,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const [positionedThreadKey, setPositionedThreadKey] = useState<string | null>(() =>
     rememberedPosition?.atEnd === false ? null : listIdentityKey,
   );
+  const [openingReturn, setOpeningReturn] = useState<{ key: string; reading: boolean } | null>(
+    null,
+  );
   const restoringThreadPosition = positionedThreadKey !== listIdentityKey;
   const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const listIdentityRef = useRef(listIdentityKey);
@@ -567,6 +570,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   if (listIdentityRef.current !== listIdentityKey) {
     listIdentityRef.current = listIdentityKey;
     setPositionedThreadKey(null);
+    setOpeningReturn(null);
     previousLatestTurnRef.current = latestTurn;
     setSettlingListIdentity(listIdentityKey);
     paintedExpandedTurnIds = rememberedPosition?.disclosures?.turns ?? new Set();
@@ -822,9 +826,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const candidateRestoreReadingPosition = threadSyncPending
     ? rememberedPosition?.atEnd === false
     : shouldRestoreTimelineReadingPosition(rememberedPosition, lastTimelineReadingRowId(rows));
-  const [openingReturn, setOpeningReturn] = useState<{ key: string; reading: boolean } | null>(
-    null,
-  );
   if (!threadSyncPending && rows.length > 0 && openingReturn?.key !== listIdentityKey) {
     setOpeningReturn({ key: listIdentityKey, reading: candidateRestoreReadingPosition });
   }

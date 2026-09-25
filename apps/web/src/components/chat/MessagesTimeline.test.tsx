@@ -1114,6 +1114,82 @@ describe("MessagesTimeline", () => {
     }
   });
 
+  it("re-evaluates the reading position after visiting an empty draft", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const viewport = {
+      scrollTop: 0,
+      ownerDocument: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+    const scrollToIndex = vi.fn().mockResolvedValue(undefined);
+    const scrollToEnd = vi.fn().mockResolvedValue(undefined);
+    const listRef = {
+      current: {
+        getScrollableNode: () => viewport,
+        getState: () => ({ data: [], scroll: 0, scrollLength: 500, contentLength: 500 }),
+        scrollToIndex,
+        scrollToEnd,
+      },
+    } as unknown as React.RefObject<LegendListRef>;
+    const threadKey = "environment-local:return-after-empty-draft";
+    const entry = {
+      id: "reading-work",
+      kind: "work" as const,
+      createdAt: MESSAGE_CREATED_AT,
+      entry: {
+        id: "reading-call",
+        createdAt: MESSAGE_CREATED_AT,
+        toolCallId: "reading-call",
+        label: "Read output",
+        tone: "error" as const,
+        itemType: "command_execution" as const,
+        command: "git status",
+        toolLifecycleStatus: "completed" as const,
+      },
+    };
+    const props = { ...buildProps(), listRef, routeThreadKey: threadKey, timelineEntries: [entry] };
+    let renderer!: ReactTestRenderer;
+    try {
+      await act(async () => {
+        renderer = create(<MessagesTimeline {...props} />);
+      });
+      rememberTimelinePosition(threadKey, {
+        rowId: "reading-work",
+        lastRowId: "reading-work",
+        offsetWithinRow: 20,
+        scrollOffset: 800,
+        atEnd: false,
+      });
+      await act(async () => {
+        renderer.update(
+          <MessagesTimeline
+            {...props}
+            routeThreadKey="environment-local:empty-draft"
+            timelineEntries={[]}
+          />,
+        );
+      });
+      scrollToIndex.mockClear();
+      scrollToEnd.mockClear();
+      await act(async () => {
+        renderer.update(<MessagesTimeline {...props} />);
+      });
+      expect(scrollToIndex).toHaveBeenCalledWith({
+        index: 0,
+        animated: false,
+        viewPosition: 0,
+        viewOffset: -20,
+      });
+      expect(scrollToEnd).not.toHaveBeenCalled();
+    } finally {
+      act(() => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps reserved end space when tool work starts while reading history", () => {
     const turnId = TurnId.make("turn-with-active-tool");
     const firstEntry = buildUserTimelineEntry("Run the command.");
