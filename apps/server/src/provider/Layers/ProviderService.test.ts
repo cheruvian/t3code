@@ -5181,3 +5181,61 @@ describe("agent browser access", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
+
+const sharedHomeWorkInstanceId = ProviderInstanceId.make("codex_work");
+const sharedHomePersonalInstanceId = ProviderInstanceId.make("codex_personal");
+const sharedHomeWorkCodex = makeFakeCodexAdapter();
+const sharedHomePersonalCodex = makeFakeCodexAdapter();
+const sharedHomeRegistry = makeStaticInstanceRegistry([
+  [sharedHomeWorkInstanceId, sharedHomeWorkCodex.adapter],
+  [sharedHomePersonalInstanceId, sharedHomePersonalCodex.adapter],
+]);
+const sharedHomeAccounts = makeProviderServiceLayer({
+  registry: {
+    ...sharedHomeRegistry,
+    getInstanceInfo: (instanceId) =>
+      sharedHomeRegistry.getInstanceInfo(instanceId).pipe(
+        Effect.map((info) => ({
+          ...info,
+          continuationIdentity: {
+            ...info.continuationIdentity,
+            continuationKey: "codex:home:/Users/example/.codex",
+          },
+        })),
+      ),
+  },
+});
+
+sharedHomeAccounts.layer("ProviderServiceLive shared-home account switch", (it) => {
+  it.effect("releases the previous account's session before resuming on another", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-shared-home-account-switch");
+      const resumeCursor = { threadId: "native-thread" };
+
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: sharedHomeWorkInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+        resumeCursor,
+      });
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: sharedHomePersonalInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+        resumeCursor,
+      });
+
+      const [stoppedAt] = sharedHomeWorkCodex.stopSession.mock.invocationCallOrder;
+      const [resumedAt] = sharedHomePersonalCodex.startSession.mock.invocationCallOrder;
+      assert.isDefined(stoppedAt);
+      assert.isDefined(resumedAt);
+      assert.isBelow(stoppedAt!, resumedAt!);
+      assert.deepEqual(sharedHomePersonalCodex.startSession.mock.calls[0]?.[0].resumeCursor, {
+        threadId: "native-thread",
+      });
+    }),
+  );
+});

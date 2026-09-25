@@ -1461,6 +1461,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           );
         }
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        let resumesAcrossInstances = false;
         if (
           !input.freshSession &&
           persistedBinding?.provider === resolvedProvider &&
@@ -1481,6 +1482,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               `Thread '${threadId}' cannot switch from instance '${previousInstanceId}' to '${resolvedInstanceId}' because their provider resume state is incompatible.`,
             );
           }
+          resumesAcrossInstances = true;
         }
         const effectiveResumeCursor = input.freshSession
           ? undefined
@@ -1529,6 +1531,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
         if (input.freshSession && persistedBinding) {
           yield* stopSession({ threadId });
+        }
+        // Instances sharing a continuation key resume the same native thread,
+        // and providers such as Codex allow a single writer per thread, so the
+        // previous instance must release it before the new one resumes.
+        if (resumesAcrossInstances) {
+          yield* stopStaleSessionsForThread({ threadId, currentInstanceId: resolvedInstanceId });
         }
         yield* clearTurnAnalyticsSession(resolvedInstanceId, threadId);
         yield* prepareMcpSession(threadId, resolvedInstanceId);
