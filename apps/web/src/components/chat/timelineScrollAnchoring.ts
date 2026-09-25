@@ -135,6 +135,13 @@ export function shouldRestoreTimelineReadingPosition(
   );
 }
 
+export function lastTimelineReadingRowId(
+  rows: readonly { readonly kind: string; readonly id: string }[],
+) {
+  // A queued follow-up is a composer action, not a new conversation row.
+  return rows.findLast((row) => row.kind !== "queued-message")?.id;
+}
+
 // Scoped thread keys keep separate environments independent. Bound the session cache.
 const rememberedTimelinePositions = new Map<string, RememberedTimelinePosition>();
 

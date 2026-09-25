@@ -161,6 +161,7 @@ import { useProject, useThread } from "../../state/entities";
 import { serverEnvironment } from "../../state/server";
 import {
   CHAT_TIMELINE_ANCHOR_OFFSET,
+  lastTimelineReadingRowId,
   readTimelinePosition,
   rememberTimelinePosition,
   shouldRestoreTimelineReadingPosition,
@@ -820,7 +821,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const minimapItems = useMemo(() => deriveTimelineMinimapItems(deferredRows), [deferredRows]);
   const candidateRestoreReadingPosition = threadSyncPending
     ? rememberedPosition?.atEnd === false
-    : shouldRestoreTimelineReadingPosition(rememberedPosition, rows.at(-1)?.id);
+    : shouldRestoreTimelineReadingPosition(rememberedPosition, lastTimelineReadingRowId(rows));
   const [openingReturn, setOpeningReturn] = useState<{ key: string; reading: boolean } | null>(
     null,
   );
@@ -1063,7 +1064,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       const index = state.indexByKey(position.rowId);
       const row = index === undefined ? undefined : state.elementAtIndex(index);
       const element = listRef.current?.getScrollableNode();
-      const lastRowId = rows.at(-1)?.id;
+      const lastRowId = lastTimelineReadingRowId(rows);
       if (element) {
         rememberTimelinePosition(listIdentityKey, {
           ...position,

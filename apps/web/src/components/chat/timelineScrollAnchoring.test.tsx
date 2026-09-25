@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   getAnchoredTurnMetrics,
   getRowBottom,
+  lastTimelineReadingRowId,
   readTimelinePosition,
   rememberTimelinePosition,
   shouldRestoreTimelineReadingPosition,
@@ -176,6 +177,29 @@ describe("timeline scroll anchoring", () => {
 });
 
 describe("remembered timeline positions", () => {
+  it("does not treat queued follow-ups as new conversation rows", () => {
+    const rows = [
+      { kind: "message", id: "message-9" },
+      { kind: "queued-message", id: "queued-message:first" },
+    ];
+    const reading = {
+      rowId: "message-4",
+      lastRowId: "message-9",
+      offsetWithinRow: 32,
+      scrollOffset: 932,
+      atEnd: false,
+    };
+    expect(shouldRestoreTimelineReadingPosition(reading, lastTimelineReadingRowId(rows))).toBe(
+      true,
+    );
+    expect(
+      shouldRestoreTimelineReadingPosition(
+        reading,
+        lastTimelineReadingRowId([...rows, { kind: "message", id: "message-10" }]),
+      ),
+    ).toBe(false);
+  });
+
   it("resumes reading only when the thread has no newer row", () => {
     const reading = {
       rowId: "message-4",
