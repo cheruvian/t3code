@@ -4309,6 +4309,68 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("resets context usage and the resume cursor when Claude clears a conversation", () => {
+    const harness = makeHarness();
+    const oldSessionId = "550e8400-e29b-41d4-a716-446655440000";
+    const newSessionId = "550e8400-e29b-41d4-a716-446655440001";
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        resumeCursor: {
+          resume: oldSessionId,
+          resumeSessionAt: "old-assistant-message",
+          turnCount: 1,
+          turnStartMessageIds: ["old-user-message"],
+        },
+      });
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "/clear", attachments: [] });
+      harness.query.emit({
+        type: "conversation_reset",
+        new_conversation_id: newSessionId,
+        session_id: oldSessionId,
+        uuid: "conversation-reset",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        duration_ms: 1,
+        duration_api_ms: 0,
+        num_turns: 1,
+        result: "",
+        session_id: newSessionId,
+        usage: {},
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const resetUsage = runtimeEvents.findLast(
+        (event) => event.type === "thread.token-usage.updated",
+      );
+      assert.equal(resetUsage?.type, "thread.token-usage.updated");
+      if (resetUsage?.type === "thread.token-usage.updated") {
+        assert.equal(resetUsage.payload.usage.usedTokens, 0);
+        assert.equal(resetUsage.payload.usage.totalProcessedTokens, undefined);
+      }
+      const resumeCursor = (yield* adapter.listSessions())[0]?.resumeCursor as
+        | { resume?: string; resumeSessionAt?: string }
+        | undefined;
+      assert.equal(resumeCursor?.resume, newSessionId);
+      assert.equal(resumeCursor?.resumeSessionAt, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("consumes undeclared and UX-internal system subtypes without warning rows", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

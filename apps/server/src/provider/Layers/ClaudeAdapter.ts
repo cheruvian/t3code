@@ -4181,12 +4181,26 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       case "rate_limit_event":
         yield* handleSdkTelemetryMessage(context, message);
         return;
-      // Composer prompt suggestions have no T3 surface; consumed deliberately.
-      // `conversation_reset` announces a CLI-side conversation id swap
-      // (e.g. /clear); T3 keeps its own thread identity and resume cursor.
       case "prompt_suggestion":
-      case "conversation_reset":
         return;
+      case "conversation_reset": {
+        context.resumeSessionId = message.new_conversation_id;
+        context.lastAssistantUuid = undefined;
+        context.lastKnownTokenUsage = undefined;
+        context.lastKnownTotalProcessedTokens = undefined;
+        yield* updateResumeCursor(context);
+        yield* emitThreadTokenUsage(
+          context,
+          {
+            usedTokens: 0,
+            ...(context.lastKnownContextWindow !== undefined
+              ? { maxTokens: context.lastKnownContextWindow }
+              : {}),
+          },
+          { rawMethod: "claude/conversation_reset", rawPayload: message },
+        );
+        return;
+      }
       default: {
         // Exhaustiveness guard (see handleSystemMessage): new SDK top-level
         // message types fail typecheck here instead of warning at runtime.

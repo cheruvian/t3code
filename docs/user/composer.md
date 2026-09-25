@@ -171,9 +171,9 @@ Provider commands must start the message to run. T3 Code commands such as
 Send `/compact` in an existing conversation to reduce context usage when the
 provider supports it. Web and desktop also offer compaction from the context meter.
 
-In a Codex conversation, send `/clear` by itself to start with empty agent context
-in the same thread and workspace. Earlier messages stay visible, but Codex will
-not remember them unless you include the needed details again.
+In a Codex or Claude conversation, send `/clear` by itself to start with empty
+agent context in the same thread and workspace. Earlier messages stay visible,
+but the agent will not remember them unless you include the needed details again.
 
 ## Context in your message
 
