@@ -403,6 +403,7 @@ const TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH = {
 interface MessagesTimelineProps {
   citationRequest?: AssistantCitationRequest | null;
   citationHistoryLoading?: boolean;
+  threadSyncPending?: boolean;
   onCiteAssistantText?: (
     citation: AssistantCitation,
     sourceAnchor: AssistantCitationSourceAnchor,
@@ -481,6 +482,7 @@ interface MessagesTimelineProps {
 export const MessagesTimeline = memo(function MessagesTimeline({
   citationRequest = null,
   citationHistoryLoading = false,
+  threadSyncPending = false,
   onCiteAssistantText,
   isWorking,
   worktreeSetup = null,
@@ -816,14 +818,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const rows = useStableRows(rawRows, listIdentityKey);
   const deferredRows = useDeferredValue(rows);
   const minimapItems = useMemo(() => deriveTimelineMinimapItems(deferredRows), [deferredRows]);
-  const candidateRestoreReadingPosition = shouldRestoreTimelineReadingPosition(
-    rememberedPosition,
-    rows.at(-1)?.id,
-  );
+  const candidateRestoreReadingPosition = threadSyncPending
+    ? rememberedPosition?.atEnd === false
+    : shouldRestoreTimelineReadingPosition(rememberedPosition, rows.at(-1)?.id);
   const [openingReturn, setOpeningReturn] = useState<{ key: string; reading: boolean } | null>(
     null,
   );
-  if (!citationHistoryLoading && rows.length > 0 && openingReturn?.key !== listIdentityKey) {
+  if (!threadSyncPending && rows.length > 0 && openingReturn?.key !== listIdentityKey) {
     setOpeningReturn({ key: listIdentityKey, reading: candidateRestoreReadingPosition });
   }
   const restoreReadingPosition =
@@ -840,7 +841,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [restoreRowIndex, restoringThreadPosition],
   );
   useLayoutEffect(() => {
-    if (!restoringThreadPosition || citationHistoryLoading || rows.length === 0) return;
+    if (!restoringThreadPosition || rows.length === 0) return;
     const list = listRef.current;
     if (!list) return;
     if (citationRequest !== null) {
@@ -876,10 +877,36 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     viewport?.addEventListener("touchmove", cancelForNavigation, { passive: true });
     viewport?.addEventListener("pointerdown", cancelForNavigation, { passive: true });
     viewport?.ownerDocument.addEventListener("keydown", onScrollKey);
+    if (cancelPositionRestoreRef) cancelPositionRestoreRef.current = cancelRestoration;
+    const cleanup = () => {
+      cancelled = true;
+      if (cancelPositionRestoreRef?.current === cancelRestoration) {
+        cancelPositionRestoreRef.current = null;
+      }
+      if (settleFrame !== null) cancelAnimationFrame(settleFrame);
+      viewport?.removeEventListener("wheel", cancelForNavigation);
+      viewport?.removeEventListener("touchmove", cancelForNavigation);
+      viewport?.removeEventListener("pointerdown", cancelForNavigation);
+      viewport?.ownerDocument.removeEventListener("keydown", onScrollKey);
+    };
+    // Show the cached reading position while syncing, then reconcile it against
+    // the live rows. A user gesture can take over before that final pass.
+    if (threadSyncPending) {
+      const position = rememberedPosition;
+      const index = position ? rows.findIndex((row) => row.id === position.rowId) : -1;
+      if (position?.atEnd === false && index >= 0) {
+        void list.scrollToIndex({
+          index,
+          animated: false,
+          viewPosition: 0,
+          viewOffset: -position.offsetWithinRow,
+        });
+      }
+      return cleanup;
+    }
     const position = rememberedPosition;
     const index = position ? rows.findIndex((row) => row.id === position.rowId) : -1;
     if (restoreReadingPosition) onManualNavigation();
-    if (cancelPositionRestoreRef) cancelPositionRestoreRef.current = cancelRestoration;
     const scrolling =
       restoreReadingPosition && position
         ? index >= 0
@@ -932,19 +959,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       };
       settleFrame = requestAnimationFrame(reconcile);
     });
-    return () => {
-      cancelled = true;
-      if (cancelPositionRestoreRef?.current === cancelRestoration) {
-        cancelPositionRestoreRef.current = null;
-      }
-      if (settleFrame !== null) cancelAnimationFrame(settleFrame);
-      viewport?.removeEventListener("wheel", cancelForNavigation);
-      viewport?.removeEventListener("touchmove", cancelForNavigation);
-      viewport?.removeEventListener("pointerdown", cancelForNavigation);
-      viewport?.ownerDocument.removeEventListener("keydown", onScrollKey);
-    };
+    return cleanup;
   }, [
-    citationHistoryLoading,
     citationRequest,
     cancelPositionRestoreRef,
     listIdentityKey,
@@ -954,6 +970,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     restoreReadingPosition,
     restoringThreadPosition,
     rows,
+    threadSyncPending,
   ]);
 
   const [timelineViewportElement, setTimelineViewportElement] = useState<HTMLDivElement | null>(

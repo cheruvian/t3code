@@ -13,6 +13,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { LegendListRef, MaintainScrollAtEndOptions } from "@legendapp/list/react";
 import { shouldUseRestingComposerLayout } from "../composerFooterLayout";
 import { useComposerFocusState } from "./useComposerFocusState";
+import { rememberTimelinePosition } from "./timelineScrollAnchoring";
 
 vi.mock("@legendapp/list/react", async () => {
   const legendListTestId = "legend-list";
@@ -992,6 +993,121 @@ describe("MessagesTimeline", () => {
       flushFrame();
       flushFrame();
       expect(animatedAttr(renderer)).toBe(true);
+    } finally {
+      act(() => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("waits for a cached thread to finish syncing before restoring its reading position", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const ownerDocument = { addEventListener: vi.fn(), removeEventListener: vi.fn() };
+    const viewport = {
+      scrollTop: 0,
+      ownerDocument,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+    const scrollToOffset = vi.fn().mockResolvedValue(undefined);
+    const scrollToIndex = vi.fn().mockResolvedValue(undefined);
+    const scrollToEnd = vi.fn().mockResolvedValue(undefined);
+    const listRef = {
+      current: {
+        getScrollableNode: () => viewport,
+        getState: () => ({ data: [], scroll: 0, scrollLength: 500, contentLength: 500 }),
+        scrollToOffset,
+        scrollToIndex,
+        scrollToEnd,
+      },
+    } as unknown as React.RefObject<LegendListRef>;
+    const threadKey = "environment-local:syncing-position-test";
+    rememberTimelinePosition(threadKey, {
+      rowId: "syncing-work",
+      offsetWithinRow: 20,
+      scrollOffset: 800,
+      atEnd: false,
+    });
+    const entry = {
+      id: "syncing-work",
+      kind: "work" as const,
+      createdAt: MESSAGE_CREATED_AT,
+      entry: {
+        id: "syncing-call",
+        createdAt: MESSAGE_CREATED_AT,
+        toolCallId: "syncing-call",
+        label: "Read output",
+        tone: "error" as const,
+        itemType: "command_execution" as const,
+        command: "git status",
+        toolLifecycleStatus: "completed" as const,
+      },
+    };
+    const props = { ...buildProps(), listRef, routeThreadKey: threadKey, timelineEntries: [entry] };
+    let renderer!: ReactTestRenderer;
+    try {
+      await act(async () => {
+        renderer = create(<MessagesTimeline {...props} threadSyncPending />);
+      });
+      expect(scrollToIndex).toHaveBeenCalledWith({
+        index: 0,
+        animated: false,
+        viewPosition: 0,
+        viewOffset: -20,
+      });
+      expect(scrollToOffset).not.toHaveBeenCalled();
+      expect(scrollToEnd).not.toHaveBeenCalled();
+      expect(viewport.addEventListener).toHaveBeenCalledWith("wheel", expect.any(Function), {
+        passive: true,
+      });
+
+      await act(async () => {
+        renderer.update(<MessagesTimeline {...props} threadSyncPending={false} />);
+      });
+      expect(scrollToIndex).toHaveBeenCalledTimes(2);
+
+      const nextThreadKey = "environment-local:syncing-navigation-test";
+      rememberTimelinePosition(nextThreadKey, {
+        rowId: "syncing-work",
+        offsetWithinRow: 20,
+        scrollOffset: 900,
+        atEnd: false,
+      });
+      const onManualNavigation = vi.fn();
+      scrollToOffset.mockClear();
+      scrollToIndex.mockClear();
+      await act(async () => {
+        renderer.update(
+          <MessagesTimeline
+            {...props}
+            routeThreadKey={nextThreadKey}
+            onManualNavigation={onManualNavigation}
+            threadSyncPending
+          />,
+        );
+      });
+      viewport.scrollTop = 321;
+      const wheelListener = viewport.addEventListener.mock.calls.findLast(
+        ([eventName]) => eventName === "wheel",
+      )?.[1] as (() => void) | undefined;
+      expect(wheelListener).toBeDefined();
+      await act(async () => wheelListener?.());
+      expect(scrollToOffset).toHaveBeenCalledWith({ offset: 321, animated: false });
+      expect(onManualNavigation).toHaveBeenCalledOnce();
+
+      await act(async () => {
+        renderer.update(
+          <MessagesTimeline
+            {...props}
+            routeThreadKey={nextThreadKey}
+            onManualNavigation={onManualNavigation}
+            threadSyncPending={false}
+          />,
+        );
+      });
+      expect(scrollToOffset).not.toHaveBeenCalledWith({ offset: 900, animated: false });
+      expect(scrollToIndex).toHaveBeenCalledTimes(1);
     } finally {
       act(() => renderer?.unmount());
       vi.unstubAllGlobals();

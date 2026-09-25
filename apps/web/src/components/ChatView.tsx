@@ -10114,6 +10114,7 @@ export default function ChatView(props: ChatViewProps) {
                 <MessagesTimeline
                   citationRequest={paintOnlyDisplayedTimeline ? null : citationRequest}
                   citationHistoryLoading={threadDetailLoading}
+                  threadSyncPending={!paintOnlyDisplayedTimeline && threadSyncPhase !== null}
                   {...(!paintOnlyDisplayedTimeline
                     ? {
                         onCiteAssistantText: citeAssistantText,
