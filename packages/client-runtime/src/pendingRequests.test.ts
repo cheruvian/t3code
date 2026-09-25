@@ -415,6 +415,30 @@ describe("pending questions", () => {
     ]);
   });
 
+  it("closes a question once any client submits an answer, until the provider rejects it", () => {
+    const requested = makeActivity({
+      kind: "user-input.requested",
+      payload: {
+        requestId: "question-1",
+        questions: [{ id: "q", header: "Q", question: "Continue?", options: [] }],
+      },
+    });
+    const submitted = makeActivity({
+      kind: "user-input.answer-submitted",
+      payload: { requestId: "question-1", answers: { q: "yes" } },
+    });
+    const failed = makeActivity({
+      kind: "provider.user-input.respond.failed",
+      payload: { requestId: "question-1", detail: "Provider adapter request failed: timeout" },
+    });
+    const pendingIds = (activities: OrchestrationThreadActivity[]) =>
+      derivePendingRequests(activities).userInputs.map((request) => request.requestId);
+
+    expect(pendingIds([requested, submitted])).toEqual([]);
+    expect(pendingIds([requested, submitted, failed])).toEqual(["question-1"]);
+    expect(pendingIds([requested, submitted, failed, submitted])).toEqual([]);
+  });
+
   it("clears stale pending user-input prompts when the provider reports an orphaned request", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

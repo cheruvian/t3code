@@ -92,6 +92,7 @@ const requestActivityKinds = new Set([
   "provider.approval.respond.failed",
   "user-input.requested",
   "user-input.resolved",
+  "user-input.answer-submitted",
   "provider.user-input.respond.failed",
 ]);
 
@@ -126,6 +127,8 @@ export function derivePendingRequests(activities: ReadonlyArray<OrchestrationThr
   const userInputs = new Map<ApprovalRequestId, PendingUserInput>();
   const closedApprovals = new Set<ApprovalRequestId>();
   const closedUserInputs = new Set<ApprovalRequestId>();
+  // An answer is on its way to the provider; a failed reply reopens it.
+  const answeredUserInputs = new Set<ApprovalRequestId>();
 
   // Request IDs are unique. A terminal event stays final even when provider
   // sequences and server-generated activities arrive in a different order.
@@ -162,6 +165,8 @@ export function derivePendingRequests(activities: ReadonlyArray<OrchestrationThr
       });
     } else if (activity.kind === "user-input.requested") {
       if (closedUserInputs.has(requestId)) continue;
+      // A question reopened after its session ended takes a fresh answer.
+      answeredUserInputs.delete(requestId);
       const questions = parseQuestions(payload.questions);
       if (questions.length === 0) continue;
       userInputs.set(requestId, {
@@ -177,6 +182,8 @@ export function derivePendingRequests(activities: ReadonlyArray<OrchestrationThr
     ) {
       closedApprovals.add(requestId);
       approvals.delete(requestId);
+    } else if (activity.kind === "user-input.answer-submitted") {
+      answeredUserInputs.add(requestId);
     } else if (
       activity.kind === "user-input.resolved" ||
       (activity.kind === "provider.user-input.respond.failed" &&
@@ -184,8 +191,11 @@ export function derivePendingRequests(activities: ReadonlyArray<OrchestrationThr
     ) {
       closedUserInputs.add(requestId);
       userInputs.delete(requestId);
+    } else if (activity.kind === "provider.user-input.respond.failed") {
+      answeredUserInputs.delete(requestId);
     }
   }
+  for (const requestId of answeredUserInputs) userInputs.delete(requestId);
 
   const byCreatedAt = (
     left: { readonly createdAt: string },

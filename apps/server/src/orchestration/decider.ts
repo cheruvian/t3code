@@ -9,6 +9,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  type OrchestrationSessionStatus,
   type OrchestrationThread,
   type ThreadPullRequestKey,
   type ThreadPullRequestLink,
@@ -78,6 +79,13 @@ function isStaleRequestFailureDetail(payload: Record<string, unknown> | null): b
     detail.includes("unknown pending codex user input request")
   );
 }
+
+const SESSION_STATUSES_WITHOUT_LIVE_CALLBACKS: ReadonlySet<OrchestrationSessionStatus> = new Set([
+  "starting",
+  "interrupted",
+  "stopped",
+  "error",
+]);
 
 // Scans the read model's activities, which the projector caps at the most
 // recent 500 plus pending async questions. Async questions remain actionable
@@ -1918,7 +1926,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
-      if (attachments.length === 0) return responseEvent;
+      // Every client treats the question as answered from here, so a second
+      // device or a double click cannot answer a callback the provider closed.
       const historyEvent = yield* decideOrchestrationCommand({
         readModel,
         command: {
@@ -1937,8 +1946,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               requestId: command.requestId,
               answers: command.answers,
               questionTextById,
-              attachmentsByQuestionId: command.attachmentsByQuestionId,
-              detail: attachments.map((attachment) => attachment.name).join("\n"),
+              ...(attachments.length > 0
+                ? {
+                    attachmentsByQuestionId: command.attachmentsByQuestionId,
+                    detail: attachments.map((attachment) => attachment.name).join("\n"),
+                  }
+                : {}),
             },
           },
         },
@@ -2077,6 +2090,59 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           session: command.session,
         },
       };
+      // Approvals and native questions are callbacks held by the running turn.
+      // Once the session stops, fails, is interrupted, or starts a new turn, no
+      // provider can take the answer, so approvals expire. Questions the user
+      // interrupted are dismissed; the rest reopen as message-mode questions so
+      // the answer still reaches the agent, as a message.
+      const expiredRequestEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      if (SESSION_STATUSES_WITHOUT_LIVE_CALLBACKS.has(command.session.status)) {
+        for (const [requestId, request] of openRequests(thread)) {
+          const isApproval = request.kind === "approval.requested";
+          const payload = Predicate.isObject(request.payload) ? request.payload : undefined;
+          if (!isApproval && (payload === undefined || payload.responseMode === "message")) {
+            continue;
+          }
+          const closing = {
+            id: EventId.make(`session-ended:${command.commandId}:${requestId}`),
+            turnId: request.turnId,
+            createdAt: command.createdAt,
+          };
+          const activity: OrchestrationThreadActivity = isApproval
+            ? {
+                ...closing,
+                kind: "approval.resolved",
+                summary: "Approval expired",
+                tone: "approval",
+                payload: { requestId },
+              }
+            : command.session.status === "interrupted"
+              ? {
+                  ...closing,
+                  kind: "user-input.resolved",
+                  summary: "User input dismissed",
+                  tone: "info",
+                  payload: { requestId },
+                }
+              : {
+                  ...closing,
+                  kind: "user-input.requested",
+                  summary: request.summary,
+                  tone: request.tone,
+                  payload: { ...payload, responseMode: "message" },
+                };
+          expiredRequestEvents.push({
+            ...(yield* withEventBase({
+              aggregateKind: "thread",
+              aggregateId: command.threadId,
+              occurredAt: command.createdAt,
+              commandId: command.commandId,
+            })),
+            type: "thread.activity-appended",
+            payload: { threadId: command.threadId, activity },
+          });
+        }
+      }
       // Only a session coming alive is activity worth waking a settled thread
       // for — status writes like ready/stopped/error arrive after the fact and
       // must not fight a user's explicit settle. Snooze is deliberately NOT
@@ -2089,7 +2155,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command.session.status === "starting" || command.session.status === "running";
       // Real activity resets ANY override (settled wakes, active unpins).
       if (thread.settledOverride === null || !isSessionActivity) {
-        return sessionSetEvent;
+        return expiredRequestEvents.length === 0
+          ? sessionSetEvent
+          : [sessionSetEvent, ...expiredRequestEvents];
       }
       const unsettledEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
@@ -2105,7 +2173,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       };
-      return [unsettledEvent, sessionSetEvent];
+      return [unsettledEvent, sessionSetEvent, ...expiredRequestEvents];
     }
 
     case "thread.message.assistant.delta":

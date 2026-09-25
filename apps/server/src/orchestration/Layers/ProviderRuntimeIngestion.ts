@@ -2377,12 +2377,14 @@ const make = Effect.gen(function* () {
                 : null;
             const requestId = payload?.requestId;
             if (typeof requestId !== "string") continue;
-            if (
-              activity.kind === "user-input.requested" &&
-              activity.turnId === turnId &&
-              payload?.responseMode !== "message"
-            ) {
-              pendingRequestIds.add(requestId);
+            if (activity.kind === "user-input.requested") {
+              // A question reopened in message mode after its session failed
+              // stays open for an answer by message.
+              if (activity.turnId === turnId && payload?.responseMode !== "message") {
+                pendingRequestIds.add(requestId);
+              } else {
+                pendingRequestIds.delete(requestId);
+              }
             } else if (activity.kind === "user-input.resolved") {
               pendingRequestIds.delete(requestId);
             }

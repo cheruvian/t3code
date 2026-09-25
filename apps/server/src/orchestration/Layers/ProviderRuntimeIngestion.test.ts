@@ -3296,7 +3296,7 @@ describe("ProviderRuntimeIngestion", () => {
     };
   }
 
-  it.each(["completed", "interrupted", "failed", "aborted"] as const)(
+  it.each(["completed", "interrupted", "aborted"] as const)(
     "resolves native questions when their turn is %s",
     async (state) => {
       const harness = await createHarness();
@@ -3347,6 +3347,40 @@ describe("ProviderRuntimeIngestion", () => {
       ).toHaveLength(1);
     },
   );
+
+  it("reopens a native question for a message answer when its turn fails", async () => {
+    const harness = await createHarness();
+    const request = userInputEvent("failed-turn", "failed-question");
+    await harness.emitAndDrain([
+      {
+        type: "turn.started",
+        eventId: asEventId("failed-question-started"),
+        provider: request.provider,
+        threadId: request.threadId,
+        turnId: request.turnId,
+        createdAt: request.createdAt,
+      },
+      request,
+      {
+        type: "turn.completed",
+        eventId: asEventId("failed-question-completed"),
+        provider: request.provider,
+        threadId: request.threadId,
+        turnId: request.turnId,
+        createdAt: "2026-01-01T00:00:03.000Z",
+        payload: { state: "failed" },
+      },
+    ]);
+    const thread = (await harness.readModel()).threads[0]!;
+    expect(thread.session?.status).toBe("error");
+    expect((await harness.readThreadShell()).hasPendingUserInput).toBe(true);
+    expect(thread.activities.filter((activity) => activity.kind === "user-input.resolved")).toEqual(
+      [],
+    );
+    expect(
+      thread.activities.findLast((activity) => activity.kind === "user-input.requested")?.payload,
+    ).toMatchObject({ requestId: request.requestId, responseMode: "message" });
+  });
 
   it("keeps a stale request dismissed when its turn later completes", async () => {
     const harness = await createHarness();
