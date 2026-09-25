@@ -166,6 +166,17 @@ export const ServerProviderVersionAdvisory = Schema.Struct({
 });
 export type ServerProviderVersionAdvisory = typeof ServerProviderVersionAdvisory.Type;
 
+export const ProviderOutageSeverity = Schema.Literals(["none", "degraded", "outage"]);
+export type ProviderOutageSeverity = typeof ProviderOutageSeverity.Type;
+
+export const ServerProviderOutageAdvisory = Schema.Struct({
+  severity: ProviderOutageSeverity,
+  message: Schema.NullOr(TrimmedNonEmptyString),
+  statusPageUrl: Schema.NullOr(TrimmedNonEmptyString),
+  checkedAt: IsoDateTime,
+});
+export type ServerProviderOutageAdvisory = typeof ServerProviderOutageAdvisory.Type;
+
 export const ServerProviderUpdateStatus = Schema.Literals([
   "idle",
   "queued",
@@ -235,6 +246,10 @@ export const ServerProvider = Schema.Struct({
   usageLimits: Schema.optional(ServerProviderUsageLimits),
   versionAdvisory: Schema.optionalKey(ServerProviderVersionAdvisory),
   updateState: Schema.optionalKey(ServerProviderUpdateState),
+  // Absent for drivers with no independent status page (e.g. OpenCode,
+  // Antigravity are agent layers over other backends, not services with
+  // their own uptime).
+  outageAdvisory: Schema.optionalKey(ServerProviderOutageAdvisory),
 });
 export type ServerProvider = typeof ServerProvider.Type;
 

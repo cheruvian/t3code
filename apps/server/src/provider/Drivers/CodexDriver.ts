@@ -61,6 +61,7 @@ import {
   normalizeCommandPath,
   resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
+import { enrichProviderSnapshotWithOutageAdvisory } from "../providerOutageStatus.ts";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
@@ -227,6 +228,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
                 enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
               }),
             ),
+            Effect.flatMap(enrichProviderSnapshotWithOutageAdvisory),
             Effect.provideService(HttpClient.HttpClient, httpClient),
             Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
           ),

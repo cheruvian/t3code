@@ -86,6 +86,7 @@ import type {
 } from "../../lib/threadActivity";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerFeedback } from "./ComposerFeedback";
+import { ComposerProviderOutage, getProviderOutageBannerKey } from "./ComposerProviderOutage";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import { ThreadCreationFailedCard } from "./ThreadCreationFailedCard";
@@ -681,14 +682,34 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   );
   const selectedInstanceId = props.selectedThread.modelSelection.instanceId;
   useStreamingHaptics(props.selectedThread.id, props.selectedThreadFeed);
+  const selectedProviderStatus = useMemo(
+    () =>
+      props.serverConfig?.providers.find(
+        (candidate) => candidate.instanceId === selectedInstanceId,
+      ) ?? null,
+    [props.serverConfig, selectedInstanceId],
+  );
   const selectedProviderSkills = useMemo(() => {
-    const provider = props.serverConfig?.providers.find(
-      (candidate) => candidate.instanceId === selectedInstanceId,
-    );
-    return provider
-      ? resolveProviderSkillsForCwd(provider, props.threadCwd ?? props.projectWorkspaceRoot)
+    return selectedProviderStatus
+      ? resolveProviderSkillsForCwd(
+          selectedProviderStatus,
+          props.threadCwd ?? props.projectWorkspaceRoot,
+        )
       : [];
-  }, [props.projectWorkspaceRoot, props.serverConfig, props.threadCwd, selectedInstanceId]);
+  }, [props.projectWorkspaceRoot, props.threadCwd, selectedProviderStatus]);
+  const providerOutageBannerKey = getProviderOutageBannerKey(selectedProviderStatus);
+  const [dismissedProviderOutageBannerKey, setDismissedProviderOutageBannerKey] = useState<
+    string | null
+  >(null);
+  useEffect(() => {
+    if (providerOutageBannerKey === null && dismissedProviderOutageBannerKey !== null) {
+      setDismissedProviderOutageBannerKey(null);
+    }
+  }, [dismissedProviderOutageBannerKey, providerOutageBannerKey]);
+  const visibleProviderOutageStatus =
+    providerOutageBannerKey !== null && providerOutageBannerKey !== dismissedProviderOutageBannerKey
+      ? selectedProviderStatus
+      : null;
 
   useLayoutEffect(() => {
     selectedThreadKeyRef.current = selectedThreadKey;
@@ -972,6 +993,10 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     onDismiss={() => props.onDismissFeedback(submission.id)}
                   />
                 ))}
+                <ComposerProviderOutage
+                  status={visibleProviderOutageStatus}
+                  onDismiss={() => setDismissedProviderOutageBannerKey(providerOutageBannerKey)}
+                />
                 {usageLimitsReport && activeUserInputRequestId === null ? (
                   <Animated.View
                     className="shrink-0 px-4 pb-3"

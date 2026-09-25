@@ -398,6 +398,11 @@ import {
   shouldShowProviderStatusBanner,
 } from "./chat/ProviderStatusBanner";
 import {
+  getProviderOutageBannerKey,
+  ProviderOutageBanner,
+  shouldShowProviderOutageBanner,
+} from "./chat/ProviderOutageBanner";
+import {
   dismissThreadErrorBannerForSession,
   getThreadErrorBannerKey,
   isThreadErrorBannerDismissedForSession,
@@ -3800,7 +3805,23 @@ export default function ChatView(props: ChatViewProps) {
   )
     ? activeProviderStatus
     : null;
-  const hasTimelineTopBanner = Boolean(visibleThreadError) || visibleProviderStatus !== null;
+  const providerOutageBannerKey = getProviderOutageBannerKey(activeProviderStatus);
+  const [dismissedProviderOutageBannerKey, setDismissedProviderOutageBannerKey] = useState<
+    string | null
+  >(null);
+  useEffect(() => {
+    if (providerOutageBannerKey === null && dismissedProviderOutageBannerKey !== null) {
+      setDismissedProviderOutageBannerKey(null);
+    }
+  }, [dismissedProviderOutageBannerKey, providerOutageBannerKey]);
+  const visibleProviderOutage = shouldShowProviderOutageBanner(
+    activeProviderStatus,
+    dismissedProviderOutageBannerKey,
+  )
+    ? activeProviderStatus
+    : null;
+  const hasTimelineTopBanner =
+    Boolean(visibleThreadError) || visibleProviderStatus !== null || visibleProviderOutage !== null;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
@@ -10089,6 +10110,10 @@ export default function ChatView(props: ChatViewProps) {
                 status={visibleProviderStatus}
                 onDismiss={() => setDismissedProviderStatusBannerKey(providerStatusBannerKey)}
                 onOpenProviderSetup={openProviderSetup}
+              />
+              <ProviderOutageBanner
+                status={visibleProviderOutage}
+                onDismiss={() => setDismissedProviderOutageBannerKey(providerOutageBannerKey)}
               />
               <ThreadErrorBanner
                 error={visibleThreadError}

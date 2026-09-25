@@ -35,6 +35,7 @@ import {
   enrichProviderSnapshotWithVersionAdvisory,
   type ProviderMaintenanceCapabilities,
 } from "../providerMaintenance.ts";
+import { enrichProviderSnapshotWithOutageAdvisory } from "../providerOutageStatus.ts";
 import {
   GROK_DEFAULT_MODEL_SLUG,
   isValidGrokReasoningEffortToken,
@@ -567,6 +568,7 @@ export const enrichGrokSnapshot = (input: {
   return enrichProviderSnapshotWithVersionAdvisory(snapshot, input.maintenanceCapabilities, {
     enableProviderUpdateChecks: input.enableProviderUpdateChecks,
   }).pipe(
+    Effect.flatMap(enrichProviderSnapshotWithOutageAdvisory),
     Effect.provideService(HttpClient.HttpClient, input.httpClient),
     Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
     Effect.catchCause((cause) =>

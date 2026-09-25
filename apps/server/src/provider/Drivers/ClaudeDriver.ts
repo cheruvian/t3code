@@ -54,6 +54,7 @@ import {
   normalizeCommandPath,
   resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
+import { enrichProviderSnapshotWithOutageAdvisory } from "../providerOutageStatus.ts";
 import {
   haveProviderSnapshotSettingsChanged,
   makeProviderSnapshotSettingsSource,
@@ -224,6 +225,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
                 enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
               }),
             ),
+            Effect.flatMap(enrichProviderSnapshotWithOutageAdvisory),
             Effect.provideService(HttpClient.HttpClient, httpClient),
             Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
           ),
