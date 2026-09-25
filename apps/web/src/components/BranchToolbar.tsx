@@ -6,6 +6,7 @@ import {
   FolderGitIcon,
   FolderIcon,
   HistoryIcon,
+  PlusIcon,
   ScaleIcon,
 } from "lucide-react";
 import {
@@ -21,6 +22,7 @@ import {
 } from "react";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
+import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { useProject, useThreadShell, useThreadShellsForProjectRefs } from "../state/entities";
 import {
@@ -54,6 +56,7 @@ import {
 } from "./ui/menu";
 import { Separator } from "./ui/separator";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { toastManager } from "./ui/toast";
 import { ComposerSurface } from "./chat/ComposerSurface";
 import { useComposerMenuProps } from "./chat/composerEventScope";
 import { measureRestingComposerControls } from "./chat/restingComposerControlsMeasurement";
@@ -502,6 +505,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   composerControlsHostRef,
   contextStripVisible = true,
 }: BranchToolbarProps) {
+  const handleNewThread = useNewThreadHandler();
   const branchSelectorRef = useRef<BranchToolbarBranchSelectorHandle>(null);
   const threadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
@@ -596,6 +600,26 @@ export const BranchToolbar = memo(function BranchToolbar({
   });
   const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
   const labelsOverflow = useLabelsOverflow(stripElement);
+  const onNewThreadInWorkspace = async () => {
+    if (!serverThread || forceNewWorktree) return;
+    try {
+      await handleNewThread(scopeProjectRef(serverThread.environmentId, serverThread.projectId), {
+        branch: serverThread.branch,
+        worktreePath: serverThread.worktreePath,
+        envMode: serverThread.worktreePath ? "worktree" : "local",
+        startFromOrigin: false,
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not create thread",
+        description: error instanceof Error ? error.message : undefined,
+      });
+    }
+  };
+  const newThreadLabel = activeWorktreePath
+    ? "New thread in this worktree"
+    : "New thread in this checkout";
 
   if (!hasActiveThread || !activeProject) return null;
 
@@ -706,6 +730,20 @@ export const BranchToolbar = memo(function BranchToolbar({
           {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
           {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
         />
+      ) : null}
+      {showGitControls && serverThread && !forceNewWorktree ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={<Button variant="ghost" size="icon-xs" />}
+            className="shrink-0 text-muted-foreground/70 hover:text-foreground/80"
+            aria-label={newThreadLabel}
+            data-composer-context-control
+            onClick={() => void onNewThreadInWorkspace()}
+          >
+            <PlusIcon className="size-3" />
+          </TooltipTrigger>
+          <TooltipPopup>{newThreadLabel}</TooltipPopup>
+        </Tooltip>
       ) : null}
     </ComposerSurface.ContextStrip>
   );
