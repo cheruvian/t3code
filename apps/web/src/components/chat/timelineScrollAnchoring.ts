@@ -109,6 +109,7 @@ export function getAnchoredTurnMetrics({
 
 export interface RememberedTimelinePosition {
   readonly rowId: string;
+  readonly lastRowId?: string;
   readonly offsetWithinRow: number;
   readonly scrollOffset: number;
   readonly atEnd: boolean;
@@ -122,6 +123,16 @@ export interface RememberedTimelinePosition {
       expandedEntries: Set<string>;
     };
   };
+}
+
+export function shouldRestoreTimelineReadingPosition(
+  position: RememberedTimelinePosition | undefined,
+  lastRowId: string | undefined,
+) {
+  return (
+    position?.atEnd === false &&
+    (position.lastRowId === undefined || position.lastRowId === lastRowId)
+  );
 }
 
 // Scoped thread keys keep separate environments independent. Bound the session cache.

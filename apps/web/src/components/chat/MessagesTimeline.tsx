@@ -163,6 +163,7 @@ import {
   CHAT_TIMELINE_ANCHOR_OFFSET,
   readTimelinePosition,
   rememberTimelinePosition,
+  shouldRestoreTimelineReadingPosition,
   timelineContentOverflowsViewport,
 } from "./timelineScrollAnchoring";
 import { MessageCopyButton } from "./MessageCopyButton";
@@ -815,8 +816,22 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const rows = useStableRows(rawRows, listIdentityKey);
   const deferredRows = useDeferredValue(rows);
   const minimapItems = useMemo(() => deriveTimelineMinimapItems(deferredRows), [deferredRows]);
+  const candidateRestoreReadingPosition = shouldRestoreTimelineReadingPosition(
+    rememberedPosition,
+    rows.at(-1)?.id,
+  );
+  const [openingReturn, setOpeningReturn] = useState<{ key: string; reading: boolean } | null>(
+    null,
+  );
+  if (!citationHistoryLoading && rows.length > 0 && openingReturn?.key !== listIdentityKey) {
+    setOpeningReturn({ key: listIdentityKey, reading: candidateRestoreReadingPosition });
+  }
+  const restoreReadingPosition =
+    openingReturn?.key === listIdentityKey
+      ? openingReturn.reading
+      : candidateRestoreReadingPosition;
   const restoreRowIndex =
-    restoringThreadPosition && rememberedPosition?.atEnd === false
+    restoringThreadPosition && restoreReadingPosition && rememberedPosition
       ? rows.findIndex((row) => row.id === rememberedPosition.rowId)
       : -1;
   const restoringAlwaysRender = useMemo(
@@ -825,7 +840,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [restoreRowIndex, restoringThreadPosition],
   );
   useLayoutEffect(() => {
-    if (!restoringThreadPosition || rows.length === 0) return;
+    if (!restoringThreadPosition || citationHistoryLoading || rows.length === 0) return;
     const list = listRef.current;
     if (!list) return;
     if (citationRequest !== null) {
@@ -863,10 +878,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     viewport?.ownerDocument.addEventListener("keydown", onScrollKey);
     const position = rememberedPosition;
     const index = position ? rows.findIndex((row) => row.id === position.rowId) : -1;
-    if (position?.atEnd === false) onManualNavigation();
+    if (restoreReadingPosition) onManualNavigation();
     if (cancelPositionRestoreRef) cancelPositionRestoreRef.current = cancelRestoration;
     const scrolling =
-      position?.atEnd === false
+      restoreReadingPosition && position
         ? index >= 0
           ? list.scrollToIndex({
               index,
@@ -878,7 +893,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         : list.scrollToEnd({ animated: false });
     void Promise.resolve(scrolling).then(() => {
       if (cancelled) return;
-      if (position?.atEnd !== false || index < 0) {
+      if (!restoreReadingPosition || index < 0 || !position) {
         setPositionedThreadKey(listIdentityKey);
         return;
       }
@@ -929,12 +944,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       viewport?.ownerDocument.removeEventListener("keydown", onScrollKey);
     };
   }, [
+    citationHistoryLoading,
     citationRequest,
     cancelPositionRestoreRef,
     listIdentityKey,
     listRef,
     onManualNavigation,
     rememberedPosition,
+    restoreReadingPosition,
     restoringThreadPosition,
     rows,
   ]);
@@ -1029,11 +1046,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       const index = state.indexByKey(position.rowId);
       const row = index === undefined ? undefined : state.elementAtIndex(index);
       const element = listRef.current?.getScrollableNode();
-      if (row && element) {
+      const lastRowId = rows.at(-1)?.id;
+      if (element) {
         rememberTimelinePosition(listIdentityKey, {
           ...position,
-          // DOM geometry includes the header and the virtualizer's layout adjustment.
-          offsetWithinRow: element.getBoundingClientRect().top - row.getBoundingClientRect().top,
+          ...(lastRowId ? { lastRowId } : {}),
+          // A fast scroll can reach a row before the virtualizer mounts it.
+          // Keep its measured anchor instead of leaving an older position in the cache.
+          offsetWithinRow: row
+            ? element.getBoundingClientRect().top - row.getBoundingClientRect().top
+            : position.offsetWithinRow,
           scrollOffset: element.scrollTop,
           atEnd: isAtEnd,
           disclosures: {
@@ -1286,7 +1308,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             getItemType={getItemType}
             renderItem={renderItem}
             estimatedItemSize={90}
-            initialScrollAtEnd={citationRequest === null && rememberedPosition?.atEnd !== false}
+            initialScrollAtEnd={citationRequest === null && !restoreReadingPosition}
             // Legend needs a data refresh to mount new pins without a scroll event.
             dataVersion={readyCitationRequest?.key ?? listIdentityKey}
             {...(alwaysRender ? { alwaysRender } : {})}
@@ -1295,9 +1317,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             contentInsetEndAdjustment={anchoredEndSpace ? contentInsetEndAdjustment : 0}
             maintainScrollAtEnd={
               citationPositioning ||
-              (restoringThreadPosition && rememberedPosition?.atEnd === false) ||
+              (restoringThreadPosition && restoreReadingPosition) ||
               anchoredEndSpace ||
-              !liveFollowEnabled ||
+              (!liveFollowEnabled && !(restoringThreadPosition && !restoreReadingPosition)) ||
               disclosureToggleSettling
                 ? false
                 : isWorking && !prefersReducedMotion && settlingListIdentity === null
@@ -1305,8 +1327,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   : TIMELINE_MAINTAIN_SCROLL_AT_END
             }
             maintainVisibleContentPosition={
-              citationPositioning ||
-              (restoringThreadPosition && rememberedPosition?.atEnd === false)
+              citationPositioning || (restoringThreadPosition && restoreReadingPosition)
                 ? false
                 : maintainVisibleContentPosition
             }

@@ -4,6 +4,7 @@ import {
   getRowBottom,
   readTimelinePosition,
   rememberTimelinePosition,
+  shouldRestoreTimelineReadingPosition,
   timelineContentOverflowsViewport,
 } from "./timelineScrollAnchoring";
 
@@ -175,6 +176,21 @@ describe("timeline scroll anchoring", () => {
 });
 
 describe("remembered timeline positions", () => {
+  it("resumes reading only when the thread has no newer row", () => {
+    const reading = {
+      rowId: "message-4",
+      lastRowId: "message-9",
+      offsetWithinRow: 32,
+      scrollOffset: 932,
+      atEnd: false,
+    };
+    expect(shouldRestoreTimelineReadingPosition(reading, "message-9")).toBe(true);
+    expect(shouldRestoreTimelineReadingPosition(reading, "message-10")).toBe(false);
+    expect(shouldRestoreTimelineReadingPosition({ ...reading, atEnd: true }, "message-9")).toBe(
+      false,
+    );
+  });
+
   it("keeps reading positions and end-follow independent across threads and environments", () => {
     const reading = { rowId: "message-4", offsetWithinRow: 32, scrollOffset: 932, atEnd: false };
     const following = { rowId: "message-9", offsetWithinRow: 10, scrollOffset: 2010, atEnd: true };
