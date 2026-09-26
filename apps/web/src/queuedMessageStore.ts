@@ -27,6 +27,8 @@ export interface QueuedComposerMessage {
    * the message goes out on.
    */
   queuedAfterToolActivityId: string | null;
+  /** A worktree bootstrap follow-up waits until the first agent turn starts. */
+  waitForFirstTurn?: boolean;
   /**
    * Set when the message was created by Stop or a failed restore, not by the
    * user pressing send. It waits for Send now instead of leaving on its own.
@@ -186,11 +188,16 @@ export function latestCompletedToolActivityId(
  * between a send and the provider picking it up, so nothing is due there.
  */
 export function isQueuedMessageDue(input: {
-  message: Pick<QueuedComposerMessage, "queuedAfterToolActivityId" | "holdUntilUserAction">;
+  message: Pick<
+    QueuedComposerMessage,
+    "queuedAfterToolActivityId" | "holdUntilUserAction" | "waitForFirstTurn"
+  >;
   phase: "connecting" | "running" | "ready" | "disconnected";
   latestToolActivityId: string | null;
+  firstTurnStarted?: boolean;
 }): boolean {
   if (input.message.holdUntilUserAction) return false;
+  if (input.message.waitForFirstTurn && !input.firstTurnStarted) return false;
   if (input.phase === "connecting") return false;
   if (input.phase !== "running") return true;
   return input.latestToolActivityId !== input.message.queuedAfterToolActivityId;

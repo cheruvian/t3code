@@ -313,6 +313,7 @@ import {
   useComposerDraftStore,
   DraftId,
 } from "../composerDraftStore";
+import { useOptimisticThreadListStore } from "../optimisticThreadListStore";
 import {
   formatTerminalContextLabel,
   type TerminalContextDraft,
@@ -3689,6 +3690,12 @@ export default function ChatView(props: ChatViewProps) {
       : isServerThread &&
         activeThreadShell?.session?.status === "starting" &&
         activeThreadShell.latestTurn === null;
+  const canQueueDuringWorktreeSetup =
+    isServerThread &&
+    activeThread?.id === routeThreadRef.threadId &&
+    activeThread.latestTurn === null &&
+    isPreparingWorktree &&
+    worktreeSetupBlocksSend;
   const cancelWorktreeSetup = useAtomCommand(vcsEnvironment.cancelWorktreeSetup, {
     reportFailure: false,
   });
@@ -7529,12 +7536,13 @@ export default function ChatView(props: ChatViewProps) {
     };
     if (
       !activeThread ||
-      isSendBusy ||
+      (isSendBusy && !canQueueDuringWorktreeSetup) ||
       isConnecting ||
       isRevertingCheckpoint ||
       !clientSettingsHydrated ||
       threadDetailLoading ||
-      sendInFlightRef.current ||
+      (sendInFlightRef.current && !canQueueDuringWorktreeSetup) ||
+      (queuedMessage !== undefined && canQueueDuringWorktreeSetup) ||
       feedbackUploadsInFlightRef.current.has(routeThreadKey)
     ) {
       notifyDirectAnnotationAttached();
@@ -7848,9 +7856,10 @@ export default function ChatView(props: ChatViewProps) {
     if (
       !queuedMessage &&
       !directAnnotation &&
-      phase === "running" &&
+      (phase === "running" || canQueueDuringWorktreeSetup) &&
       activeThreadKey &&
-      (settings.followUpBehavior === "queue") !== (submissionIntent === "alternate")
+      (canQueueDuringWorktreeSetup ||
+        (settings.followUpBehavior === "queue") !== (submissionIntent === "alternate"))
     ) {
       if (composerRef.current?.validateProviderInput(promptForSend) === false) {
         return;
@@ -7864,6 +7873,7 @@ export default function ChatView(props: ChatViewProps) {
         reviewComments: [...composerReviewComments],
         submissionIntent,
         queuedAfterToolActivityId: latestCompletedToolActivityId(threadActivities),
+        ...(canQueueDuringWorktreeSetup ? { waitForFirstTurn: true } : {}),
         createdAt: new Date().toISOString(),
       });
       promptRef.current = "";
@@ -8190,6 +8200,7 @@ export default function ChatView(props: ChatViewProps) {
             ]);
             const uncertainThreadId = uncertainMultipleSubmissionsRef.current.get(retryKey);
             const targetThreadId = uncertainThreadId ?? newThreadId();
+            const targetThreadRef = scopeThreadRef(environmentId, targetThreadId);
             let requestMayHaveStarted = false;
             try {
               if (uncertainThreadId) {
@@ -8201,6 +8212,13 @@ export default function ChatView(props: ChatViewProps) {
                 appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment
                   .capabilities.inlineMessageContext === true;
               requestMayHaveStarted = true;
+              useOptimisticThreadListStore.getState().add({
+                threadRef: targetThreadRef,
+                projectId: activeProject.id,
+                title,
+                createdAt: messageCreatedAt,
+                draftId: null,
+              });
               const result = await startThreadTurn({
                 environmentId,
                 input: {
@@ -8254,6 +8272,7 @@ export default function ChatView(props: ChatViewProps) {
               }
               startedCount += 1;
             } catch (error) {
+              useOptimisticThreadListStore.getState().remove(targetThreadRef);
               if (requestMayHaveStarted && !uncertainMultipleSubmissionsRef.current.has(retryKey)) {
                 uncertainMultipleSubmissionsRef.current.set(retryKey, targetThreadId);
               }
@@ -8508,6 +8527,16 @@ export default function ChatView(props: ChatViewProps) {
       ctxSelectedModel || activeProjectDefaultModelSelection?.model || DEFAULT_MODEL,
       ctxSelectedModelSelection.options,
     );
+    const optimisticThreadRef = scopeThreadRef(environmentId, threadIdForSend);
+    if (isLocalDraftThread) {
+      useOptimisticThreadListStore.getState().add({
+        threadRef: optimisticThreadRef,
+        projectId: activeProject.id,
+        title,
+        createdAt: messageCreatedAt,
+        draftId,
+      });
+    }
 
     let failure: AtomCommandResult<unknown, unknown> | null = null;
     // Auto-title from first message
@@ -8702,6 +8731,9 @@ export default function ChatView(props: ChatViewProps) {
     }
 
     if (failure !== null) {
+      if (isLocalDraftThread) {
+        useOptimisticThreadListStore.getState().remove(optimisticThreadRef);
+      }
       if (resolvedSubmissionIntent === "background" && draftId && draftThread) {
         restoreFailedBackgroundDraftThread(
           draftId,
@@ -8767,6 +8799,9 @@ export default function ChatView(props: ChatViewProps) {
           prompt: messageTextForSend,
           detectTrigger: true,
         });
+      }
+      if (baseBranchForWorktree && !queuedMessage && activeThreadKey) {
+        restoreQueuedMessagesToComposer(useQueuedMessageStore.getState().drain(activeThreadKey));
       }
       if (!isAtomCommandInterrupted(failure)) {
         const error = squashAtomCommandFailure(failure);
@@ -8849,10 +8884,19 @@ export default function ChatView(props: ChatViewProps) {
   useEffect(() => {
     if (!nextQueuedMessage || isSendBusy || queueBlockedByPendingRequest || queueSendGate) return;
     if (sendInFlightRef.current) return;
-    if (!isQueuedMessageDue({ message: nextQueuedMessage, phase, latestToolActivityId })) return;
+    if (
+      !isQueuedMessageDue({
+        message: nextQueuedMessage,
+        phase,
+        latestToolActivityId,
+        firstTurnStarted: activeThread?.latestTurn?.startedAt != null,
+      })
+    )
+      return;
     sendQueuedMessage(nextQueuedMessage);
   }, [
     isSendBusy,
+    activeThread?.latestTurn?.startedAt,
     latestToolActivityId,
     nextQueuedMessage,
     phase,
@@ -9358,6 +9402,14 @@ export default function ChatView(props: ChatViewProps) {
     }
     const nextThreadTitle = truncate(buildPlanImplementationThreadTitle(planMarkdown));
     const nextThreadModelSelection: ModelSelection = ctxSelectedModelSelection;
+    const nextThreadRef = scopeThreadRef(environmentId, nextThreadId);
+    useOptimisticThreadListStore.getState().add({
+      threadRef: nextThreadRef,
+      projectId: activeProject.id,
+      title: nextThreadTitle,
+      createdAt,
+      draftId: null,
+    });
 
     sendInFlightRef.current = true;
     beginLocalDispatch({ preparingWorktree: false });
@@ -9429,6 +9481,7 @@ export default function ChatView(props: ChatViewProps) {
     }
 
     if (failure !== null) {
+      useOptimisticThreadListStore.getState().remove(nextThreadRef);
       const cleanupResult = await deleteThread({
         environmentId,
         input: {
@@ -10350,7 +10403,7 @@ export default function ChatView(props: ChatViewProps) {
                             projectSelectionRequired={isLocalDraftThread && activeProject === null}
                             phase={phase}
                             isConnecting={isConnecting}
-                            isSendBusy={isSendBusy}
+                            isSendBusy={isSendBusy && !canQueueDuringWorktreeSetup}
                             isRevertingCheckpoint={isRevertingCheckpoint}
                             sendDisabledReason={
                               isRevertingCheckpoint
@@ -10359,7 +10412,7 @@ export default function ChatView(props: ChatViewProps) {
                                   ? "Sending feedback"
                                   : threadDetailLoading
                                     ? "Messages loading"
-                                    : worktreeSetupBlocksSend
+                                    : worktreeSetupBlocksSend && !canQueueDuringWorktreeSetup
                                       ? "Preparing worktree"
                                       : projectCloneSendBlockReason
                             }

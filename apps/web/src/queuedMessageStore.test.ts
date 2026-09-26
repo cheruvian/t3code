@@ -133,6 +133,38 @@ describe("queued message dispatch timing", () => {
     expect(isQueuedMessageDue({ message, phase: "ready", latestToolActivityId: "a4" })).toBe(false);
   });
 
+  it("holds a setup follow-up until the first agent turn starts", () => {
+    const message = { queuedAfterToolActivityId: null, waitForFirstTurn: true };
+    expect(isQueuedMessageDue({ message, phase: "disconnected", latestToolActivityId: null })).toBe(
+      false,
+    );
+    expect(isQueuedMessageDue({ message, phase: "ready", latestToolActivityId: null })).toBe(false);
+    expect(
+      isQueuedMessageDue({
+        message,
+        phase: "running",
+        latestToolActivityId: null,
+        firstTurnStarted: true,
+      }),
+    ).toBe(false);
+    expect(
+      isQueuedMessageDue({
+        message,
+        phase: "running",
+        latestToolActivityId: "tool-after-start",
+        firstTurnStarted: true,
+      }),
+    ).toBe(true);
+    expect(
+      isQueuedMessageDue({
+        message,
+        phase: "ready",
+        latestToolActivityId: null,
+        firstTurnStarted: true,
+      }),
+    ).toBe(true);
+  });
+
   it("is due as soon as the turn is over, but not while a send is connecting", () => {
     const message = { queuedAfterToolActivityId: "a2" };
     expect(isQueuedMessageDue({ message, phase: "ready", latestToolActivityId: "a2" })).toBe(true);

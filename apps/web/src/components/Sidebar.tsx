@@ -250,6 +250,10 @@ import {
   type ComposerThreadDraftState,
   type DraftSessionState,
 } from "../composerDraftStore";
+import {
+  useOptimisticThreadListStore,
+  visibleOptimisticThreads,
+} from "../optimisticThreadListStore";
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more.
@@ -817,6 +821,67 @@ interface SidebarDraftRowData {
   session: DraftSessionState;
   composer: ComposerThreadDraftState;
 }
+
+const SidebarCreatingThreads = memo(function SidebarCreatingThreads(props: {
+  canonicalThreadKeys: ReadonlySet<string>;
+  scopedProjectKeys: ReadonlySet<string> | null;
+  projectByKey: ReadonlyMap<string, EnvironmentProject>;
+  projectDisplayNameByKey: ReadonlyMap<string, string>;
+  onNavigateToDraft: (draftId: DraftId) => void;
+}) {
+  const entriesByKey = useOptimisticThreadListStore((state) => state.entriesByKey);
+  const entries = useMemo(
+    () =>
+      visibleOptimisticThreads(entriesByKey, props.canonicalThreadKeys, props.scopedProjectKeys),
+    [entriesByKey, props.canonicalThreadKeys, props.scopedProjectKeys],
+  );
+  if (entries.length === 0) return null;
+  return (
+    <>
+      {entries.map((entry) => {
+        const projectKey = `${entry.threadRef.environmentId}:${entry.projectId}`;
+        const project = props.projectByKey.get(projectKey) ?? null;
+        const content = (
+          <>
+            <span className="flex min-w-0 items-center gap-1.5 text-xs text-secondary-label">
+              <ClockIcon aria-hidden className="size-3.5 shrink-0" />
+              {project ? <ProjectFavicon project={project} className="size-4 shrink-0" /> : null}
+              <span className="min-w-0 flex-1 truncate">
+                Creating thread · {props.projectDisplayNameByKey.get(projectKey) ?? "Project"}
+              </span>
+            </span>
+            <span className="mt-0.5 block truncate text-sm font-medium text-foreground/90">
+              {entry.title}
+            </span>
+          </>
+        );
+        const draftId = entry.draftId;
+        return (
+          <li key={scopedThreadKey(entry.threadRef)} className="list-none py-0.5">
+            {draftId ? (
+              <button
+                type="button"
+                data-testid="sidebar-creating-thread-row"
+                className="w-full rounded-md px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)] text-left hover:bg-sidebar-row-hover"
+                onClick={() => props.onNavigateToDraft(draftId)}
+              >
+                {content}
+              </button>
+            ) : (
+              <div
+                data-testid="sidebar-creating-thread-row"
+                className="rounded-md px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]"
+              >
+                {content}
+              </div>
+            )}
+          </li>
+        );
+      })}
+      <li aria-hidden className="mx-2.5 my-1.5 h-px list-none bg-sidebar-border/60" />
+    </>
+  );
+});
 
 // Draft sessions with user content, surfaced above the pinned block so an
 // interrupted "new thread" stays one click away. Self-contained (own store
@@ -2191,6 +2256,20 @@ export default function Sidebar() {
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
   const orderingThreads = useSidebarOrderingThreads(threads);
+  const canonicalThreadKeys = useMemo(
+    () =>
+      new Set(
+        threads.map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+      ),
+    [threads],
+  );
+  const creatingEntriesByKey = useOptimisticThreadListStore((state) => state.entriesByKey);
+  const removeCreatingEntry = useOptimisticThreadListStore((state) => state.remove);
+  useEffect(() => {
+    for (const [key, entry] of Object.entries(creatingEntriesByKey)) {
+      if (canonicalThreadKeys.has(key)) removeCreatingEntry(entry.threadRef);
+    }
+  }, [canonicalThreadKeys, creatingEntriesByKey, removeCreatingEntry]);
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -2503,6 +2582,11 @@ export default function Sidebar() {
   // (every non-promoted session with content); it can overcount by one for
   // an open never-left draft, which only softens the empty state.
   const routeDraftIdForRows = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
+  const creatingThreadCount = useMemo(
+    () =>
+      visibleOptimisticThreads(creatingEntriesByKey, canonicalThreadKeys, scopedProjectKeys).length,
+    [canonicalThreadKeys, creatingEntriesByKey, scopedProjectKeys],
+  );
   const visibleDraftSessionCount = useComposerDraftStore((store) => {
     let count = 0;
     for (const [draftKey, session] of Object.entries(store.draftThreadsByThreadKey)) {
@@ -3485,7 +3569,8 @@ export default function Sidebar() {
         .join("\0"),
     [sidebarListItems],
   );
-  const sidebarListHasRows = sidebarListItems.length + visibleDraftSessionCount > 0;
+  const sidebarListHasRows =
+    sidebarListItems.length + visibleDraftSessionCount + creatingThreadCount > 0;
   useLayoutEffect(() => {
     // Drag release clears the baseline, so its commit cannot replay the
     // sortable preview; rows glide from their released positions instead.
@@ -4882,6 +4967,14 @@ export default function Sidebar() {
                       };
                       const from = dragState?.activeSection ?? null;
                       const items: ReactNode[] = [
+                        <SidebarCreatingThreads
+                          key="creating-threads"
+                          canonicalThreadKeys={canonicalThreadKeys}
+                          scopedProjectKeys={scopedProjectKeys}
+                          projectByKey={projectByKey}
+                          projectDisplayNameByKey={projectDisplayNameByKey}
+                          onNavigateToDraft={navigateToDraft}
+                        />,
                         <SidebarDraftBlock
                           key="draft-sessions"
                           projectByKey={projectByKey}
@@ -5016,6 +5109,7 @@ export default function Sidebar() {
           ) : null}
           {!isSearchingThreads &&
           visibleDraftSessionCount === 0 &&
+          creatingThreadCount === 0 &&
           pinnedThreads.length +
             activeThreads.length +
             snoozedThreads.length +

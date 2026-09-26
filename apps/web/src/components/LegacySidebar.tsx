@@ -7,6 +7,7 @@ import {
   ArchiveIcon,
   ArrowUpDownIcon,
   ChevronRightIcon,
+  ClockIcon,
   FolderPlusIcon,
   Globe2Icon,
   SearchIcon,
@@ -113,6 +114,11 @@ import { isModelPickerOpen } from "../modelPickerVisibility";
 import { useShortcutModifierState } from "../shortcutModifierState";
 import { ensureLocalApi, readLocalApi } from "../localApi";
 import { useComposerDraftStore } from "../composerDraftStore";
+import {
+  type OptimisticThreadListEntry,
+  useOptimisticThreadListStore,
+  visibleOptimisticThreads,
+} from "../optimisticThreadListStore";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useDesktopUpdateState } from "../state/desktopUpdate";
 
@@ -959,6 +965,7 @@ interface SidebarProjectThreadListProps {
   hiddenThreadStatus: ThreadStatusPill | null;
   orderedProjectThreadKeys: readonly string[];
   renderedThreads: readonly SidebarThreadSummary[];
+  creatingThreads: readonly OptimisticThreadListEntry[];
   showEmptyThreadState: boolean;
   shouldShowThreadPanel: boolean;
   isThreadListExpanded: boolean;
@@ -1015,6 +1022,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
     hiddenThreadStatus,
     orderedProjectThreadKeys,
     renderedThreads,
+    creatingThreads,
     showEmptyThreadState,
     shouldShowThreadPanel,
     isThreadListExpanded,
@@ -1045,6 +1053,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
     expandThreadListForProject,
     collapseThreadListForProject,
   } = props;
+  const navigate = useNavigate();
   const showMoreButtonRender = useMemo(() => <button type="button" />, []);
   const showLessButtonRender = useMemo(() => <button type="button" />, []);
 
@@ -1063,6 +1072,29 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
           </div>
         </SidebarMenuSubItem>
       ) : null}
+      {shouldShowThreadPanel &&
+        creatingThreads.map((entry) => (
+          <SidebarMenuSubItem
+            key={scopedThreadKey(entry.threadRef)}
+            className="w-full"
+            data-testid="sidebar-creating-thread-row"
+          >
+            <button
+              type="button"
+              disabled={entry.draftId === null}
+              className="flex h-8 w-full items-center gap-2 truncate rounded-md px-2 text-left text-xs text-sidebar-muted-foreground/75 enabled:hover:bg-sidebar-row-hover"
+              onClick={() => {
+                if (entry.draftId) {
+                  void navigate({ to: "/draft/$draftId", params: { draftId: entry.draftId } });
+                }
+              }}
+            >
+              <ClockIcon className="size-3 shrink-0" />
+              <span className="truncate">{entry.title}</span>
+              <span className="ml-auto shrink-0 text-[10px]">Creating</span>
+            </button>
+          </SidebarMenuSubItem>
+        ))}
       {shouldShowThreadPanel &&
         renderedThreads.map((thread) => {
           const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
@@ -1272,6 +1304,31 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const sidebarThreadByKeyRef = useRef(sidebarThreadByKey);
   sidebarThreadByKeyRef.current = sidebarThreadByKey;
   const projectThreads = sidebarThreads;
+  const creatingEntriesByKey = useOptimisticThreadListStore((state) => state.entriesByKey);
+  const removeCreatingEntry = useOptimisticThreadListStore((state) => state.remove);
+  const canonicalThreadKeys = useMemo(
+    () =>
+      new Set(
+        sidebarThreads.map((thread) =>
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        ),
+      ),
+    [sidebarThreads],
+  );
+  const creatingThreads = useMemo(
+    () =>
+      visibleOptimisticThreads(
+        creatingEntriesByKey,
+        canonicalThreadKeys,
+        new Set(project.memberProjectRefs.map((ref) => `${ref.environmentId}:${ref.projectId}`)),
+      ),
+    [canonicalThreadKeys, creatingEntriesByKey, project.memberProjectRefs],
+  );
+  useEffect(() => {
+    for (const [key, entry] of Object.entries(creatingEntriesByKey)) {
+      if (canonicalThreadKeys.has(key)) removeCreatingEntry(entry.threadRef);
+    }
+  }, [canonicalThreadKeys, creatingEntriesByKey, removeCreatingEntry]);
   const projectPreferenceKeys = useMemo(() => projectExpansionPreferenceKeys(project), [project]);
   const projectExpanded = useUiStateStore((state) =>
     resolveProjectExpanded(state.projectExpandedById, projectPreferenceKeys),
@@ -2479,7 +2536,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         hiddenThreadStatus={hiddenThreadStatus}
         orderedProjectThreadKeys={orderedProjectThreadKeys}
         renderedThreads={renderedThreads}
-        showEmptyThreadState={showEmptyThreadState}
+        creatingThreads={creatingThreads}
+        showEmptyThreadState={showEmptyThreadState && creatingThreads.length === 0}
         shouldShowThreadPanel={shouldShowThreadPanel}
         isThreadListExpanded={isThreadListExpanded}
         activeRouteThreadKey={activeRouteThreadKey}
