@@ -9,6 +9,7 @@ import {
   commandLabel,
   keybindingConflictLabels,
   keybindingFromKeyboardEvent,
+  keybindingSearchFromKeyboardEvent,
   parseWhenExpressionDraft,
   shortcutToKeybindingInput,
   unknownWhenVariables,
@@ -93,6 +94,120 @@ describe("KeybindingsSettings.logic", () => {
         "Win32",
       ),
     ).toBe("mod+shift+k");
+  });
+
+  it("searches by a modifier, a modifier pair, and a complete shortcut", () => {
+    const bindings = [
+      {
+        command: "chat.new",
+        shortcut: {
+          key: "k",
+          modKey: true,
+          metaKey: false,
+          ctrlKey: false,
+          altKey: false,
+          shiftKey: false,
+        },
+      },
+      {
+        command: "chat.newLocal",
+        shortcut: {
+          key: "k",
+          modKey: true,
+          metaKey: false,
+          ctrlKey: false,
+          altKey: false,
+          shiftKey: true,
+        },
+      },
+      {
+        command: "terminal.toggle",
+        shortcut: {
+          key: "j",
+          modKey: false,
+          metaKey: false,
+          ctrlKey: false,
+          altKey: false,
+          shiftKey: true,
+        },
+      },
+      {
+        command: "terminal.new",
+        shortcut: {
+          key: "k",
+          modKey: false,
+          metaKey: false,
+          ctrlKey: false,
+          altKey: true,
+          shiftKey: true,
+        },
+      },
+    ] satisfies ResolvedKeybindingsConfig;
+
+    expect(buildKeybindingRows(bindings, "mod", "mod").map((row) => row.command)).toEqual([
+      "chat.new",
+      "chat.newLocal",
+    ]);
+    expect(
+      buildKeybindingRows(bindings, "mod+shift", "mod+shift").map((row) => row.command),
+    ).toEqual(["chat.newLocal"]);
+    expect(buildKeybindingRows(bindings, "mod+k", "mod+k").map((row) => row.command)).toEqual([
+      "chat.new",
+    ]);
+    expect(
+      buildKeybindingRows(bindings, "mod+shift+k", "mod+shift+k").map((row) => row.command),
+    ).toEqual(["chat.newLocal"]);
+    expect(buildKeybindingRows(bindings, "new").map((row) => row.command)).toEqual([
+      "chat.new",
+      "chat.newLocal",
+      "terminal.new",
+    ]);
+  });
+
+  it("turns pressed modifiers and chords into platform-specific search queries", () => {
+    const event = {
+      key: "Meta",
+      code: "MetaLeft",
+      metaKey: true,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+    };
+    expect(keybindingSearchFromKeyboardEvent(event, "MacIntel")).toBe("mod");
+    expect(keybindingSearchFromKeyboardEvent({ ...event, metaKey: false }, "MacIntel")).toBe("mod");
+    expect(
+      keybindingSearchFromKeyboardEvent(
+        { ...event, key: "Shift", code: "ShiftLeft", metaKey: false },
+        "MacIntel",
+      ),
+    ).toBe("shift");
+    expect(
+      keybindingSearchFromKeyboardEvent({ ...event, key: "Shift", shiftKey: true }, "MacIntel"),
+    ).toBe("mod+shift");
+    expect(
+      keybindingSearchFromKeyboardEvent(
+        { ...event, key: "K", code: "KeyK", shiftKey: true },
+        "MacIntel",
+      ),
+    ).toBe("mod+shift+k");
+    expect(
+      keybindingSearchFromKeyboardEvent(
+        { ...event, key: "Control", code: "ControlLeft", metaKey: false, ctrlKey: true },
+        "Win32",
+      ),
+    ).toBe("mod");
+    expect(
+      keybindingSearchFromKeyboardEvent(
+        { ...event, key: "Meta", metaKey: true, ctrlKey: true },
+        "Win32",
+      ),
+    ).toBe("mod+meta");
+    expect(
+      keybindingSearchFromKeyboardEvent(
+        { ...event, key: "K", code: "KeyK", metaKey: false },
+        "MacIntel",
+      ),
+    ).toBeNull();
   });
 
   it.each([

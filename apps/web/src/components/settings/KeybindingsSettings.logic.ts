@@ -173,6 +173,7 @@ export function keybindingConflictLabels(
 export function buildKeybindingRows(
   keybindings: ResolvedKeybindingsConfig,
   query: string,
+  shortcutQuery: string | null = null,
 ): ReadonlyArray<KeybindingRow> {
   const normalizedQuery = query.trim().toLowerCase();
   const rows = keybindings.map((binding, index) => {
@@ -213,6 +214,16 @@ export function buildKeybindingRows(
     return rowsWithConflicts;
   }
 
+  if (shortcutQuery) {
+    const searchedParts = shortcutQuery.split("+");
+    const searchedKey = searchedParts.find((part) => !SEARCH_MODIFIERS.has(part));
+    return rowsWithConflicts.filter((row) => {
+      if (searchedKey !== undefined) return row.key === shortcutQuery;
+      const parts = row.key.split("+");
+      return searchedParts.every((part) => parts.includes(part));
+    });
+  }
+
   return rowsWithConflicts.filter((row) => {
     return (
       row.command.toLowerCase().includes(normalizedQuery) ||
@@ -222,6 +233,33 @@ export function buildKeybindingRows(
       row.source.toLowerCase().includes(normalizedQuery)
     );
   });
+}
+
+const SEARCH_MODIFIERS = new Set(["mod", "meta", "ctrl", "alt", "shift"]);
+
+export function keybindingSearchFromKeyboardEvent(
+  event: Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">,
+  platform: string,
+): string | null {
+  const modifiers: string[] = [];
+  const pressedKey = event.key.toLowerCase();
+  const metaKey = event.metaKey || pressedKey === "meta";
+  const ctrlKey = event.ctrlKey || pressedKey === "control";
+  const altKey = event.altKey || pressedKey === "alt";
+  const shiftKey = event.shiftKey || pressedKey === "shift";
+  if (isMacPlatform(platform)) {
+    if (metaKey) modifiers.push("mod");
+    if (ctrlKey) modifiers.push("ctrl");
+  } else {
+    if (ctrlKey) modifiers.push("mod");
+    if (metaKey) modifiers.push("meta");
+  }
+  if (altKey) modifiers.push("alt");
+  if (shiftKey) modifiers.push("shift");
+  if (modifiers.length === 0) return null;
+
+  const key = normalizeShortcutKeyToken(shortcutKeyFromEvent(event));
+  return key ? [...modifiers, key].join("+") : modifiers.join("+");
 }
 
 function collectWhenIdentifiersFromNode(

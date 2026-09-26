@@ -2,6 +2,9 @@
 
 Customize shortcuts in **Settings → Keybindings** on web and desktop. That page
 also lists the command IDs and defaults available in your version.
+Search by command name or focus the search field and press a shortcut. Press a
+modifier by itself to show bindings that use it, or press multiple modifiers to
+narrow the list. Escape clears the search.
 
 ## Composer controls
 

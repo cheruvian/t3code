@@ -57,6 +57,7 @@ import {
   isKnownWhenVariable,
   keybindingConflictLabels,
   keybindingFromKeyboardEvent,
+  keybindingSearchFromKeyboardEvent,
   parseWhenExpressionDraft,
   shouldSkipKeybindingCapture,
   type KeybindingCommandOption,
@@ -107,6 +108,7 @@ function KeybindingPill({ value }: { value: string }) {
 function ExpandableHeaderSearch({
   query,
   onChange,
+  onShortcut,
   isOpen,
   onOpenChange,
   inputRef,
@@ -114,6 +116,7 @@ function ExpandableHeaderSearch({
 }: {
   query: string;
   onChange: (next: string) => void;
+  onShortcut: (next: string) => void;
   isOpen: boolean;
   onOpenChange: (next: boolean) => void;
   inputRef?: RefObject<HTMLInputElement | null>;
@@ -158,11 +161,20 @@ function ExpandableHeaderSearch({
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             event.preventDefault();
+            event.stopPropagation();
             onChange("");
             onOpenChange(false);
+            return;
           }
+          if (event.key === "Tab") return;
+          const shortcut = keybindingSearchFromKeyboardEvent(event.nativeEvent, navigator.platform);
+          if (!shortcut) return;
+          event.preventDefault();
+          event.stopPropagation();
+          onShortcut(shortcut);
+          event.currentTarget.select();
         }}
-        placeholder="Search keybindings"
+        placeholder="Search or press shortcut"
         aria-label="Search keybindings"
         className="w-44 [&_[data-slot=input]]:pl-7"
         size="sm"
@@ -1371,11 +1383,15 @@ export function KeybindingsSettingsPanel() {
     availableEditors,
   );
   const [query, setQuery] = useState("");
+  const [shortcutQuery, setShortcutQuery] = useState<string | null>(null);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [savingCommand, setSavingCommand] = useState<KeybindingCommand | null>(null);
   const [isAddingBinding, setIsAddingBinding] = useState(false);
-  const rows = useMemo(() => buildKeybindingRows(keybindings, query), [keybindings, query]);
+  const rows = useMemo(
+    () => buildKeybindingRows(keybindings, query, shortcutQuery),
+    [keybindings, query, shortcutQuery],
+  );
   // The search-target context is provided by this panel's own page container,
   // so the jump target is read from the route hash here.
   const searchTargetId = useLocation({ select: (location) => location.hash.replace(/^#/, "") });
@@ -1384,8 +1400,19 @@ export function KeybindingsSettingsPanel() {
   // A settings-search jump must not be hidden by the page's own filter.
   if (searchTargetId !== handledSearchTargetId) {
     setHandledSearchTargetId(searchTargetId);
-    if (searchTargetId.startsWith("keybinding-")) setQuery("");
+    if (searchTargetId.startsWith("keybinding-")) {
+      setQuery("");
+      setShortcutQuery(null);
+    }
   }
+  const changeSearch = useCallback((next: string) => {
+    setQuery(next);
+    setShortcutQuery(null);
+  }, []);
+  const searchShortcut = useCallback((next: string) => {
+    setQuery(next);
+    setShortcutQuery(next);
+  }, []);
   const commandOptions = useMemo(() => buildKeybindingCommandOptions(keybindings), [keybindings]);
   const whenVariables = useMemo(() => buildWhenVariableOptions(), []);
 
@@ -1541,7 +1568,8 @@ export function KeybindingsSettingsPanel() {
           <div className="flex items-center gap-1.5">
             <ExpandableHeaderSearch
               query={query}
-              onChange={setQuery}
+              onChange={changeSearch}
+              onShortcut={searchShortcut}
               isOpen={isSearchOpen}
               onOpenChange={setIsSearchOpen}
               inputRef={searchInputRef}
