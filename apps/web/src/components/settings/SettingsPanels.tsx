@@ -2415,13 +2415,13 @@ export function GeneralSettingsPanel() {
             title="Instructions for every project"
             description="Appended to the system prompt for every provider across every project on this environment."
           >
-            <details className="group/instructions mt-3 max-w-2xl pb-3.5">
+            <details className="group/instructions mt-3 min-w-0 max-w-2xl pb-3.5">
               <summary className="flex w-fit cursor-pointer list-none items-center gap-2 rounded-sm text-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
                 <ChevronRightIcon className="size-4 group-open/instructions:rotate-90" />
                 Edit instructions
               </summary>
               <Textarea
-                className="mt-3 [&_textarea]:max-h-64 [&_textarea]:overflow-y-auto"
+                className="mt-3 min-w-0 max-w-full [&_textarea]:max-h-64 [&_textarea]:min-w-0 [&_textarea]:max-w-full [&_textarea]:resize-y [&_textarea]:overflow-y-auto [&_textarea]:[overflow-wrap:anywhere]"
                 key={settings.globalCustomInstructions}
                 defaultValue={settings.globalCustomInstructions}
                 onBlur={(event) => {
