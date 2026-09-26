@@ -96,6 +96,7 @@ import {
   renderCodexFileCitationsAsMarkdown,
 } from "@t3tools/client-runtime/codex-markdown-directives";
 import { renderSkillInlineMarkdownChildren } from "./chat/SkillInlineText";
+import { useUiStateStore } from "~/uiStateStore";
 import {
   resolveMarkdownMediaPreview,
   type ExpandedImagePreview,
@@ -700,11 +701,14 @@ function readInitialWordWrapSetting(): boolean {
 function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const tableRef = useRef<HTMLTableElement | null>(null);
-  const [expanded, setExpanded] = useState(readInitialWordWrapSetting);
+  const wrapTableCells = useUiStateStore((store) => store.wrapTableCells);
+  const [expanded, setExpanded] = useState(() => wrapTableCells);
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const expandLabel = expanded ? "Collapse table cells" : "Expand table cells";
   const copyLabel = copied ? "Copied" : "Copy table";
+
+  useEffect(() => setExpanded(wrapTableCells), [wrapTableCells]);
 
   function toggleExpanded() {
     const table = tableRef.current;

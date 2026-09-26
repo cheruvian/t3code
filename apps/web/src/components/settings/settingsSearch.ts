@@ -190,6 +190,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "appearance",
   },
   {
+    id: "setting-table-cell-wrap",
+    title: "Table cell wrapping",
+    to: "/settings/appearance",
+    searchTerms: ["markdown tables truncate expand text wrap cells"],
+  },
+  {
     // Prefixed because the slider control already owns the `appearance-contrast` id.
     id: "setting-appearance-contrast",
     title: "Contrast",

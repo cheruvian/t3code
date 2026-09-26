@@ -94,6 +94,7 @@ import {
 } from "./useScopedSettings";
 import { useScopedModelDisabledReason } from "./useScopedModelAvailability";
 import { useSettingsScope } from "./SettingsScopeContext";
+import { useUiStateStore } from "~/uiStateStore";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
@@ -1188,6 +1189,8 @@ function BackgroundActivityAdvancedDialog({
 }
 
 export function AppearanceSettingsPanel() {
+  const wrapTableCells = useUiStateStore((store) => store.wrapTableCells);
+  const setWrapTableCells = useUiStateStore((store) => store.setWrapTableCells);
   const {
     appearanceMode,
     refreshTheme,
@@ -1247,6 +1250,17 @@ export function AppearanceSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection id="appearance-interface" title="Interface">
+        <SettingsRow
+          {...searchableSetting("setting-table-cell-wrap")}
+          description="Wrap table text by default instead of truncating it."
+          control={
+            <Switch
+              aria-label="Wrap table cell text"
+              checked={wrapTableCells}
+              onCheckedChange={(checked) => setWrapTableCells(Boolean(checked))}
+            />
+          }
+        />
         <SettingsRow
           {...searchableSetting("setting-appearance-contrast")}
           description="Adjust the contrast of colors and borders across the interface."

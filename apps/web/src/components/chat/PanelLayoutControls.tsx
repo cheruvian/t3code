@@ -13,10 +13,13 @@ interface PanelLayoutControlsProps {
   rightPanelOpen: boolean;
   rightPanelShortcutLabel: string | null;
   rightPanelUnavailableLabel?: string;
+  fullWidthThreadMessages: boolean;
+  messageWidthShortcutLabel: string | null;
   /** Running + waiting subagents in this thread; badges the right panel toggle. */
   liveAgentCount: number;
   onToggleTerminal: () => void;
   onToggleRightPanel: () => void;
+  onToggleMessageWidth: () => void;
 }
 
 export const PanelLayoutControls = memo(function PanelLayoutControls({
@@ -28,9 +31,12 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   rightPanelOpen,
   rightPanelShortcutLabel,
   rightPanelUnavailableLabel = "Right panel is unavailable",
+  fullWidthThreadMessages,
+  messageWidthShortcutLabel,
   liveAgentCount,
   onToggleTerminal,
   onToggleRightPanel,
+  onToggleMessageWidth,
 }: PanelLayoutControlsProps) {
   return (
     <div
@@ -59,6 +65,34 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
           </TooltipPopup>
         </Tooltip>
       ) : null}
+      <Tooltip>
+        <TooltipTrigger render={<span className="flex shrink-0" />}>
+          <Toggle
+            className="shrink-0 [-webkit-app-region:no-drag]"
+            pressed={fullWidthThreadMessages}
+            onPressedChange={onToggleMessageWidth}
+            aria-label={
+              fullWidthThreadMessages
+                ? "Use narrow thread messages"
+                : "Use full-width thread messages"
+            }
+            variant="ghost"
+            size="sm"
+          >
+            {fullWidthThreadMessages ? (
+              <Minimize2Icon className="size-4" />
+            ) : (
+              <Maximize2Icon className="size-4" />
+            )}
+          </Toggle>
+        </TooltipTrigger>
+        <TooltipPopup side="bottom">
+          {fullWidthThreadMessages
+            ? "Use narrow thread messages"
+            : "Use full-width thread messages"}
+          {messageWidthShortcutLabel ? ` (${messageWidthShortcutLabel})` : ""}
+        </TooltipPopup>
+      </Tooltip>
       <Tooltip>
         <TooltipTrigger render={<span className="flex shrink-0" />}>
           <Toggle

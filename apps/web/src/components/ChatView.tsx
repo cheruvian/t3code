@@ -1599,6 +1599,9 @@ export default function ChatView(props: ChatViewProps) {
     };
   }, [routeKind, routeThreadRef, routeThreadState]);
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
+  const fullWidthThreadMessages = useUiStateStore((store) => store.fullWidthThreadMessages);
+  const setFullWidthThreadMessages = useUiStateStore((store) => store.setFullWidthThreadMessages);
+  const setWrapTableCells = useUiStateStore((store) => store.setWrapTableCells);
   const settings = useEnvironmentSettings(environmentId);
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
@@ -6903,6 +6906,21 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
+      if (command === "thread.toggleMessageWidth") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat)
+          setFullWidthThreadMessages(!useUiStateStore.getState().fullWidthThreadMessages);
+        return;
+      }
+
+      if (command === "thread.toggleTableCellWrap") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) setWrapTableCells(!useUiStateStore.getState().wrapTableCells);
+        return;
+      }
+
       if (command === "thread.settle") {
         event.preventDefault();
         event.stopPropagation();
@@ -7140,6 +7158,8 @@ export default function ChatView(props: ChatViewProps) {
     toggleRightPanelMaximized,
     toggleTerminalVisibility,
     composerRef,
+    setFullWidthThreadMessages,
+    setWrapTableCells,
   ]);
 
   // Paste-to-focus: the resting composer blurs on a click into the timeline,
@@ -9763,6 +9783,8 @@ export default function ChatView(props: ChatViewProps) {
       terminalAvailable={activeProject !== null}
       terminalOpen={terminalUiState.terminalOpen}
       terminalShortcutLabel={shortcutLabelForCommand(keybindings, "terminal.toggle")}
+      fullWidthThreadMessages={fullWidthThreadMessages}
+      messageWidthShortcutLabel={shortcutLabelForCommand(keybindings, "thread.toggleMessageWidth")}
       rightPanelAvailable={activeProject !== null}
       rightPanelOpen={rightPanelOpen}
       rightPanelShortcutLabel={shortcutLabelForCommand(keybindings, "rightPanel.toggle")}
@@ -9773,6 +9795,7 @@ export default function ChatView(props: ChatViewProps) {
       }
       onToggleTerminal={toggleTerminalVisibility}
       onToggleRightPanel={toggleRightPanel}
+      onToggleMessageWidth={() => setFullWidthThreadMessages(!fullWidthThreadMessages)}
     />
   );
   const panelLayoutControls = (

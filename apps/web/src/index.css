@@ -1932,8 +1932,8 @@ code {
   border-bottom: 1px solid color-mix(in srgb, var(--contrast-border) 60%, transparent);
 }
 
-/* Collapsed (default): single-line cells truncate so arbitrary chat content
-   cannot blow the column out; the footer toggle expands cells to wrap. */
+/* Collapsed: single-line cells truncate so arbitrary chat content cannot
+   blow the column out; the footer toggle expands cells to wrap. */
 .chat-markdown .chat-markdown-table-container[data-expanded="false"] th,
 .chat-markdown .chat-markdown-table-container[data-expanded="false"] td {
   overflow: hidden;

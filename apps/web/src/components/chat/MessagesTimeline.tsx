@@ -533,6 +533,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   steerQueuedMessageShortcutLabel = null,
   onRemoveQueuedMessage = NOOP_QUEUED_MESSAGE_ACTION,
 }: MessagesTimelineProps) {
+  const fullWidthThreadMessages = useUiStateStore((store) => store.fullWidthThreadMessages);
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
   const rememberedPosition = useMemo(
     () => readTimelinePosition(listIdentityKey),
@@ -1284,11 +1285,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // from TimelineRowCtx, which propagates through LegendList's memo.
   const renderItem = useCallback(
     ({ item }: { item: MessagesTimelineRow }) => (
-      <div className="mx-auto w-full min-w-0 max-w-3xl overflow-x-clip" data-timeline-root="true">
+      <div
+        className={`mx-auto w-full min-w-0 ${fullWidthThreadMessages ? "max-w-none" : "max-w-3xl"} overflow-x-clip`}
+        data-timeline-root="true"
+      >
         <TimelineRowContent row={item} />
       </div>
     ),
-    [],
+    [fullWidthThreadMessages],
   );
 
   if (rows.length === 0 && !isWorking) {
