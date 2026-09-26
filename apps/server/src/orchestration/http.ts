@@ -17,6 +17,10 @@ import {
   requireEnvironmentScope,
 } from "../auth/http.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
+import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
+import * as ServerConfig from "../config.ts";
+import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
+import { dispatchBootstrapRpc } from "./bootstrapRpcClient.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 
@@ -106,6 +110,35 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               failEnvironmentInternal("orchestration_dispatch_failed", cause),
             ),
           );
+          if (args.payload.type === "thread.turn.start" && args.payload.bootstrap) {
+            const bootstrapCommand = args.payload;
+            const config = yield* ServerConfig.ServerConfig;
+            const runtime = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+            if (Option.isNone(runtime)) {
+              return yield* failEnvironmentInternal(
+                "orchestration_dispatch_failed",
+                "The running T3 Code server is required to prepare a worktree.",
+              );
+            }
+            const auth = yield* EnvironmentAuth.EnvironmentAuth;
+            return yield* Effect.acquireUseRelease(
+              auth.issueSession({
+                scopes: [AuthOrchestrationOperateScope],
+                label: "t3 http worktree bootstrap",
+              }),
+              (issued) =>
+                dispatchBootstrapRpc({
+                  origin: runtime.value.origin,
+                  sessionId: issued.sessionId,
+                  command: bootstrapCommand,
+                }).pipe(Effect.map(({ dispatch }) => dispatch)),
+              (issued) => auth.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
+            ).pipe(
+              Effect.catch((cause) =>
+                failEnvironmentInternal("orchestration_dispatch_failed", cause),
+              ),
+            );
+          }
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );

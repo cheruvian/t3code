@@ -239,6 +239,47 @@ it.effect("rejects typed-contract violations as invalid input", () =>
   }).pipe(Effect.provide(TestLayer)),
 );
 
+it.effect("does not dispatch a worktree bootstrap through the raw engine", () =>
+  Effect.gen(function* () {
+    const result = yield* callApi("orchestration.dispatchCommand", {
+      type: "thread.turn.start",
+      commandId: "cmd-bootstrap",
+      threadId: "thread-bootstrap",
+      message: {
+        messageId: "message-bootstrap",
+        role: "user",
+        text: "Start in a worktree",
+        attachments: [],
+      },
+      modelSelection: { instanceId: "codex", model: "gpt-6-sol" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      bootstrap: {
+        createThread: {
+          projectId: targetProjectId,
+          title: "Bootstrap thread",
+          modelSelection: { instanceId: "codex", model: "gpt-6-sol" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: "main",
+          worktreePath: null,
+          createdAt,
+        },
+        prepareWorktree: {
+          projectCwd: "/tmp/t3-mcp-api-test/casino",
+          baseBranch: "main",
+          requireWorktree: true,
+        },
+      },
+      createdAt,
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      { type: "text", text: expect.stringContaining("running T3 Code server is required") },
+    ]);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
 // The helper's real management flow: add a global worktree-setup action to
 // the keybindings file, then dispatch project.meta.update to drop the
 // project-level "Setup worktree" script it replaces.

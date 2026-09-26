@@ -8,6 +8,7 @@ export function buildRuntimeInstructions(runtime: {
   readonly model?: string | undefined;
   readonly reasoningEffort?: string | undefined;
   readonly customInstructions?: string | undefined;
+  readonly t3CodeProjectDir?: string | undefined;
 }): string {
   const harness = toSingleLine(runtime.harness);
   const model = toSingleLine(runtime.model ?? "");
@@ -18,7 +19,13 @@ export function buildRuntimeInstructions(runtime: {
   const customInstructionsBlock = customInstructions
     ? `\n\n<user_custom_instructions>\n${customInstructions}\n</user_custom_instructions>`
     : "";
-  return `<runtime_info>In case you're asked: you are running in T3 Code through the ${harness} harness${modelInfo}${effortInfo}. No need to mention this otherwise. You can embed images and videos in your response using Markdown with absolute file paths.</runtime_info>\n\n${PULL_REQUEST_LINKING_INSTRUCTIONS}${customInstructionsBlock}`;
+  const skillPath = runtime.t3CodeProjectDir
+    ? `${runtime.t3CodeProjectDir.replaceAll(/[\\/]$/g, "")}/.agents/skills/t3-cli-api/SKILL.md`
+    : undefined;
+  const skillBlock = skillPath
+    ? `\n\n<available_skill name="t3-cli-api" description="Interact with the running T3 Code environment, API, app, and backend.">Read ${skillPath} when managing T3 Code projects, threads, messages, or settings.</available_skill>`
+    : "";
+  return `<runtime_info>In case you're asked: you are running in T3 Code through the ${harness} harness${modelInfo}${effortInfo}. No need to mention this otherwise. You can embed images and videos in your response using Markdown with absolute file paths.</runtime_info>\n\n${PULL_REQUEST_LINKING_INSTRUCTIONS}${skillBlock}${customInstructionsBlock}`;
 }
 
 function toSingleLine(value: string): string {

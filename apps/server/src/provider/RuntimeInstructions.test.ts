@@ -36,6 +36,15 @@ describe("buildRuntimeInstructions", () => {
     );
   });
 
+  it("advertises the environment skill when its path is provided", () => {
+    const instructions = buildRuntimeInstructions({
+      harness: "Codex",
+      t3CodeProjectDir: "/t3-home/t3code",
+    });
+    expect(instructions).toContain('name="t3-cli-api"');
+    expect(instructions).toContain("/t3-home/t3code/.agents/skills/t3-cli-api/SKILL.md");
+  });
+
   it.each([undefined, "", "   "])("omits the custom instructions block for %s", (value) => {
     const instructions = buildRuntimeInstructions({ harness: "Codex", customInstructions: value });
     expect(instructions).not.toContain("user_custom_instructions");

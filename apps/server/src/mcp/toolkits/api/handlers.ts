@@ -1,6 +1,8 @@
 import {
   AGENT_EXPOSED_API_NAMES,
   AgentApiCallError,
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
   ClientOrchestrationCommand,
   ORCHESTRATION_WS_METHODS,
   OrchestrationRpcSchemas,
@@ -28,9 +30,12 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import * as EnvironmentAuth from "../../../auth/EnvironmentAuth.ts";
 import * as CheckpointDiffQuery from "../../../checkpointing/CheckpointDiffQuery.ts";
+import * as ServerConfig from "../../../config.ts";
 import * as Keybindings from "../../../keybindings.ts";
 import { projectThreadDetailSnapshot } from "../../../orchestration/ActivityPayloadProjection.ts";
+import { dispatchBootstrapRpc } from "../../../orchestration/bootstrapRpcClient.ts";
 import {
   cleanupFailedUploadedAttachments,
   normalizeDispatchCommand,
@@ -38,6 +43,7 @@ import {
 import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { loadServerConfig } from "../../../serverConfigSnapshot.ts";
+import { readPersistedServerRuntimeState } from "../../../serverRuntimeState.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as WorkspaceEntries from "../../../workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "../../../workspace/WorkspaceFileSystem.ts";
@@ -195,6 +201,31 @@ const runners = {
     OrchestrationRpcSchemas.dispatchCommand.output,
     (command) =>
       Effect.gen(function* () {
+        if (command.type === "thread.turn.start" && command.bootstrap) {
+          const config = yield* ServerConfig.ServerConfig;
+          const runtime = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+          if (Option.isNone(runtime)) {
+            return yield* new AgentApiCallError({
+              operation: ORCHESTRATION_WS_METHODS.dispatchCommand,
+              reason: "unavailable",
+              message: "The running T3 Code server is required to prepare a worktree.",
+            });
+          }
+          const auth = yield* EnvironmentAuth.EnvironmentAuth;
+          return yield* Effect.acquireUseRelease(
+            auth.issueSession({
+              scopes: [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+              label: "t3 helper worktree bootstrap",
+            }),
+            (issued) =>
+              dispatchBootstrapRpc({
+                origin: runtime.value.origin,
+                sessionId: issued.sessionId,
+                command,
+              }).pipe(Effect.map(({ dispatch }) => dispatch)),
+            (issued) => auth.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
+          );
+        }
         const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
         const normalizedCommand = yield* normalizeDispatchCommand(command);
         return yield* orchestrationEngine

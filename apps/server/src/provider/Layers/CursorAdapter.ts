@@ -1106,7 +1106,11 @@ export function makeCursorAdapter(
               : [
                   {
                     type: "text",
-                    text: buildRuntimeInstructions({ harness: "Cursor", model: resolvedModel }),
+                    text: buildRuntimeInstructions({
+                      harness: "Cursor",
+                      model: resolvedModel,
+                      t3CodeProjectDir: serverConfig.t3CodeProjectDir,
+                    }),
                   },
                 ];
           // Unlike the transient runtime-info block above, custom instructions

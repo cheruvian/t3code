@@ -195,6 +195,7 @@ ${browserToolInstructions(browserToolsAvailable)}
 export interface CodexRuntimeInfo {
   readonly model: string;
   readonly reasoningEffort: string;
+  readonly t3CodeProjectDir?: string;
 }
 
 export function buildCodexDeveloperInstructions(

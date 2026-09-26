@@ -17,6 +17,7 @@ import { isEntrypoint } from "./entrypoint.ts";
 import { projectCommand } from "./cli/project.ts";
 import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
 import { serviceCommand } from "./cli/service.ts";
+import { settingsCommand } from "./cli/settings.ts";
 import { uninstallCommand } from "./cli/uninstall.ts";
 import { updateCommand } from "./cli/update.ts";
 import { claudeHistoryCommand } from "./cli/claudeHistory.ts";
@@ -24,6 +25,7 @@ import { serviceLauncherCommand } from "./cli/serviceLauncher.ts";
 import { servicePreflightCommand } from "./cli/servicePreflight.ts";
 import { sshHelperCommand } from "./cli/sshHelper.ts";
 import { themeCommand } from "./cli/theme.ts";
+import { threadCommand } from "./cli/thread.ts";
 import { triageCommand } from "./cli/triage.ts";
 
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
@@ -63,6 +65,8 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       pairCommand,
       authCommand,
       projectCommand,
+      threadCommand,
+      settingsCommand,
       serviceCommand,
       updateCommand,
       uninstallCommand,

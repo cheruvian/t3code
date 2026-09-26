@@ -1657,6 +1657,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   : buildRuntimeInstructions({
                       harness: "Grok",
                       model: displayModel,
+                      t3CodeProjectDir: serverConfig.t3CodeProjectDir,
                       reasoningEffort: normalizeGrokReasoningEffort(requestedTurnReasoningEffort),
                     });
               // Unlike the transient runtime-info block above, custom

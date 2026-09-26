@@ -196,6 +196,7 @@ export interface CodexSessionRuntimeOptions {
   readonly mcpCapabilities?: ReadonlySet<string>;
   /** Snapshotted at session start, same as `binaryPath`/`homePath` above. */
   readonly globalCustomInstructions?: string;
+  readonly t3CodeProjectDir?: string;
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
@@ -609,6 +610,7 @@ function buildCodexCollaborationMode(input: {
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly browserToolsAvailable?: boolean | T3CodeToolAvailability;
   readonly globalCustomInstructions?: string;
+  readonly t3CodeProjectDir?: string;
 }): EffectCodexSchema.V2TurnStartParams__CollaborationMode | undefined {
   if (input.interactionMode === undefined) {
     return undefined;
@@ -622,7 +624,11 @@ function buildCodexCollaborationMode(input: {
       reasoning_effort: reasoningEffort,
       developer_instructions: buildCodexDeveloperInstructions(
         input.interactionMode,
-        { model, reasoningEffort },
+        {
+          model,
+          reasoningEffort,
+          ...(input.t3CodeProjectDir ? { t3CodeProjectDir: input.t3CodeProjectDir } : {}),
+        },
         input.browserToolsAvailable ?? true,
         input.globalCustomInstructions,
       ),
@@ -649,6 +655,7 @@ export function buildTurnStartParams(input: {
   /** Defaults to true so callers that predate the agent-access gate are unchanged. */
   readonly browserToolsAvailable?: boolean | T3CodeToolAvailability;
   readonly globalCustomInstructions?: string;
+  readonly t3CodeProjectDir?: string;
 }): Effect.Effect<
   CodexTurnStartParamsWithCollaborationMode,
   CodexErrors.CodexAppServerProtocolParseError
@@ -673,6 +680,7 @@ export function buildTurnStartParams(input: {
     ...(input.globalCustomInstructions
       ? { globalCustomInstructions: input.globalCustomInstructions }
       : {}),
+    ...(input.t3CodeProjectDir ? { t3CodeProjectDir: input.t3CodeProjectDir } : {}),
   });
 
   return decodeCodexTurnStartParamsWithCollaborationMode({
@@ -2679,6 +2687,7 @@ export const makeCodexSessionRuntime = (
             ...(options.globalCustomInstructions
               ? { globalCustomInstructions: options.globalCustomInstructions }
               : {}),
+            ...(options.t3CodeProjectDir ? { t3CodeProjectDir: options.t3CodeProjectDir } : {}),
             browserToolsAvailable: configuredMcpToolAvailability(
               options.appServerArgs,
               options.mcpCapabilities,

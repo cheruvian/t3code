@@ -3289,6 +3289,7 @@ export function makeOpenCodeAdapter(
                     system: buildRuntimeInstructions({
                       harness: "OpenCode",
                       model: `${parsedModel.providerID}/${parsedModel.modelID}`,
+                      t3CodeProjectDir: serverConfig.t3CodeProjectDir,
                       customInstructions: globalCustomInstructions,
                     }),
                     parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],

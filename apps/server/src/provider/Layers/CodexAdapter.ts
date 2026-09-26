@@ -2549,6 +2549,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(options?.environment ? { environment: options.environment } : {}),
           ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
           ...(globalCustomInstructions ? { globalCustomInstructions } : {}),
+          t3CodeProjectDir: serverConfig.t3CodeProjectDir,
           ...(isCodexResumeCursorSchema(input.resumeCursor)
             ? { resumeCursor: input.resumeCursor }
             : {}),

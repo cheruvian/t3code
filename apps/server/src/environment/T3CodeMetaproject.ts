@@ -15,9 +15,12 @@ import { helperIcon } from "./t3ChatHelperIcon.ts";
 
 export const T3_CHAT_HELPER_TITLE = "T3 Chat Helper";
 
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+
 const instructions = (input: {
   readonly settingsPath: string;
   readonly keybindingsPath: string;
+  readonly baseDir: string;
   readonly commit: string | null;
 }) => `# T3 Chat Helper pseudo-project
 
@@ -31,13 +34,15 @@ This workspace is a built-in pseudo-project for inspecting and managing the T3 C
 
 Call the typed APIs through the \`api_call\` tool on the built-in \`t3-code\` MCP server: pass an agent-exposed \`operation\` from the inventory (for example \`server.updateSettings\`, \`server.upsertKeybinding\`, \`server.removeKeybinding\`, or \`orchestration.dispatchCommand\`) and a typed \`input\`. Prefer these APIs over file edits for supported changes. Direct writes are supported only for the two user-managed JSON files listed above. Read before writing, preserve valid JSON, and make the smallest change that satisfies the request. A missing file means T3 Code is using its defaults; create it only when a requested change needs persisted configuration. The server watches both files and reloads valid edits.
 
-Everything else is outside this helper's write boundary. Never write to the source snapshot, state database, authentication or secret material, runtime identifiers, logs, attachments, caches, or any worktree, including unrelated worktrees. Explain the boundary and direct product source changes to a separate normal project opened on the real T3 Code repository.
+Everything else is outside this helper's direct file-write boundary. Never edit the source snapshot, state database, authentication or secret material, runtime identifiers, logs, attachments, caches, or worktree files. Supported environment commands may create worktrees through the server. Explain the boundary and direct product source changes to a separate normal project opened on the real T3 Code repository.
 
 When the user asks what a setting currently does, inspect the live value first. Explain defaults separately from configured values. Prefer the Settings UI when it supports the requested change; direct file edits are appropriate when the user asks you to make the change from this project.
 
 ## Managing T3 Code
 
 This project may also manage the environment itself. The generated \`api-inventory.json\` lists every typed RPC and orchestration API known by this server, including whether it is read-only, mutating, or destructive and whether it is agent-exposed or UI-only. Every agent-exposed operation is callable through \`api_call\`. Projects are managed by dispatching \`project.create\`, \`project.meta.update\`, and \`project.delete\` commands through \`orchestration.dispatchCommand\`; the installed CLI (\`t3 project add\`, \`t3 project rename\`, and \`t3 project remove\`) remains available as a fallback — use \`t3 project --help\` first and preserve the environment's data-directory flags. Read current projects and threads with \`orchestration.subscribeShell\`, which returns the current snapshot over this bridge. Actions and keybindings live in the keybindings file above. Provider settings, general settings, and other server configuration live in the settings file above. Confirm destructive commands such as \`project.delete\` before executing them, and never edit the state database directly.
+
+For thread creation, search, messages, and settings, use the local \`t3-cli-api\` skill at \`.agents/skills/t3-cli-api/SKILL.md\`. Use \`--base-dir ${shellQuote(input.baseDir)}\` for this environment. A raw \`thread.create\` followed by \`thread.turn.start\` does not prepare a worktree.
 
 ## Product knowledge
 
@@ -60,6 +65,35 @@ ${
 }
 
 Distinguish documented behavior from conclusions inferred from source. If asked to edit anything under \`source/\`, refuse the edit, do not invoke a write tool, and say that the checkout is read-only. Open a separate normal project if the user asks for a T3 Code product change.
+`;
+
+export const t3CliSkill = (baseDir: string) => `---
+name: t3-cli-api
+description: Interact with the running T3 Code environment, API, app, and backend. Use for projects, threads, messages, and settings.
+---
+
+# T3 CLI/API
+
+Environment: \`--base-dir ${shellQuote(baseDir)}\` selects this server's data directory. Commands require the running server. Output is JSON.
+
+\`t3 thread start --base-dir ${shellQuote(baseDir)} --instance INSTANCE_ID --model MODEL_ID --base-branch main --title "Fix issue" --message-file /tmp/prompt.txt /path/to/project\`
+
+Start source: final argument = project ID, title, or workspace root; \`--base-branch\` = Git branch to fork. Use configured instance/model IDs; omit both to use project defaults. The result includes \`threadId\`, \`branch\`, and worktree \`cwd\`.
+
+\`t3 thread search --base-dir ${shellQuote(baseDir)} "search text"\`
+\`t3 thread list --base-dir ${shellQuote(baseDir)} --limit 20\`
+\`t3 thread status --base-dir ${shellQuote(baseDir)} THREAD_ID\`
+\`t3 thread messages --base-dir ${shellQuote(baseDir)} --turns 10 THREAD_ID\`
+\`t3 thread send --base-dir ${shellQuote(baseDir)} --message-file /tmp/reply.txt THREAD_ID\`
+\`t3 thread wait --base-dir ${shellQuote(baseDir)} --after-sequence SEQUENCE THREAD_ID\`
+\`t3 project add --base-dir ${shellQuote(baseDir)} /path/to/project\`
+\`t3 app --base-dir ${shellQuote(baseDir)} /path/to/project\`
+\`t3 settings get --base-dir ${shellQuote(baseDir)}\`
+\`t3 settings patch --base-dir ${shellQuote(baseDir)} --file /tmp/settings-patch.json\`
+
+\`send\` prints a sequence; pass it to \`wait --after-sequence\`, then read \`messages\`. If start disconnects, list threads before retrying.
+
+In the T3 Chat Helper project, \`api_call\` on the \`t3-code\` MCP server can call agent-exposed operations in \`api-inventory.json\`. It is unavailable in other projects. Use \`--help\` for CLI flags.
 `;
 
 const checkoutScript = (
@@ -120,6 +154,7 @@ export const ensureT3CodeMetaproject = Effect.gen(function* () {
     instructions({
       settingsPath: config.settingsPath,
       keybindingsPath: config.keybindingsConfigPath,
+      baseDir: config.baseDir,
       commit,
     }),
   );
@@ -145,6 +180,15 @@ export const ensureT3CodeMetaproject = Effect.gen(function* () {
     path.join(config.t3CodeProjectDir, "api-inventory.json"),
     agentApiInventoryJson(),
   );
+  for (const skillRoot of [".agents", ".claude"]) {
+    yield* fs.remove(path.join(config.t3CodeProjectDir, skillRoot, "skills", "t3-cli"), {
+      recursive: true,
+      force: true,
+    });
+    const skillDir = path.join(config.t3CodeProjectDir, skillRoot, "skills", "t3-cli-api");
+    yield* fs.makeDirectory(skillDir, { recursive: true });
+    yield* fs.writeFileString(path.join(skillDir, "SKILL.md"), t3CliSkill(config.baseDir));
+  }
 
   return config.t3CodeProjectDir;
 });

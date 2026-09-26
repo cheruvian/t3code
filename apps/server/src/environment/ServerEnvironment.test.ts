@@ -190,7 +190,26 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(metaprojectInstructions).toContain("server.updateSettings");
       expect(metaprojectInstructions).toContain("api_call");
       expect(metaprojectInstructions).toContain("orchestration.dispatchCommand");
-      expect(metaprojectInstructions).toContain("outside this helper's write boundary");
+      expect(metaprojectInstructions).toContain(".agents/skills/t3-cli-api/SKILL.md");
+      const cliSkill = yield* fileSystem.readFileString(
+        `${baseDir}/t3code/.agents/skills/t3-cli-api/SKILL.md`,
+      );
+      expect(cliSkill).toContain(`t3 thread start --base-dir '${baseDir}'`);
+      expect(cliSkill).toContain("--instance INSTANCE_ID --model MODEL_ID --base-branch main");
+      expect(cliSkill).toContain("t3 thread search");
+      expect(cliSkill).toContain("t3 thread list");
+      expect(cliSkill).toContain("t3 thread status");
+      expect(cliSkill).toContain("t3 thread messages");
+      expect(cliSkill).toContain("t3 thread send");
+      expect(cliSkill).toContain("t3 thread wait");
+      expect(cliSkill).toContain("t3 project add");
+      expect(cliSkill).toContain("t3 app");
+      expect(cliSkill).toContain("t3 settings get");
+      expect(cliSkill).toContain("t3 settings patch");
+      expect(
+        yield* fileSystem.readFileString(`${baseDir}/t3code/.claude/skills/t3-cli-api/SKILL.md`),
+      ).toBe(cliSkill);
+      expect(metaprojectInstructions).toContain("outside this helper's direct file-write boundary");
       expect(yield* fileSystem.readFileString(`${baseDir}/t3code/t3.json`)).toContain(
         '"iconPath": "assets/t3-chat-helper.svg"',
       );

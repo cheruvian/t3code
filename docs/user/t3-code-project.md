@@ -10,4 +10,6 @@ The workspace records the running server version and source commit. Before inspe
 
 T3 Code creates the helper workspace separately from its runtime data. The helper's agent manages the environment through typed APIs: it can update settings and keybindings, and it can add, change, or remove projects by dispatching the same commands the app itself uses — for example, replacing per-project setup actions with a single global one. These APIs answer only to helper sessions; agents in your other projects cannot call them. Direct file writes are limited to the two user-managed JSON files for settings and keybindings. The source snapshot, state database, authentication material, runtime identifiers, logs, attachments, caches, and all worktrees remain read-only or inaccessible from this helper.
 
+To start an isolated coding thread, ask the helper to use `t3 thread start`. The command prepares the worktree before the provider turn begins. The helper can create a worktree through this command but cannot edit its files directly.
+
 The bundled paperclip icon identifies the helper on web, desktop, and mobile through the shared project-favicon contract. Clients retain their standard accessible folder or project-name fallback if the asset cannot be loaded.

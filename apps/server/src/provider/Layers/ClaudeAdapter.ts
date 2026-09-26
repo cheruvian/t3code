@@ -4943,6 +4943,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           // Model and effort can change after this session-level prompt is set.
           append: buildRuntimeInstructions({
             harness: "Claude Code",
+            t3CodeProjectDir: serverConfig.t3CodeProjectDir,
             customInstructions: globalCustomInstructions,
           }),
         },
