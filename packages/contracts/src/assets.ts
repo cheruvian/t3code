@@ -23,6 +23,11 @@ export const AssetResource = Schema.Union([
     threadId: ThreadId,
     path: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
   }),
+  // Download one arbitrary file from the environment host. This is separate
+  // from preview media so downloads are not limited to renderable extensions.
+  Schema.TaggedStruct("host-file-download", {
+    path: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
+  }),
   // A workspace file named by a draft that has no thread yet. The draft names
   // its workspace root explicitly instead of resolving one from a thread.
   Schema.TaggedStruct("draft-workspace-file", {

@@ -3097,6 +3097,7 @@ const makeWsRpcLayer = (
                 input.resource._tag === "native-app-icon" ||
                 // GitHub media names the repository it authenticates through itself.
                 input.resource._tag === "github-media" ||
+                input.resource._tag === "host-file-download" ||
                 (input.resource._tag === "media-file" && path.isAbsolute(input.resource.path))
               ) {
                 return yield* issueAssetUrl({ resource: input.resource });
