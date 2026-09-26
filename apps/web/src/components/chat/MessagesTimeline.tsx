@@ -1281,18 +1281,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
 
-  // Stable renderItem — no closure deps. Row components read shared state
-  // from TimelineRowCtx, which propagates through LegendList's memo.
+  // Keep the row renderer stable: the width preference is applied by the
+  // timeline container so cached virtualized rows update without remounting.
   const renderItem = useCallback(
     ({ item }: { item: MessagesTimelineRow }) => (
-      <div
-        className={`mx-auto w-full min-w-0 ${fullWidthThreadMessages ? "max-w-none" : "max-w-3xl"} overflow-x-clip`}
-        data-timeline-root="true"
-      >
+      <div className="mx-auto w-full min-w-0 max-w-3xl overflow-x-clip" data-timeline-root="true">
         <TimelineRowContent row={item} />
       </div>
     ),
-    [fullWidthThreadMessages],
+    [],
   );
 
   if (rows.length === 0 && !isWorking) {
@@ -1315,6 +1312,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           ref={setTimelineViewportElement}
           className="relative h-full min-h-0"
           data-assistant-citation-viewport="true"
+          data-thread-full-width={fullWidthThreadMessages ? "true" : undefined}
         >
           {onCiteAssistantText && citationThreadRef ? (
             <AssistantSelectionToolbar
