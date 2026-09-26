@@ -253,6 +253,8 @@ import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerImageThumbnail } from "./ComposerImageThumbnail";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
+import { BrowserDictationButton } from "./BrowserDictationButton";
+import { useBrowserDictation } from "./useBrowserDictation";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
@@ -1156,6 +1158,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
+  dictationButton: ReactNode;
   activeContextWindow: ContextWindowSnapshot | null;
   reserveContextWindowMeter: boolean;
   activeThreadModelDisplayName: string | null;
@@ -1196,6 +1199,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
       ) : props.reserveContextWindowMeter ? (
         <ContextWindowMeterPlaceholder />
       ) : null}
+      {props.dictationButton}
       <ComposerPrimaryActions
         compact={props.compact}
         pendingAction={props.pendingAction}
@@ -2659,6 +2663,36 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [composerDraftTarget, setComposerDraftPrompt],
   );
 
+  const voiceInputEnabled =
+    isMobileViewport &&
+    !activePendingProgress &&
+    !isComposerApprovalState &&
+    !isSendBusy &&
+    !isConnecting &&
+    environmentUnavailable === null &&
+    !noProviderAvailable &&
+    !projectSelectionRequired;
+  const voiceInput = useBrowserDictation({
+    owner: composerTargetKey(composerDraftTarget),
+    prompt,
+    enabled: voiceInputEnabled,
+    commit: (capturedPrompt, transcript) => {
+      const current =
+        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? "";
+      if (current !== capturedPrompt) return false;
+      const next = capturedPrompt.trimEnd();
+      const text = next ? `${next} ${transcript}` : transcript;
+      promptRef.current = text;
+      setPrompt(text);
+      setComposerCursor(collapseExpandedComposerCursor(text, text.length));
+      return true;
+    },
+  });
+  const dictationButton =
+    isMobileViewport && !activePendingProgress && !isComposerApprovalState ? (
+      <BrowserDictationButton voice={voiceInput} disabled={!voiceInputEnabled} />
+    ) : null;
+
   const addComposerImage = useCallback(
     (image: ComposerImageAttachment) => addComposerDraftImages(attachmentDraftTarget, [image]),
     [attachmentDraftTarget, addComposerDraftImages],
@@ -3748,7 +3782,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const submitComposer = useCallback(
     (event?: { preventDefault: () => void }, intent: ComposerSubmissionIntent = "foreground") => {
-      if (noProviderAvailable || isSendDisabled) {
+      if (voiceInput.busy || noProviderAvailable || isSendDisabled) {
         event?.preventDefault();
         return;
       }
@@ -3798,6 +3832,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
     },
     [
+      voiceInput.busy,
       activeThreadId,
       activePendingProgress,
       attachmentTargetKey,
@@ -6330,6 +6365,31 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               composerProviderState.composerSurfaceClassName,
             )}
           >
+            {voiceInput.busy || voiceInput.error ? (
+              <div
+                className="flex items-center gap-2 px-3 pt-2 text-xs text-muted-foreground"
+                role="status"
+              >
+                <span className="min-w-0 flex-1">
+                  {voiceInput.error ??
+                    (voiceInput.phase === "finishing"
+                      ? "Finishing dictation…"
+                      : voiceInput.phase === "starting"
+                        ? "Starting microphone…"
+                        : "Listening…")}
+                  {voiceInput.preview ? (
+                    <span className="mt-1 block max-h-24 overflow-y-auto text-foreground">
+                      {voiceInput.preview}
+                    </span>
+                  ) : null}
+                </span>
+                {voiceInput.error ? (
+                  <button type="button" className="p-2 underline" onClick={voiceInput.dismissError}>
+                    Dismiss
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             {showCollapsedMobilePromptRow ? (
               <div className="flex items-center justify-between gap-2 px-3 py-2">
                 <button
@@ -6357,11 +6417,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         : "Ask anything...")}
                 </button>
                 {collapsedComposerImagePreviews}
+                {dictationButton}
                 <button
                   type="button"
                   data-chat-composer-transition-actions="true"
                   className="flex size-8 shrink-0 items-center justify-center rounded-full bg-message-action text-message-action-foreground hover:bg-message-action-hover disabled:opacity-30"
-                  disabled={collapsedComposerPrimaryActionDisabled}
+                  disabled={collapsedComposerPrimaryActionDisabled || voiceInput.busy}
                   aria-label={collapsedComposerPrimaryActionLabel}
                   onPointerDown={(event) => event.preventDefault()}
                   onClick={(event) => {
@@ -6984,6 +7045,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     </>
                   ) : null}
                   <ComposerFooterPrimaryActions
+                    dictationButton={dictationButton}
                     compact={isComposerResting || isComposerPrimaryActionsCompact}
                     activeContextWindow={
                       settings.contextWindowMeterEnabled ? activeContextWindow : null
@@ -6997,7 +7059,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     }
                     promptHasText={prompt.trim().length > 0}
                     isSendBusy={isSendBusy}
-                    sendDisabledReason={sendDisabledReason}
+                    sendDisabledReason={
+                      voiceInput.busy ? "Finish dictation before sending" : sendDisabledReason
+                    }
                     isConnecting={isConnecting}
                     isEnvironmentUnavailable={
                       environmentUnavailable !== null ||

@@ -141,7 +141,25 @@ Stashes containing uploaded files must be restored in their original environment
 Those files are retained for 24 hours. After an upload expires, restore the prompt
 and use **Attach again** or remove the missing file before sending.
 
-## Voice input on iPhone
+## Voice input in a mobile browser
+
+Use **Start dictation** beside Send to dictate without opening the keyboard.
+Choose **Finish dictation** to append the transcript to your draft, then review
+and send it. **Cancel dictation** preserves the draft. Editing the draft,
+switching threads, or leaving the browser page cancels dictation.
+
+Dictation requires HTTPS and browser speech recognition support. Your browser
+may send audio to its speech service and require an internet connection. No
+transcription API key is needed.
+
+## Read replies aloud in a browser
+
+Choose **Read message aloud** on a completed assistant reply to hear that message.
+Choose **Stop reading** to stop. Starting another reply stops the current one.
+Code blocks are omitted. Playback uses your browser's voices without a paid
+speech provider or VoiceOver. Available voices depend on your device and browser.
+
+## Voice input in the iPhone app
 
 On supported iPhones with iOS 26 or later, use the composer's microphone to record,
 then confirm to transcribe. Text is inserted where your selection was when
