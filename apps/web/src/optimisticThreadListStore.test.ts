@@ -3,6 +3,7 @@ import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import {
+  representedThreadKeys,
   useOptimisticThreadListStore,
   visibleOptimisticThreads,
 } from "./optimisticThreadListStore";
@@ -38,5 +39,28 @@ describe("optimistic thread list", () => {
     );
     useOptimisticThreadListStore.getState().remove(threadRef);
     expect(useOptimisticThreadListStore.getState().entriesByKey).toEqual({});
+  });
+
+  it("gives a submitted draft one list row through creation, failure, and shell handoff", () => {
+    const key = scopedThreadKey(threadRef);
+    const canonical = new Set<string>();
+    const rowCount = () => {
+      const pending = useOptimisticThreadListStore.getState().entriesByKey;
+      return (
+        Number(!representedThreadKeys(canonical, pending).has(key)) +
+        visibleOptimisticThreads(pending, canonical, null).length +
+        Number(canonical.has(key))
+      );
+    };
+    expect(rowCount()).toBe(1); // A visible saved draft.
+
+    useOptimisticThreadListStore.getState().add(entry);
+    expect(rowCount()).toBe(1); // The creating thread replaces its draft row.
+
+    useOptimisticThreadListStore.getState().remove(threadRef);
+    expect(rowCount()).toBe(1); // A failed creation returns to its draft.
+
+    canonical.add(key);
+    expect(rowCount()).toBe(1); // The server thread owns the row after handoff.
   });
 });

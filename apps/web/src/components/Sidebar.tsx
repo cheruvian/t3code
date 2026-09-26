@@ -251,6 +251,7 @@ import {
   type DraftSessionState,
 } from "../composerDraftStore";
 import {
+  representedThreadKeys as resolveRepresentedThreadKeys,
   useOptimisticThreadListStore,
   visibleOptimisticThreads,
 } from "../optimisticThreadListStore";
@@ -891,6 +892,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   projectByKey: ReadonlyMap<string, EnvironmentProject>;
   projectDisplayNameByKey: ReadonlyMap<string, string>;
   scopedProjectKeys: ReadonlySet<string> | null;
+  representedThreadKeys: ReadonlySet<string>;
   routeDraftId: string | null;
   onNavigateToDraft: (draftId: DraftId) => void;
 }) {
@@ -931,6 +933,13 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
         continue;
       }
       if (
+        props.representedThreadKeys.has(
+          scopedThreadKey(scopeThreadRef(session.environmentId, session.threadId)),
+        )
+      ) {
+        continue;
+      }
+      if (
         props.scopedProjectKeys !== null &&
         !props.scopedProjectKeys.has(`${session.environmentId}:${session.projectId}`)
       ) {
@@ -938,8 +947,8 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
       }
       if (draftKey === props.routeDraftId) {
         // Open draft: render the frozen entry snapshot, or nothing for a
-        // draft that has never been left. Gated on the LIVE session above so
-        // send/discard still removes the row immediately.
+        // draft that has never been left. The live session and represented
+        // thread key keep this snapshot from duplicating a submitted thread.
         if (frozenActive.routeDraftId === draftKey && frozenActive.row !== null) {
           rows.push(frozenActive.row);
         }
@@ -958,6 +967,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
     draftsByThreadKey,
     frozenActive,
     props.routeDraftId,
+    props.representedThreadKeys,
     props.scopedProjectKeys,
   ]);
   const handleDiscard = useCallback(
@@ -2264,6 +2274,10 @@ export default function Sidebar() {
     [threads],
   );
   const creatingEntriesByKey = useOptimisticThreadListStore((state) => state.entriesByKey);
+  const representedThreadKeys = useMemo(
+    () => resolveRepresentedThreadKeys(canonicalThreadKeys, creatingEntriesByKey),
+    [canonicalThreadKeys, creatingEntriesByKey],
+  );
   const removeCreatingEntry = useOptimisticThreadListStore((state) => state.remove);
   useEffect(() => {
     for (const [key, entry] of Object.entries(creatingEntriesByKey)) {
@@ -2591,6 +2605,13 @@ export default function Sidebar() {
     let count = 0;
     for (const [draftKey, session] of Object.entries(store.draftThreadsByThreadKey)) {
       if (session.promotedTo != null) {
+        continue;
+      }
+      if (
+        representedThreadKeys.has(
+          scopedThreadKey(scopeThreadRef(session.environmentId, session.threadId)),
+        )
+      ) {
         continue;
       }
       if (!composerDraftHasUserContent(store.draftsByThreadKey[draftKey])) {
@@ -4980,6 +5001,7 @@ export default function Sidebar() {
                           projectByKey={projectByKey}
                           projectDisplayNameByKey={projectDisplayNameByKey}
                           scopedProjectKeys={scopedProjectKeys}
+                          representedThreadKeys={representedThreadKeys}
                           routeDraftId={routeDraftIdForRows}
                           onNavigateToDraft={navigateToDraft}
                         />,

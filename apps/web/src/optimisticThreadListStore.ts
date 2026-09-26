@@ -52,3 +52,11 @@ export function visibleOptimisticThreads(
     .map(([, entry]) => entry)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
+
+/** A submitted draft has one list row throughout optimistic and server handoff. */
+export function representedThreadKeys(
+  canonicalThreadKeys: ReadonlySet<string>,
+  entriesByKey: Readonly<Record<string, OptimisticThreadListEntry>>,
+): ReadonlySet<string> {
+  return new Set([...canonicalThreadKeys, ...Object.keys(entriesByKey)]);
+}
