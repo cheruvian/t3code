@@ -169,7 +169,6 @@ import {
 } from "./timelineScrollAnchoring";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { MessageSpeechButton } from "./MessageSpeechButton";
-import { MessageSpeechRateControl } from "./MessageSpeechRateControl";
 import { MessageSpeechSections } from "./MessageSpeechSections";
 import { getMessageSpeechPlayer, messageSpeechSections } from "~/lib/messageSpeech";
 import { PierreEntryIcon } from "./PierreEntryIcon";
@@ -2444,11 +2443,17 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
     [speechSections],
   );
   const owner = `${ctx.routeThreadKey}:${row.message.id}`;
+  const isLatest = ctx.latestSpokenReplyId === row.message.id;
   const renderSpeechSectionActions = useCallback(
     (index: number) => (
-      <MessageSpeechSections owner={owner} sections={speechSections} index={index} />
+      <MessageSpeechSections
+        owner={owner}
+        sections={speechSections}
+        index={index}
+        {...(isLatest && index === speechSections.length - 1 ? { fullReply: messageText } : {})}
+      />
     ),
-    [owner, speechSections],
+    [isLatest, messageText, owner, speechSections],
   );
 
   return (
@@ -2473,6 +2478,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             onUseArtifactTemplate={ctx.onUseArtifactTemplate}
             onImageExpand={ctx.onImageExpand}
             speechSectionOffsets={speechOffsets}
+            speechFullReplyIndex={isLatest ? speechSections.length - 1 : undefined}
             renderSpeechSectionActions={renderSpeechSectionActions}
           />
         </AssistantCitationSource>
@@ -2489,15 +2495,9 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             showCopyButton={row.showAssistantCopyButton}
             copyStreaming={row.assistantCopyStreaming}
           />
-        ) : !row.message.streaming ? (
+        ) : !row.message.streaming && !isLatest ? (
           <div className="mt-1 flex items-center gap-2 opacity-0 max-sm:opacity-100 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100">
             <AssistantMessageSpeechActions message={row.message} />
-          </div>
-        ) : null}
-        {!row.message.streaming && ctx.latestSpokenReplyId === row.message.id ? (
-          <div className="mt-1 flex justify-end items-center gap-1">
-            <MessageSpeechRateControl />
-            <MessageSpeechButton owner={owner} text={messageText} latest />
           </div>
         ) : null}
       </div>
@@ -2553,7 +2553,7 @@ function AssistantMessageMeta({
         showCopyButton={showCopyButton}
         streaming={copyStreaming}
       />
-      {!message.streaming && !copyStreaming ? (
+      {!message.streaming && !copyStreaming && ctx.latestSpokenReplyId !== message.id ? (
         <AssistantMessageSpeechActions message={message} />
       ) : null}
       {!message.streaming && (

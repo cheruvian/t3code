@@ -40,7 +40,7 @@ export function MessageSpeechButton({
             variant="ghost"
             className={
               latest
-                ? "h-9 gap-1.5 rounded-full px-3 text-muted-foreground hover:text-foreground"
+                ? "h-9 shrink-0 gap-1.5 whitespace-nowrap rounded-full px-2 text-muted-foreground hover:text-foreground sm:px-3"
                 : "size-9 text-muted-foreground hover:text-foreground sm:size-6"
             }
             aria-label={label}
@@ -70,7 +70,16 @@ export function MessageSpeechButton({
               <Volume2Icon className="size-3.5" />
             )}
             {latest ? (
-              <span className="text-xs">{speaking ? "Stop" : "Play full reply"}</span>
+              <span className="text-xs">
+                {speaking ? (
+                  "Stop"
+                ) : (
+                  <>
+                    <span className="sm:hidden">Read all</span>
+                    <span className="hidden sm:inline">Play full reply</span>
+                  </>
+                )}
+              </span>
             ) : null}
           </Button>
         }
