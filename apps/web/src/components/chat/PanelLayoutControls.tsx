@@ -65,34 +65,36 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
           </TooltipPopup>
         </Tooltip>
       ) : null}
-      <Tooltip>
-        <TooltipTrigger render={<span className="flex shrink-0" />}>
-          <Toggle
-            className="shrink-0 [-webkit-app-region:no-drag]"
-            pressed={fullWidthThreadMessages}
-            onPressedChange={onToggleMessageWidth}
-            aria-label={
-              fullWidthThreadMessages
-                ? "Use narrow thread messages"
-                : "Use full-width thread messages"
-            }
-            variant="ghost"
-            size="sm"
-          >
-            {fullWidthThreadMessages ? (
-              <Minimize2Icon className="size-4" />
-            ) : (
-              <Maximize2Icon className="size-4" />
-            )}
-          </Toggle>
-        </TooltipTrigger>
-        <TooltipPopup side="bottom">
-          {fullWidthThreadMessages
-            ? "Use narrow thread messages"
-            : "Use full-width thread messages"}
-          {messageWidthShortcutLabel ? ` (${messageWidthShortcutLabel})` : ""}
-        </TooltipPopup>
-      </Tooltip>
+      <div className="hidden sm:flex">
+        <Tooltip>
+          <TooltipTrigger render={<span className="flex shrink-0" />}>
+            <Toggle
+              className="shrink-0 [-webkit-app-region:no-drag]"
+              pressed={fullWidthThreadMessages}
+              onPressedChange={onToggleMessageWidth}
+              aria-label={
+                fullWidthThreadMessages
+                  ? "Use narrow thread messages"
+                  : "Use full-width thread messages"
+              }
+              variant="ghost"
+              size="sm"
+            >
+              {fullWidthThreadMessages ? (
+                <Minimize2Icon className="size-4" />
+              ) : (
+                <Maximize2Icon className="size-4" />
+              )}
+            </Toggle>
+          </TooltipTrigger>
+          <TooltipPopup side="bottom">
+            {fullWidthThreadMessages
+              ? "Use narrow thread messages"
+              : "Use full-width thread messages"}
+            {messageWidthShortcutLabel ? ` (${messageWidthShortcutLabel})` : ""}
+          </TooltipPopup>
+        </Tooltip>
+      </div>
       <Tooltip>
         <TooltipTrigger render={<span className="flex shrink-0" />}>
           <Toggle
