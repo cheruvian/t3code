@@ -6,6 +6,9 @@ include a skill when the task needs more context.
 Messages can contain up to 120,000 characters. Longer drafts stay in the composer
 so you can shorten them or split them into several messages.
 
+On a phone browser, pull down on the focused message input to hide the keyboard.
+Scrolling the conversation leaves the keyboard open.
+
 Pasting 32 KiB or more of text adds that fragment as a text-file attachment so
 the agent can inspect it without filling the model context. A smaller paste also
 becomes an attachment when inserting it would exceed the message limit. On a
