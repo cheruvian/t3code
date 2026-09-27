@@ -169,6 +169,9 @@ import {
 } from "./timelineScrollAnchoring";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { MessageSpeechButton } from "./MessageSpeechButton";
+import { MessageSpeechRateControl } from "./MessageSpeechRateControl";
+import { MessageSpeechSections } from "./MessageSpeechSections";
+import { getMessageSpeechPlayer } from "~/lib/messageSpeech";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { inferEntryKindFromPath } from "../../pierre-icons";
 import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
@@ -826,6 +829,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     queuedMessages,
   ]);
   const rows = useStableRows(rawRows, listIdentityKey);
+  const latestSpokenReply = useMemo(
+    () =>
+      rows.findLast(
+        (row) =>
+          row.kind === "message" &&
+          row.message.role === "assistant" &&
+          !row.message.streaming &&
+          Boolean(row.message.text?.trim()),
+      ),
+    [rows],
+  );
+  useEffect(() => () => getMessageSpeechPlayer()?.stop(), [listIdentityKey]);
   const deferredRows = useDeferredValue(rows);
   const minimapItems = useMemo(() => deriveTimelineMinimapItems(deferredRows), [deferredRows]);
   const candidateRestoreReadingPosition = threadSyncPending
@@ -1380,6 +1395,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             }
             ListFooterComponent={timelineListFooter}
           />
+          {latestSpokenReply?.kind === "message" && getMessageSpeechPlayer() ? (
+            <div className="absolute bottom-2 right-4 z-20 flex items-center gap-0.5 rounded-full border border-border/70 bg-background/95 p-0.5 shadow-sm">
+              <MessageSpeechRateControl />
+              <MessageSpeechButton
+                owner={`${routeThreadKey}:${latestSpokenReply.message.id}`}
+                text={latestSpokenReply.message.text ?? ""}
+                latest
+              />
+            </div>
+          ) : null}
           <TimelineMinimap
             items={minimapItems}
             hasPersistentGutter={minimapHasPersistentGutter}
@@ -2452,6 +2477,10 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             showCopyButton={row.showAssistantCopyButton}
             copyStreaming={row.assistantCopyStreaming}
           />
+        ) : !row.message.streaming ? (
+          <div className="mt-1 flex items-center gap-2 opacity-0 max-sm:opacity-100 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100">
+            <AssistantMessageSpeechActions message={row.message} />
+          </div>
         ) : null}
       </div>
     </>
@@ -2506,12 +2535,9 @@ function AssistantMessageMeta({
         showCopyButton={showCopyButton}
         streaming={copyStreaming}
       />
-      {!message.streaming && !copyStreaming && (
-        <MessageSpeechButton
-          owner={`${ctx.routeThreadKey}:${message.id}`}
-          text={message.text ?? ""}
-        />
-      )}
+      {!message.streaming && !copyStreaming ? (
+        <AssistantMessageSpeechActions message={message} />
+      ) : null}
       {!message.streaming && (
         <Tooltip>
           <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
@@ -2523,6 +2549,18 @@ function AssistantMessageMeta({
         </Tooltip>
       )}
     </div>
+  );
+}
+
+function AssistantMessageSpeechActions({ message }: { message: ChatMessage }) {
+  const ctx = use(TimelineRowCtx);
+  const owner = `${ctx.routeThreadKey}:${message.id}`;
+  const text = message.text ?? "";
+  return (
+    <>
+      <MessageSpeechButton owner={owner} text={text} />
+      <MessageSpeechSections owner={owner} text={text} />
+    </>
   );
 }
 

@@ -4,25 +4,52 @@ import remarkGfm from "remark-gfm";
 import { unified } from "unified";
 
 const parser = unified().use(remarkParse).use(remarkGfm);
+export const MESSAGE_SPEECH_RATES = [1, 1.25, 1.5, 2] as const;
+const RATE_STORAGE_KEY = "t3.message-speech-rate";
+
+function readSpeechNode(node: Root | RootContent): string {
+  if (node.type === "code") return " Code block omitted. ";
+  if (node.type === "html" || node.type === "definition") return "";
+  if ("alt" in node) return node.alt ?? "";
+  if ("value" in node) return node.value;
+  if ("children" in node) {
+    const block = ["root", "blockquote", "list", "listItem", "table", "tableRow"].includes(
+      node.type,
+    );
+    return node.children.map(readSpeechNode).join(block ? "\n" : "");
+  }
+  return node.type === "break" ? "\n" : "";
+}
 
 /** Read prose and inline code, without Markdown punctuation or fenced code dumps. */
 export function messageSpeechText(markdown: string): string {
-  const read = (node: Root | RootContent): string => {
-    if (node.type === "code") return " Code block omitted. ";
-    if (node.type === "html" || node.type === "definition") return "";
-    if ("alt" in node) return node.alt ?? "";
-    if ("value" in node) return node.value;
-    if ("children" in node) {
-      const block = ["root", "blockquote", "list", "listItem", "table", "tableRow"].includes(
-        node.type,
-      );
-      return node.children.map(read).join(block ? "\n" : "");
-    }
-    return node.type === "break" ? "\n" : "";
-  };
-  return read(parser.parse(markdown))
+  return readSpeechNode(parser.parse(markdown))
     .replace(/[ \t]+/g, " ")
     .trim();
+}
+
+export type MessageSpeechSection = { readonly text: string; readonly label: string };
+
+/** The rendered reply's top-level paragraphs, headings, lists and other blocks. */
+export function messageSpeechSections(markdown: string): MessageSpeechSection[] {
+  return parser.parse(markdown).children.flatMap((node) => {
+    const text = readSpeechNode(node)
+      .replace(/[ \t]+/g, " ")
+      .trim();
+    if (!text) return [];
+    const label = text.replace(/\s+/g, " ");
+    return [{ text, label: label.length > 64 ? `${label.slice(0, 61)}…` : label }];
+  });
+}
+
+export function speechFromSection(
+  sections: ReadonlyArray<MessageSpeechSection>,
+  index: number,
+): string {
+  return sections
+    .slice(index)
+    .map((section) => section.text)
+    .join("\n");
 }
 
 export function speechChunks(text: string): string[] {
@@ -45,10 +72,19 @@ export function speechChunks(text: string): string[] {
 export class MessageSpeechPlayer {
   private active: { owner: string; utterance: SpeechSynthesisUtterance | null } | null = null;
   private listeners = new Set<() => void>();
+  private rate = 1;
   constructor(
     private readonly synthesis: Pick<SpeechSynthesis, "speak" | "cancel" | "getVoices">,
     private readonly createUtterance: (text: string) => SpeechSynthesisUtterance,
-  ) {}
+    private readonly storage?: Pick<Storage, "getItem" | "setItem">,
+  ) {
+    try {
+      const saved = Number(storage?.getItem(RATE_STORAGE_KEY));
+      if (MESSAGE_SPEECH_RATES.some((rate) => rate === saved)) this.rate = saved;
+    } catch {
+      /* Speech still works when storage is unavailable. */
+    }
+  }
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => {
@@ -56,6 +92,17 @@ export class MessageSpeechPlayer {
     };
   };
   getSnapshot = () => this.active?.owner ?? null;
+  getRateSnapshot = () => this.rate;
+  setRate = (rate: number) => {
+    if (!MESSAGE_SPEECH_RATES.some((choice) => choice === rate)) return;
+    this.rate = rate;
+    try {
+      this.storage?.setItem(RATE_STORAGE_KEY, String(rate));
+    } catch {
+      /* Keep this session's choice. */
+    }
+    this.listeners.forEach((listener) => listener());
+  };
   stop = (owner?: string) => {
     if (!this.active || (owner !== undefined && this.active.owner !== owner)) return;
     this.active = null;
@@ -63,8 +110,11 @@ export class MessageSpeechPlayer {
     this.listeners.forEach((listener) => listener());
   };
   play(owner: string, text: string, language: string, onError: () => void) {
+    this.playPlain(owner, messageSpeechText(text), language, onError);
+  }
+  playPlain(owner: string, text: string, language: string, onError: () => void) {
     this.stop();
-    const chunks = speechChunks(messageSpeechText(text));
+    const chunks = speechChunks(text);
     if (chunks.length === 0) return;
     const session = { owner, utterance: null as SpeechSynthesisUtterance | null };
     this.active = session;
@@ -86,6 +136,7 @@ export class MessageSpeechPlayer {
       const utterance = this.createUtterance(text);
       session.utterance = utterance;
       utterance.lang = language;
+      utterance.rate = this.rate;
       if (localVoice) utterance.voice = localVoice;
       utterance.onend = next;
       utterance.onerror = () => {
@@ -108,9 +159,18 @@ let browserPlayer: MessageSpeechPlayer | undefined;
 export function getMessageSpeechPlayer() {
   if (typeof window === "undefined" || !window.speechSynthesis || !window.SpeechSynthesisUtterance)
     return null;
-  browserPlayer ??= new MessageSpeechPlayer(
-    window.speechSynthesis,
-    (text) => new SpeechSynthesisUtterance(text),
-  );
+  if (!browserPlayer) {
+    let storage: Storage | undefined;
+    try {
+      storage = window.localStorage;
+    } catch {
+      /* Storage may be disabled; speech still works. */
+    }
+    browserPlayer = new MessageSpeechPlayer(
+      window.speechSynthesis,
+      (text) => new SpeechSynthesisUtterance(text),
+      storage,
+    );
+  }
   return browserPlayer;
 }
