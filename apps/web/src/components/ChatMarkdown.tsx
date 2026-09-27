@@ -229,6 +229,9 @@ interface ChatMarkdownProps {
       text nests under the heading that introduces it, such as a chat message's
       author. Rendered tags and their styling are unchanged. */
   headingLevelOffset?: number | undefined;
+  /** Optional controls beside top-level rendered blocks in a completed reply. */
+  speechSectionOffsets?: ReadonlyArray<number> | undefined;
+  renderSpeechSectionActions?: ((index: number) => ReactNode) | undefined;
 }
 
 export interface ChatMarkdownContextReference {
@@ -2733,6 +2736,9 @@ function useChatMarkdownState({
 const ChatMarkdownRendererContext = React.createContext<
   ReturnType<typeof useChatMarkdownState>["componentState"]
 >(null!);
+const SpeechSectionActionsContext = React.createContext<((index: number) => ReactNode) | undefined>(
+  undefined,
+);
 
 // Screen readers take a heading's level from its tag, which would let a `#` in a
 // message outrank the heading placed above it. Override only the exposed level:
@@ -2763,6 +2769,16 @@ const CHAT_MARKDOWN_COMPONENTS = {
   h6: markdownHeadingRenderer(6),
   div: function MarkdownDiv({ node, children, ...props }) {
     const { onUseArtifactTemplate } = use(ChatMarkdownRendererContext);
+    const renderSpeechSectionActions = use(SpeechSectionActionsContext);
+    const speechIndex = node?.properties?.dataSpeechSectionIndex;
+    if (typeof speechIndex === "number" && renderSpeechSectionActions) {
+      return (
+        <div className="group/speech-block relative">
+          {children}
+          {renderSpeechSectionActions(speechIndex)}
+        </div>
+      );
+    }
     const artifactTemplate = artifactTemplateFromHastProperties(node?.properties);
     if (artifactTemplate) {
       return (
@@ -3290,6 +3306,8 @@ function ChatMarkdown({
   lineBreaks = false,
   parseRawHtml = true,
   extraRemarkPlugins = EMPTY_REMARK_PLUGINS,
+  speechSectionOffsets,
+  renderSpeechSectionActions,
   ...props
 }: ChatMarkdownProps) {
   const {
@@ -3312,6 +3330,32 @@ function ChatMarkdown({
     ],
     [extraRemarkPlugins, incrementalParsing, lineBreaks],
   );
+  const rehypePlugins = useMemo(() => {
+    if (!parseRawHtml) return undefined;
+    if (!speechSectionOffsets?.length || !renderSpeechSectionActions)
+      return CHAT_MARKDOWN_REHYPE_PLUGINS;
+    const sectionByOffset = new Map(speechSectionOffsets.map((offset, index) => [offset, index]));
+    const wrapSpeechSections =
+      () =>
+      (tree: {
+        children: Array<{
+          type: string;
+          position?: { start?: { offset?: number } };
+        }>;
+      }) => {
+        tree.children = tree.children.map((node) => {
+          const index = sectionByOffset.get(node.position?.start?.offset ?? -1);
+          if (index === undefined || node.type !== "element") return node;
+          return {
+            type: "element",
+            tagName: "div",
+            properties: { dataSpeechSectionIndex: index },
+            children: [node],
+          };
+        });
+      };
+    return [...CHAT_MARKDOWN_REHYPE_PLUGINS, wrapSpeechSections];
+  }, [parseRawHtml, renderSpeechSectionActions, speechSectionOffsets]);
 
   // react-markdown converts unparsed HTML nodes to text when skipHtml is false.
   // Keep that behavior explicit because literal mode depends on escaping the
@@ -3328,15 +3372,17 @@ function ChatMarkdown({
       onCopy={handleCopy}
     >
       <ChatMarkdownRendererContext value={componentState}>
-        <ReactMarkdown
-          remarkPlugins={remarkPlugins}
-          rehypePlugins={parseRawHtml ? CHAT_MARKDOWN_REHYPE_PLUGINS : undefined}
-          skipHtml={false}
-          components={CHAT_MARKDOWN_COMPONENTS}
-          urlTransform={markdownUrlTransform}
-        >
-          {text}
-        </ReactMarkdown>
+        <SpeechSectionActionsContext value={renderSpeechSectionActions}>
+          <ReactMarkdown
+            remarkPlugins={remarkPlugins}
+            rehypePlugins={rehypePlugins}
+            skipHtml={false}
+            components={CHAT_MARKDOWN_COMPONENTS}
+            urlTransform={markdownUrlTransform}
+          >
+            {text}
+          </ReactMarkdown>
+        </SpeechSectionActionsContext>
       </ChatMarkdownRendererContext>
       {localMediaPreview ? (
         <ExpandedImageDialog

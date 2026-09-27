@@ -171,7 +171,7 @@ import { MessageCopyButton } from "./MessageCopyButton";
 import { MessageSpeechButton } from "./MessageSpeechButton";
 import { MessageSpeechRateControl } from "./MessageSpeechRateControl";
 import { MessageSpeechSections } from "./MessageSpeechSections";
-import { getMessageSpeechPlayer } from "~/lib/messageSpeech";
+import { getMessageSpeechPlayer, messageSpeechSections } from "~/lib/messageSpeech";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { inferEntryKindFromPath } from "../../pierre-icons";
 import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
@@ -283,6 +283,7 @@ interface TimelineRowSharedState {
   listRef: React.RefObject<LegendListRef | null>;
   timestampFormat: TimestampFormat;
   routeThreadKey: string;
+  latestSpokenReplyId: string | null;
   threadRef: ScopedThreadRef | null;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
@@ -1199,6 +1200,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       listRef,
       timestampFormat,
       routeThreadKey,
+      latestSpokenReplyId:
+        latestSpokenReply?.kind === "message" ? latestSpokenReply.message.id : null,
       // Keep Markdown callbacks memoized during unrelated activity updates.
       threadRef: citationThreadRef,
       markdownCwd,
@@ -1236,6 +1239,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       listRef,
       timestampFormat,
       routeThreadKey,
+      latestSpokenReply,
       citationThreadRef,
       markdownCwd,
       resolvedTheme,
@@ -1395,16 +1399,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             }
             ListFooterComponent={timelineListFooter}
           />
-          {latestSpokenReply?.kind === "message" && getMessageSpeechPlayer() ? (
-            <div className="absolute bottom-2 right-4 z-20 flex items-center gap-0.5 rounded-full border border-border/70 bg-background/95 p-0.5 shadow-sm">
-              <MessageSpeechRateControl />
-              <MessageSpeechButton
-                owner={`${routeThreadKey}:${latestSpokenReply.message.id}`}
-                text={latestSpokenReply.message.text ?? ""}
-                latest
-              />
-            </div>
-          ) : null}
           <TimelineMinimap
             items={minimapItems}
             hasPersistentGutter={minimapHasPersistentGutter}
@@ -2440,6 +2434,22 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  const speechSections = useMemo(
+    () =>
+      !row.message.streaming && getMessageSpeechPlayer() ? messageSpeechSections(messageText) : [],
+    [messageText, row.message.streaming],
+  );
+  const speechOffsets = useMemo(
+    () => speechSections.map((section) => section.startOffset),
+    [speechSections],
+  );
+  const owner = `${ctx.routeThreadKey}:${row.message.id}`;
+  const renderSpeechSectionActions = useCallback(
+    (index: number) => (
+      <MessageSpeechSections owner={owner} sections={speechSections} index={index} />
+    ),
+    [owner, speechSections],
+  );
 
   return (
     <>
@@ -2462,6 +2472,8 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             headingLevelOffset={MESSAGE_HEADING_LEVEL}
             onUseArtifactTemplate={ctx.onUseArtifactTemplate}
             onImageExpand={ctx.onImageExpand}
+            speechSectionOffsets={speechOffsets}
+            renderSpeechSectionActions={renderSpeechSectionActions}
           />
         </AssistantCitationSource>
         <AssistantChangedFilesSection
@@ -2480,6 +2492,12 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         ) : !row.message.streaming ? (
           <div className="mt-1 flex items-center gap-2 opacity-0 max-sm:opacity-100 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100">
             <AssistantMessageSpeechActions message={row.message} />
+          </div>
+        ) : null}
+        {!row.message.streaming && ctx.latestSpokenReplyId === row.message.id ? (
+          <div className="mt-1 flex justify-end items-center gap-1">
+            <MessageSpeechRateControl />
+            <MessageSpeechButton owner={owner} text={messageText} latest />
           </div>
         ) : null}
       </div>
@@ -2559,7 +2577,6 @@ function AssistantMessageSpeechActions({ message }: { message: ChatMessage }) {
   return (
     <>
       <MessageSpeechButton owner={owner} text={text} />
-      <MessageSpeechSections owner={owner} text={text} />
     </>
   );
 }

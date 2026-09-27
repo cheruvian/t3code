@@ -1,77 +1,54 @@
-import { useMemo, useState } from "react";
-import { ListIcon } from "lucide-react";
+import { PlayIcon, Volume2Icon } from "lucide-react";
 import {
   getMessageSpeechPlayer,
-  messageSpeechSections,
   speechFromSection,
+  type MessageSpeechSection,
 } from "~/lib/messageSpeech";
 import { Button } from "../ui/button";
-import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
 
-export function MessageSpeechSections({ owner, text }: { owner: string; text: string }) {
-  const [open, setOpen] = useState(false);
-  const sections = useMemo(() => (open ? messageSpeechSections(text) : []), [open, text]);
+export function MessageSpeechSections({
+  owner,
+  sections,
+  index,
+}: {
+  owner: string;
+  sections: ReadonlyArray<MessageSpeechSection>;
+  index: number;
+}) {
   const player = getMessageSpeechPlayer();
-  if (!player || !text.trim()) return null;
+  const section = sections[index];
+  if (!player || !section) return null;
 
-  const play = (sectionText: string) => {
-    setOpen(false);
-    player.playPlain(
-      owner,
-      sectionText,
-      document.documentElement.lang || navigator.language,
-      () => {
-        toastManager.add({ type: "error", title: "Could not read this message aloud." });
-      },
-    );
-  };
+  const play = (text: string) =>
+    player.playPlain(owner, text, document.documentElement.lang || navigator.language, () => {
+      toastManager.add({ type: "error", title: "Could not read this message aloud." });
+    });
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        render={
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="ghost"
-            className="size-9 text-muted-foreground hover:text-foreground sm:size-6"
-            aria-label="Choose a section to read"
-          >
-            <ListIcon className="size-3.5" />
-          </Button>
-        }
-      />
-      <PopoverPopup side="top" align="start" className="w-80 max-w-[calc(100vw-1.5rem)]">
-        <div className="max-h-[min(60vh,28rem)] space-y-2 overflow-y-auto text-sm">
-          <div className="font-medium">Read a section</div>
-          {sections.map((section, index) => (
-            <div key={index} className="border-t border-border/60 pt-2">
-              <p className="line-clamp-2 text-muted-foreground">{section.label}</p>
-              <div className="mt-1 flex gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  aria-label={`Play section ${index + 1}: ${section.label}`}
-                  onClick={() => play(section.text)}
-                >
-                  Play this
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  aria-label={`Play from section ${index + 1}: ${section.label}`}
-                  onClick={() => play(speechFromSection(sections, index))}
-                >
-                  From here
-                </Button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </PopoverPopup>
-    </Popover>
+    <div className="flex justify-end gap-1 sm:pointer-events-none sm:absolute sm:right-0 sm:top-0 sm:rounded-full sm:bg-background/95 sm:opacity-0 sm:group-hover/speech-block:pointer-events-auto sm:group-hover/speech-block:opacity-100 sm:focus-within:pointer-events-auto sm:focus-within:opacity-100">
+      <Button
+        type="button"
+        size="icon-xs"
+        variant="ghost"
+        className="size-9 text-muted-foreground sm:size-6"
+        aria-label={`Play from this section: ${section.label}`}
+        title="Play from here"
+        onClick={() => play(speechFromSection(sections, index))}
+      >
+        <PlayIcon className="size-3.5" />
+      </Button>
+      <Button
+        type="button"
+        size="icon-xs"
+        variant="ghost"
+        className="size-9 text-muted-foreground sm:size-6"
+        aria-label={`Play only this section: ${section.label}`}
+        title="Play this block"
+        onClick={() => play(section.text)}
+      >
+        <Volume2Icon className="size-3.5" />
+      </Button>
+    </div>
   );
 }

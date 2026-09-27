@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { SquareIcon, Volume2Icon } from "lucide-react";
+import { CirclePlayIcon, SquareIcon, Volume2Icon } from "lucide-react";
 import { getMessageSpeechPlayer } from "~/lib/messageSpeech";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -25,7 +25,11 @@ export function MessageSpeechButton({
   );
   const speaking = active === owner || (latest && active !== null);
   if (!player || !text.trim()) return null;
-  const label = speaking ? "Stop reading" : latest ? "Play latest reply" : "Read message aloud";
+  const label = speaking
+    ? "Stop reading"
+    : latest
+      ? "Play entire latest reply"
+      : "Read message aloud";
   return (
     <Tooltip>
       <TooltipTrigger
@@ -58,8 +62,16 @@ export function MessageSpeechButton({
                 );
             }}
           >
-            {speaking ? <SquareIcon className="size-3.5" /> : <Volume2Icon className="size-3.5" />}
-            {latest ? <span className="text-xs">{speaking ? "Stop" : "Play latest"}</span> : null}
+            {speaking ? (
+              <SquareIcon className="size-3.5" />
+            ) : latest ? (
+              <CirclePlayIcon className="size-4" />
+            ) : (
+              <Volume2Icon className="size-3.5" />
+            )}
+            {latest ? (
+              <span className="text-xs">{speaking ? "Stop" : "Play full reply"}</span>
+            ) : null}
           </Button>
         }
       />
@@ -67,7 +79,7 @@ export function MessageSpeechButton({
         {speaking
           ? "Stop reading"
           : latest
-            ? "Play the latest assistant reply"
+            ? "Play the entire latest assistant reply"
             : "Read message aloud (code blocks omitted)"}
       </TooltipPopup>
     </Tooltip>

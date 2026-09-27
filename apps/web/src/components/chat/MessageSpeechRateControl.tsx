@@ -27,11 +27,11 @@ export function MessageSpeechRateControl() {
             type="button"
             size="sm"
             variant="ghost"
-            className="h-9 min-w-12 rounded-full px-2 text-xs tabular-nums"
+            className="h-9 rounded-full px-2 text-xs tabular-nums"
             aria-label={`Speech speed ${rate} times. Set to ${nextRate} times`}
             onClick={() => player.setRate(nextRate)}
           >
-            {rate}×
+            Speed {rate}×
           </Button>
         }
       />

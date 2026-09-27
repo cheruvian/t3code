@@ -154,15 +154,14 @@ transcription API key is needed.
 
 ## Read replies aloud in a browser
 
-Choose **Read message aloud** on a completed assistant reply to hear that message.
-Use **Play latest** above the composer to hear the latest reply without finding
-it in the thread. Choose **Stop reading** to stop. Starting another reply stops
-the current one. Tap the adjacent speed control to cycle through 1×, 1.25×,
+Choose **Play full reply** at the bottom right of the latest completed reply to
+hear it all. Choose **Stop reading** to stop. Starting another reply stops the
+current one. Tap the adjacent **Speed** control to cycle through 1×, 1.25×,
 1.5×, and 2×; the next sentence uses the new speed.
 
-For a shorter excerpt, choose **Choose a section to read** on a reply, then
-**Play this** for one section or **From here** for that section and everything
-after it. Code blocks are omitted. Playback uses your browser's voices without
+For a shorter excerpt, tap the speaker beside a section to read just that block,
+or the play button to read from there to the end of the reply. Code blocks are
+omitted. Playback uses your browser's voices without
 a paid speech provider or VoiceOver. Available voices depend on your device and
 browser.
 

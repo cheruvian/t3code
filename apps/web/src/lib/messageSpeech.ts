@@ -28,7 +28,11 @@ export function messageSpeechText(markdown: string): string {
     .trim();
 }
 
-export type MessageSpeechSection = { readonly text: string; readonly label: string };
+export type MessageSpeechSection = {
+  readonly text: string;
+  readonly label: string;
+  readonly startOffset: number;
+};
 
 /** The rendered reply's top-level paragraphs, headings, lists and other blocks. */
 export function messageSpeechSections(markdown: string): MessageSpeechSection[] {
@@ -38,7 +42,13 @@ export function messageSpeechSections(markdown: string): MessageSpeechSection[] 
       .trim();
     if (!text) return [];
     const label = text.replace(/\s+/g, " ");
-    return [{ text, label: label.length > 64 ? `${label.slice(0, 61)}…` : label }];
+    return [
+      {
+        text,
+        label: label.length > 64 ? `${label.slice(0, 61)}…` : label,
+        startOffset: node.position?.start.offset ?? -1,
+      },
+    ];
   });
 }
 
