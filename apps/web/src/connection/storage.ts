@@ -321,9 +321,9 @@ export const makeCatalogStore = Effect.fn("web.connectionStorage.makeCatalogStor
   const state = yield* Ref.make<Option.Option<ConnectionCatalogDocumentType>>(Option.none());
   const lock = yield* Semaphore.make(1);
 
-  const loadUnlocked = Effect.fn("web.connectionStorage.loadCatalog")(function* () {
+  const loadUnlocked = Effect.fn("web.connectionStorage.loadCatalog")(function* (fresh = false) {
     const cached = yield* Ref.get(state);
-    if (Option.isSome(cached)) {
+    if (!fresh && Option.isSome(cached)) {
       return cached.value;
     }
     const raw = yield* backend.read;
@@ -332,7 +332,7 @@ export const makeCatalogStore = Effect.fn("web.connectionStorage.makeCatalogStor
       catalog = yield* decodeCatalog(raw).pipe(
         Effect.catch((error) =>
           Effect.gen(function* () {
-            yield* Effect.logWarning("Discarding a corrupt web connection catalog.", {
+            yield* Effect.logWarning("Could not decode the saved web connection catalog.", {
               error: error.message,
             });
             if (backend.quarantine !== undefined) {
@@ -344,15 +344,10 @@ export const makeCatalogStore = Effect.fn("web.connectionStorage.makeCatalogStor
                 ),
               );
             }
-            const encoded = yield* encodeCatalog(EMPTY_CONNECTION_CATALOG_DOCUMENT);
-            yield* backend.write(encoded).pipe(
-              Effect.catch((cause) =>
-                Effect.logWarning("Could not persist the recovered web connection catalog.", {
-                  error: cause.message,
-                }),
-              ),
+            return yield* catalogError(
+              "decode",
+              "Saved connections could not be read. Their data was preserved.",
             );
-            return EMPTY_CONNECTION_CATALOG_DOCUMENT;
           }),
         ),
       );
@@ -366,7 +361,9 @@ export const makeCatalogStore = Effect.fn("web.connectionStorage.makeCatalogStor
     function* (transform) {
       yield* lock.withPermits(1)(
         Effect.gen(function* () {
-          const next = transform(yield* loadUnlocked());
+          // Another open client can have changed this document since our last
+          // read. Merge each mutation with the latest durable catalog.
+          const next = transform(yield* loadUnlocked(true));
           yield* backend.write(yield* encodeCatalog(next));
           yield* Ref.set(state, Option.some(next));
         }),

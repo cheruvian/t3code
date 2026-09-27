@@ -1,9 +1,16 @@
 import {
+  BearerConnectionCredential,
+  BearerConnectionProfile,
+  BearerConnectionRegistration,
+  BearerConnectionTarget,
   ConnectionTransientError,
   PrimaryConnectionTarget,
 } from "@t3tools/client-runtime/connection";
 import { EnvironmentId } from "@t3tools/contracts";
-import { ConnectionCatalogDocument } from "@t3tools/client-runtime/platform";
+import {
+  ConnectionCatalogDocument,
+  registerConnectionInCatalog,
+} from "@t3tools/client-runtime/platform";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -28,6 +35,7 @@ const emptyCatalog = {
 } as const;
 const decodeCatalog = Schema.decodeUnknownSync(Schema.fromJsonString(ConnectionCatalogDocument));
 const encodeCatalog = Schema.encodeSync(Schema.fromJsonString(ConnectionCatalogDocument));
+const encodeUnknownJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -35,20 +43,34 @@ afterEach(() => {
 });
 
 describe("makeCatalogStore", () => {
-  it.effect("quarantines malformed catalogs and starts from an empty document", () =>
+  it.effect("preserves an unreadable catalog and rejects reads and writes", () =>
     Effect.gen(function* () {
       const writes: string[] = [];
       const quarantined: string[] = [];
+      const raw = encodeUnknownJson({
+        ...emptyCatalog,
+        targets: [
+          {
+            _tag: "BearerConnectionTarget",
+            environmentId: "remote-1",
+            label: "One",
+            connectionId: "one",
+          },
+          { _tag: "BearerConnectionTarget", environmentId: "remote-2", label: "Two" },
+        ],
+      });
       const store = yield* makeCatalogStore({
-        read: Effect.succeed("{not-json"),
+        read: Effect.succeed(raw),
         write: (raw) => Effect.sync(() => writes.push(raw)),
         quarantine: (raw) => Effect.sync(() => quarantined.push(raw)),
       });
 
-      expect(yield* store.read).toEqual(emptyCatalog);
-      expect(quarantined).toEqual(["{not-json"]);
-      expect(writes).toHaveLength(1);
-      expect(decodeCatalog(writes[0]!)).toEqual(emptyCatalog);
+      expect((yield* Effect.flip(store.read)).message).toContain("data was preserved");
+      expect((yield* Effect.flip(store.update((document) => document))).message).toContain(
+        "data was preserved",
+      );
+      expect(quarantined).toEqual([raw, raw]);
+      expect(writes).toEqual([]);
     }),
   );
 
@@ -64,6 +86,53 @@ describe("makeCatalogStore", () => {
       });
 
       expect(yield* Effect.flip(store.read)).toBe(failure);
+    }),
+  );
+
+  it.effect("merges writes from clients that opened before another pairing was saved", () =>
+    Effect.gen(function* () {
+      let raw = encodeCatalog(emptyCatalog);
+      const backend = {
+        read: Effect.sync(() => raw),
+        write: (next: string) =>
+          Effect.sync(() => {
+            raw = next;
+          }),
+      };
+      const first = yield* makeCatalogStore(backend);
+      const second = yield* makeCatalogStore(backend);
+      yield* first.read;
+      yield* second.read;
+
+      const registration = (environmentId: string) => {
+        const id = EnvironmentId.make(environmentId);
+        const connectionId = `${environmentId}-connection`;
+        return new BearerConnectionRegistration({
+          target: new BearerConnectionTarget({
+            environmentId: id,
+            label: environmentId,
+            connectionId,
+          }),
+          profile: new BearerConnectionProfile({
+            environmentId: id,
+            label: environmentId,
+            connectionId,
+            httpBaseUrl: `https://${environmentId}.example.test`,
+            wsBaseUrl: `wss://${environmentId}.example.test`,
+          }),
+          credential: new BearerConnectionCredential({ token: `${environmentId}-token` }),
+        });
+      };
+
+      yield* first.update((document) => registerConnectionInCatalog(document, registration("one")));
+      yield* second.update((document) =>
+        registerConnectionInCatalog(document, registration("two")),
+      );
+
+      const saved = decodeCatalog(raw);
+      expect(saved.targets.map((target) => target.environmentId)).toEqual(["one", "two"]);
+      expect(saved.profiles).toHaveLength(2);
+      expect(saved.credentials).toHaveLength(2);
     }),
   );
 });
