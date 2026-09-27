@@ -2173,6 +2173,13 @@ export default function ChatView(props: ChatViewProps) {
     [activeThread?.environmentId, activeThread?.projectId],
   );
   const activeProject = useProject(activeProjectRef);
+  const resourceActionRunning =
+    activeThreadId !== null &&
+    (activeProject?.resourceLocks?.some(
+      (lock) =>
+        lock.threadId === activeThreadId && (lock.phase === "checkout" || lock.phase === "release"),
+    ) ??
+      false);
   const requestResource = useAtomCommand(projectEnvironment.resource);
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   // Environment settings with the active project's overrides applied.
@@ -7856,9 +7863,10 @@ export default function ChatView(props: ChatViewProps) {
     if (
       !queuedMessage &&
       !directAnnotation &&
-      (phase === "running" || canQueueDuringWorktreeSetup) &&
+      (phase === "running" || canQueueDuringWorktreeSetup || resourceActionRunning) &&
       activeThreadKey &&
       (canQueueDuringWorktreeSetup ||
+        resourceActionRunning ||
         (settings.followUpBehavior === "queue") !== (submissionIntent === "alternate"))
     ) {
       if (composerRef.current?.validateProviderInput(promptForSend) === false) {
@@ -8889,6 +8897,7 @@ export default function ChatView(props: ChatViewProps) {
         message: nextQueuedMessage,
         phase,
         latestToolActivityId,
+        resourceActionRunning,
         firstTurnStarted: activeThread?.latestTurn?.startedAt != null,
       })
     )
@@ -8902,6 +8911,7 @@ export default function ChatView(props: ChatViewProps) {
     phase,
     queueBlockedByPendingRequest,
     queueSendGate,
+    resourceActionRunning,
   ]);
 
   // The row handlers are read from refs at call-time so their identity stays
@@ -8913,7 +8923,13 @@ export default function ChatView(props: ChatViewProps) {
   queuedMessageActionsRef.current = {
     steer: (id) => {
       const message = queuedMessages.find((entry) => entry.id === id);
-      if (!message || sendInFlightRef.current || queueBlockedByPendingRequest) return;
+      if (
+        !message ||
+        sendInFlightRef.current ||
+        queueBlockedByPendingRequest ||
+        resourceActionRunning
+      )
+        return;
       void onSend(undefined, message.submissionIntent, undefined, message);
     },
     remove: (id) => {
@@ -10292,6 +10308,7 @@ export default function ChatView(props: ChatViewProps) {
                     paintOnlyDisplayedTimeline ? EMPTY_QUEUED_MESSAGES : queuedMessages
                   }
                   onSteerQueuedMessage={onSteerQueuedMessage}
+                  resourceActionRunning={resourceActionRunning}
                   steerQueuedMessageShortcutLabel={shortcutLabelForCommand(
                     keybindings,
                     "thread.steerQueuedMessage",
@@ -10402,6 +10419,7 @@ export default function ChatView(props: ChatViewProps) {
                             forceExpandedOnMobile={forceExpandedMobileComposer && isDraftHeroState}
                             projectSelectionRequired={isLocalDraftThread && activeProject === null}
                             phase={phase}
+                            isResourceActionRunning={resourceActionRunning}
                             isConnecting={isConnecting}
                             isSendBusy={isSendBusy && !canQueueDuringWorktreeSetup}
                             isRevertingCheckpoint={isRevertingCheckpoint}

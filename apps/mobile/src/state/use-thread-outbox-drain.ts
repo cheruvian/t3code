@@ -28,6 +28,7 @@ import {
   forgetAcknowledgedThreadMessage,
 } from "./acknowledged-thread-messages";
 import { appAtomRegistry } from "./atom-registry";
+import { environmentProjects } from "./projects";
 import { restoredNewTaskDraftKey } from "./new-task-draft-key";
 import { useProjects, useServerConfigs, useThreadShells } from "./entities";
 import {
@@ -98,6 +99,22 @@ function findThread(
   return threads.find(
     (candidate) =>
       candidate.environmentId === message.environmentId && candidate.id === message.threadId,
+  );
+}
+
+function hasRunningResourceAction(
+  projects: ReadonlyArray<EnvironmentProject>,
+  thread: EnvironmentThreadShell | undefined,
+): boolean {
+  if (!thread) return false;
+  return projects.some(
+    (project) =>
+      project.environmentId === thread.environmentId &&
+      project.id === thread.projectId &&
+      project.resourceLocks?.some(
+        (lock) =>
+          lock.threadId === thread.id && (lock.phase === "checkout" || lock.phase === "release"),
+      ),
   );
 }
 
@@ -784,6 +801,14 @@ export function useThreadOutboxDrain(): void {
       if (!isQueuedMessagePayloadCurrent(persistedMessage, deliveryRevision)) {
         return true;
       }
+      if (
+        hasRunningResourceAction(
+          appAtomRegistry.get(environmentProjects.projectsAtom),
+          findThread(appAtomRegistry.get(environmentThreadShells.threadShellsAtom), queuedMessage),
+        )
+      ) {
+        return false;
+      }
       const currentConfig = appAtomRegistry.get(
         serverEnvironment.configValueAtom(queuedMessage.environmentId),
       );
@@ -1090,6 +1115,7 @@ export function useThreadOutboxDrain(): void {
         shellStatus,
         environmentConnected: environment?.connectionState === "connected",
         threadBusy: thread?.session?.status === "running" || thread?.session?.status === "starting",
+        resourceActionRunning: hasRunningResourceAction(projects, thread),
       });
       // The delivery action resolves first; capability checks apply only to
       // a message that will send. Checking earlier would restore a
@@ -1203,6 +1229,10 @@ export function useThreadOutboxDrain(): void {
             shellStatus,
             environmentConnected: environment?.connectionState === "connected",
             threadBusy: liveThreadBusy,
+            resourceActionRunning: hasRunningResourceAction(
+              appAtomRegistry.get(environmentProjects.projectsAtom),
+              liveThread,
+            ),
           });
           if (liveDeliveryAction !== "send") {
             return true;

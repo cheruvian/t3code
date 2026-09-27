@@ -307,6 +307,7 @@ interface TimelineRowSharedState {
   onWorktreeSetupWorkLocally: (() => void) | null;
   onOpenWorktreeSetupTerminal: ((terminalId: string) => void) | null;
   onSteerQueuedMessage: (id: string) => void;
+  resourceActionRunning: boolean;
   steerQueuedMessageShortcutLabel: string | null;
   onRemoveQueuedMessage: (id: string) => void;
 }
@@ -473,6 +474,7 @@ interface MessagesTimelineProps {
   /** Messages sent during the running turn. They render as ghost bubbles after the live rows. */
   queuedMessages?: ReadonlyArray<QueuedComposerMessage>;
   onSteerQueuedMessage?: (id: string) => void;
+  resourceActionRunning?: boolean;
   steerQueuedMessageShortcutLabel?: string | null;
   onRemoveQueuedMessage?: (id: string) => void;
 }
@@ -531,6 +533,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   loadEarlier = null,
   queuedMessages = EMPTY_QUEUED_MESSAGES,
   onSteerQueuedMessage = NOOP_QUEUED_MESSAGE_ACTION,
+  resourceActionRunning = false,
   steerQueuedMessageShortcutLabel = null,
   onRemoveQueuedMessage = NOOP_QUEUED_MESSAGE_ACTION,
 }: MessagesTimelineProps) {
@@ -1209,6 +1212,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onWorktreeSetupWorkLocally: onWorktreeSetupWorkLocally ?? null,
       onOpenWorktreeSetupTerminal: onOpenWorktreeSetupTerminal ?? null,
       onSteerQueuedMessage,
+      resourceActionRunning,
       steerQueuedMessageShortcutLabel,
       onRemoveQueuedMessage,
     }),
@@ -1244,6 +1248,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onWorktreeSetupWorkLocally,
       onOpenWorktreeSetupTerminal,
       onSteerQueuedMessage,
+      resourceActionRunning,
       steerQueuedMessageShortcutLabel,
       onRemoveQueuedMessage,
     ],
@@ -1816,9 +1821,11 @@ function QueuedMessageTimelineRow({
   const text = queuedMessage.prompt.trim();
   const statusLabel = queuedMessage.holdUntilUserAction
     ? "Waits for Send now"
-    : row.isNext
-      ? "Sends after the next tool call or when the turn ends"
-      : "Sends after the messages above it";
+    : ctx.resourceActionRunning
+      ? "Sends when the resource action finishes"
+      : row.isNext
+        ? "Sends after the next tool call or when the turn ends"
+        : "Sends after the messages above it";
   return (
     <div className="flex flex-col items-end" data-queued-message-id={queuedMessage.id}>
       <div className="max-w-[80%] rounded-2xl border border-dashed border-border p-3 text-message-foreground/80">
@@ -1864,15 +1871,18 @@ function QueuedMessageTimelineRow({
                     className="size-6"
                     onPointerDown={(event) => event.preventDefault()}
                     onClick={() => ctx.onSteerQueuedMessage(queuedMessage.id)}
-                    aria-label="Send now"
+                    disabled={ctx.resourceActionRunning}
+                    aria-label={ctx.resourceActionRunning ? "Wait for resource action" : "Send now"}
                   />
                 }
               >
                 <ArrowUpIcon className="size-3.5" aria-hidden />
               </TooltipTrigger>
               <TooltipPopup side="bottom">
-                Send now
-                {row.isNext && ctx.steerQueuedMessageShortcutLabel
+                {ctx.resourceActionRunning
+                  ? "Send now is available when the resource action finishes"
+                  : "Send now"}
+                {!ctx.resourceActionRunning && row.isNext && ctx.steerQueuedMessageShortcutLabel
                   ? ` (${ctx.steerQueuedMessageShortcutLabel})`
                   : null}
               </TooltipPopup>

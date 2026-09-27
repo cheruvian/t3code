@@ -172,4 +172,24 @@ describe("queued message dispatch timing", () => {
       false,
     );
   });
+
+  it("waits for a resource action even when the agent turn is ready", () => {
+    const message = { queuedAfterToolActivityId: null };
+    expect(
+      isQueuedMessageDue({
+        message,
+        phase: "ready",
+        latestToolActivityId: null,
+        resourceActionRunning: true,
+      }),
+    ).toBe(false);
+    expect(
+      isQueuedMessageDue({
+        message,
+        phase: "ready",
+        latestToolActivityId: null,
+        resourceActionRunning: false,
+      }),
+    ).toBe(true);
+  });
 });

@@ -1340,6 +1340,29 @@ describe("thread outbox", () => {
     ).toBe("wait");
   });
 
+  it("waits for resource hooks before delivering an existing-thread message", () => {
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
+        environmentConnected: true,
+        threadBusy: false,
+        resourceActionRunning: true,
+      }),
+    ).toBe("wait");
+    expect(
+      resolveThreadOutboxDeliveryAction({
+        isCreation: false,
+        threadExists: true,
+        shellStatus: "live",
+        environmentConnected: true,
+        threadBusy: false,
+        resourceActionRunning: false,
+      }),
+    ).toBe("send");
+  });
+
   it("sends queued creations once connected and live, removing already-created ones", () => {
     expect(
       resolveThreadOutboxDeliveryAction({

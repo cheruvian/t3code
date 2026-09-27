@@ -195,9 +195,11 @@ export function isQueuedMessageDue(input: {
   phase: "connecting" | "running" | "ready" | "disconnected";
   latestToolActivityId: string | null;
   firstTurnStarted?: boolean;
+  resourceActionRunning?: boolean;
 }): boolean {
   if (input.message.holdUntilUserAction) return false;
   if (input.message.waitForFirstTurn && !input.firstTurnStarted) return false;
+  if (input.resourceActionRunning) return false;
   if (input.phase === "connecting") return false;
   if (input.phase !== "running") return true;
   return input.latestToolActivityId !== input.message.queuedAfterToolActivityId;

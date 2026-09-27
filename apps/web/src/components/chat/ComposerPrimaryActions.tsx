@@ -20,6 +20,7 @@ interface ComposerPrimaryActionsProps {
   compact: boolean;
   pendingAction: PendingActionState | null;
   isRunning: boolean;
+  isResourceActionRunning?: boolean;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
@@ -60,6 +61,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   compact,
   pendingAction,
   isRunning,
+  isResourceActionRunning = false,
   showPlanFollowUpPrompt,
   promptHasText,
   isSendBusy,
@@ -243,7 +245,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
                 ? "Queue message"
                 : isSendBusy
                   ? "Sending"
-                  : isRunning
+                  : isRunning || isResourceActionRunning
                     ? "Queue message"
                     : "Send message"
       }
