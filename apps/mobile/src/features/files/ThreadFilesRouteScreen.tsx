@@ -103,6 +103,7 @@ function FileHeader(props: {
   readonly fileInspectorSupported: boolean;
   readonly onBack: () => void;
   readonly onReturnToThread: () => void;
+  readonly onCloseFiles: () => void;
   readonly actions: ReadonlyArray<{
     readonly id: string;
     readonly title: string;
@@ -141,7 +142,13 @@ function FileHeader(props: {
                 onPress: toggleAuxiliaryPane,
               },
             ]
-          : undefined
+          : [
+              {
+                accessibilityLabel: "Close files",
+                icon: "xmark",
+                onPress: props.onCloseFiles,
+              },
+            ]
       }
       menus={[
         {
@@ -854,6 +861,25 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
       );
     }
   }, [environmentId, navigation, threadId]);
+  const handleCloseFiles = useCallback(() => {
+    if (environmentId !== null && threadId !== null) {
+      const params = {
+        environmentId: String(environmentId),
+        threadId: String(threadId),
+      };
+      const hasThreadRoute =
+        navigation.getState()?.routes.some((route) => route.name === "Thread") ?? false;
+      navigation.dispatch(
+        hasThreadRoute
+          ? StackActions.popTo("Thread", params)
+          : StackActions.replace("Thread", params),
+      );
+    } else if (navigation.canGoBack()) {
+      navigation.goBack();
+    } else {
+      navigation.dispatch(StackActions.replace("Home"));
+    }
+  }, [environmentId, navigation, threadId]);
   const handleBack = useCallback(() => {
     if (navigation.canGoBack()) {
       navigation.goBack();
@@ -894,6 +920,7 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
         fileInspectorSupported={fileInspector.supported}
         onBack={handleBack}
         onReturnToThread={handleReturnToThread}
+        onCloseFiles={handleCloseFiles}
         actions={fileMenuActions}
       />
       <MaterialScreenContent>

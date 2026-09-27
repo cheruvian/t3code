@@ -92,6 +92,8 @@ export function useThreadHeaderOptions(props: {
       : undefined,
     title: props.title,
     headerBackVisible: !layout.usesSplitView,
+    // Compact uses the workspace's edge swipe to return to the thread list.
+    ...(layout.usesSplitView ? {} : { gestureEnabled: false }),
     // Compact uses the NATIVE back button when a previous route exists;
     // deep links / cold starts get an explicit Home button instead.
     // Split view always uses its custom left items.

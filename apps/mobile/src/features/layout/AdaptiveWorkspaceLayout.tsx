@@ -23,7 +23,9 @@ import {
   type ReactNode,
 } from "react";
 import { Platform, useWindowDimensions, View } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
+  runOnJS,
   useAnimatedStyle,
   useDerivedValue,
   useSharedValue,
@@ -62,6 +64,7 @@ import { WorkspaceInspectorPane } from "./workspace-inspector-pane";
 import { WorkspaceContentWidthContext } from "./workspace-content-width";
 
 type WorkspaceInspectorRenderer = (registrationActive: boolean) => ReactNode;
+const makePanGesture = Gesture.Pan;
 
 interface AdaptiveWorkspaceContextValue {
   readonly layout: Layout;
@@ -370,6 +373,25 @@ function AdaptiveWorkspaceLayoutContent(
     }
     setPrimarySidebarPreferredVisible(true);
   }, [panes.primarySidebarSuppressedByAuxiliary]);
+  const showCompactThreadList = useCallback(() => {
+    const hasHomeRoute =
+      navigation.getState()?.routes.some((route) => route.name === "Home") ?? false;
+    navigation.dispatch(hasHomeRoute ? StackActions.popTo("Home") : StackActions.replace("Home"));
+  }, [navigation]);
+  const revealThreadListSwipe = useMemo(
+    () =>
+      makePanGesture()
+        .enabled(!layout.usesSplitView && /^\/threads\/[^/]+\/[^/]+\/?$/.test(pathname))
+        .hitSlop({ left: 0, width: 48 })
+        .activeOffsetX(14)
+        .failOffsetY([-16, 16])
+        .onEnd((event) => {
+          if (event.translationX >= 72 && Math.abs(event.translationY) < 48) {
+            runOnJS(showCompactThreadList)();
+          }
+        }),
+    [layout.usesSplitView, pathname, showCompactThreadList],
+  );
   const handleToggleSidebarCommand = useCallback(() => {
     togglePrimarySidebar();
     return true;
@@ -567,6 +589,25 @@ function AdaptiveWorkspaceLayoutContent(
       togglePrimarySidebar,
     ],
   );
+  const mainPane = (
+    <View
+      className={
+        Platform.OS === "android"
+          ? "flex-1 overflow-hidden bg-header"
+          : "flex-1 overflow-hidden bg-screen"
+      }
+      collapsable={false}
+    >
+      <View
+        collapsable={false}
+        style={contentSettledWidth !== null ? { flex: 1, width: contentSettledWidth } : { flex: 1 }}
+      >
+        <WorkspaceContentWidthContext value={layout.usesSplitView ? renderedContentWidth : null}>
+          {props.children}
+        </WorkspaceContentWidthContext>
+      </View>
+    </View>
+  );
 
   return (
     <HomeListOptionsProvider projectGroupingMode={projectGroupingMode}>
@@ -602,32 +643,11 @@ function AdaptiveWorkspaceLayoutContent(
               </View>
             </Animated.View>
           ) : null}
-          <View
-            className={
-              Platform.OS === "android"
-                ? "flex-1 overflow-hidden bg-header"
-                : "flex-1 overflow-hidden bg-screen"
-            }
-            collapsable={false}
-          >
-            <View
-              collapsable={false}
-              style={
-                contentSettledWidth !== null
-                  ? {
-                      flex: 1,
-                      width: contentSettledWidth,
-                    }
-                  : { flex: 1 }
-              }
-            >
-              <WorkspaceContentWidthContext
-                value={layout.usesSplitView ? renderedContentWidth : null}
-              >
-                {props.children}
-              </WorkspaceContentWidthContext>
-            </View>
-          </View>
+          {layout.usesSplitView ? (
+            mainPane
+          ) : (
+            <GestureDetector gesture={revealThreadListSwipe}>{mainPane}</GestureDetector>
+          )}
           <WorkspaceInspectorPane
             renderedInspectorWidth={renderedInspectorWidth}
             active={workspaceInspector?.active ?? false}

@@ -1145,6 +1145,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         // Full swipe commits the advertised lifecycle action (Settle /
         // Un-settle), never the secondary snooze action.
         fullSwipeAction="primary"
+        longFullSwipe={swipeActions.primary === "settle" && !sidebarPane}
         fullSwipeWidth={props.fullSwipeWidth ?? windowWidth - 32}
         onDelete={handleDelete}
         onSwipeableClose={props.onSwipeableClose}

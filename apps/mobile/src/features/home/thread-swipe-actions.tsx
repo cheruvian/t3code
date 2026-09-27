@@ -242,6 +242,8 @@ interface ThreadSwipeableProps {
    * secondary actions default to the advertised primary action.
    */
   readonly fullSwipeAction?: "delete" | "primary";
+  /** Use a longer commit gesture for Settle while preserving other actions. */
+  readonly longFullSwipe?: boolean;
   readonly fullSwipeWidth: number;
   readonly onDelete: () => void;
   readonly onSwipeableClose?: (methods: SwipeableMethods) => void;
@@ -277,7 +279,9 @@ function ThreadSwipeableRow(props: ThreadSwipeableProps) {
   const fullSwipeArmedRef = useRef(false);
   const hasSecondaryAction = props.secondaryAction !== null;
   const actionsWidth = swipeActionsWidth(hasSecondaryAction);
-  const fullSwipeThreshold = Math.max(actionsWidth + 44, props.fullSwipeWidth * 0.58);
+  const fullSwipeThreshold = props.longFullSwipe
+    ? Math.max(actionsWidth + 64, props.fullSwipeWidth * 0.68)
+    : Math.max(actionsWidth + 44, props.fullSwipeWidth * 0.58);
   const fullSwipeAction =
     props.fullSwipeAction ?? (props.secondaryAction === undefined ? "delete" : "primary");
   const close = useCallback(() => swipeableRef.current?.close(), []);
