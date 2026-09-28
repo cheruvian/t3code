@@ -574,7 +574,6 @@ describe("ClientSettings environment identification", () => {
 describe("ClientSettings sidebar", () => {
   it("defaults to the current compact sidebar", () => {
     const settings = decodeClientSettings({});
-    expect(settings.legacySidebarEnabled).toBe(false);
     expect(settings.sidebarCompactMode).toBe(true);
     expect(settings.sidebarAllowUnpinnedReorder).toBe(false);
   });
@@ -584,7 +583,6 @@ describe("ClientSettings sidebar", () => {
       sidebarV2Enabled: false,
       sidebarV2ConfiguredByUser: true,
     });
-    expect(decoded.legacySidebarEnabled).toBe(false);
     expect(decoded).not.toHaveProperty("sidebarV2Enabled");
     expect(decoded).not.toHaveProperty("sidebarV2ConfiguredByUser");
   });
@@ -597,11 +595,11 @@ describe("ClientSettings sidebar", () => {
     expect(decodeClientSettingsPatch(stored)).toEqual({});
   });
 
-  it("preserves an explicit legacy sidebar opt-in", () => {
-    expect(decodeClientSettings({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(true);
-    expect(decodeClientSettingsPatch({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(
-      true,
+  it("drops an old legacy sidebar preference", () => {
+    expect(decodeClientSettings({ legacySidebarEnabled: true })).not.toHaveProperty(
+      "legacySidebarEnabled",
     );
+    expect(decodeClientSettingsPatch({ legacySidebarEnabled: true })).toEqual({});
   });
 
   it("supports opting out of compact inbox rows", () => {

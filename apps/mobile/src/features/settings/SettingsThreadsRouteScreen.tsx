@@ -9,7 +9,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
 import { AppText as Text } from "../../components/AppText";
-import { cn } from "../../lib/cn";
 import {
   allowUnpinnedReorderAtom,
   mobilePreferencesAtom,
@@ -17,7 +16,6 @@ import {
 } from "../../state/preferences";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsProjectOverridesSection } from "./components/SettingsProjectOverridesSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
@@ -239,26 +237,18 @@ function AutoSettleSettingsRows() {
 }
 
 /**
- * Device-local legacy toggles. Mobile has no client-settings sync, so this is
- * the counterpart of web's Settings → General → Legacy features backed by
- * mobile preferences.
+ * Mobile stores its legacy Plan Mode choice on this device because it has no
+ * client-settings sync.
  */
 function LegacySettingsSection() {
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const preferences = useAtomValue(mobilePreferencesAtom);
-  const threadListV2Enabled = useThreadListV2Enabled();
   const planModeEnabled =
     AsyncResult.isSuccess(preferences) && preferences.value.planModeEnabled === true;
 
   return (
     <View className="gap-3">
       <SettingsSection title="Legacy">
-        <SettingsSwitchRow
-          icon="sidebar.left"
-          label="Legacy Thread List"
-          value={!threadListV2Enabled}
-          onValueChange={(value) => savePreferences({ legacyThreadListEnabled: value })}
-        />
         <SettingsSwitchRow
           icon="hammer"
           label="Plan Mode"
