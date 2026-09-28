@@ -6,18 +6,15 @@ import {
 } from "~/lib/messageSpeech";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
-import { cn } from "~/lib/utils";
 
 export function MessageSpeechSections({
   owner,
   sections,
   index,
-  inline = false,
 }: {
   owner: string;
   sections: ReadonlyArray<MessageSpeechSection>;
   index: number;
-  inline?: boolean;
 }) {
   const player = getMessageSpeechPlayer();
   const section = sections[index];
@@ -29,13 +26,7 @@ export function MessageSpeechSections({
     });
 
   return (
-    <div
-      className={cn(
-        "flex shrink-0 items-center gap-1",
-        !inline &&
-          "justify-end sm:pointer-events-none sm:absolute sm:right-0 sm:top-0 sm:rounded-full sm:bg-background/95 sm:opacity-0 sm:group-hover/speech-block:pointer-events-auto sm:group-hover/speech-block:opacity-100 sm:focus-within:pointer-events-auto sm:focus-within:opacity-100",
-      )}
-    >
+    <div className="absolute right-0 top-0 flex shrink-0 items-center gap-1 rounded-full bg-background/95 sm:pointer-events-none sm:opacity-0 sm:group-hover/speech-block:pointer-events-auto sm:group-hover/speech-block:opacity-100 sm:focus-within:pointer-events-auto sm:focus-within:opacity-100">
       <Button
         type="button"
         size="icon-xs"

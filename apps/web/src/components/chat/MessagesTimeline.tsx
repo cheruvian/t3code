@@ -2453,11 +2453,10 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   const owner = `${ctx.routeThreadKey}:${row.message.id}`;
   const isLatest = ctx.latestSpokenReplyId === row.message.id;
   const renderSpeechSectionActions = useCallback(
-    (index: number) =>
-      isLatest && index === speechSections.length - 1 ? null : (
-        <MessageSpeechSections owner={owner} sections={speechSections} index={index} />
-      ),
-    [isLatest, owner, speechSections],
+    (index: number) => (
+      <MessageSpeechSections owner={owner} sections={speechSections} index={index} />
+    ),
+    [owner, speechSections],
   );
 
   return (
@@ -2507,10 +2506,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             )}
           >
             {isLatest ? (
-              <>
-                <LastBlockSpeechActions message={row.message} />
-                <LatestReplyPlaybackActions message={row.message} />
-              </>
+              <LatestReplyPlaybackActions message={row.message} />
             ) : (
               <AssistantMessageSpeechActions message={row.message} />
             )}
@@ -2571,9 +2567,7 @@ function AssistantMessageMeta({
           streaming={copyStreaming}
         />
         {!message.streaming && !copyStreaming ? (
-          isLatest ? (
-            <LastBlockSpeechActions message={message} />
-          ) : (
+          isLatest ? null : (
             <AssistantMessageSpeechActions message={message} />
           )
         ) : null}
@@ -2594,20 +2588,6 @@ function AssistantMessageMeta({
       </div>
       {isLatest ? <LatestReplyPlaybackActions message={message} /> : null}
     </div>
-  );
-}
-
-function LastBlockSpeechActions({ message }: { message: ChatMessage }) {
-  const ctx = use(TimelineRowCtx);
-  const sections = useMemo(() => messageSpeechSections(message.text ?? ""), [message.text]);
-  if (sections.length === 0) return null;
-  return (
-    <MessageSpeechSections
-      owner={`${ctx.routeThreadKey}:${message.id}`}
-      sections={sections}
-      index={sections.length - 1}
-      inline
-    />
   );
 }
 

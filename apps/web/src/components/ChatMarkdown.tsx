@@ -2773,7 +2773,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
     const speechIndex = node?.properties?.dataSpeechSectionIndex;
     if (typeof speechIndex === "number" && renderSpeechSectionActions) {
       return (
-        <div className="group/speech-block relative">
+        <div className="group/speech-block relative pr-20 sm:pr-14">
           {children}
           {renderSpeechSectionActions(speechIndex)}
         </div>
