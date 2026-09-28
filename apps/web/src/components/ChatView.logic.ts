@@ -58,6 +58,17 @@ import {
   type ProviderInstanceEntry,
 } from "../providerInstances";
 
+/** Reconcile an uncertain send against the server timeline without clearing newer composer work. */
+export function resolveUncertainSendRecovery<T extends object>(input: {
+  messageId: MessageId;
+  serverMessageIds: ReadonlyArray<MessageId>;
+  restoredDraft: T;
+  currentDraft: T | null;
+}): "waiting" | "clear" | "preserve" {
+  if (!input.serverMessageIds.includes(input.messageId)) return "waiting";
+  return input.currentDraft === input.restoredDraft ? "clear" : "preserve";
+}
+
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
 

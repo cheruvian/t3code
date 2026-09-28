@@ -48,6 +48,7 @@ import {
   getStartedThreadModelChangeBlockReason,
   hasEnvironmentReconnectWarningGraceElapsed,
   hasServerAcknowledgedLocalDispatch,
+  resolveUncertainSendRecovery,
   shouldRefocusComposerOnWindowFocus,
   isBranchMismatchDismissedForSession,
   reconcileMountedTerminalThreadIds,
@@ -91,6 +92,33 @@ import {
   waitForRevertedMessage,
   prepareRevertedMessageAttachments,
 } from "./ChatView.logic";
+
+describe("uncertain send recovery", () => {
+  it("waits for the sent message ID even when another message has identical text", () => {
+    const restoredDraft = { prompt: "same text" };
+    expect(
+      resolveUncertainSendRecovery({
+        messageId: MessageId.make("sent"),
+        serverMessageIds: [MessageId.make("other")],
+        restoredDraft,
+        currentDraft: restoredDraft,
+      }),
+    ).toBe("waiting");
+  });
+
+  it("clears only the unchanged restored draft once the sent message appears", () => {
+    const restoredDraft = { prompt: "sent text" };
+    const input = {
+      messageId: MessageId.make("sent"),
+      serverMessageIds: [MessageId.make("sent")],
+      restoredDraft,
+    };
+    expect(resolveUncertainSendRecovery({ ...input, currentDraft: restoredDraft })).toBe("clear");
+    expect(resolveUncertainSendRecovery({ ...input, currentDraft: { prompt: "new work" } })).toBe(
+      "preserve",
+    );
+  });
+});
 
 describe("agent browser close confirmation", () => {
   const surfaces = [

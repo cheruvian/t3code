@@ -50,6 +50,7 @@ import {
 } from "@t3tools/contracts";
 import { type EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import {
+  isTransportConnectionErrorMessage,
   wasBootstrapThreadDeleted,
   wasBootstrapThreadNotCreated,
 } from "@t3tools/client-runtime/errors";
@@ -305,6 +306,7 @@ import {
   beginBackgroundDraftSubmissionByRef,
   clearBackgroundDraftSubmissionByRef,
   composerDraftHasUserContent,
+  type ComposerThreadDraftState,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -445,6 +447,7 @@ import {
   latestTurnStartFailureId,
   scheduleEnvironmentReconnectWarning,
   hasServerAcknowledgedLocalDispatch,
+  resolveUncertainSendRecovery,
   isBranchMismatchDismissedForSession,
   shouldDockDraftHeroForSubmission,
   shouldReleaseTimelineAnchorForToolActivity,
@@ -736,6 +739,11 @@ const draftFanoutStateAtom = Atom.family((_routeKey: string) =>
     selections: null as ReadonlyArray<ModelSelection> | null,
     sendInFlight: { current: false },
     uncertainSubmissions: { current: new Map<string, ThreadId>() },
+    uncertainSend: null as null | {
+      threadId: ThreadId;
+      messageId: MessageId;
+      restoredDraft: ComposerThreadDraftState;
+    },
   }).pipe(Atom.keepAlive),
 );
 
@@ -4074,6 +4082,37 @@ export default function ChatView(props: ChatViewProps) {
     },
     [activeServerThread, draftId, routeThreadKey, routeThreadRef],
   );
+
+  useEffect(() => {
+    const uncertainSend = fanoutState.uncertainSend;
+    if (!uncertainSend || !isServerThread || activeThread?.id !== uncertainSend.threadId) {
+      return;
+    }
+    const recovery = resolveUncertainSendRecovery({
+      messageId: uncertainSend.messageId,
+      serverMessageIds: activeThread.messages.map((message) => message.id),
+      restoredDraft: uncertainSend.restoredDraft,
+      currentDraft: useComposerDraftStore.getState().getComposerDraft(composerDraftTarget) ?? null,
+    });
+    if (recovery === "waiting") return;
+    appAtomRegistry.update(fanoutStateAtom, (current) =>
+      current.uncertainSend === uncertainSend ? { ...current, uncertainSend: null } : current,
+    );
+    if (recovery === "preserve") return;
+    clearComposerDraftContent(composerDraftTarget);
+    promptRef.current = "";
+    composerRef.current?.resetCursorState();
+    setThreadError(uncertainSend.threadId, null);
+  }, [
+    activeThread,
+    clearComposerDraftContent,
+    composerDraftTarget,
+    composerRef,
+    fanoutState.uncertainSend,
+    fanoutStateAtom,
+    isServerThread,
+    setThreadError,
+  ]);
 
   const interruptContextRef = useRef({ activeThread, phase, setThreadError });
   interruptContextRef.current = { activeThread, phase, setThreadError };
@@ -7897,7 +7936,9 @@ export default function ChatView(props: ChatViewProps) {
     if (
       !directAnnotation &&
       activeThreadKey &&
-      (queueStillSending || canQueueDuringWorktreeSetup || resourceActionRunning ||
+      (queueStillSending ||
+        canQueueDuringWorktreeSetup ||
+        resourceActionRunning ||
         (phase === "running" &&
           (settings.followUpBehavior === "queue") !== (submissionIntent === "alternate")))
     ) {
@@ -8582,6 +8623,7 @@ export default function ChatView(props: ChatViewProps) {
       failure = turnAttachmentsResult;
     }
 
+    let turnStartAttempted = false;
     let turnStartSucceeded = false;
     let backgroundDraftOpened = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
@@ -8622,6 +8664,7 @@ export default function ChatView(props: ChatViewProps) {
       if (backgroundThreadRef) {
         beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
       }
+      turnStartAttempted = true;
       const startPromise = startThreadTurn({
         environmentId,
         input: {
@@ -8732,6 +8775,7 @@ export default function ChatView(props: ChatViewProps) {
     }
 
     if (failure !== null) {
+      let restoredDraft: ComposerThreadDraftState | null = null;
       if (isLocalDraftThread) {
         useOptimisticThreadListStore.getState().remove(optimisticThreadRef);
       }
@@ -8778,11 +8822,23 @@ export default function ChatView(props: ChatViewProps) {
         setComposerDraftTerminalContexts(composerDraftTarget, composerTerminalContextsSnapshot);
         setComposerDraftPreviewAnnotations(composerDraftTarget, composerPreviewAnnotationsSnapshot);
         setComposerDraftReviewComments(composerDraftTarget, composerReviewCommentsSnapshot);
+        restoredDraft =
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget) ?? null;
         composerRef.current?.resetCursorState({
           cursor: collapseExpandedComposerCursor(messageTextForSend, messageTextForSend.length),
           prompt: messageTextForSend,
           detectTrigger: true,
         });
+      }
+      if (
+        turnStartAttempted &&
+        restoredDraft &&
+        isTransportConnectionErrorMessage(String(squashAtomCommandFailure(failure)))
+      ) {
+        appAtomRegistry.update(fanoutStateAtom, (current) => ({
+          ...current,
+          uncertainSend: { threadId: threadIdForSend, messageId: messageIdForSend, restoredDraft },
+        }));
       }
       if (baseBranchForWorktree && activeThreadKey) {
         restoreQueuedMessagesToComposer(useQueuedMessageStore.getState().drain(activeThreadKey));
