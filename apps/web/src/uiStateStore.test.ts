@@ -21,6 +21,8 @@ import {
 
 function makeUiState(overrides: Partial<UiState> = {}): UiState {
   return {
+    fullWidthThreadMessages: false,
+    wrapTableCells: false,
     projectExpandedById: {},
     projectOrder: [],
     sidebarProjectScopeKey: null,

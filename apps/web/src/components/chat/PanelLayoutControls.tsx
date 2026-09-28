@@ -6,6 +6,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 interface PanelLayoutControlsProps {
   showTerminalControl?: boolean;
+  showMessageWidthControl?: boolean;
   terminalAvailable: boolean;
   terminalOpen: boolean;
   terminalShortcutLabel: string | null;
@@ -24,6 +25,7 @@ interface PanelLayoutControlsProps {
 
 export const PanelLayoutControls = memo(function PanelLayoutControls({
   showTerminalControl = true,
+  showMessageWidthControl = true,
   terminalAvailable,
   terminalOpen,
   terminalShortcutLabel,
@@ -65,7 +67,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
           </TooltipPopup>
         </Tooltip>
       ) : null}
-      <div className="hidden sm:flex">
+      {showMessageWidthControl ? <div className="hidden sm:flex">
         <Tooltip>
           <TooltipTrigger render={<span className="flex shrink-0" />}>
             <Toggle
@@ -94,7 +96,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
             {messageWidthShortcutLabel ? ` (${messageWidthShortcutLabel})` : ""}
           </TooltipPopup>
         </Tooltip>
-      </div>
+      </div> : null}
       <Tooltip>
         <TooltipTrigger render={<span className="flex shrink-0" />}>
           <Toggle
@@ -114,7 +116,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
             {liveAgentCount > 0 ? (
               <span
                 aria-hidden
-                className="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-info px-1 text-[9px] font-semibold tabular-nums text-white"
+                className="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-info px-1 text-3xs font-semibold tabular-nums text-white"
               >
                 {liveAgentCount}
               </span>

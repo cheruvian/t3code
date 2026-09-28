@@ -150,8 +150,6 @@ export default function ProjectScriptsControl({
     () => importableProjectFileScripts(fileScripts, scripts),
     [fileScripts, scripts],
   );
-  const dropdownItemClassName =
-    "data-highlighted:bg-transparent data-highlighted:text-foreground hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground data-highlighted:hover:bg-accent data-highlighted:hover:text-accent-foreground data-highlighted:focus-visible:bg-accent data-highlighted:focus-visible:text-accent-foreground";
 
   const openAddDialog = () => {
     setEditorRequest({ scriptId: null, initial: EMPTY_PROJECT_SCRIPT_INPUT });
@@ -209,12 +207,11 @@ export default function ProjectScriptsControl({
           <MenuItem
             density={presentation === "menu" ? "touch" : "default"}
             key={`${fileScript.name} ${fileScript.command}`}
-            className={dropdownItemClassName}
             onClick={() => void importFileScript(fileScript)}
           >
             <ScriptIcon icon={fileScript.icon ?? "play"} className="size-4" />
-            <MenuItemLabel className="truncate">{fileScript.name}</MenuItemLabel>
-            <MenuShortcut className="ms-auto">
+            <MenuItemLabel>{fileScript.name}</MenuItemLabel>
+            <MenuShortcut>
               <DownloadIcon className="size-3.5" aria-label="Import" />
             </MenuShortcut>
           </MenuItem>
@@ -234,7 +231,7 @@ export default function ProjectScriptsControl({
           <MenuItem
             density={presentation === "menu" ? "touch" : "default"}
             key={script.id}
-            className={`group ${dropdownItemClassName}`}
+            className="group"
             disabled={resourceBusy(script)}
             onClick={() => onRunScript(script)}
           >
@@ -300,11 +297,7 @@ export default function ProjectScriptsControl({
         );
       })}
       {importMenuItems}
-      <MenuItem
-        density={presentation === "menu" ? "touch" : "default"}
-        className={dropdownItemClassName}
-        onClick={openAddDialog}
-      >
+      <MenuItem density={presentation === "menu" ? "touch" : "default"} onClick={openAddDialog}>
         <PlusIcon className="size-4" />
         <MenuItemLabel>Add action</MenuItemLabel>
       </MenuItem>
@@ -344,9 +337,7 @@ export default function ProjectScriptsControl({
                 <ScriptIcon icon="play" className="size-4" />
                 <MenuItemLabel>Project actions</MenuItemLabel>
               </MenuSubTrigger>
-              <MenuSubPopup className="min-w-32 max-w-[calc(100vw-2rem)]">
-                {scriptItems}
-              </MenuSubPopup>
+              <MenuSubPopup>{scriptItems}</MenuSubPopup>
             </MenuSub>
           ) : (
             <MenuItem
@@ -388,7 +379,6 @@ export default function ProjectScriptsControl({
           </Tooltip>
           <GroupSeparator className="hidden @3xl/header-actions:block" />
           <Menu
-            highlightItemOnHover={false}
             open={actionsMenuOpen.scripts}
             onOpenChange={(open) =>
               setActionsMenuOpen({ presentation, scripts: open, imports: false })
@@ -404,7 +394,6 @@ export default function ProjectScriptsControl({
         </Group>
       ) : importableScripts.length > 0 ? (
         <Menu
-          highlightItemOnHover={false}
           open={actionsMenuOpen.imports}
           onOpenChange={(open) =>
             setActionsMenuOpen({ presentation, scripts: false, imports: open })
@@ -419,7 +408,7 @@ export default function ProjectScriptsControl({
           </MenuTrigger>
           <MenuPopup align="end">
             {importMenuItems}
-            <MenuItem className={dropdownItemClassName} onClick={openAddDialog}>
+            <MenuItem onClick={openAddDialog}>
               <PlusIcon className="size-4" />
               Add action
             </MenuItem>
@@ -432,7 +421,7 @@ export default function ProjectScriptsControl({
               <Button
                 size="xs"
                 variant="outline"
-                className="w-7 px-0 sm:w-6 @3xl/header-actions:w-auto! @3xl/header-actions:px-[calc(--spacing(2)-1px)]"
+                className="w-7 sm:w-6 @3xl/header-actions:w-auto!"
                 aria-label="Add action"
                 // The tooltip wrapper replaces data-slot="button", so themed
                 // toolbar styling needs its own hook.

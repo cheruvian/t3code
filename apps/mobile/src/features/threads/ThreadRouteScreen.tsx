@@ -713,6 +713,7 @@ function ThreadRouteContent(
           mode={inspectorMode}
           paneVisible={panes.auxiliaryPaneVisible}
           registrationActive={registrationActive}
+          resetKeys={[routeThreadIdentity, selectedThreadCwd]}
           Route={props.renderInspector ? RouteInspector : undefined}
         />
       ),
@@ -723,6 +724,9 @@ function ThreadRouteContent(
       inspectorMode,
       panes.auxiliaryPaneVisible,
       props.renderInspector,
+      props.renderInspector,
+      routeThreadIdentity,
+      selectedThreadCwd,
     ],
   );
   const activeInspectorRenderer = inspectorMode === null ? undefined : renderInspectorStack;
