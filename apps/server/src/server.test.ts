@@ -820,6 +820,17 @@ const buildAppUnderTest = (options?: {
           }),
           Layer.mock(ProviderService.ProviderService)({
             uploadFeedback: () => Effect.die("Provider feedback is not stubbed in this test"),
+            getInstanceInfo: (instanceId) =>
+              Effect.succeed({
+                instanceId,
+                driverKind: ProviderDriverKind.make("codex"),
+                displayName: "Codex",
+                enabled: true,
+                continuationIdentity: {
+                  driverKind: ProviderDriverKind.make("codex"),
+                  continuationKey: instanceId,
+                },
+              }),
             ...options?.layers?.providerService,
           }),
           Layer.mock(ProviderAuthService)({
@@ -11320,6 +11331,85 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         dispatchedCommands.map((command) => command.type),
         ["thread.archive", "thread.session.stop"],
       );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects a disabled provider before creating a thread or worktree", () =>
+    Effect.gen(function* () {
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const createWorktree = vi.fn(() => Effect.die("Worktree creation must not start"));
+      yield* buildAppUnderTest({
+        layers: {
+          providerService: {
+            getInstanceInfo: (instanceId) =>
+              Effect.succeed({
+                instanceId,
+                driverKind: ProviderDriverKind.make("codex"),
+                displayName: "Codex",
+                enabled: false,
+                continuationIdentity: {
+                  driverKind: ProviderDriverKind.make("codex"),
+                  continuationKey: instanceId,
+                },
+              }),
+          },
+          gitVcsDriver: { createWorktree },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+        },
+      });
+
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-disabled-provider-bootstrap"),
+            threadId: ThreadId.make("thread-disabled-provider-bootstrap"),
+            message: {
+              messageId: MessageId.make("msg-disabled-provider-bootstrap"),
+              role: "user",
+              text: "hello",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: defaultProjectId,
+                title: "Disabled provider",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: null,
+                worktreePath: null,
+                createdAt,
+              },
+              prepareWorktree: {
+                projectCwd: "/tmp/project",
+                baseBranch: "main",
+                branch: "t3code/disabled-provider",
+              },
+            },
+            createdAt,
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assertTrue(result._tag === "Failure");
+      assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
+      assert.strictEqual(result.failure.bootstrapThreadDisposition, "not-created");
+      assert.include(result.failure.message, "is disabled in T3 Code settings");
+      assert.deepEqual(dispatchedCommands, []);
+      assert.equal(createWorktree.mock.calls.length, 0);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

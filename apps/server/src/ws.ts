@@ -1066,6 +1066,27 @@ const makeWsRpcLayer = (
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> =>
         Effect.gen(function* () {
           const bootstrap = command.bootstrap;
+          if (bootstrap?.createThread) {
+            const instanceIds = new Set([bootstrap.createThread.modelSelection.instanceId]);
+            if (command.modelSelection) instanceIds.add(command.modelSelection.instanceId);
+            for (const instanceId of instanceIds) {
+              const instance = yield* providerService.getInstanceInfo(instanceId).pipe(
+                Effect.mapError(
+                  (error) =>
+                    new OrchestrationDispatchCommandError({
+                      message: error.message,
+                      bootstrapThreadDisposition: "not-created",
+                    }),
+                ),
+              );
+              if (!instance.enabled) {
+                return yield* new OrchestrationDispatchCommandError({
+                  message: `Provider instance '${instanceId}' is disabled in T3 Code settings.`,
+                  bootstrapThreadDisposition: "not-created",
+                });
+              }
+            }
+          }
           const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
           let createdThread = false;
           let targetProjectId = bootstrap?.createThread?.projectId;
