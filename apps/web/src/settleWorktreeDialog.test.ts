@@ -70,7 +70,7 @@ describe("settle worktree dialog", () => {
 
     first.reject(new Error("Git status failed"));
     await vi.waitFor(() => expect(readSettleWorktreeDialog()?.phase).toBe("error"));
-    respondToSettleWorktreeDialog("keep");
+    respondToSettleWorktreeDialog("delete");
     expect(readSettleWorktreeDialog()?.phase).toBe("error");
 
     retrySettleWorktreeDialog();
@@ -79,6 +79,24 @@ describe("settle worktree dialog", () => {
     expect(await choice).toBeNull();
     second.resolve(dirtyStatus);
     await second.promise;
+    expect(readSettleWorktreeDialog()).toBeNull();
+  });
+
+  it("settles while keeping a worktree even when its changed files cannot load", async () => {
+    unregister = registerSettleWorktreeDialog();
+    const status = deferred<VcsStatusLocalResult>();
+    const choice = requestSettleWorktreeDialog({
+      path: "/worktree",
+      canDelete: true,
+      loadStatus: () => status.promise,
+    });
+
+    respondToSettleWorktreeDialog("keep");
+    expect(await choice).toEqual({ choice: "keep" });
+    expect(readSettleWorktreeDialog()).toBeNull();
+
+    status.reject(new Error("Git status failed"));
+    await expect(status.promise).rejects.toThrow("Git status failed");
     expect(readSettleWorktreeDialog()).toBeNull();
   });
 

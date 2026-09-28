@@ -2,7 +2,8 @@ import type { VcsStatusLocalResult } from "@t3tools/contracts";
 
 export type SettleWorktreeChoice = "keep" | "delete" | null;
 export type SettleWorktreeDecision =
-  | { choice: "keep" | "delete"; status: VcsStatusLocalResult }
+  | { choice: "keep" }
+  | { choice: "delete"; status: VcsStatusLocalResult }
   | { choice: "clean" }
   | null;
 
@@ -123,7 +124,11 @@ export function respondToSettleWorktreeDialog(choice: SettleWorktreeChoice) {
     finish(null);
     return;
   }
+  if (choice === "keep") {
+    finish({ choice: "keep" });
+    return;
+  }
   const { status, phase, canDelete } = active.state;
-  if (phase !== "ready" || !status || (choice === "delete" && !canDelete)) return;
-  finish({ choice, status });
+  if (phase !== "ready" || !status || !canDelete) return;
+  finish({ choice: "delete", status });
 }

@@ -26,6 +26,8 @@ import {
   subscribeSettleWorktreeDialog,
 } from "../settleWorktreeDialog";
 
+const SETTLE_WORKTREE_VISIBLE_FILES = 100;
+
 type ConfirmationCopy = {
   readonly title: string;
   readonly description: string | null;
@@ -117,8 +119,8 @@ export function ConfirmDialogHost() {
           <AlertDialogHeader>
             <AlertDialogTitle>Settle this conversation?</AlertDialogTitle>
             <AlertDialogDescription>
-              This worktree has local changes. Review them before deciding whether to keep or delete
-              it. Deleting also removes untracked and ignored files in the worktree.
+              This worktree has local changes. You can keep it when settling, or review the changes
+              before deleting it. Deleting also removes untracked and ignored files in the worktree.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {settlePrompt && (
@@ -135,7 +137,7 @@ export function ConfirmDialogHost() {
               )}
               {settlePrompt.phase === "error" && (
                 <div className="space-y-2 rounded-md border p-3" role="alert">
-                  <p>Could not load the worktree changes. Try again before settling.</p>
+                  <p>Could not load the worktree changes. Try again before deleting it.</p>
                   <Button variant="outline" onClick={retrySettleWorktreeDialog}>
                     Retry
                   </Button>
@@ -150,15 +152,22 @@ export function ConfirmDialogHost() {
                     {settlePrompt.status.workingTree.deletions} lines
                   </div>
                   <ul className="max-h-48 space-y-1 overflow-auto rounded-md border p-2 font-mono text-xs">
-                    {settlePrompt.status.workingTree.files.map((file) => (
-                      <li key={file.path} className="flex justify-between gap-3">
-                        <span className="min-w-0 break-all">{file.path}</span>
-                        <span className="shrink-0 text-muted-foreground">
-                          +{file.insertions} −{file.deletions}
-                        </span>
-                      </li>
-                    ))}
+                    {settlePrompt.status.workingTree.files
+                      .slice(0, SETTLE_WORKTREE_VISIBLE_FILES)
+                      .map((file) => (
+                        <li key={file.path} className="flex justify-between gap-3">
+                          <span className="min-w-0 break-all">{file.path}</span>
+                          <span className="shrink-0 text-muted-foreground">
+                            +{file.insertions} −{file.deletions}
+                          </span>
+                        </li>
+                      ))}
                   </ul>
+                  {settlePrompt.status.workingTree.files.length > SETTLE_WORKTREE_VISIBLE_FILES && (
+                    <p className="text-muted-foreground">
+                      Showing the first {SETTLE_WORKTREE_VISIBLE_FILES} changed files.
+                    </p>
+                  )}
                 </>
               )}
               {!settlePrompt.canDelete && (
@@ -169,11 +178,7 @@ export function ConfirmDialogHost() {
             </div>
           )}
           <AlertDialogFooter className="flex-col sm:flex-col">
-            <Button
-              className="w-full"
-              disabled={settlePrompt?.phase !== "ready"}
-              onClick={() => respondToSettleWorktreeDialog("keep")}
-            >
+            <Button className="w-full" onClick={() => respondToSettleWorktreeDialog("keep")}>
               Settle and keep worktree
             </Button>
             {settlePrompt?.canDelete && (
