@@ -1741,21 +1741,31 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             {accessibleTitle}
             {/* Settled history recedes: dimmed favicon at rest, restored on
               hover so the tail stays scannable when you're hunting. */}
-            <span
-              className={cn(
-                "shrink-0 transition-opacity",
-                (!props.isActive || variantAction === "unsettle") &&
-                  "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
-              )}
-            >
-              {props.project ? <ProjectFavicon project={props.project} className="size-4" /> : null}
-            </span>
+            {props.project ? (
+              <span className="relative isolate inline-flex size-4 shrink-0 items-center justify-center">
+                <span
+                  aria-label={topStatus?.label ?? "Ready"}
+                  className={cn("absolute -inset-0.5 rounded-full", compactStatusDotClassName)}
+                  role="img"
+                />
+                <span
+                  className={cn(
+                    "relative transition-opacity",
+                    (!props.isActive || variantAction === "unsettle") &&
+                      "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
+                  )}
+                >
+                  <ProjectFavicon project={props.project} className="size-4" />
+                </span>
+              </span>
+            ) : (
+              <span
+                aria-label={topStatus?.label ?? "Ready"}
+                className={cn("size-1.5 shrink-0 rounded-full", compactStatusDotClassName)}
+                role="img"
+              />
+            )}
             {draftIndicator}
-            <span
-              aria-label={topStatus?.label ?? "Ready"}
-              className={cn("size-1.5 shrink-0 rounded-full", compactStatusDotClassName)}
-              role="img"
-            />
             {driverKind ? (
               <ProviderInstanceIcon
                 driverKind={driverKind}
