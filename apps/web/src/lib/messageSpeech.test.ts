@@ -102,17 +102,17 @@ describe("message speech", () => {
     );
     player.play("reply", "First. Second.", "en-US", vi.fn());
     expect(spoken[0]!.rate).toBe(1);
-    player.setRate(1.5);
+    player.setRate(2);
     spoken[0]!.onend?.({} as SpeechSynthesisEvent);
-    expect(spoken[1]!.rate).toBe(1.5);
-    expect(player.getRateSnapshot()).toBe(1.5);
+    expect(spoken[1]!.rate).toBe(2);
+    expect(player.getRateSnapshot()).toBe(2);
     expect(
       new MessageSpeechPlayer(
         synthesis,
         (text) => ({ text }) as SpeechSynthesisUtterance,
         storage,
       ).getRateSnapshot(),
-    ).toBe(1.5);
+    ).toBe(2);
   });
 
   it("keeps playback available when speed storage fails", () => {

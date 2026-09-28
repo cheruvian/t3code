@@ -231,7 +231,6 @@ interface ChatMarkdownProps {
   headingLevelOffset?: number | undefined;
   /** Optional controls beside top-level rendered blocks in a completed reply. */
   speechSectionOffsets?: ReadonlyArray<number> | undefined;
-  speechFullReplyIndex?: number | undefined;
   renderSpeechSectionActions?: ((index: number) => ReactNode) | undefined;
 }
 
@@ -2774,12 +2773,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
     const speechIndex = node?.properties?.dataSpeechSectionIndex;
     if (typeof speechIndex === "number" && renderSpeechSectionActions) {
       return (
-        <div
-          className={cn(
-            "group/speech-block relative",
-            node?.properties?.dataSpeechFullReply === true && "sm:pr-72",
-          )}
-        >
+        <div className="group/speech-block relative">
           {children}
           {renderSpeechSectionActions(speechIndex)}
         </div>
@@ -3313,7 +3307,6 @@ function ChatMarkdown({
   parseRawHtml = true,
   extraRemarkPlugins = EMPTY_REMARK_PLUGINS,
   speechSectionOffsets,
-  speechFullReplyIndex,
   renderSpeechSectionActions,
   ...props
 }: ChatMarkdownProps) {
@@ -3356,16 +3349,13 @@ function ChatMarkdown({
           return {
             type: "element",
             tagName: "div",
-            properties: {
-              dataSpeechSectionIndex: index,
-              ...(index === speechFullReplyIndex ? { dataSpeechFullReply: true } : {}),
-            },
+            properties: { dataSpeechSectionIndex: index },
             children: [node],
           };
         });
       };
     return [...CHAT_MARKDOWN_REHYPE_PLUGINS, wrapSpeechSections];
-  }, [parseRawHtml, renderSpeechSectionActions, speechFullReplyIndex, speechSectionOffsets]);
+  }, [parseRawHtml, renderSpeechSectionActions, speechSectionOffsets]);
 
   // react-markdown converts unparsed HTML nodes to text when skipHtml is false.
   // Keep that behavior explicit because literal mode depends on escaping the

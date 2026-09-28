@@ -7,19 +7,17 @@ import {
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { cn } from "~/lib/utils";
-import { MessageSpeechButton } from "./MessageSpeechButton";
-import { MessageSpeechRateControl } from "./MessageSpeechRateControl";
 
 export function MessageSpeechSections({
   owner,
   sections,
   index,
-  fullReply,
+  inline = false,
 }: {
   owner: string;
   sections: ReadonlyArray<MessageSpeechSection>;
   index: number;
-  fullReply?: string;
+  inline?: boolean;
 }) {
   const player = getMessageSpeechPlayer();
   const section = sections[index];
@@ -33,16 +31,11 @@ export function MessageSpeechSections({
   return (
     <div
       className={cn(
-        "flex items-center justify-end gap-1 sm:absolute sm:right-0 sm:top-0 sm:rounded-full sm:bg-background/95 sm:group-hover/speech-block:pointer-events-auto sm:group-hover/speech-block:opacity-100 sm:focus-within:pointer-events-auto sm:focus-within:opacity-100",
-        fullReply ? "sm:pointer-events-auto sm:opacity-100" : "sm:pointer-events-none sm:opacity-0",
+        "flex shrink-0 items-center gap-1",
+        !inline &&
+          "justify-end sm:pointer-events-none sm:absolute sm:right-0 sm:top-0 sm:rounded-full sm:bg-background/95 sm:opacity-0 sm:group-hover/speech-block:pointer-events-auto sm:group-hover/speech-block:opacity-100 sm:focus-within:pointer-events-auto sm:focus-within:opacity-100",
       )}
     >
-      {fullReply ? (
-        <div className="mr-auto flex shrink-0 items-center gap-0.5">
-          <MessageSpeechRateControl />
-          <MessageSpeechButton owner={owner} text={fullReply} latest />
-        </div>
-      ) : null}
       <Button
         type="button"
         size="icon-xs"

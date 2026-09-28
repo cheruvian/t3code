@@ -169,6 +169,7 @@ import {
 } from "./timelineScrollAnchoring";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { MessageSpeechButton } from "./MessageSpeechButton";
+import { MessageSpeechRateControl } from "./MessageSpeechRateControl";
 import { MessageSpeechSections } from "./MessageSpeechSections";
 import { getMessageSpeechPlayer, messageSpeechSections } from "~/lib/messageSpeech";
 import { PierreEntryIcon } from "./PierreEntryIcon";
@@ -283,6 +284,7 @@ interface TimelineRowSharedState {
   timestampFormat: TimestampFormat;
   routeThreadKey: string;
   latestSpokenReplyId: string | null;
+  detachedAssistantMetaIds: ReadonlySet<string>;
   threadRef: ScopedThreadRef | null;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
@@ -840,6 +842,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       ),
     [rows],
   );
+  const detachedAssistantMetaIds = useMemo(
+    () => new Set(rows.flatMap((row) => (row.kind === "assistant-meta" ? [row.message.id] : []))),
+    [rows],
+  );
   useEffect(() => () => getMessageSpeechPlayer()?.stop(), [listIdentityKey]);
   const deferredRows = useDeferredValue(rows);
   const minimapItems = useMemo(() => deriveTimelineMinimapItems(deferredRows), [deferredRows]);
@@ -1201,6 +1207,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       routeThreadKey,
       latestSpokenReplyId:
         latestSpokenReply?.kind === "message" ? latestSpokenReply.message.id : null,
+      detachedAssistantMetaIds,
       // Keep Markdown callbacks memoized during unrelated activity updates.
       threadRef: citationThreadRef,
       markdownCwd,
@@ -1239,6 +1246,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       timestampFormat,
       routeThreadKey,
       latestSpokenReply,
+      detachedAssistantMetaIds,
       citationThreadRef,
       markdownCwd,
       resolvedTheme,
@@ -2445,15 +2453,11 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   const owner = `${ctx.routeThreadKey}:${row.message.id}`;
   const isLatest = ctx.latestSpokenReplyId === row.message.id;
   const renderSpeechSectionActions = useCallback(
-    (index: number) => (
-      <MessageSpeechSections
-        owner={owner}
-        sections={speechSections}
-        index={index}
-        {...(isLatest && index === speechSections.length - 1 ? { fullReply: messageText } : {})}
-      />
-    ),
-    [isLatest, messageText, owner, speechSections],
+    (index: number) =>
+      isLatest && index === speechSections.length - 1 ? null : (
+        <MessageSpeechSections owner={owner} sections={speechSections} index={index} />
+      ),
+    [isLatest, owner, speechSections],
   );
 
   return (
@@ -2478,7 +2482,6 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             onUseArtifactTemplate={ctx.onUseArtifactTemplate}
             onImageExpand={ctx.onImageExpand}
             speechSectionOffsets={speechOffsets}
-            speechFullReplyIndex={isLatest ? speechSections.length - 1 : undefined}
             renderSpeechSectionActions={renderSpeechSectionActions}
           />
         </AssistantCitationSource>
@@ -2495,9 +2498,22 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             showCopyButton={row.showAssistantCopyButton}
             copyStreaming={row.assistantCopyStreaming}
           />
-        ) : !row.message.streaming && !isLatest ? (
-          <div className="mt-1 flex items-center gap-2 opacity-0 max-sm:opacity-100 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100">
-            <AssistantMessageSpeechActions message={row.message} />
+        ) : !row.message.streaming && !ctx.detachedAssistantMetaIds.has(row.message.id) ? (
+          <div
+            className={cn(
+              "mt-1 flex w-full items-center gap-2",
+              !isLatest &&
+                "opacity-0 max-sm:opacity-100 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100",
+            )}
+          >
+            {isLatest ? (
+              <>
+                <LastBlockSpeechActions message={row.message} />
+                <LatestReplyPlaybackActions message={row.message} />
+              </>
+            ) : (
+              <AssistantMessageSpeechActions message={row.message} />
+            )}
           </div>
         ) : null}
       </div>
@@ -2537,35 +2553,74 @@ function AssistantMessageMeta({
   alwaysVisible?: boolean;
 }) {
   const ctx = use(TimelineRowCtx);
+  const isLatest = !message.streaming && ctx.latestSpokenReplyId === message.id;
 
   return (
-    <div
-      className={cn(
-        "flex items-center gap-2 text-xs tabular-nums transition-opacity duration-200",
-        alwaysVisible
-          ? "opacity-100"
-          : "opacity-0 max-sm:opacity-100 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100",
-        className,
-      )}
-    >
-      <AssistantCopyButton
-        message={message}
-        showCopyButton={showCopyButton}
-        streaming={copyStreaming}
+    <div className={cn("flex w-full min-w-0 items-center gap-2 text-xs tabular-nums", className)}>
+      <div
+        className={cn(
+          "flex min-w-0 items-center gap-2 transition-opacity duration-200",
+          alwaysVisible || isLatest
+            ? "opacity-100"
+            : "opacity-0 max-sm:opacity-100 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100",
+        )}
+      >
+        <AssistantCopyButton
+          message={message}
+          showCopyButton={showCopyButton}
+          streaming={copyStreaming}
+        />
+        {!message.streaming && !copyStreaming ? (
+          isLatest ? (
+            <LastBlockSpeechActions message={message} />
+          ) : (
+            <AssistantMessageSpeechActions message={message} />
+          )
+        ) : null}
+        {!message.streaming && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <p className="whitespace-nowrap text-muted-foreground text-xs tabular-nums" />
+              }
+            >
+              {formatDayAwareTimestamp(message.updatedAt, ctx.timestampFormat)}
+            </TooltipTrigger>
+            <TooltipPopup>
+              {formatChatTimestampTooltip(message.updatedAt, ctx.timestampFormat)}
+            </TooltipPopup>
+          </Tooltip>
+        )}
+      </div>
+      {isLatest ? <LatestReplyPlaybackActions message={message} /> : null}
+    </div>
+  );
+}
+
+function LastBlockSpeechActions({ message }: { message: ChatMessage }) {
+  const ctx = use(TimelineRowCtx);
+  const sections = useMemo(() => messageSpeechSections(message.text ?? ""), [message.text]);
+  if (sections.length === 0) return null;
+  return (
+    <MessageSpeechSections
+      owner={`${ctx.routeThreadKey}:${message.id}`}
+      sections={sections}
+      index={sections.length - 1}
+      inline
+    />
+  );
+}
+
+function LatestReplyPlaybackActions({ message }: { message: ChatMessage }) {
+  const ctx = use(TimelineRowCtx);
+  return (
+    <div className="ml-auto flex shrink-0 items-center gap-0.5">
+      <MessageSpeechRateControl />
+      <MessageSpeechButton
+        owner={`${ctx.routeThreadKey}:${message.id}`}
+        text={message.text ?? ""}
+        latest
       />
-      {!message.streaming && !copyStreaming && ctx.latestSpokenReplyId !== message.id ? (
-        <AssistantMessageSpeechActions message={message} />
-      ) : null}
-      {!message.streaming && (
-        <Tooltip>
-          <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
-            {formatDayAwareTimestamp(message.updatedAt, ctx.timestampFormat)}
-          </TooltipTrigger>
-          <TooltipPopup>
-            {formatChatTimestampTooltip(message.updatedAt, ctx.timestampFormat)}
-          </TooltipPopup>
-        </Tooltip>
-      )}
     </div>
   );
 }

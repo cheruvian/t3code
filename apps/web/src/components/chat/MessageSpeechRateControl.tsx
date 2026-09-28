@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { GaugeIcon } from "lucide-react";
 import { getMessageSpeechPlayer, MESSAGE_SPEECH_RATES } from "~/lib/messageSpeech";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -27,16 +28,17 @@ export function MessageSpeechRateControl() {
             type="button"
             size="sm"
             variant="ghost"
-            className="h-9 shrink-0 whitespace-nowrap rounded-full px-2 text-xs tabular-nums"
+            className="h-9 shrink-0 gap-1 whitespace-nowrap rounded-full px-2 text-xs tabular-nums"
             aria-label={`Speech speed ${rate} times. Set to ${nextRate} times`}
             onClick={() => player.setRate(nextRate)}
           >
-            Speed {rate}×
+            <GaugeIcon className="size-3.5" aria-hidden />
+            {rate}×
           </Button>
         }
       />
       <TooltipPopup>
-        Speech speed. Tap to change; the next sentence uses the new speed.
+        Speech speed. Tap to switch between 1× and 2×; the next sentence uses the new speed.
       </TooltipPopup>
     </Tooltip>
   );

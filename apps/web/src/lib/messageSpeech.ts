@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm";
 import { unified } from "unified";
 
 const parser = unified().use(remarkParse).use(remarkGfm);
-export const MESSAGE_SPEECH_RATES = [1, 1.25, 1.5, 2] as const;
+export const MESSAGE_SPEECH_RATES = [1, 2] as const;
 const RATE_STORAGE_KEY = "t3.message-speech-rate";
 
 function readSpeechNode(node: Root | RootContent): string {

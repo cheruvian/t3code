@@ -157,13 +157,14 @@ transcription API key is needed.
 
 ## Read replies aloud in a browser
 
-Choose **Read all** beside the last block of the latest completed reply to
-hear it all. Choose **Stop reading** to stop. Starting another reply stops the
-current one. Tap the adjacent **Speed** control to cycle through 1×, 1.25×,
-1.5×, and 2×; the next sentence uses the new speed.
+Tap the circled play button beside the latest reply's copy and timestamp
+controls to hear it all. Tap again to stop. Starting another reply stops the
+current one. Tap the adjacent speed control to switch between 1× and 2×; the
+next sentence uses the new speed.
 
 For a shorter excerpt, tap the speaker beside a section to read just that block,
-or the play button to read from there to the end of the reply. Code blocks are
+or the play button to read from there to the end of the reply. The last block's
+controls appear beside the reply's copy button. Code blocks are
 omitted. Playback uses your browser's voices without
 a paid speech provider or VoiceOver. Available voices depend on your device and
 browser.
