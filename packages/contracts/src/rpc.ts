@@ -155,6 +155,8 @@ import {
   ProjectListEntriesInput,
   ProjectListEntriesResult,
   ProjectReadFileError,
+  ProjectResolveFilePathsInput,
+  ProjectResolveFilePathsResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
   ProjectSearchContentsError,
@@ -280,6 +282,7 @@ export const WS_METHODS = {
   // commands (`project.create`, `project.meta.update`, `project.delete`)
   // dispatched through `orchestration.dispatchCommand`.
   projectsListEntries: "projects.listEntries",
+  projectsResolveFilePaths: "projects.resolveFilePaths",
   projectsReadFile: "projects.readFile",
   projectsSearchContents: "projects.searchContents",
   projectsSearchEntries: "projects.searchEntries",
@@ -943,6 +946,12 @@ const WsProjectsListEntriesRpc = Rpc.make(WS_METHODS.projectsListEntries, {
   error: Schema.Union([ProjectListEntriesError, EnvironmentAuthorizationError]),
 });
 
+const WsProjectsResolveFilePathsRpc = Rpc.make(WS_METHODS.projectsResolveFilePaths, {
+  payload: ProjectResolveFilePathsInput,
+  success: ProjectResolveFilePathsResult,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
   payload: ProjectReadFileInput,
   success: ProjectReadFileResult,
@@ -1465,6 +1474,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectCloneRetryRpc,
   WsSubscribeProjectClonesRpc,
   WsProjectsListEntriesRpc,
+  WsProjectsResolveFilePathsRpc,
   WsProjectsReadFileRpc,
   WsProjectsSearchContentsRpc,
   WsProjectsSearchEntriesRpc,

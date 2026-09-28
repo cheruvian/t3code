@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { MarkdownNode } from "react-native-nitro-markdown/headless";
 
 import {
+  resolveNativeMarkdownFileRuns,
   nativeMarkdownChunkSpacing,
   nativeMarkdownDocumentChunks,
   nativeMarkdownDocumentRuns,
@@ -79,7 +80,12 @@ describe("nativeMarkdownTextRuns", () => {
       }),
     ).toEqual([
       { text: "/tmp/frame.png " },
-      { text: "frame.png", href: "/tmp/frame.png", fileIcon: "image" },
+      {
+        text: "frame.png",
+        href: "/tmp/frame.png",
+        fileIcon: "image",
+        inlineFileSource: "/tmp/frame.png",
+      },
     ]);
   });
 
@@ -1172,5 +1178,33 @@ describe("pull request chip status", () => {
         sectionId: "pull-request:1",
       }).accent,
     ).toBe("#7079e4");
+  });
+});
+
+describe("resolved file runs", () => {
+  it("leaves missing storage keys as code and normalizes existing links without changing the source", () => {
+    const source = "word-split-repro/1790368741038/collect-prod-source.png";
+    const runs = nativeMarkdownTextRuns({
+      type: "paragraph",
+      children: [
+        { type: "code_inline", content: source },
+        { type: "code_inline", content: "tree/report.md" },
+      ],
+    });
+    const resolutions = new Map([
+      [
+        "tree/report.md",
+        {
+          path: "tree/report.md",
+          absolutePath: "/workspace/tree/report.md",
+          relativePath: "report.md",
+        },
+      ],
+    ]);
+    const rendered = resolveNativeMarkdownFileRuns(runs, resolutions);
+    expect(rendered[0]).toMatchObject({ text: source, code: true });
+    expect(rendered[0]?.href).toBeUndefined();
+    expect(rendered[1]?.href).toBe("/workspace/tree/report.md");
+    expect(runs[1]?.href).toBe("tree/report.md");
   });
 });

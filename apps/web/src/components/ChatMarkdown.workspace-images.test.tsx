@@ -23,7 +23,10 @@ vi.mock("../assets/assetUrls", () => ({
   },
 }));
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
-vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
+vi.mock("../state/use-atom-query-runner", () => {
+  const query = vi.fn(async () => ({ _tag: "Success", value: [] }));
+  return { useAtomQueryRunner: () => query };
+});
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("../state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/session")>()),

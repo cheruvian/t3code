@@ -1,3 +1,7 @@
+import {
+  resolvedMarkdownFileHref,
+  type MarkdownFileResolutions,
+} from "@t3tools/client-runtime/markdown-file-resolution";
 import type { MarkdownNode } from "react-native-nitro-markdown/headless";
 import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineTokens";
 import { imageMimeType } from "@t3tools/shared/image";
@@ -130,6 +134,7 @@ import {
 } from "./markdownLinks";
 
 export interface NativeMarkdownTextRun {
+  readonly inlineFileSource?: string;
   readonly text: string;
   readonly bold?: boolean;
   readonly italic?: boolean;
@@ -172,6 +177,7 @@ export type NativeMarkdownDocumentChunk =
     };
 
 interface RunContext {
+  readonly inlineFileSource?: string;
   readonly bold: boolean;
   readonly italic: boolean;
   readonly strikethrough: boolean;
@@ -274,6 +280,7 @@ function sameRunStyle(left: NativeMarkdownTextRun, right: NativeMarkdownTextRun)
     left.spacing === right.spacing &&
     left.firstLineHeadIndent === right.firstLineHeadIndent &&
     left.headIndent === right.headIndent &&
+    left.inlineFileSource === right.inlineFileSource &&
     left.paragraphSpacing === right.paragraphSpacing
   );
 }
@@ -289,6 +296,7 @@ function appendRun(
 
   const run: NativeMarkdownTextRun = {
     text,
+    ...(context.inlineFileSource ? { inlineFileSource: context.inlineFileSource } : {}),
     ...(context.bold ? { bold: true } : {}),
     ...(context.italic ? { italic: true } : {}),
     ...(context.strikethrough ? { strikethrough: true } : {}),
@@ -448,6 +456,7 @@ function appendNode(
         ? appendRun(runs, presentation.label, {
             ...context,
             href: presentation.href,
+            inlineFileSource: content,
             fileIcon: presentation.icon,
           })
         : appendRun(runs, content, { ...context, code: true });
@@ -961,4 +970,19 @@ export function nativeMarkdownDocumentRuns(
     }
   }
   return decorateMentionRuns(decorateSkillRuns(runs, skills));
+}
+
+/** Missing auto-detected files remain code; explicit links retain their authored destination. */
+export function resolveNativeMarkdownFileRuns(
+  runs: ReadonlyArray<NativeMarkdownTextRun>,
+  resolutions: MarkdownFileResolutions,
+) {
+  return runs.map((run) => {
+    if (!run.href || !run.fileIcon) return run;
+    const href = resolvedMarkdownFileHref(run.href, resolutions);
+    if (href) return { ...run, href };
+    if (!run.inlineFileSource) return run;
+    const { href: _href, fileIcon: _icon, inlineFileSource, ...plain } = run;
+    return { ...plain, text: inlineFileSource, code: true };
+  });
 }

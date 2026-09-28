@@ -34,7 +34,10 @@ vi.mock("./ui/tooltip", async () => {
     TooltipPopup: () => null,
   };
 });
-vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
+vi.mock("../state/use-atom-query-runner", () => {
+  const query = vi.fn(async () => ({ _tag: "Success", value: [] }));
+  return { useAtomQueryRunner: () => query };
+});
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("../state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/session")>()),
@@ -881,7 +884,7 @@ describe("ChatMarkdown Windows file links", () => {
   );
 
   it.each([true, false])(
-    "does not disambiguate the same file in links and inline code with parseRawHtml=%s",
+    "keeps inline code unlinked until the host verifies it with parseRawHtml=%s",
     (parseRawHtml) => {
       const path = String.raw`C:\Users\shawn\project\src\main.ts`;
       const html = renderToStaticMarkup(
@@ -894,7 +897,7 @@ describe("ChatMarkdown Windows file links", () => {
         />,
       );
 
-      expect(html.match(/chat-markdown-file-link/g)).toHaveLength(2);
+      expect(html.match(/chat-markdown-file-link/g)).toHaveLength(1);
       expect(html).not.toContain("main.ts ·");
     },
   );

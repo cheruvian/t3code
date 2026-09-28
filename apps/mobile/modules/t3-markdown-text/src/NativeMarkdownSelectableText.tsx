@@ -1,3 +1,4 @@
+import { type MarkdownFileResolutions } from "@t3tools/client-runtime/markdown-file-resolution";
 import { createContext, useCallback, useContext, useMemo } from "react";
 import { decodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
 import {
@@ -17,7 +18,10 @@ import { markdownFileIconSource } from "./markdownFileIcons";
 import { markdownLinkIconSource } from "./markdownLinkIcons";
 import { resolveMarkdownFileIcon, resolveMarkdownLinkIcon } from "./markdownLinks";
 import type { NativeMarkdownTextRun } from "./nativeMarkdownText";
-import { nativeMarkdownContextCopyRanges } from "./nativeMarkdownText";
+import {
+  nativeMarkdownContextCopyRanges,
+  resolveNativeMarkdownFileRuns,
+} from "./nativeMarkdownText";
 import type {
   MarkdownFileContextMenu,
   NativeMarkdownTextStyle,
@@ -28,6 +32,10 @@ import {
 } from "./T3MarkdownTextSelectionModule";
 import { parseComposerContextHref } from "@t3tools/shared/composerContextReferences";
 import { contextChipPresentation } from "./nativeMarkdownText";
+
+export const MarkdownFileResolutionContext = createContext<MarkdownFileResolutions | undefined>(
+  undefined,
+);
 
 export const MarkdownContextClipboardContext = createContext("");
 
@@ -197,6 +205,11 @@ export function NativeMarkdownSelectableText(props: {
   readonly textStyle: NativeMarkdownTextStyle;
   readonly onLinkPress?: (href: string) => void;
 }) {
+  const resolutions = useContext(MarkdownFileResolutionContext);
+  const runs = useMemo(
+    () => (resolutions ? resolveNativeMarkdownFileRuns(props.runs, resolutions) : props.runs),
+    [props.runs, resolutions],
+  );
   const colorScheme = useColorScheme();
   const menu = useContext(MarkdownFileContextMenuContext);
   const contextClipboardFragment = useContext(MarkdownContextClipboardContext);
@@ -204,7 +217,7 @@ export function NativeMarkdownSelectableText(props: {
     () => decodeComposerContextFragment(contextClipboardFragment)?.records ?? [],
     [contextClipboardFragment],
   );
-  const containsInlineIcon = props.runs.some(
+  const containsInlineIcon = runs.some(
     (run) =>
       run.fileIcon != null ||
       run.skillName != null ||
@@ -214,7 +227,7 @@ export function NativeMarkdownSelectableText(props: {
   const keyedRuns = useMemo(() => {
     const occurrences = new Map<string, number>();
     const prefixedExternalLinks = new Set<string>();
-    return props.runs.map((run) => {
+    return runs.map((run) => {
       const signature = runKeySignature(run);
       const occurrence = occurrences.get(signature) ?? 0;
       occurrences.set(signature, occurrence + 1);
@@ -284,7 +297,7 @@ export function NativeMarkdownSelectableText(props: {
 
       return { key: `${signature}:${occurrence}`, run, text, linkIcon, chip, androidChip };
     });
-  }, [props.runs, props.textStyle, contextRecords]);
+  }, [runs, props.textStyle, contextRecords]);
   const ranges = nativeMarkdownContextCopyRanges(
     keyedRuns.map(({ run, text, linkIcon, androidChip }) => ({
       run,
@@ -333,7 +346,7 @@ export function NativeMarkdownSelectableText(props: {
       contextClipboardConfig={contextClipboardConfig}
       accessibilityLabel={
         Platform.OS === "android" && containsInlineIcon
-          ? props.runs.map((run) => run.skillLabel ?? run.text).join("")
+          ? runs.map((run) => run.skillLabel ?? run.text).join("")
           : undefined
       }
       uiTextView

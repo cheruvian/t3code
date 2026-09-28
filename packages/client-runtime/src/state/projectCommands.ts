@@ -70,6 +70,12 @@ export function createProjectEnvironmentAtoms<R, E>(
       staleTimeMs: 30_000,
       idleTtlMs: 5 * 60_000,
     }),
+    resolveFilePaths: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:projects:resolve-file-paths",
+      tag: WS_METHODS.projectsResolveFilePaths,
+      staleTimeMs: 15_000,
+      idleTtlMs: 60_000,
+    }),
     readFile: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:projects:read-file",
       tag: WS_METHODS.projectsReadFile,

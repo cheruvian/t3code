@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./markdown-file-resolution": "./src/markdownFileResolution.ts",
     "./device/stream": {
       "types": "./src/device/stream.ts",
       "default": "./src/device/stream.ts"

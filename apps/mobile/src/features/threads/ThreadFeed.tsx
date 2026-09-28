@@ -1,3 +1,5 @@
+import { useMarkdownFileResolutions } from "../../lib/useMarkdownFileResolutions";
+import { resolvedMarkdownFileHref } from "@t3tools/client-runtime/markdown-file-resolution";
 import {
   WorktreeWorkingHeader,
   WorktreeSetupCard,
@@ -106,7 +108,7 @@ import { hasWideMarkdownBlock } from "../../lib/wideMarkdownBlocks";
 import { faviconUrlForOrigin } from "@t3tools/shared/favicon";
 import {
   hasNativeSelectableMarkdownText,
-  SelectableMarkdownText,
+  SelectableMarkdownText as BaseSelectableMarkdownText,
   type MarkdownFileContextMenu,
   type MarkdownImageRenderer,
   type NativeMarkdownTextStyle,
@@ -626,6 +628,36 @@ interface MarkdownStyleSet {
 }
 
 const failedMarkdownFaviconHosts = new Set<string>();
+const ThreadMarkdownWorkspaceContext = createContext<{
+  environmentId: EnvironmentId;
+  cwd?: string;
+} | null>(null);
+
+function SelectableMarkdownText(props: React.ComponentProps<typeof BaseSelectableMarkdownText>) {
+  const workspace = useContext(ThreadMarkdownWorkspaceContext);
+  const resolutions = useMarkdownFileResolutions(
+    props.markdown,
+    workspace?.environmentId ?? null,
+    workspace?.cwd,
+  );
+  const renderImage = props.renderImage;
+  const resolvedRenderImage = useCallback<MarkdownImageRenderer>(
+    (image) =>
+      renderImage?.({
+        ...image,
+        href: resolvedMarkdownFileHref(image.href, resolutions) ?? image.href,
+      }) ?? null,
+    [renderImage, resolutions],
+  );
+  return (
+    <BaseSelectableMarkdownText
+      {...props}
+      fileResolutions={resolutions}
+      renderImage={resolvedRenderImage}
+    />
+  );
+}
+
 const MarkdownLinkLabelContext = createContext(false);
 const markdownLinkStyles = StyleSheet.create({
   inlineIcon: {
@@ -1954,6 +1986,21 @@ function ThreadFeedPlaceholder(props: {
 }
 
 export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+  const workspace = useMemo(
+    () => ({
+      environmentId: props.environmentId,
+      ...(props.workspaceRoot ? { cwd: props.workspaceRoot } : {}),
+    }),
+    [props.environmentId, props.workspaceRoot],
+  );
+  return (
+    <ThreadMarkdownWorkspaceContext.Provider value={workspace}>
+      <ThreadFeedContent {...props} />
+    </ThreadMarkdownWorkspaceContext.Provider>
+  );
+});
+
+const ThreadFeedContent = memo(function ThreadFeedContent(props: ThreadFeedProps) {
   const navigation = useNavigation();
   const { themeAppearance } = useAppearancePreferences();
   const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2516,7 +2563,11 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const shouldResume = returnTarget !== undefined;
   const initializedMountKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!presentedFeed.some((entry) => entry.type !== "thinking") || initializedMountKeyRef.current === listMountKey) return;
+    if (
+      !presentedFeed.some((entry) => entry.type !== "thinking") ||
+      initializedMountKeyRef.current === listMountKey
+    )
+      return;
     initializedMountKeyRef.current = listMountKey;
     clearUserScrollSettle();
     userScrollSessionRef.current = false;

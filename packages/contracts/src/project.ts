@@ -305,3 +305,23 @@ export class ProjectWriteFileError extends Schema.TaggedError<ProjectWriteFileEr
     } as any);
   }
 }
+
+/** Render-time file references. Message text and provider input are never rewritten. */
+export const ProjectResolveFilePathsInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  baseDir: Schema.optional(TrimmedNonEmptyString),
+  paths: Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(4096))).check(
+    Schema.isMaxLength(128),
+  ),
+});
+export type ProjectResolveFilePathsInput = typeof ProjectResolveFilePathsInput.Type;
+
+export const ProjectResolvedFilePath = Schema.Struct({
+  path: Schema.String,
+  absolutePath: Schema.NullOr(Schema.String),
+  relativePath: Schema.NullOr(Schema.String),
+});
+export type ProjectResolvedFilePath = typeof ProjectResolvedFilePath.Type;
+
+export const ProjectResolveFilePathsResult = Schema.Array(ProjectResolvedFilePath);
+export type ProjectResolveFilePathsResult = typeof ProjectResolveFilePathsResult.Type;
