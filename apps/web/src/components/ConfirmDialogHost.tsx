@@ -17,10 +17,12 @@ import {
   AlertDialogTitle,
 } from "./ui/alert-dialog";
 import { Button } from "./ui/button";
+import { Spinner } from "./ui/spinner";
 import {
   readSettleWorktreeDialog,
   registerSettleWorktreeDialog,
   respondToSettleWorktreeDialog,
+  retrySettleWorktreeDialog,
   subscribeSettleWorktreeDialog,
 } from "../settleWorktreeDialog";
 
@@ -122,21 +124,43 @@ export function ConfirmDialogHost() {
           {settlePrompt && (
             <div className="min-w-0 space-y-2 px-6 text-sm">
               <div className="break-all font-mono text-xs">{settlePrompt.path}</div>
-              <div>
-                {settlePrompt.files.length} changed{" "}
-                {settlePrompt.files.length === 1 ? "file" : "files"} · +{settlePrompt.insertions} −
-                {settlePrompt.deletions} lines
-              </div>
-              <ul className="max-h-48 space-y-1 overflow-auto rounded-md border p-2 font-mono text-xs">
-                {settlePrompt.files.map((file) => (
-                  <li key={file.path} className="flex justify-between gap-3">
-                    <span className="min-w-0 break-all">{file.path}</span>
-                    <span className="shrink-0 text-muted-foreground">
-                      +{file.insertions} −{file.deletions}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              {settlePrompt.phase === "loading" && (
+                <div
+                  className="flex items-center gap-2 rounded-md border p-3 text-muted-foreground"
+                  role="status"
+                >
+                  <Spinner size="sm" aria-hidden />
+                  Loading changed files and diff summary…
+                </div>
+              )}
+              {settlePrompt.phase === "error" && (
+                <div className="space-y-2 rounded-md border p-3" role="alert">
+                  <p>Could not load the worktree changes. Try again before settling.</p>
+                  <Button variant="outline" onClick={retrySettleWorktreeDialog}>
+                    Retry
+                  </Button>
+                </div>
+              )}
+              {settlePrompt.status && (
+                <>
+                  <div>
+                    {settlePrompt.status.workingTree.files.length} changed{" "}
+                    {settlePrompt.status.workingTree.files.length === 1 ? "file" : "files"} · +
+                    {settlePrompt.status.workingTree.insertions} −
+                    {settlePrompt.status.workingTree.deletions} lines
+                  </div>
+                  <ul className="max-h-48 space-y-1 overflow-auto rounded-md border p-2 font-mono text-xs">
+                    {settlePrompt.status.workingTree.files.map((file) => (
+                      <li key={file.path} className="flex justify-between gap-3">
+                        <span className="min-w-0 break-all">{file.path}</span>
+                        <span className="shrink-0 text-muted-foreground">
+                          +{file.insertions} −{file.deletions}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
               {!settlePrompt.canDelete && (
                 <p className="text-muted-foreground">
                   This worktree is shared or still in use, so it can only be kept.
@@ -145,13 +169,18 @@ export function ConfirmDialogHost() {
             </div>
           )}
           <AlertDialogFooter className="flex-col sm:flex-col">
-            <Button className="w-full" onClick={() => respondToSettleWorktreeDialog("keep")}>
+            <Button
+              className="w-full"
+              disabled={settlePrompt?.phase !== "ready"}
+              onClick={() => respondToSettleWorktreeDialog("keep")}
+            >
               Settle and keep worktree
             </Button>
             {settlePrompt?.canDelete && (
               <Button
                 className="w-full"
                 variant="destructive"
+                disabled={settlePrompt.phase !== "ready"}
                 onClick={() => respondToSettleWorktreeDialog("delete")}
               >
                 Delete worktree and discard local changes

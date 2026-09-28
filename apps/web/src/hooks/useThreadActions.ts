@@ -701,7 +701,8 @@ export function useThreadActions() {
           environmentId: target.environmentId,
           input: { cwd: worktreePath },
         });
-        if (changes._tag !== "Success" || changes.value) {
+        let initialStatus: VcsStatusLocalResult | undefined;
+        if (changes._tag !== "Success") {
           const status = await readWorktreeStatus({
             environmentId: target.environmentId,
             input: { cwd: worktreePath },
@@ -711,32 +712,39 @@ export function useThreadActions() {
               Cause.fail(new Error("Could not check the worktree before settling.")),
             );
           }
-          if (status.value.hasWorkingTreeChanges) {
-            const project = readProject({
-              environmentId: target.environmentId,
-              projectId: resolved.thread.projectId,
-            });
-            const onlyThread =
-              getOrphanedWorktreePathForThread(
-                readThreadShells().filter(
-                  (thread) => thread.environmentId === target.environmentId,
-                ),
-                target.threadId,
-              ) === worktreePath;
-            const canDelete =
-              onlyThread && project !== null && resolved.thread.session?.status !== "running";
-            const choice = await requestSettleWorktreeDialog({
-              path: worktreePath,
-              files: status.value.workingTree.files,
-              insertions: status.value.workingTree.insertions,
-              deletions: status.value.workingTree.deletions,
-              canDelete,
-            });
-            if (choice === null) return AsyncResult.failure(Cause.interrupt());
-            if (choice === "delete" && canDelete) {
-              deleteWorktreePath = worktreePath;
-              deleteWorktreePreview = status.value;
-            }
+          initialStatus = status.value;
+        }
+        if (changes._tag === "Success" ? changes.value : initialStatus?.hasWorkingTreeChanges) {
+          const project = readProject({
+            environmentId: target.environmentId,
+            projectId: resolved.thread.projectId,
+          });
+          const onlyThread =
+            getOrphanedWorktreePathForThread(
+              readThreadShells().filter((thread) => thread.environmentId === target.environmentId),
+              target.threadId,
+            ) === worktreePath;
+          const canDelete =
+            onlyThread && project !== null && resolved.thread.session?.status !== "running";
+          const decision = await requestSettleWorktreeDialog({
+            path: worktreePath,
+            canDelete,
+            ...(initialStatus ? { initialStatus } : {}),
+            loadStatus: async () => {
+              const status = await readWorktreeStatus({
+                environmentId: target.environmentId,
+                input: { cwd: worktreePath },
+              });
+              if (status._tag !== "Success") {
+                throw new Error("Could not load worktree changes.");
+              }
+              return status.value;
+            },
+          });
+          if (decision === null) return AsyncResult.failure(Cause.interrupt());
+          if (decision.choice === "delete" && canDelete) {
+            deleteWorktreePath = worktreePath;
+            deleteWorktreePreview = decision.status;
           }
         }
       }
