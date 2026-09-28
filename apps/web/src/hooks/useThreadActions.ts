@@ -214,6 +214,10 @@ export function useThreadActions() {
     reportFailure: false,
     reportDefect: false,
   });
+  const readWorktreeChanges = useAtomCommand(vcsEnvironment.hasWorkingTreeChanges, {
+    reportFailure: false,
+    reportDefect: false,
+  });
   const unsettleThreadMutation = useAtomCommand(threadEnvironment.unsettle, {
     reportFailure: false,
   });
@@ -693,33 +697,46 @@ export function useThreadActions() {
       let deleteWorktreePreview: VcsStatusLocalResult | null = null;
       if (resolved?.thread.worktreePath) {
         const worktreePath = resolved.thread.worktreePath;
-        const status = await readWorktreeStatus({
+        const changes = await readWorktreeChanges({
           environmentId: target.environmentId,
           input: { cwd: worktreePath },
         });
-        if (status._tag === "Success" && status.value.hasWorkingTreeChanges) {
-          const project = readProject({
+        if (changes._tag !== "Success" || changes.value) {
+          const status = await readWorktreeStatus({
             environmentId: target.environmentId,
-            projectId: resolved.thread.projectId,
+            input: { cwd: worktreePath },
           });
-          const onlyThread =
-            getOrphanedWorktreePathForThread(
-              readThreadShells().filter((thread) => thread.environmentId === target.environmentId),
-              target.threadId,
-            ) === worktreePath;
-          const canDelete =
-            onlyThread && project !== null && resolved.thread.session?.status !== "running";
-          const choice = await requestSettleWorktreeDialog({
-            path: worktreePath,
-            files: status.value.workingTree.files,
-            insertions: status.value.workingTree.insertions,
-            deletions: status.value.workingTree.deletions,
-            canDelete,
-          });
-          if (choice === null) return AsyncResult.failure(Cause.interrupt());
-          if (choice === "delete" && canDelete) {
-            deleteWorktreePath = worktreePath;
-            deleteWorktreePreview = status.value;
+          if (status._tag !== "Success") {
+            return AsyncResult.failure(
+              Cause.fail(new Error("Could not check the worktree before settling.")),
+            );
+          }
+          if (status.value.hasWorkingTreeChanges) {
+            const project = readProject({
+              environmentId: target.environmentId,
+              projectId: resolved.thread.projectId,
+            });
+            const onlyThread =
+              getOrphanedWorktreePathForThread(
+                readThreadShells().filter(
+                  (thread) => thread.environmentId === target.environmentId,
+                ),
+                target.threadId,
+              ) === worktreePath;
+            const canDelete =
+              onlyThread && project !== null && resolved.thread.session?.status !== "running";
+            const choice = await requestSettleWorktreeDialog({
+              path: worktreePath,
+              files: status.value.workingTree.files,
+              insertions: status.value.workingTree.insertions,
+              deletions: status.value.workingTree.deletions,
+              canDelete,
+            });
+            if (choice === null) return AsyncResult.failure(Cause.interrupt());
+            if (choice === "delete" && canDelete) {
+              deleteWorktreePath = worktreePath;
+              deleteWorktreePreview = status.value;
+            }
           }
         }
       }
@@ -822,6 +839,7 @@ export function useThreadActions() {
       closeTerminal,
       markThreadVisited,
       readWorktreeStatus,
+      readWorktreeChanges,
       removeConfirmedWorktree,
       pinThread,
       resolveThreadTarget,

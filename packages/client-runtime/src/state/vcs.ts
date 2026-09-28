@@ -373,8 +373,10 @@ export function createVcsEnvironmentAtoms<R, E>(
     localStatus: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:local-status",
       tag: WS_METHODS.vcsLocalStatus,
-      scheduler: vcsCommandScheduler,
-      concurrency: vcsCommandConcurrency,
+    }),
+    hasWorkingTreeChanges: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:has-working-tree-changes",
+      tag: WS_METHODS.vcsHasWorkingTreeChanges,
     }),
     pull: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:pull",

@@ -719,6 +719,26 @@ const GitManagerTestLayer = GitVcsDriver.layer.pipe(
 );
 
 it.layer(GitManagerTestLayer)("GitManager", (it) => {
+  it.effect("reads fresh tracked and untracked changes for Settle", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const { manager } = yield* makeManager();
+
+      expect(yield* manager.hasWorkingTreeChanges({ cwd: repoDir })).toBe(false);
+
+      NodeFS.writeFileSync(NodePath.join(repoDir, "untracked.txt"), "untracked\n");
+      expect(yield* manager.hasWorkingTreeChanges({ cwd: repoDir })).toBe(true);
+      NodeFS.unlinkSync(NodePath.join(repoDir, "untracked.txt"));
+      expect(yield* manager.hasWorkingTreeChanges({ cwd: repoDir })).toBe(false);
+
+      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "changed\n");
+      expect(yield* manager.hasWorkingTreeChanges({ cwd: repoDir })).toBe(true);
+      yield* runGit(repoDir, ["add", "README.md"]);
+      expect(yield* manager.hasWorkingTreeChanges({ cwd: repoDir })).toBe(true);
+    }),
+  );
+
   it.effect("status includes draft PR metadata when branch already has a draft PR", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");

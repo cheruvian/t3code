@@ -46,6 +46,9 @@ export class GitWorkflowService extends Context.Service<
     readonly localStatus: (
       input: VcsStatusInput,
     ) => Effect.Effect<VcsStatusLocalResult, GitManagerServiceError>;
+    readonly hasWorkingTreeChanges: (
+      input: VcsStatusInput,
+    ) => Effect.Effect<boolean, GitManagerServiceError>;
     readonly remoteStatus: (
       input: VcsStatusInput,
       options?: GitManager.GitRemoteStatusOptions,
@@ -307,6 +310,12 @@ export const make = Effect.gen(function* () {
           isGitRepository
             ? gitManager.localStatus(input)
             : Effect.succeed(nonRepositoryLocalStatus()),
+        ),
+      ),
+    hasWorkingTreeChanges: (input) =>
+      detectGitRepositoryForStatus("GitWorkflowService.hasWorkingTreeChanges", input.cwd).pipe(
+        Effect.flatMap((isGitRepository) =>
+          isGitRepository ? gitManager.hasWorkingTreeChanges(input) : Effect.succeed(false),
         ),
       ),
     remoteStatus: (input, options) =>

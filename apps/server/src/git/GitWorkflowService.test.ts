@@ -81,6 +81,13 @@ describe("GitWorkflowService", () => {
     ),
   );
 
+  it.effect("reports no worktree changes outside Git", () =>
+    Effect.gen(function* () {
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      assert.equal(yield* workflow.hasWorkingTreeChanges({ cwd: "/not-a-repo" }), false);
+    }).pipe(Effect.provide(makeLayer({ detect: () => Effect.succeed(null) }))),
+  );
+
   it.effect("returns an empty full status when no VCS repository is detected", () =>
     Effect.gen(function* () {
       const workflow = yield* GitWorkflowService.GitWorkflowService;
@@ -114,6 +121,7 @@ describe("GitWorkflowService", () => {
 
   it.effect("does not call GitManager status methods when no VCS repository is detected", () => {
     const localStatus = vi.fn();
+    const hasWorkingTreeChanges = vi.fn();
     const remoteStatus = vi.fn();
     const status = vi.fn();
 
@@ -127,6 +135,7 @@ describe("GitWorkflowService", () => {
       Layer.provide(
         Layer.mock(GitManager.GitManager)({
           localStatus,
+          hasWorkingTreeChanges,
           remoteStatus,
           status,
         }),
@@ -136,10 +145,12 @@ describe("GitWorkflowService", () => {
     return Effect.gen(function* () {
       const workflow = yield* GitWorkflowService.GitWorkflowService;
       yield* workflow.localStatus({ cwd: "/not-a-repo" });
+      yield* workflow.hasWorkingTreeChanges({ cwd: "/not-a-repo" });
       yield* workflow.remoteStatus({ cwd: "/not-a-repo" });
       yield* workflow.status({ cwd: "/not-a-repo" });
 
       assert.equal(localStatus.mock.calls.length, 0);
+      assert.equal(hasWorkingTreeChanges.mock.calls.length, 0);
       assert.equal(remoteStatus.mock.calls.length, 0);
       assert.equal(status.mock.calls.length, 0);
     }).pipe(Effect.provide(testLayer));

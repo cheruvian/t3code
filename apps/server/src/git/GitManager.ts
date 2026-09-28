@@ -107,6 +107,9 @@ export class GitManager extends Context.Service<
     readonly localStatus: (
       input: VcsStatusInput,
     ) => Effect.Effect<VcsStatusLocalResult, GitManagerServiceError>;
+    readonly hasWorkingTreeChanges: (
+      input: VcsStatusInput,
+    ) => Effect.Effect<boolean, GitManagerServiceError>;
     readonly remoteStatus: (
       input: VcsStatusInput,
       options?: GitRemoteStatusOptions,
@@ -2125,6 +2128,16 @@ export const make = Effect.gen(function* () {
       return yield* Cache.get(localStatusResultCache, cacheKey);
     },
   );
+  const hasWorkingTreeChanges: GitManager["Service"]["hasWorkingTreeChanges"] = Effect.fn(
+    "hasWorkingTreeChanges",
+  )(function* ({ cwd }) {
+    const result = yield* gitCore.execute({
+      operation: "GitManager.hasWorkingTreeChanges",
+      cwd,
+      args: ["status", "--porcelain=1", "--untracked-files=normal"],
+    });
+    return result.stdout.length > 0;
+  });
   const remoteStatus: GitManager["Service"]["remoteStatus"] = Effect.fn("remoteStatus")(
     function* (input, options) {
       const cacheKey = yield* normalizeStatusCacheKey(input.cwd);
@@ -2847,6 +2860,7 @@ export const make = Effect.gen(function* () {
 
   return GitManager.of({
     localStatus,
+    hasWorkingTreeChanges,
     remoteStatus,
     status,
     branchPullRequest,

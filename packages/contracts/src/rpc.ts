@@ -319,6 +319,7 @@ export const WS_METHODS = {
   vcsPull: "vcs.pull",
   vcsRefreshStatus: "vcs.refreshStatus",
   vcsLocalStatus: "vcs.localStatus",
+  vcsHasWorkingTreeChanges: "vcs.hasWorkingTreeChanges",
   vcsListRefs: "vcs.listRefs",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
@@ -1045,6 +1046,12 @@ const WsVcsLocalStatusRpc = Rpc.make(WS_METHODS.vcsLocalStatus, {
   error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
 });
 
+const WsVcsHasWorkingTreeChangesRpc = Rpc.make(WS_METHODS.vcsHasWorkingTreeChanges, {
+  payload: VcsStatusInput,
+  success: Schema.Boolean,
+  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+});
+
 const WsSubscribeWorktreeSetupRpc = Rpc.make(WS_METHODS.subscribeWorktreeSetup, {
   payload: WorktreeSetupSubscribeInput,
   success: WorktreeSetupStreamEvent,
@@ -1519,6 +1526,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsPullRpc,
   WsVcsRefreshStatusRpc,
   WsVcsLocalStatusRpc,
+  WsVcsHasWorkingTreeChangesRpc,
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,

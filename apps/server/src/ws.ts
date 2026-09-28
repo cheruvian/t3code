@@ -3290,9 +3290,21 @@ const makeWsRpcLayer = (
             },
           ),
         [WS_METHODS.vcsLocalStatus]: (input) =>
-          observeRpcEffect(WS_METHODS.vcsLocalStatus, gitWorkflow.localStatus(input), {
-            "rpc.aggregate": "vcs",
-          }),
+          observeRpcEffect(
+            WS_METHODS.vcsLocalStatus,
+            gitWorkflow
+              .invalidateLocalStatus(input.cwd)
+              .pipe(Effect.andThen(gitWorkflow.localStatus(input))),
+            {
+              "rpc.aggregate": "vcs",
+            },
+          ),
+        [WS_METHODS.vcsHasWorkingTreeChanges]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.vcsHasWorkingTreeChanges,
+            gitWorkflow.hasWorkingTreeChanges(input),
+            { "rpc.aggregate": "vcs" },
+          ),
         [WS_METHODS.vcsPull]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsPull,
