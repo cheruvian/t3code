@@ -1,3 +1,7 @@
+# Keep transitive declaration files near the workspace type packages.
+# The global virtual store cannot resolve optional React typings from consumers.
+enableGlobalVirtualStore: false
+
 packages:
   - apps/*
   - infra/*

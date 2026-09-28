@@ -370,6 +370,12 @@ export function createVcsEnvironmentAtoms<R, E>(
     listRefs,
     status: createStatusFamily(false, "environment-data:vcs:status"),
     remoteStatus: createStatusFamily(true, "environment-data:vcs:remote-status"),
+    localStatus: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:local-status",
+      tag: WS_METHODS.vcsLocalStatus,
+      scheduler: vcsCommandScheduler,
+      concurrency: vcsCommandConcurrency,
+    }),
     pull: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:pull",
       tag: WS_METHODS.vcsPull,
@@ -409,6 +415,15 @@ export function createVcsEnvironmentAtoms<R, E>(
       scheduler: vcsCommandScheduler,
       concurrency: vcsCommandConcurrency,
       onSettled: invalidateRefs,
+    }),
+    removeConfirmedWorktree: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:remove-confirmed-worktree",
+      tag: WS_METHODS.vcsRemoveConfirmedWorktree,
+    }),
+    removeSettledWorktrees: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:remove-settled-worktrees",
+      tag: WS_METHODS.vcsRemoveSettledWorktrees,
+      scheduler: vcsCommandScheduler,
     }),
     createRef: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:create-ref",

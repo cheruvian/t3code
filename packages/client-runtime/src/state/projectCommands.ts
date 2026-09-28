@@ -23,6 +23,7 @@ import {
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 
 export type {
+  RequestProjectResourceInput,
   CreateProjectInput,
   DeleteProjectInput,
   UpdateProjectInput,

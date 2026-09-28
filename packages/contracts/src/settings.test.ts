@@ -28,6 +28,7 @@ describe("storage cleanup settings", () => {
       worktreeOnMerge: false,
       worktreeOnDelete: false,
       worktreeUnchanged: false,
+      worktreeOnPush: false,
       browserArtifactsAfterDays: null,
       logsAfterDays: null,
     });

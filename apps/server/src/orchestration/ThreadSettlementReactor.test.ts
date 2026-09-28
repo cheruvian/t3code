@@ -336,7 +336,7 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
       number: 42,
       mergedAt: NOW,
     }),
-    layer: ThreadSettlementReactor.layer.pipe(Layer.provide(dependencies)),
+    layer: ThreadSettlementReactor.layer.pipe(Layer.provideMerge(dependencies)),
   };
 });
 
@@ -1592,6 +1592,18 @@ describe("storage cleanup", () => {
     "policy-extended",
     "files-disabled",
     "files-extended",
+    "manual-merged",
+    "manual-open-pr",
+    "manual-diverged",
+    "manual-dirty",
+    "manual-dirty-shared",
+    "manual-ignored",
+    "manual-active",
+    "manual-pushed-upstream",
+    "manual-pushed-no-upstream",
+    "manual-not-pushed",
+    "manual-pushed-dirty",
+    "pushed-automatic",
   ] as const) {
     it.effect(
       `retains protected worktrees (${protection}) and expires only old artifacts and rotated logs`,
@@ -1634,6 +1646,9 @@ describe("storage cleanup", () => {
           const thread = makeThread("storage-thread", {
             branch: "feature",
             worktreePath,
+            ...(protection.startsWith("manual-") && protection !== "manual-active"
+              ? { settledAt: NOW }
+              : {}),
             latestUserMessageAt:
               protection === "recent" ? "2026-08-26T00:00:00.000Z" : "2026-08-01T00:00:00.000Z",
             ...(protection === "session"
@@ -1684,6 +1699,7 @@ describe("storage cleanup", () => {
                                 worktreeOnDelete: deleteRule,
                                 worktreeOnMerge: false,
                                 worktreeUnchanged: false,
+                                worktreeOnPush: false,
                               },
                             },
                           }
@@ -1691,12 +1707,18 @@ describe("storage cleanup", () => {
                 },
                 storageCleanup: {
                   worktreeAfterDays:
-                    deleteRule || mergeRule || unchangedRule || protection === "project-custom"
+                    deleteRule ||
+                    mergeRule ||
+                    unchangedRule ||
+                    protection === "pushed-automatic" ||
+                    protection === "project-custom" ||
+                    protection.startsWith("manual-")
                       ? null
                       : 8,
                   worktreeOnDelete: deleteRule && protection !== "deleted-project-custom",
                   worktreeOnMerge: mergeRule,
                   worktreeUnchanged: unchangedRule,
+                  worktreeOnPush: protection === "pushed-automatic",
                   browserArtifactsAfterDays: 8,
                   logsAfterDays: 8,
                 },
@@ -1798,7 +1820,7 @@ describe("storage cleanup", () => {
                   getArchivedShellSnapshot: () =>
                     Effect.succeed(
                       makeSnapshot(
-                        protection === "shared"
+                        protection === "shared" || protection === "manual-dirty-shared"
                           ? [
                               {
                                 ...thread,
@@ -1812,12 +1834,10 @@ describe("storage cleanup", () => {
                 }),
                 Layer.mock(GitManager)({
                   invalidateStatus: () => Effect.void,
-                  branchPullRequest: (_input, options) => {
-                    assert.strictEqual(options?.refresh, true);
-                    return Effect.succeed(
+                  branchPullRequest: () =>
+                    Effect.succeed(
                       makeBranchPullRequest(protection === "unmerged" ? "open" : "merged"),
-                    );
-                  },
+                    ),
                 }),
                 Layer.mock(OrchestrationEngineService)({
                   subscribeDomainEvents: PubSub.subscribe(domainEvents).pipe(
@@ -1858,7 +1878,14 @@ describe("storage cleanup", () => {
                       assert.deepStrictEqual(input, {
                         cwd: config.baseDir,
                         remoteName: "origin",
-                        remoteBranch: "main",
+                        remoteBranch:
+                          protection === "manual-pushed-upstream"
+                            ? "review-feature"
+                            : protection === "pushed-automatic" ||
+                                protection.startsWith("manual-pushed-") ||
+                                protection === "manual-not-pushed"
+                              ? "feature"
+                              : "main",
                       });
                       defaultRefFetched = true;
                       fetches++;
@@ -1881,11 +1908,22 @@ describe("storage cleanup", () => {
                       hasOriginRemote: false,
                       isDefaultBranch: false,
                       branch: cwd === secondWorktreePath ? "feature-two" : "feature",
-                      upstreamRef: null,
+                      upstreamRef:
+                        protection === "manual-pushed-upstream"
+                          ? "origin/review-feature"
+                          : protection === "manual-not-pushed"
+                            ? "origin/feature"
+                            : null,
                       hasWorkingTreeChanges:
-                        protection === "dirty" || protection === "deleted-dirty",
+                        protection === "dirty" ||
+                        protection === "deleted-dirty" ||
+                        protection === "manual-dirty" ||
+                        protection === "manual-dirty-shared" ||
+                        protection === "manual-pushed-dirty",
                       workingTree: { files: [], insertions: 0, deletions: 0 },
-                      hasUpstream: false,
+                      hasUpstream:
+                        protection === "manual-pushed-upstream" ||
+                        protection === "manual-not-pushed",
                       aheadCount: 0,
                       behindCount: 0,
                       aheadOfDefaultCount: 0,
@@ -1893,17 +1931,27 @@ describe("storage cleanup", () => {
                   execute: (input) =>
                     Effect.succeed({
                       exitCode: ChildProcessSpawner.ExitCode(
-                        input.operation === "StorageCleanup.integratedBranch" &&
-                          (protection === "diverged" || input.args.at(-1) !== "b".repeat(40))
+                        (input.operation === "StorageCleanup.integratedBranch" &&
+                          (protection === "diverged" ||
+                            protection === "manual-diverged" ||
+                            input.args.at(-1) !== "b".repeat(40))) ||
+                          (input.operation === "StorageCleanup.pushedBranch" &&
+                            protection === "manual-not-pushed")
                           ? 1
                           : 0,
                       ),
                       stdout:
-                        protection === "ignored" || protection === "deleted-ignored"
-                          ? ".env\0"
-                          : protection === "ignored-directory"
-                            ? ".cache/\0"
-                            : "",
+                        input.operation === "StorageCleanup.upstreamRef"
+                          ? protection === "manual-pushed-upstream"
+                            ? "origin\0refs/heads/review-feature\n"
+                            : "origin\0refs/heads/feature\n"
+                          : protection === "ignored" ||
+                              protection === "deleted-ignored" ||
+                              protection === "manual-ignored"
+                            ? ".env\0"
+                            : protection === "ignored-directory"
+                              ? ".cache/\0"
+                              : "",
                       stderr: "",
                       stdoutTruncated: false,
                       stderrTruncated: false,
@@ -1935,7 +1983,7 @@ describe("storage cleanup", () => {
                       ),
                     ),
                   removeWorktree: (input) => {
-                    assert.strictEqual(input.force, false);
+                    assert.strictEqual(input.force, protection === "manual-dirty");
                     removals.push(input.path);
                     return fs.remove(input.path, { recursive: true }).pipe(Effect.orDie);
                   },
@@ -1974,8 +2022,34 @@ describe("storage cleanup", () => {
             ),
           );
           yield* cleanup.start();
-          yield* Deferred.await(snapshotRead);
+          if (!protection.startsWith("manual-")) yield* Deferred.await(snapshotRead);
           yield* cleanup.drain;
+          if (protection.startsWith("manual-")) {
+            const criterion =
+              protection.startsWith("manual-pushed-") || protection === "manual-not-pushed"
+                ? "pushed"
+                : "default";
+            const result = yield* cleanup.removeSettledWorktrees(criterion, PROJECT_ID);
+            assert.deepStrictEqual(
+              result,
+              protection === "manual-merged" ||
+                protection === "manual-open-pr" ||
+                protection === "manual-pushed-upstream" ||
+                protection === "manual-pushed-no-upstream"
+                ? [worktreePath]
+                : [],
+            );
+            if (protection === "manual-dirty" || protection === "manual-dirty-shared") {
+              assert.strictEqual(
+                yield* cleanup.removeConfirmedWorktree({
+                  threadId: thread.id,
+                  expectedRefName: "feature",
+                  expectedFiles: [],
+                }),
+                protection === "manual-dirty",
+              );
+            }
+          }
           if (protection === "deleted-event") {
             assert.strictEqual(yield* fs.exists(worktreePath), true);
             tombstoned = true;
@@ -2007,6 +2081,12 @@ describe("storage cleanup", () => {
             protection === "files-disabled" ||
             protection === "files-extended" ||
             protection === "merged" ||
+            protection === "manual-merged" ||
+            protection === "manual-open-pr" ||
+            protection === "manual-dirty" ||
+            protection === "manual-pushed-upstream" ||
+            protection === "manual-pushed-no-upstream" ||
+            protection === "pushed-automatic" ||
             protection === "unchanged" ||
             protection === "unchanged-two-worktrees";
           assert.strictEqual(yield* fs.exists(worktreePath), !removed);
@@ -2018,7 +2098,20 @@ describe("storage cleanup", () => {
                 ? [worktreePath]
                 : [],
           );
-          assert.strictEqual(fetches, mergeRule || unchangedRule ? 1 : 0);
+          assert.strictEqual(
+            fetches,
+            mergeRule ||
+              unchangedRule ||
+              protection === "manual-merged" ||
+              protection === "manual-open-pr" ||
+              protection === "manual-diverged" ||
+              protection === "manual-pushed-upstream" ||
+              protection === "manual-pushed-no-upstream" ||
+              protection === "manual-not-pushed" ||
+              protection === "pushed-automatic"
+              ? 1
+              : 0,
+          );
           assert.strictEqual(thread.worktreePath, worktreePath);
           assert.strictEqual(thread.branch, "feature");
           assert.strictEqual(yield* fs.exists(oldImage), protection.startsWith("files-"));

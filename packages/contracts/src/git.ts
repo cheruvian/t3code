@@ -173,6 +173,19 @@ export const VcsRemoveWorktreeInput = Schema.Struct({
 });
 export type VcsRemoveWorktreeInput = typeof VcsRemoveWorktreeInput.Type;
 
+export const VcsRemoveConfirmedWorktreeInput = Schema.Struct({
+  threadId: ThreadId,
+  expectedRefName: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  expectedFiles: Schema.Array(
+    Schema.Struct({
+      path: TrimmedNonEmptyStringSchema,
+      insertions: NonNegativeInt,
+      deletions: NonNegativeInt,
+    }),
+  ),
+});
+export type VcsRemoveConfirmedWorktreeInput = typeof VcsRemoveConfirmedWorktreeInput.Type;
+
 export const VcsCreateRefInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   refName: TrimmedNonEmptyStringSchema,

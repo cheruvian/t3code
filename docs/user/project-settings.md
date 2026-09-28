@@ -73,12 +73,28 @@ Inherit follows each machine's rules; Off keeps that project's worktrees until y
 manually. Custom applies separate worktree rules to the selected project or checkout. Browser
 captures and log retention remain machine-wide.
 
-Worktrees can be removed after a chosen number of inactive days, after merging, or when they
-have no commits beyond the default branch. Only T3-managed worktrees are eligible. Active
+Worktrees can be removed after a chosen number of inactive days, when a merged pull request's
+commits are on the remote default branch, when all commits are on that branch without a pull
+request, or when all commits are backed up on the worktree branch's remote. Only T3-managed
+worktrees are eligible. Active
 sessions, shared worktrees, uncommitted changes, and ignored files other than `node_modules`
 prevent removal. Branches and thread history stay; starting another turn recreates the checkout.
-Merge cleanup requires the commits to be included in the remote default branch, so squash merges
-may need the inactivity rule instead.
+Merge cleanup requires the commits to be included in the remote default branch. A squash merge
+does not include the original branch commits; use the pushed cleanup action if the branch is still
+on its remote, or the inactivity rule.
+
+To clean up now, open **Settings → Storage → Review worktrees**. **Remove all settled worktrees
+pushed to default branch** checks the remote default branch. **Remove all settled worktrees pushed
+to any remote branch** checks the branch's upstream, or its same-name branch on the primary remote.
+It can remove an unmerged checkout after all its commits are backed up remotely. Both actions
+check local changes and live sessions before removing a checkout, regardless of the automatic
+policy. Expand a worktree's changed files to review local work, or select **Open conversation** to
+return to its thread.
+
+When you settle a conversation with local changes, review the file list and line summary in the
+confirmation. Choose **Settle and keep worktree** to preserve them. To remove the checkout,
+including untracked and ignored files, choose **Delete worktree and discard local changes**.
+Closing the dialog cancels settlement.
 
 Enable **Delete worktrees with deleted threads** to remove safe worktrees after their last
 thread is deleted, including archived threads and worktrees left by earlier deletions. The
