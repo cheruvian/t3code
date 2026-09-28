@@ -6,7 +6,12 @@ import {
 } from "@t3tools/client-runtime/environment";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
-import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  type ScopedThreadRef,
+  ThreadId,
+  type VcsStatusLocalResult,
+} from "@t3tools/contracts";
 import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
@@ -46,6 +51,7 @@ import { useClientSettings } from "./useSettings";
 import * as ThreadUndo from "./threadUndo";
 import { showThreadUndoNotice } from "./showThreadUndoNotice";
 import { useAtomCommand } from "../state/use-atom-command";
+import { requestSettleWorktreeDialog } from "../settleWorktreeDialog";
 
 export class ThreadArchiveBlockedError extends Schema.TaggedError<ThreadArchiveBlockedError>()(
   "ThreadArchiveBlockedError",
@@ -204,6 +210,10 @@ export function useThreadActions() {
   const settleThreadMutation = useAtomCommand(threadEnvironment.settle, {
     reportFailure: false,
   });
+  const readWorktreeStatus = useAtomCommand(vcsEnvironment.localStatus, {
+    reportFailure: false,
+    reportDefect: false,
+  });
   const unsettleThreadMutation = useAtomCommand(threadEnvironment.unsettle, {
     reportFailure: false,
   });
@@ -230,6 +240,9 @@ export function useThreadActions() {
   });
   const stopThreadSession = useAtomCommand(threadEnvironment.stopSession);
   const removeWorktree = useAtomCommand(vcsEnvironment.removeWorktree, {
+    reportFailure: false,
+  });
+  const removeConfirmedWorktree = useAtomCommand(vcsEnvironment.removeConfirmedWorktree, {
     reportFailure: false,
   });
   const refreshVcsStatus = useAtomCommand(vcsEnvironment.refreshStatus, {
@@ -676,6 +689,40 @@ export function useThreadActions() {
         );
       }
       const resolved = resolveThreadTarget(target);
+      let deleteWorktreePath: string | null = null;
+      let deleteWorktreePreview: VcsStatusLocalResult | null = null;
+      if (resolved?.thread.worktreePath) {
+        const worktreePath = resolved.thread.worktreePath;
+        const status = await readWorktreeStatus({
+          environmentId: target.environmentId,
+          input: { cwd: worktreePath },
+        });
+        if (status._tag === "Success" && status.value.hasWorkingTreeChanges) {
+          const project = readProject({
+            environmentId: target.environmentId,
+            projectId: resolved.thread.projectId,
+          });
+          const onlyThread =
+            getOrphanedWorktreePathForThread(
+              readThreadShells().filter((thread) => thread.environmentId === target.environmentId),
+              target.threadId,
+            ) === worktreePath;
+          const canDelete =
+            onlyThread && project !== null && resolved.thread.session?.status !== "running";
+          const choice = await requestSettleWorktreeDialog({
+            path: worktreePath,
+            files: status.value.workingTree.files,
+            insertions: status.value.workingTree.insertions,
+            deletions: status.value.workingTree.deletions,
+            canDelete,
+          });
+          if (choice === null) return AsyncResult.failure(Cause.interrupt());
+          if (choice === "delete" && canDelete) {
+            deleteWorktreePath = worktreePath;
+            deleteWorktreePreview = status.value;
+          }
+        }
+      }
       const wokeAt = resolved
         ? threadWokeAt(resolved.thread, { now: new Date().toISOString() })
         : null;
@@ -699,6 +746,52 @@ export function useThreadActions() {
       }
       if (wokeAt !== null) {
         markThreadVisited(scopedThreadKey(target), wokeAt);
+      }
+      if (deleteWorktreePath !== null && deleteWorktreePreview !== null && resolved) {
+        const stopped =
+          resolved.thread.session && resolved.thread.session.status !== "stopped"
+            ? await stopThreadSession({
+                environmentId: target.environmentId,
+                input: { threadId: target.threadId },
+              })
+            : null;
+        const terminalClosed =
+          stopped === null || stopped._tag === "Success"
+            ? await closeTerminal({
+                environmentId: target.environmentId,
+                input: { threadId: target.threadId, deleteHistory: false },
+              })
+            : stopped;
+        const removal =
+          terminalClosed._tag === "Success"
+            ? await removeConfirmedWorktree({
+                environmentId: target.environmentId,
+                input: {
+                  threadId: target.threadId,
+                  expectedRefName: deleteWorktreePreview.refName,
+                  expectedFiles: deleteWorktreePreview.workingTree.files,
+                },
+              })
+            : null;
+        const failure =
+          terminalClosed._tag === "Failure"
+            ? terminalClosed
+            : removal?._tag === "Failure"
+              ? removal
+              : null;
+        if (failure !== null || (removal?._tag === "Success" && !removal.value.removed)) {
+          const error = failure === null ? null : squashAtomCommandFailure(failure);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Conversation settled, but worktree was kept",
+              description:
+                error instanceof Error
+                  ? error.message
+                  : "The worktree changed or is still in use. Review it before deleting.",
+            }),
+          );
+        }
       }
       showThreadUndoNotice({
         action: "Settled",
@@ -726,12 +819,16 @@ export function useThreadActions() {
       return result;
     },
     [
+      closeTerminal,
       markThreadVisited,
+      readWorktreeStatus,
+      removeConfirmedWorktree,
       pinThread,
       resolveThreadTarget,
       settleThreadMutation,
       snoozeThreadMutation,
       unsettleThread,
+      stopThreadSession,
     ],
   );
 

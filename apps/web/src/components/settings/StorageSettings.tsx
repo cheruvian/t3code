@@ -13,6 +13,7 @@ import {
 } from "../ui/number-field";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { SettingsScopeNotice } from "./SettingsScopeNotice";
+import { WorktreeCleanupPanel } from "./WorktreeCleanupPanel";
 import type { ScopedSettingsTarget } from "./scopedSettings";
 import { useSettingsScope } from "./SettingsScopeContext";
 import {
@@ -224,34 +225,49 @@ export function StorageSettingsPanel() {
               }
             />
             <SettingsRow
-              title="Delete merged worktrees"
+              title="Delete merged pull request worktrees"
               status={ruleStatus("worktreeOnMerge")}
-              description="Remove worktrees whose pull request is merged and whose commits are included in the default branch."
+              description="Remove worktrees whose pull request is merged and whose commits are included in the remote default branch."
               serverScoped={!isProjectScope}
               control={
                 <Switch
-                  aria-label="Delete merged worktrees"
+                  aria-label="Delete merged pull request worktrees"
                   checked={settings.worktreeOnMerge}
                   onCheckedChange={(worktreeOnMerge) => updateWorktree({ worktreeOnMerge })}
                 />
               }
             />
             <SettingsRow
-              title="Delete unchanged worktrees"
+              title="Delete worktrees pushed to the default branch"
               status={ruleStatus("worktreeUnchanged")}
-              description="Remove worktrees with no commits beyond the default branch."
+              description="Remove worktrees whose commits are on the remote default branch, even without a pull request."
               serverScoped={!isProjectScope}
               control={
                 <Switch
-                  aria-label="Delete unchanged worktrees"
+                  aria-label="Delete worktrees pushed to the default branch"
                   checked={settings.worktreeUnchanged}
                   onCheckedChange={(worktreeUnchanged) => updateWorktree({ worktreeUnchanged })}
+                />
+              }
+            />
+            <SettingsRow
+              title="Delete worktrees pushed to a remote branch"
+              status={ruleStatus("worktreeOnPush")}
+              description="Remove worktrees whose commits are on their upstream or same-name primary remote branch, even if unmerged."
+              serverScoped={!isProjectScope}
+              control={
+                <Switch
+                  aria-label="Delete worktrees pushed to a remote branch"
+                  checked={settings.worktreeOnPush}
+                  onCheckedChange={(worktreeOnPush) => updateWorktree({ worktreeOnPush })}
                 />
               }
             />
           </>
         )}
       </SettingsSection>
+
+      <WorktreeCleanupPanel />
 
       {!isProjectScope && (
         <SettingsSection id="storage-artifacts" title="Artifacts and logs">

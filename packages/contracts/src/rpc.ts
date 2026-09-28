@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
-import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   ProviderAuthCancelInput,
   ProviderAuthCompleteInput,
@@ -73,9 +73,11 @@ import {
   GitPullRequestRefInput,
   VcsPullResult,
   VcsRemoveWorktreeInput,
+  VcsRemoveConfirmedWorktreeInput,
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
   VcsStatusInput,
+  VcsStatusLocalResult,
   VcsStatusSubscriptionInput,
   VcsStatusResult,
   VcsStatusStreamEvent,
@@ -313,9 +315,12 @@ export const WS_METHODS = {
   // VCS methods
   vcsPull: "vcs.pull",
   vcsRefreshStatus: "vcs.refreshStatus",
+  vcsLocalStatus: "vcs.localStatus",
   vcsListRefs: "vcs.listRefs",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
+  vcsRemoveConfirmedWorktree: "vcs.removeConfirmedWorktree",
+  vcsRemoveSettledWorktrees: "vcs.removeSettledWorktrees",
   vcsCreateRef: "vcs.createRef",
   vcsSwitchRef: "vcs.switchRef",
   vcsInit: "vcs.init",
@@ -1025,6 +1030,12 @@ const WsVcsRefreshStatusRpc = Rpc.make(WS_METHODS.vcsRefreshStatus, {
   error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
 });
 
+const WsVcsLocalStatusRpc = Rpc.make(WS_METHODS.vcsLocalStatus, {
+  payload: VcsStatusInput,
+  success: VcsStatusLocalResult,
+  error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+});
+
 const WsSubscribeWorktreeSetupRpc = Rpc.make(WS_METHODS.subscribeWorktreeSetup, {
   payload: WorktreeSetupSubscribeInput,
   success: WorktreeSetupStreamEvent,
@@ -1072,6 +1083,21 @@ const WsVcsCreateWorktreeRpc = Rpc.make(WS_METHODS.vcsCreateWorktree, {
 const WsVcsRemoveWorktreeRpc = Rpc.make(WS_METHODS.vcsRemoveWorktree, {
   payload: VcsRemoveWorktreeInput,
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+});
+
+const WsVcsRemoveConfirmedWorktreeRpc = Rpc.make(WS_METHODS.vcsRemoveConfirmedWorktree, {
+  payload: VcsRemoveConfirmedWorktreeInput,
+  success: Schema.Struct({ removed: Schema.Boolean }),
+  error: EnvironmentAuthorizationError,
+});
+
+const WsVcsRemoveSettledWorktreesRpc = Rpc.make(WS_METHODS.vcsRemoveSettledWorktrees, {
+  payload: Schema.Struct({
+    criterion: Schema.Literals(["default", "pushed"]),
+    projectId: Schema.optional(ProjectId),
+  }),
+  success: Schema.Struct({ removedPaths: Schema.Array(Schema.String) }),
+  error: EnvironmentAuthorizationError,
 });
 
 const WsVcsCreateRefRpc = Rpc.make(WS_METHODS.vcsCreateRef, {
@@ -1482,12 +1508,15 @@ export const WsRpcGroup = RpcGroup.make(
   WsWorktreeSetupCancelRpc,
   WsVcsPullRpc,
   WsVcsRefreshStatusRpc,
+  WsVcsLocalStatusRpc,
   WsGitRunStackedActionRpc,
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
   WsVcsListRefsRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,
+  WsVcsRemoveConfirmedWorktreeRpc,
+  WsVcsRemoveSettledWorktreesRpc,
   WsVcsCreateRefRpc,
   WsVcsSwitchRefRpc,
   WsVcsInitRpc,

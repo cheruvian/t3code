@@ -49,6 +49,7 @@ describe("OrchestrationReactor", () => {
               return Effect.void;
             },
             drain: Effect.void,
+            removeSettledWorktrees: () => Effect.succeed([]),
           }),
         ),
         Layer.provideMerge(

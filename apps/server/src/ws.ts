@@ -141,6 +141,7 @@ import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
+import * as StorageCleanup from "./storageCleanup.ts";
 import { linkCreatedPullRequest } from "./git/linkCreatedPullRequest.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
@@ -538,6 +539,7 @@ const makeWsRpcLayer = (
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
+      const storageCleanup = yield* StorageCleanup.StorageCleanup;
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
@@ -3282,6 +3284,10 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "vcs",
             },
           ),
+        [WS_METHODS.vcsLocalStatus]: (input) =>
+          observeRpcEffect(WS_METHODS.vcsLocalStatus, gitWorkflow.localStatus(input), {
+            "rpc.aggregate": "vcs",
+          }),
         [WS_METHODS.vcsPull]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsPull,
@@ -3364,6 +3370,22 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.vcsRemoveWorktree,
             gitWorkflow.removeWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            { "rpc.aggregate": "vcs" },
+          ),
+        [WS_METHODS.vcsRemoveConfirmedWorktree]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.vcsRemoveConfirmedWorktree,
+            storageCleanup
+              .removeConfirmedWorktree(input)
+              .pipe(Effect.map((removed) => ({ removed }))),
+            { "rpc.aggregate": "vcs" },
+          ),
+        [WS_METHODS.vcsRemoveSettledWorktrees]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.vcsRemoveSettledWorktrees,
+            storageCleanup
+              .removeSettledWorktrees(input.criterion, input.projectId)
+              .pipe(Effect.map((removedPaths) => ({ removedPaths: [...removedPaths] }))),
             { "rpc.aggregate": "vcs" },
           ),
         [WS_METHODS.vcsCreateRef]: (input) =>
