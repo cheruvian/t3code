@@ -1756,6 +1756,18 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               className={cn("size-1.5 shrink-0 rounded-full", compactStatusDotClassName)}
               role="img"
             />
+            {driverKind ? (
+              <ProviderInstanceIcon
+                driverKind={driverKind}
+                displayName={
+                  providerEntry?.displayName ?? thread.session?.providerName ?? modelInstanceId
+                }
+                accentColor={providerEntry?.accentColor}
+                showBadge={showInstanceBadge}
+                iconClassName="size-3.5 opacity-60"
+                badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-5xs"
+              />
+            ) : null}
             {title}
             {pinIndicator}
             {terminalStatusIcon}
