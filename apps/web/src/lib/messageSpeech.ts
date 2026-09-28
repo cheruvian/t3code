@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm";
 import { unified } from "unified";
 
 const parser = unified().use(remarkParse).use(remarkGfm);
-export const MESSAGE_SPEECH_RATES = [1, 2] as const;
+export const MESSAGE_SPEECH_RATES = [1, 2, 3, 4] as const;
 const RATE_STORAGE_KEY = "t3.message-speech-rate";
 
 function readSpeechNode(node: Root | RootContent): string {
@@ -80,7 +80,11 @@ export function speechChunks(text: string): string[] {
 }
 
 export class MessageSpeechPlayer {
-  private active: { owner: string; utterance: SpeechSynthesisUtterance | null } | null = null;
+  private active: {
+    owner: string;
+    utterance: SpeechSynthesisUtterance | null;
+    restartAtCurrentPosition: () => void;
+  } | null = null;
   private listeners = new Set<() => void>();
   private rate = 1;
   constructor(
@@ -104,7 +108,7 @@ export class MessageSpeechPlayer {
   getSnapshot = () => this.active?.owner ?? null;
   getRateSnapshot = () => this.rate;
   setRate = (rate: number) => {
-    if (!MESSAGE_SPEECH_RATES.some((choice) => choice === rate)) return;
+    if (!MESSAGE_SPEECH_RATES.some((choice) => choice === rate) || this.rate === rate) return;
     this.rate = rate;
     try {
       this.storage?.setItem(RATE_STORAGE_KEY, String(rate));
@@ -112,6 +116,7 @@ export class MessageSpeechPlayer {
       /* Keep this session's choice. */
     }
     this.listeners.forEach((listener) => listener());
+    this.active?.restartAtCurrentPosition();
   };
   stop = (owner?: string) => {
     if (!this.active || (owner !== undefined && this.active.owner !== owner)) return;
@@ -126,7 +131,11 @@ export class MessageSpeechPlayer {
     this.stop();
     const chunks = speechChunks(text);
     if (chunks.length === 0) return;
-    const session = { owner, utterance: null as SpeechSynthesisUtterance | null };
+    const session = {
+      owner,
+      utterance: null as SpeechSynthesisUtterance | null,
+      restartAtCurrentPosition: () => {},
+    };
     this.active = session;
     this.listeners.forEach((listener) => listener());
     const voices = this.synthesis.getVoices();
@@ -136,21 +145,30 @@ export class MessageSpeechPlayer {
         (voice) => voice.localService && voice.lang.split("-")[0] === language.split("-")[0],
       );
     let index = 0;
-    const next = () => {
-      if (this.active !== session) return;
-      const text = chunks[index++];
-      if (text === undefined) {
-        this.stop(owner);
-        return;
-      }
+    let currentChunk = "";
+    let currentOffset = 0;
+    const speakText = (text: string, offset: number) => {
       const utterance = this.createUtterance(text);
       session.utterance = utterance;
       utterance.lang = language;
       utterance.rate = this.rate;
       if (localVoice) utterance.voice = localVoice;
-      utterance.onend = next;
+      utterance.onboundary = (event) => {
+        if (this.active !== session || session.utterance !== utterance) return;
+        if (
+          Number.isFinite(event.charIndex) &&
+          event.charIndex >= 0 &&
+          event.charIndex <= text.length
+        ) {
+          currentOffset = Math.max(currentOffset, offset + event.charIndex);
+        }
+      };
+      utterance.onend = () => {
+        if (this.active !== session || session.utterance !== utterance) return;
+        next();
+      };
       utterance.onerror = () => {
-        if (this.active !== session) return;
+        if (this.active !== session || session.utterance !== utterance) return;
         this.stop(owner);
         onError();
       };
@@ -160,6 +178,25 @@ export class MessageSpeechPlayer {
         this.stop(owner);
         onError();
       }
+    };
+    const next = () => {
+      if (this.active !== session) return;
+      const text = chunks[index++];
+      if (text === undefined) {
+        this.stop(owner);
+        return;
+      }
+      currentChunk = text;
+      currentOffset = 0;
+      speakText(text, 0);
+    };
+    session.restartAtCurrentPosition = () => {
+      if (this.active !== session || !session.utterance) return;
+      const remaining = currentChunk.slice(currentOffset).trimStart();
+      session.utterance = null;
+      this.synthesis.cancel();
+      if (remaining) speakText(remaining, currentChunk.length - remaining.length);
+      else next();
     };
     next();
   }

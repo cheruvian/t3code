@@ -38,7 +38,7 @@ export function MessageSpeechRateControl() {
         }
       />
       <TooltipPopup>
-        Speech speed. Tap to switch between 1× and 2×; the next sentence uses the new speed.
+        Speech speed. Tap to cycle through 1×, 2×, 3×, and 4×. Active speech updates immediately.
       </TooltipPopup>
     </Tooltip>
   );

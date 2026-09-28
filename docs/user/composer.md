@@ -159,8 +159,8 @@ transcription API key is needed.
 
 Tap the circled play button beside the latest reply's copy and timestamp
 controls to hear it all. Tap again to stop. Starting another reply stops the
-current one. Tap the adjacent speed control to switch between 1× and 2×; the
-next sentence uses the new speed.
+current one. Tap the adjacent speed control to cycle through 1×, 2×, 3×, and
+4×. The speed changes during playback.
 
 For a shorter excerpt, tap the speaker beside a section to read just that block,
 or the play button to read from there to the end of the reply. The last block's

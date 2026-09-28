@@ -86,7 +86,7 @@ describe("message speech", () => {
     expect(error).toHaveBeenCalledOnce();
   });
 
-  it("applies a changed speed to the next sentence and remembers it for later playback", () => {
+  it("changes active speech from the last word boundary and remembers the speed", () => {
     const saved = new Map<string, string>();
     const storage = {
       getItem: (key: string) => saved.get(key) ?? null,
@@ -100,19 +100,34 @@ describe("message speech", () => {
       (text) => ({ text, onend: null, onerror: null }) as SpeechSynthesisUtterance,
       storage,
     );
-    player.play("reply", "First. Second.", "en-US", vi.fn());
+    player.play("reply", "First sentence. Second sentence.", "en-US", vi.fn());
     expect(spoken[0]!.rate).toBe(1);
-    player.setRate(2);
+    spoken[0]!.onboundary?.({ charIndex: 6 } as SpeechSynthesisEvent);
+    player.setRate(3);
+    expect(synthesis.cancel).toHaveBeenCalledOnce();
+    expect(player.getSnapshot()).toBe("reply");
+    expect(spoken[1]!.text).toBe("sentence.");
+    expect(spoken[1]!.rate).toBe(3);
     spoken[0]!.onend?.({} as SpeechSynthesisEvent);
-    expect(spoken[1]!.rate).toBe(2);
-    expect(player.getRateSnapshot()).toBe(2);
+    expect(spoken).toHaveLength(2);
+    spoken[1]!.onend?.({} as SpeechSynthesisEvent);
+    expect(spoken[2]!.text).toBe("Second sentence.");
+    expect(spoken[2]!.rate).toBe(3);
+
+    // Browsers without boundary events repeat only the current short chunk.
+    player.setRate(4);
+    expect(spoken[3]!.text).toBe("Second sentence.");
+    expect(spoken[3]!.rate).toBe(4);
+    expect(player.getRateSnapshot()).toBe(4);
+    spoken[3]!.onend?.({} as SpeechSynthesisEvent);
+    expect(player.getSnapshot()).toBeNull();
     expect(
       new MessageSpeechPlayer(
         synthesis,
         (text) => ({ text }) as SpeechSynthesisUtterance,
         storage,
       ).getRateSnapshot(),
-    ).toBe(2);
+    ).toBe(4);
   });
 
   it("keeps playback available when speed storage fails", () => {
