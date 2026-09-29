@@ -63,7 +63,7 @@ index 1a471aa..7233784 100644
  import * as Layer from "../../Layer.ts";
  import * as Queue from "../../Queue.ts";
  import * as Schedule from "../../Schedule.ts";
-@@ -280,9 +281,40 @@ export declare const layerProtocolWorker: (options: {
+@@ -280,9 +281,41 @@ export declare const layerProtocolWorker: (options: {
      readonly targetUtilization?: number | undefined;
      readonly timeToLive: Duration.Input;
  }) => Layer.Layer<Protocol, WorkerError, Worker.WorkerPlatform | Worker.Spawner>;
@@ -101,6 +101,7 @@ index 1a471aa..7233784 100644
 +    readonly onPing?: Effect.Effect<void> | undefined;
 +    readonly onPong?: Effect.Effect<void> | undefined;
 +    readonly onPingTimeout?: Effect.Effect<void> | undefined;
++    readonly missedPongLimit?: number | undefined;
  }>;
  /**
   * Represents optional client protocol hooks that run when a transport connects
@@ -315,7 +316,7 @@ index c586c60..49886d8 100644
 -    if (!recievedPong) return latch.open;
 +    if (!recievedPong) {
 +      missedPongs += 1;
-+      if (missedPongs >= 3) return latch.open;
++      if (missedPongs >= (hooks?.missedPongLimit ?? 3)) return latch.open;
 +      return (hooks?.onPing ?? Effect.void).pipe(Effect.andThen(writePing));
 +    }
      recievedPong = false;

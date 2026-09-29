@@ -11,6 +11,7 @@ import {
   backgroundActivityReporterLayer,
 } from "../lib/backgroundActivityReporter";
 import { connectionPlatformLayer } from "./platform";
+import { browserDeviceType } from "./clientMetadata";
 
 const providedConnectionPlatformLayer = connectionPlatformLayer.pipe(
   Layer.provide(runtimeContextLayer),
@@ -21,6 +22,15 @@ const snapshotLoaderLayer = Layer.mergeAll(
   shellSnapshotLoaderLayer,
   pullRequestDiffLoaderLayer,
 );
+
+const browserDeviceTypeValue =
+  typeof navigator === "undefined"
+    ? "unknown"
+    : browserDeviceType({
+        userAgent: navigator.userAgent,
+        platform: navigator.platform,
+        maxTouchPoints: navigator.maxTouchPoints,
+      });
 
 type ConnectionLayerSource =
   | typeof Connection.layer
@@ -36,6 +46,9 @@ const providedClientConnectionLayer = snapshotLoaderLayer.pipe(
       environmentThemes: true,
       usageLimitSources: true,
       usageLimitsCommand: true,
+      ...(browserDeviceTypeValue === "mobile" || browserDeviceTypeValue === "tablet"
+        ? { missedPongLimit: 5 }
+        : {}),
     }),
   ),
   Layer.provideMerge(

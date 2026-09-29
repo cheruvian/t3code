@@ -78,14 +78,21 @@ const connectivityLayer = Connectivity.layer({
       Effect.sync(() => {
         const online = () => Queue.offerUnsafe(queue, "online");
         const offline = () => Queue.offerUnsafe(queue, "offline");
+        const visible = () => {
+          if (document.visibilityState === "visible") {
+            Queue.offerUnsafe(queue, currentNetworkStatus());
+          }
+        };
         window.addEventListener("online", online);
         window.addEventListener("offline", offline);
-        return { online, offline };
+        document.addEventListener("visibilitychange", visible);
+        return { online, offline, visible };
       }),
-      ({ online, offline }) =>
+      ({ online, offline, visible }) =>
         Effect.sync(() => {
           window.removeEventListener("online", online);
           window.removeEventListener("offline", offline);
+          document.removeEventListener("visibilitychange", visible);
         }),
     ).pipe(Effect.asVoid),
   ),
@@ -93,12 +100,24 @@ const connectivityLayer = Connectivity.layer({
 
 const wakeupsLayer = Wakeups.layer({
   changes: Stream.merge(
-    Stream.callback<"application-active">((queue) =>
+    Stream.callback<"application-active" | "application-active-reconnect">((queue) =>
       Effect.acquireRelease(
         Effect.sync(() => {
+          const client = clientMetadata();
+          const isIosWeb = client.surface === "web" && client.os === "iOS";
+          let hiddenAtMs: number | null = null;
           const listener = () => {
-            if (document.visibilityState === "visible") {
-              Queue.offerUnsafe(queue, "application-active");
+            if (document.visibilityState === "hidden") {
+              hiddenAtMs = Date.now();
+            } else if (document.visibilityState === "visible") {
+              // iOS can suspend a socket without delivering its close event.
+              Queue.offerUnsafe(
+                queue,
+                isIosWeb && hiddenAtMs !== null && Date.now() - hiddenAtMs >= 10_000
+                  ? "application-active-reconnect"
+                  : "application-active",
+              );
+              hiddenAtMs = null;
             }
           };
           document.addEventListener("visibilitychange", listener);

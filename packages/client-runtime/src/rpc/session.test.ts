@@ -1089,32 +1089,34 @@ describe("RpcSessionFactory", () => {
     }),
   );
 
-  it.effect("tolerates two missed pong windows before closing the session", () =>
-    Effect.gen(function* () {
-      const { factory, sockets } = yield* makeFactory();
-      const session = yield* factory.connect(PREPARED);
-      const readyFiber = yield* Effect.forkChild(session.ready);
-      const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
-      const socket = yield* awaitSocket(sockets);
+  for (const missedPongLimit of [undefined, 5] as const) {
+    it.effect(`closes after the ${missedPongLimit ?? 3}-window missed pong limit`, () =>
+      Effect.gen(function* () {
+        const { factory, sockets } = yield* makeFactory(
+          missedPongLimit === undefined ? {} : { missedPongLimit },
+        );
+        const session = yield* factory.connect(PREPARED);
+        const readyFiber = yield* Effect.forkChild(session.ready);
+        const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
+        const socket = yield* awaitSocket(sockets);
 
-      socket.open();
-      yield* completeInitialConfig(socket);
-      yield* Fiber.join(readyFiber);
+        socket.open();
+        yield* completeInitialConfig(socket);
+        yield* Fiber.join(readyFiber);
 
-      yield* TestClock.adjust("15 seconds");
-      expect(closedFiber.pollUnsafe()).toBeUndefined();
-      expect(socket.sent.map((message) => decodeJson(message)).filter(isPing)).toEqual([
-        { _tag: "Ping" },
-        { _tag: "Ping" },
-        { _tag: "Ping" },
-      ]);
+        yield* TestClock.adjust((missedPongLimit ?? 3) * 5_000);
+        expect(closedFiber.pollUnsafe()).toBeUndefined();
+        expect(socket.sent.map((message) => decodeJson(message)).filter(isPing)).toEqual(
+          Array.from({ length: missedPongLimit ?? 3 }, () => ({ _tag: "Ping" })),
+        );
 
-      yield* TestClock.adjust("5 seconds");
-      const error = yield* Fiber.join(closedFiber);
-      expect(error).toBeInstanceOf(ConnectionTransientError);
-      expect(error).toMatchObject({ reason: "transport" });
-    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
-  );
+        yield* TestClock.adjust("5 seconds");
+        const error = yield* Fiber.join(closedFiber);
+        expect(error).toBeInstanceOf(ConnectionTransientError);
+        expect(error).toMatchObject({ reason: "transport" });
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    );
+  }
 
   it.effect("reaches ready when a newer server sends unknown config members", () =>
     Effect.gen(function* () {

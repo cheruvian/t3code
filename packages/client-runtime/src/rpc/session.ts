@@ -60,6 +60,7 @@ export interface RpcSessionOptions {
   readonly usageLimitSources?: boolean;
   /** This client answers /usage-limits itself, so the server may advertise it. */
   readonly usageLimitsCommand?: boolean;
+  readonly missedPongLimit?: number;
 }
 
 export class RpcSessionFactory extends Context.Service<
@@ -171,6 +172,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     const connected = yield* Deferred.make<void>();
     const disconnected = yield* Deferred.make<never, ConnectionTransientError>();
     const hooks = RpcClient.ConnectionHooks.of({
+      missedPongLimit: options.missedPongLimit,
       onConnect: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
       onDisconnect: Deferred.isDone(connected).pipe(
         Effect.flatMap((wasConnected) =>

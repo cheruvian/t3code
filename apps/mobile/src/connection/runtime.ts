@@ -32,7 +32,11 @@ type ConnectionLayerSource =
 
 const providedClientConnectionLayer = snapshotLoaderLayer.pipe(
   Layer.provideMerge(
-    Connection.layerWithOptions({ usageLimitSources: true, usageLimitsCommand: true }),
+    Connection.layerWithOptions({
+      usageLimitSources: true,
+      usageLimitsCommand: true,
+      missedPongLimit: 5,
+    }),
   ),
   Layer.provideMerge(
     Layer.mergeAll(
