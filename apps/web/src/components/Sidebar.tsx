@@ -1744,11 +1744,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             {props.project ? (
               <span className="relative isolate inline-flex size-4 shrink-0 items-center justify-center">
                 <span
-                  aria-label={topStatus?.label ?? "Ready"}
-                  className={cn("absolute -inset-0.5 rounded-full", compactStatusDotClassName)}
-                  role="img"
-                />
-                <span
                   className={cn(
                     "relative transition-opacity",
                     (!props.isActive || variantAction === "unsettle") &&
@@ -1757,6 +1752,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 >
                   <ProjectFavicon project={props.project} className="size-4" />
                 </span>
+                <span
+                  aria-label={topStatus?.label ?? "Ready"}
+                  className={cn(
+                    "absolute right-0 bottom-0 z-10 size-1.5 rounded-full",
+                    compactStatusDotClassName,
+                  )}
+                  style={{ boxShadow: "0 0 0 1px var(--sidebar)" }}
+                  role="img"
+                />
               </span>
             ) : (
               <span
@@ -1773,9 +1777,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   providerEntry?.displayName ?? thread.session?.providerName ?? modelInstanceId
                 }
                 accentColor={providerEntry?.accentColor}
-                showBadge={showInstanceBadge}
-                iconClassName="size-3.5 opacity-60"
-                badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-5xs"
+                iconStyle={{
+                  fill: providerEntry?.accentColor ?? "currentColor",
+                  color: providerEntry?.accentColor ?? "currentColor",
+                }}
+                iconClassName={cn(
+                  "size-3.5 transition-opacity",
+                  props.isActive
+                    ? "opacity-75"
+                    : "opacity-45 group-focus-within/sidebar-row:opacity-75 group-hover/sidebar-row:opacity-75",
+                )}
               />
             ) : null}
             {title}
