@@ -204,7 +204,7 @@ import {
   sidebarMarkerId,
   sortInboxThreadsByReturn,
   sortPinnedThreadsForSidebar,
-  sortLogicalProjectsForSidebar,
+  sortSidebarV2ProjectGroups,
   sortThreadsForSidebar,
   useThreadJumpHintVisibility,
   useRetainedValue,
@@ -2602,11 +2602,7 @@ export default function Sidebar() {
   );
   const projectGroups = useMemo(
     () =>
-      sortLogicalProjectsForSidebar(
-        unsortedProjectGroups,
-        orderingThreads,
-        sidebarProjectSortOrder,
-      ),
+      sortSidebarV2ProjectGroups(unsortedProjectGroups, orderingThreads, sidebarProjectSortOrder),
     [orderingThreads, sidebarProjectSortOrder, unsortedProjectGroups],
   );
   const projectGroupsRef = useRef(projectGroups);

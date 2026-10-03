@@ -234,7 +234,6 @@ import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
-import { loadServerConfig } from "./serverConfigSnapshot.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import {
   sameUsageLimitCommandCoverage,
@@ -1611,7 +1610,7 @@ const makeWsRpcLayer = (
           ),
         );
 
-      const loadClientServerConfig = (options: { readonly usageLimitsCommand: boolean }) =>
+      const loadServerConfig = (options: { readonly usageLimitsCommand: boolean }) =>
         Effect.gen(function* () {
           const keybindingsConfig = yield* keybindings.loadConfigState;
           const currentProviders = yield* providerRegistry.getProviders;
@@ -2028,7 +2027,7 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverGetConfig]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverGetConfig,
-            loadClientServerConfig({ usageLimitsCommand: false }),
+            loadServerConfig({ usageLimitsCommand: false }),
             {
               "rpc.aggregate": "server",
             },
@@ -3579,7 +3578,7 @@ const makeWsRpcLayer = (
             WS_METHODS.subscribeServerConfig,
             Effect.gen(function* () {
               const usageLimitsCommand = input.usageLimitsCommand === true;
-              const config = yield* loadClientServerConfig({ usageLimitsCommand });
+              const config = yield* loadServerConfig({ usageLimitsCommand });
               const keybindingsUpdates = keybindings.streamChanges.pipe(
                 Stream.map((event) => ({
                   version: 1 as const,
