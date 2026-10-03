@@ -1,0 +1,372 @@
+import {
+  type CommandId,
+  type EventId,
+  MAX_SCRIPT_ID_LENGTH,
+  type ModelSelection,
+  type ProjectIconOverride,
+  ProjectId,
+  type ProjectScript,
+  type ProjectResourceRequest,
+  type ProjectResourceLock,
+  type OrchestrationV2ThreadShell,
+  SCRIPT_RUN_COMMAND_PATTERN,
+  type ThreadEnvMode,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
+
+import type { UnsequencedProjectEvent } from "../persistence/Services/OrchestrationEventStore.ts";
+import type { ProjectRow } from "./ProjectStore.ts";
+
+export interface ProjectCreateCommand {
+  readonly type: "project.create";
+  readonly commandId: CommandId;
+  readonly projectId: ProjectId;
+  readonly title: string;
+  readonly workspaceRoot: string;
+  readonly scripts?: ReadonlyArray<ProjectScript>;
+  readonly disabledInheritedScriptIds?: ReadonlyArray<string>;
+}
+
+export interface ProjectMetaUpdateCommand {
+  readonly type: "project.meta.update";
+  readonly commandId: CommandId;
+  readonly projectId: ProjectId;
+  readonly title?: string;
+  readonly workspaceRoot?: string;
+  readonly defaultModelSelection?: ModelSelection | null;
+  readonly defaultThreadEnvMode?: ThreadEnvMode | null;
+  readonly autoPull?: boolean;
+  readonly faviconPath?: string | null;
+  readonly projectIcon?: ProjectIconOverride | null;
+  readonly scripts?: ReadonlyArray<ProjectScript>;
+  readonly disabledInheritedScriptIds?: ReadonlyArray<string>;
+}
+
+export interface ProjectDeleteCommand {
+  readonly type: "project.delete";
+  readonly commandId: CommandId;
+  readonly projectId: ProjectId;
+}
+
+export interface ProjectResourceCompleteCommand {
+  readonly type: "project.resource.complete";
+  readonly commandId: CommandId;
+  readonly projectId: ProjectId;
+  readonly operationId: CommandId;
+  readonly error?: string;
+}
+export type ProjectCommand =
+  | ProjectCreateCommand
+  | ProjectMetaUpdateCommand
+  | ProjectDeleteCommand
+  | (ProjectResourceRequest & { readonly type: "project.resource.request" })
+  | ProjectResourceCompleteCommand;
+
+export class ProjectCommandInvariantError extends Schema.TaggedError<ProjectCommandInvariantError>()(
+  "ProjectCommandInvariantError",
+  {
+    commandType: Schema.String,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Project command invariant failed (${this.commandType}): ${this.detail}`;
+  }
+}
+
+/** The command targets a project that does not exist or was deleted. */
+export class ProjectCommandMissingProjectError extends Schema.TaggedError<ProjectCommandMissingProjectError>()(
+  "ProjectCommandMissingProjectError",
+  {
+    commandType: Schema.String,
+    projectId: ProjectId,
+  },
+) {
+  override get message(): string {
+    return `Project '${this.projectId}' does not exist for command '${this.commandType}'.`;
+  }
+}
+
+export class ProjectWorkspaceConflictError extends Schema.TaggedError<ProjectWorkspaceConflictError>()(
+  "ProjectWorkspaceConflictError",
+  {
+    workspaceRoot: Schema.String,
+    conflictingProjectId: ProjectId,
+  },
+) {
+  override get message(): string {
+    return `Active project '${this.conflictingProjectId}' already exists for workspace root '${this.workspaceRoot}'.`;
+  }
+}
+
+export const ProjectCommandRejection = Schema.Union([
+  ProjectCommandInvariantError,
+  ProjectCommandMissingProjectError,
+  ProjectWorkspaceConflictError,
+]);
+export type ProjectCommandRejection = typeof ProjectCommandRejection.Type;
+
+const ProjectCommandRejectionJson = Schema.fromJsonString(ProjectCommandRejection);
+/**
+ * A rejected receipt stores its rejection as JSON, so a retried command id
+ * replays the same typed error even when a fresh plan would now succeed.
+ */
+export const encodeProjectCommandRejection = Schema.encodeSync(ProjectCommandRejectionJson);
+/** None for receipts that predate structured rejections. */
+export const decodeProjectCommandRejection = Schema.decodeUnknownOption(
+  ProjectCommandRejectionJson,
+);
+
+export interface ProjectCommandState {
+  readonly resourceThread?: OrchestrationV2ThreadShell | null;
+  /** The target project's row, including a soft-deleted one; only create sees deleted rows as taken. */
+  readonly project: ProjectRow | undefined;
+  /** The active project that holds the command's requested workspace root, if any. */
+  readonly workspaceOwner: ProjectRow | undefined;
+}
+
+const monogramSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const isScriptRunCommand = Schema.is(SCRIPT_RUN_COMMAND_PATTERN);
+
+/**
+ * Decide one project command against the rows it touches. The caller reads
+ * `state` under the project's lock and commits the planned event.
+ */
+export function planProjectCommand(input: {
+  readonly command: ProjectCommand;
+  readonly state: ProjectCommandState;
+  readonly eventId: EventId;
+  readonly now: DateTime.Utc;
+}): Result.Result<UnsequencedProjectEvent, ProjectCommandRejection> {
+  const { command, state } = input;
+  const invariant = (detail: string) =>
+    Result.fail(new ProjectCommandInvariantError({ commandType: command.type, detail }));
+  const missingProject = () =>
+    Result.fail(
+      new ProjectCommandMissingProjectError({
+        commandType: command.type,
+        projectId: command.projectId,
+      }),
+    );
+  const activeProject = state.project?.deletedAt === null ? state.project : undefined;
+  const requireWorkspaceAvailable = (workspaceRoot: string) =>
+    state.workspaceOwner === undefined || state.workspaceOwner.projectId === command.projectId
+      ? undefined
+      : new ProjectWorkspaceConflictError({
+          workspaceRoot,
+          conflictingProjectId: state.workspaceOwner.projectId,
+        });
+  const occurredAt = DateTime.formatIso(input.now);
+  const base = {
+    eventId: input.eventId,
+    aggregateKind: "project" as const,
+    aggregateId: command.projectId,
+    occurredAt,
+    commandId: command.commandId,
+    causationEventId: null,
+    correlationId: command.commandId,
+    metadata: {},
+  };
+
+  switch (command.type) {
+    case "project.create": {
+      if (state.project !== undefined) {
+        return invariant(
+          `Project '${command.projectId}' already exists and cannot be created twice.`,
+        );
+      }
+      const conflict = requireWorkspaceAvailable(command.workspaceRoot);
+      if (conflict !== undefined) return Result.fail(conflict);
+      return Result.succeed({
+        ...base,
+        type: "project.created",
+        payload: {
+          projectId: command.projectId,
+          title: command.title,
+          workspaceRoot: command.workspaceRoot,
+          // Project creation has no user model choice. Older clients sent an
+          // automatic seed, but only a metadata update records an explicit default.
+          defaultModelSelection: null,
+          faviconPath: null,
+          projectIcon: null,
+          scripts: command.scripts ?? [],
+          disabledInheritedScriptIds: command.disabledInheritedScriptIds ?? [],
+          createdAt: occurredAt,
+          updatedAt: occurredAt,
+        },
+      });
+    }
+
+    case "project.meta.update": {
+      const project = activeProject;
+      if (project === undefined) return missingProject();
+      if (
+        command.projectIcon?.kind === "monogram" &&
+        Array.from(monogramSegmenter.segment(command.projectIcon.text)).length > 2
+      ) {
+        return invariant("Project monograms must contain at most two characters.");
+      }
+      if (command.scripts !== undefined) {
+        // Persisted IDs predate shortcut validation. Let users edit or remove them
+        // without allowing another invalid ID to enter the project.
+        const existingIds = new Set(project.scripts.map((script) => script.id));
+        for (const script of command.scripts) {
+          if (!existingIds.has(script.id) && !isScriptRunCommand(`script.${script.id}.run`)) {
+            // The raw ID is unbounded user input and this detail is persisted.
+            return invariant(
+              `Script IDs must be 1-${MAX_SCRIPT_ID_LENGTH} lowercase letters, digits or hyphens, starting with a letter or digit (got ${script.id.length} characters).`,
+            );
+          }
+        }
+      }
+      if (command.workspaceRoot !== undefined) {
+        const conflict = requireWorkspaceAvailable(command.workspaceRoot);
+        if (conflict !== undefined) return Result.fail(conflict);
+      }
+      return Result.succeed({
+        ...base,
+        type: "project.meta-updated",
+        payload: {
+          projectId: command.projectId,
+          ...(command.title === undefined ? {} : { title: command.title }),
+          ...(command.workspaceRoot === undefined ? {} : { workspaceRoot: command.workspaceRoot }),
+          ...(command.defaultModelSelection === undefined
+            ? {}
+            : { defaultModelSelection: command.defaultModelSelection }),
+          ...(command.defaultThreadEnvMode === undefined
+            ? {}
+            : { defaultThreadEnvMode: command.defaultThreadEnvMode }),
+          ...(command.autoPull === undefined ? {} : { autoPull: command.autoPull }),
+          ...(command.faviconPath === undefined ? {} : { faviconPath: command.faviconPath }),
+          ...(command.projectIcon === undefined ? {} : { projectIcon: command.projectIcon }),
+          ...(command.scripts === undefined ? {} : { scripts: command.scripts }),
+          ...(command.disabledInheritedScriptIds === undefined
+            ? {}
+            : { disabledInheritedScriptIds: command.disabledInheritedScriptIds }),
+          updatedAt: occurredAt,
+        },
+      });
+    }
+
+    case "project.resource.request": {
+      if (activeProject === undefined) return missingProject();
+      const thread = state.resourceThread;
+      if (!thread || thread.deletedAt !== null || thread.projectId !== command.projectId)
+        return invariant("Resource actions require an active thread in this project.");
+      if (!command.script.resource) return invariant("This action is not a resource.");
+      const locks = activeProject.resourceLocks ?? [];
+      const current = locks.find((lock) => lock.script.id === command.script.id);
+      const changed = () => invariant("Resource ownership changed. Confirm takeover again.");
+      if (
+        command.action === "force-release" &&
+        command.expectedOperationId !== undefined &&
+        current?.operationId !== command.expectedOperationId
+      )
+        return changed();
+      if (
+        command.action === "takeover" &&
+        (!current ||
+          current.threadId === thread.id ||
+          current.operationId !== command.expectedOperationId)
+      )
+        return changed();
+      if (
+        current &&
+        current.threadId !== thread.id &&
+        command.action !== "force-release" &&
+        command.action !== "takeover"
+      )
+        return invariant(`Resource is held by thread '${current.threadId}'.`);
+      let next: ReadonlyArray<ProjectResourceLock>;
+      if (command.action === "abort") {
+        if (
+          !current ||
+          current.operationId !== command.expectedOperationId ||
+          (current.phase !== "checkout" && current.phase !== "release")
+        )
+          return invariant("Resource operation has already finished or changed.");
+        next = locks.map((lock) => (lock === current ? { ...lock, cancelRequested: true } : lock));
+      } else {
+        if (current && (current.phase === "checkout" || current.phase === "release"))
+          return invariant("Resource hooks are still running.");
+        if (command.action === "checkout" && current && current.phase !== "failed")
+          return invariant("This thread already holds the resource.");
+        if (command.action !== "checkout" && !current)
+          return invariant("Resource is already available.");
+        const releaseWithoutHooks =
+          command.action === "release" &&
+          current?.script.resource !== undefined &&
+          !current.script.resource.releaseCommand.trim() &&
+          !current.script.resource.releasePrompt.trim();
+        if (
+          command.action !== "force-release" &&
+          !releaseWithoutHooks &&
+          (thread.activeRunId !== null ||
+            thread.status === "preparing" ||
+            thread.status === "starting" ||
+            locks.some(
+              (lock) =>
+                lock.threadId === thread.id &&
+                (lock.phase === "checkout" || lock.phase === "release"),
+            ))
+        )
+          return invariant(
+            "Wait for this thread's current work to finish before running resource hooks.",
+          );
+        const remaining = locks.filter((lock) => lock.script.id !== command.script.id);
+        next =
+          command.action === "force-release"
+            ? remaining
+            : [
+                ...remaining,
+                {
+                  script:
+                    command.action === "checkout" || command.action === "takeover"
+                      ? command.script
+                      : (current?.script ?? command.script),
+                  threadId: thread.id,
+                  operationId: command.commandId,
+                  phase: command.action === "takeover" ? "checkout" : command.action,
+                },
+              ];
+      }
+      return Result.succeed({
+        ...base,
+        type: "project.meta-updated",
+        payload: { projectId: command.projectId, resourceLocks: next, updatedAt: occurredAt },
+      });
+    }
+    case "project.resource.complete": {
+      if (activeProject === undefined) return missingProject();
+      const locks = activeProject.resourceLocks ?? [];
+      const current = locks.find(
+        (lock) =>
+          lock.operationId === command.operationId &&
+          (lock.phase === "checkout" || lock.phase === "release"),
+      );
+      const next = current === undefined ? [...locks] : locks.filter((lock) => lock !== current);
+      if (current && command.error !== undefined)
+        next.push({ ...current, phase: "failed", error: command.error });
+      else if (current?.phase === "checkout") next.push({ ...current, phase: "held" });
+      return Result.succeed({
+        ...base,
+        type: "project.meta-updated",
+        payload: { projectId: command.projectId, resourceLocks: next, updatedAt: occurredAt },
+      });
+    }
+
+    case "project.delete": {
+      if (activeProject === undefined) return missingProject();
+      if ((activeProject.resourceLocks?.length ?? 0) > 0)
+        return invariant("Release the project's resources before deleting it.");
+      // Thread children are deleted by ProjectService before this event commits.
+      return Result.succeed({
+        ...base,
+        type: "project.deleted",
+        payload: { projectId: command.projectId, deletedAt: occurredAt },
+      });
+    }
+  }
+}

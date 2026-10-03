@@ -20,13 +20,13 @@ import {
   createEnvironmentSubscriptionAtomFamily,
 } from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
-import { EnvironmentSupervisor } from "../connection/supervisor.ts";
+import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
-import { EnvironmentCacheStore } from "../platform/persistence.ts";
+import * as Persistence from "../platform/persistence.ts";
 import {
-  EnvironmentRpcUnavailableError,
   request,
   subscribe,
+  EnvironmentRpcUnavailableError,
   type EnvironmentRpcFailure,
   type EnvironmentRpcInput,
 } from "../rpc/client.ts";
@@ -104,7 +104,7 @@ function canPersistVcsRefsCache(input: VcsListRefsInput): boolean {
 
 export const commitVcsRefsRefresh = Effect.fn("CachedVcsRefsState.commitRefresh")(function* (
   registry: AtomRegistry.AtomRegistry,
-  cache: EnvironmentCacheStore["Service"],
+  cache: Persistence.EnvironmentCacheStore["Service"],
   input: {
     readonly environmentId: EnvironmentId;
     readonly cwd: string;
@@ -176,8 +176,8 @@ export const makeCachedVcsRefsChanges = Effect.fn("CachedVcsRefsState.makeChange
   onRefreshFailure: VcsListRefsFailureHandler = () => Effect.void,
 ) {
   const input = normalizeVcsListRefsInput(rawInput);
-  const supervisor = yield* EnvironmentSupervisor;
-  const cache = yield* EnvironmentCacheStore;
+  const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+  const cache = yield* Persistence.EnvironmentCacheStore;
   const environmentId = supervisor.target.environmentId;
   const persistCache = canPersistVcsRefsCache(input);
   const readCache = persistCache && input.refresh !== true;
@@ -198,7 +198,7 @@ export const makeCachedVcsRefsChanges = Effect.fn("CachedVcsRefsState.makeChange
       : Option.none<VcsListRefsResult>();
   const refresh = Effect.fn("CachedVcsRefsState.refresh")(function* () {
     const refs = yield* request(WS_METHODS.vcsListRefs, input).pipe(
-      Effect.provideService(EnvironmentSupervisor, supervisor),
+      Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
     );
     const persist = cache.saveVcsRefs(environmentId, input.cwd, refs).pipe(
       Effect.catch((error) =>
@@ -294,7 +294,7 @@ function cachedVcsRefsChanges(
 }
 
 export function createVcsEnvironmentAtoms<R, E>(
-  runtime: Atom.AtomRuntime<EnvironmentRegistry | EnvironmentCacheStore | R, E>,
+  runtime: Atom.AtomRuntime<EnvironmentRegistry | Persistence.EnvironmentCacheStore | R, E>,
 ) {
   /**
    * One flat family on purpose: families hold entries via WeakRef, so a nested

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { resourceActionLogs, formatResourceActionLog } from "@t3tools/shared/resourceActions";
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
+import type { OrchestrationV2TurnItem } from "@t3tools/contracts";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "./ui/dialog";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "./ui/tooltip";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
@@ -12,14 +12,14 @@ import { Button } from "./ui/button";
 export function ThreadResources({
   project,
   threadId,
-  activities = [],
+  turnItems = [],
 }: {
   project: EnvironmentProject;
   threadId: ThreadId;
-  activities?: readonly OrchestrationThreadActivity[];
+  turnItems?: readonly OrchestrationV2TurnItem[];
 }) {
   const [logsOpen, setLogsOpen] = useState(false);
-  const logs = useMemo(() => resourceActionLogs(activities), [activities]);
+  const logs = useMemo(() => resourceActionLogs(turnItems), [turnItems]);
   const request = useAtomCommand(projectEnvironment.resource);
   const locks = (project.resourceLocks ?? []).filter((lock) => lock.threadId === threadId);
   if (locks.length === 0 && logs.length === 0) return null;

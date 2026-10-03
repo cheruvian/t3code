@@ -5,7 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import { Command, Flag } from "effect/unstable/cli";
 
-import { withEnvironmentRpc } from "../orchestration/bootstrapRpcClient.ts";
+import { withEnvironmentRpc } from "../orchestration-v2/bootstrapRpcClient.ts";
 import { projectLocationFlags } from "./config.ts";
 import { encodeCliJson, withLocalEnvironment } from "./environment.ts";
 

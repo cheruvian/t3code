@@ -3,10 +3,14 @@ import {
   AgentApiCallError,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
-  ClientOrchestrationCommand,
-  ORCHESTRATION_WS_METHODS,
-  OrchestrationRpcSchemas,
-  OrchestrationThreadDetailSnapshot,
+  Project,
+  ProjectMutation,
+  OrchestrationSearchThreadsInput,
+  OrchestrationSearchThreadsResult,
+  ORCHESTRATION_V2_WS_METHODS,
+  OrchestrationV2RpcSchemas,
+  OrchestrationV2ShellSnapshot,
+  OrchestrationV2ThreadProjection,
   ProjectListEntriesInput,
   ProjectListEntriesResult,
   ProjectReadFileInput,
@@ -29,19 +33,14 @@ import {
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as Result from "effect/Result";
 
 import * as EnvironmentAuth from "../../../auth/EnvironmentAuth.ts";
 import * as CheckpointDiffQuery from "../../../checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as Keybindings from "../../../keybindings.ts";
-import { projectThreadDetailSnapshot } from "../../../orchestration/ActivityPayloadProjection.ts";
-import { dispatchBootstrapRpc } from "../../../orchestration/bootstrapRpcClient.ts";
-import {
-  cleanupFailedUploadedAttachments,
-  normalizeDispatchCommand,
-} from "../../../orchestration/Normalizer.ts";
-import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
-import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { withEnvironmentRpc } from "../../../orchestration-v2/bootstrapRpcClient.ts";
 import { loadServerConfig } from "../../../serverConfigSnapshot.ts";
 import { readPersistedServerRuntimeState } from "../../../serverRuntimeState.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
@@ -100,6 +99,34 @@ const makeRunner = <I extends Schema.Top, O extends Schema.Top, E, R>(
       Effect.flatMap((result) => encode(result).pipe(Effect.orDie)),
     );
 };
+
+// Use the live dispatcher so helper mutations share startup gating, attachment
+// intake, worktree preparation, and event delivery with connected clients.
+const withLiveRpc = <A, E, R>(
+  operation: string,
+  run: Parameters<typeof withEnvironmentRpc<A, E, R>>[1],
+) =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    const runtime = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+    if (Option.isNone(runtime)) {
+      return yield* new AgentApiCallError({
+        operation,
+        reason: "unavailable",
+        message: "The running T3 Code server is required for orchestration operations.",
+      });
+    }
+    const auth = yield* EnvironmentAuth.EnvironmentAuth;
+    return yield* Effect.acquireUseRelease(
+      auth.issueSession({
+        scopes: [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+        label: "t3 helper API bridge",
+      }),
+      (issued) =>
+        withEnvironmentRpc({ origin: runtime.value.origin, sessionId: issued.sessionId }, run),
+      (issued) => auth.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
+    );
+  });
 
 const runners = {
   [WS_METHODS.serverGetConfig]: makeRunner(
@@ -195,101 +222,103 @@ const runners = {
         workspaceFileSystem.writeFile(input),
       ),
   ),
-  [ORCHESTRATION_WS_METHODS.dispatchCommand]: makeRunner(
-    ORCHESTRATION_WS_METHODS.dispatchCommand,
-    ClientOrchestrationCommand,
-    OrchestrationRpcSchemas.dispatchCommand.output,
-    (command) =>
-      Effect.gen(function* () {
-        if (command.type === "thread.turn.start" && command.bootstrap) {
-          const config = yield* ServerConfig.ServerConfig;
-          const runtime = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
-          if (Option.isNone(runtime)) {
-            return yield* new AgentApiCallError({
-              operation: ORCHESTRATION_WS_METHODS.dispatchCommand,
-              reason: "unavailable",
-              message: "The running T3 Code server is required to prepare a worktree.",
-            });
-          }
-          const auth = yield* EnvironmentAuth.EnvironmentAuth;
-          return yield* Effect.acquireUseRelease(
-            auth.issueSession({
-              scopes: [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
-              label: "t3 helper worktree bootstrap",
-            }),
-            (issued) =>
-              dispatchBootstrapRpc({
-                origin: runtime.value.origin,
-                sessionId: issued.sessionId,
-                command,
-              }).pipe(Effect.map(({ dispatch }) => dispatch)),
-            (issued) => auth.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
-          );
-        }
-        const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
-        const normalizedCommand = yield* normalizeDispatchCommand(command);
-        return yield* orchestrationEngine
-          .dispatch(normalizedCommand)
-          .pipe(
-            Effect.tapError(() => cleanupFailedUploadedAttachments(command, normalizedCommand)),
-          );
-      }),
+  [WS_METHODS.projectsMutate]: makeRunner(
+    WS_METHODS.projectsMutate,
+    ProjectMutation,
+    Project,
+    (input) =>
+      withLiveRpc(WS_METHODS.projectsMutate, (rpc) => rpc[WS_METHODS.projectsMutate](input)),
   ),
-  [ORCHESTRATION_WS_METHODS.getTurnDiff]: makeRunner(
-    ORCHESTRATION_WS_METHODS.getTurnDiff,
-    OrchestrationRpcSchemas.getTurnDiff.input,
-    OrchestrationRpcSchemas.getTurnDiff.output,
+  [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: makeRunner(
+    ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
+    OrchestrationV2RpcSchemas.dispatchCommand.input,
+    OrchestrationV2RpcSchemas.dispatchCommand.output,
+    (input) =>
+      withLiveRpc(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, (rpc) =>
+        rpc[ORCHESTRATION_V2_WS_METHODS.dispatchCommand](input),
+      ),
+  ),
+  [ORCHESTRATION_V2_WS_METHODS.launchThread]: makeRunner(
+    ORCHESTRATION_V2_WS_METHODS.launchThread,
+    OrchestrationV2RpcSchemas.launchThread.input,
+    OrchestrationV2RpcSchemas.launchThread.output,
+    (input) =>
+      withLiveRpc(ORCHESTRATION_V2_WS_METHODS.launchThread, (rpc) =>
+        rpc[ORCHESTRATION_V2_WS_METHODS.launchThread](input),
+      ),
+  ),
+  [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: makeRunner(
+    ORCHESTRATION_V2_WS_METHODS.getThreadProjection,
+    OrchestrationV2RpcSchemas.getThreadProjection.input,
+    OrchestrationV2RpcSchemas.getThreadProjection.output,
+    (input) =>
+      withLiveRpc(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, (rpc) =>
+        rpc[ORCHESTRATION_V2_WS_METHODS.getThreadProjection](input),
+      ),
+  ),
+  [ORCHESTRATION_V2_WS_METHODS.getTurnDiff]: makeRunner(
+    ORCHESTRATION_V2_WS_METHODS.getTurnDiff,
+    OrchestrationV2RpcSchemas.getTurnDiff.input,
+    OrchestrationV2RpcSchemas.getTurnDiff.output,
     (input) =>
       Effect.flatMap(CheckpointDiffQuery.CheckpointDiffQuery, (checkpointDiffQuery) =>
         checkpointDiffQuery.getTurnDiff(input),
       ),
   ),
-  [ORCHESTRATION_WS_METHODS.getFullThreadDiff]: makeRunner(
-    ORCHESTRATION_WS_METHODS.getFullThreadDiff,
-    OrchestrationRpcSchemas.getFullThreadDiff.input,
-    OrchestrationRpcSchemas.getFullThreadDiff.output,
+  [ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff]: makeRunner(
+    ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff,
+    OrchestrationV2RpcSchemas.getFullThreadDiff.input,
+    OrchestrationV2RpcSchemas.getFullThreadDiff.output,
     (input) =>
       Effect.flatMap(CheckpointDiffQuery.CheckpointDiffQuery, (checkpointDiffQuery) =>
         checkpointDiffQuery.getFullThreadDiff(input),
       ),
   ),
-  [ORCHESTRATION_WS_METHODS.searchThreads]: makeRunner(
-    ORCHESTRATION_WS_METHODS.searchThreads,
-    OrchestrationRpcSchemas.searchThreads.input,
-    OrchestrationRpcSchemas.searchThreads.output,
+  [ORCHESTRATION_V2_WS_METHODS.searchThreads]: makeRunner(
+    ORCHESTRATION_V2_WS_METHODS.searchThreads,
+    OrchestrationSearchThreadsInput,
+    OrchestrationSearchThreadsResult,
     (input) =>
-      Effect.flatMap(ProjectionSnapshotQuery.ProjectionSnapshotQuery, (projectionSnapshotQuery) =>
-        projectionSnapshotQuery.searchThreads(input),
+      withLiveRpc(ORCHESTRATION_V2_WS_METHODS.searchThreads, (rpc) =>
+        rpc[ORCHESTRATION_V2_WS_METHODS.searchThreads](input),
       ),
   ),
-  // Subscriptions are stateful socket streams; over this request/response
-  // bridge they answer with the current snapshot instead.
-  [ORCHESTRATION_WS_METHODS.subscribeShell]: makeRunner(
-    ORCHESTRATION_WS_METHODS.subscribeShell,
-    OrchestrationRpcSchemas.subscribeShell.input,
-    OrchestrationRpcSchemas.getArchivedShellSnapshot.output,
+  // Stream operations return one current snapshot through the request/response bridge.
+  [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: makeRunner(
+    ORCHESTRATION_V2_WS_METHODS.subscribeShell,
+    OrchestrationV2RpcSchemas.subscribeShell.input,
+    OrchestrationV2ShellSnapshot,
     () =>
-      Effect.flatMap(ProjectionSnapshotQuery.ProjectionSnapshotQuery, (projectionSnapshotQuery) =>
-        projectionSnapshotQuery.getShellSnapshot(),
+      withLiveRpc(ORCHESTRATION_V2_WS_METHODS.subscribeShell, (rpc) =>
+        rpc[ORCHESTRATION_V2_WS_METHODS.subscribeShell]({}).pipe(
+          Stream.filterMap((item) =>
+            item.kind === "snapshot" ? Result.succeed(item.snapshot) : Result.failVoid,
+          ),
+          Stream.runHead,
+          Effect.flatMap(
+            Option.match({
+              onSome: Effect.succeed,
+              onNone: () =>
+                Effect.fail(
+                  new AgentApiCallError({
+                    operation: ORCHESTRATION_V2_WS_METHODS.subscribeShell,
+                    reason: "failed",
+                    message: "Shell stream ended without a snapshot.",
+                  }),
+                ),
+            }),
+          ),
+        ),
       ),
   ),
-  [ORCHESTRATION_WS_METHODS.subscribeThread]: makeRunner(
-    ORCHESTRATION_WS_METHODS.subscribeThread,
-    OrchestrationRpcSchemas.subscribeThread.input,
-    OrchestrationThreadDetailSnapshot,
+  [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: makeRunner(
+    ORCHESTRATION_V2_WS_METHODS.subscribeThread,
+    OrchestrationV2RpcSchemas.subscribeThread.input,
+    OrchestrationV2ThreadProjection,
     (input) =>
-      Effect.gen(function* () {
-        const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
-        const snapshot = yield* projectionSnapshotQuery.getThreadDetailSnapshot(input.threadId);
-        if (Option.isNone(snapshot)) {
-          return yield* new AgentApiCallError({
-            operation: ORCHESTRATION_WS_METHODS.subscribeThread,
-            reason: "failed",
-            message: `No active thread '${input.threadId}' was found.`,
-          });
-        }
-        return projectThreadDetailSnapshot(snapshot.value);
-      }),
+      withLiveRpc(ORCHESTRATION_V2_WS_METHODS.subscribeThread, (rpc) =>
+        rpc[ORCHESTRATION_V2_WS_METHODS.getThreadProjection]({ threadId: input.threadId }),
+      ),
   ),
 };
 

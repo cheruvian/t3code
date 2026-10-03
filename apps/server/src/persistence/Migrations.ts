@@ -11,6 +11,7 @@
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -90,6 +91,9 @@ import Migration0058 from "./Migrations/058_PullRequestFilesViewed.ts";
  * Uses Migrator.fromRecord which parses the key format and
  * returns migrations sorted by ID.
  */
+import Migration0061 from "./Migrations/055_OrchestrationV2.ts";
+import Migration0062 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
+
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
@@ -151,6 +155,8 @@ export const migrationEntries = [
   [58, "PullRequestFilesViewed", Migration0058],
   [59, "ProjectResourceLocks", Migration0059],
   [60, "ProjectionThreadsAutoSettleDisabledAt", Migration0060],
+  [61, "OrchestrationV2", Migration0061],
+  [62, "RemoveRedundantProjectionIndexes", Migration0062],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -178,7 +184,9 @@ export interface RunMigrationsOptions {
  * Run all pending migrations.
  *
  * Creates the migrations tracking table (effect_sql_migrations) if it doesn't exist,
- * then runs any migrations with ID greater than the latest recorded migration.
+ * reconciles recognized upstream histories into the fork ledger, then runs
+ * migrations with IDs greater than the latest recorded migration. Unknown
+ * histories fail before any schema changes.
  *
  * Returns array of [id, name] tuples for migrations that were run.
  *
@@ -187,7 +195,11 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
-  const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
+  const reconciled = yield* reconcileV2PreviewMigration(migrationEntries);
+  const executedMigrations = [
+    ...reconciled,
+    ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
+  ];
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")

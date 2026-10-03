@@ -1,7 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import { CommandId, MessageId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 
-import { buildIsolatedThreadStart } from "./thread.ts";
+import { buildIsolatedThreadStart, recentThreadMessages, isFinishedThread } from "./thread.ts";
 
 it("starts an isolated worktree before the first provider turn", () => {
   const command = buildIsolatedThreadStart({
@@ -14,14 +14,45 @@ it("starts an isolated worktree before the first provider turn", () => {
     threadId: ThreadId.make("thread-1"),
     messageId: MessageId.make("message-1"),
     commandId: CommandId.make("command-1"),
-    createdAt: "2026-09-26T00:00:00.000Z",
   });
 
-  assert.equal(command.type, "thread.turn.start");
-  assert.equal(command.bootstrap?.prepareWorktree?.projectCwd, "/repo");
-  assert.equal(command.bootstrap?.prepareWorktree?.requireWorktree, true);
-  assert.equal(command.bootstrap?.prepareWorktree?.branch, "t3code/12345678");
-  assert.equal(command.bootstrap?.createThread?.worktreePath, null);
-  assert.equal(command.bootstrap?.createThread?.projectId, "project-1");
-  assert.equal(command.message.text, "Fix the billing bug");
+  assert.deepEqual(command.workspaceStrategy, {
+    type: "worktree",
+    baseRef: "main",
+    branch: "t3code/12345678",
+  });
+  assert.equal(command.projectId, "project-1");
+  assert.equal(command.initialMessage?.text, "Fix the billing bug");
+});
+
+it("retains every assistant message in a requested turn", () => {
+  const messages = [
+    { role: "user", text: "old" },
+    { role: "assistant", text: "old answer" },
+    { role: "user", text: "new" },
+    { role: "assistant", text: "thinking" },
+    { role: "assistant", text: "answer" },
+  ] as const;
+  assert.deepEqual(recentThreadMessages(messages, 1), {
+    messages: messages.slice(2),
+    hasMore: true,
+  });
+  assert.deepEqual(recentThreadMessages(messages, 10), { messages: [...messages], hasMore: false });
+});
+
+it("waits through preparation, queued runs and pending user input", () => {
+  const latestRunId = "run-1" as Parameters<typeof isFinishedThread>[0]["latestRunId"];
+  for (const status of ["preparing", "queued", "starting", "running", "waiting"] as const) {
+    assert.equal(isFinishedThread({ latestRunId, status }), false);
+  }
+  for (const status of [
+    "completed",
+    "failed",
+    "interrupted",
+    "cancelled",
+    "rolled_back",
+  ] as const) {
+    assert.equal(isFinishedThread({ latestRunId, status }), true);
+  }
+  assert.equal(isFinishedThread({ latestRunId: null, status: "idle" }), false);
 });

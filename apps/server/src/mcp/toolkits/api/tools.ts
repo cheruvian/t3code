@@ -10,8 +10,6 @@ import * as ServerConfig from "../../../config.ts";
 import * as RemoteOpenTargets from "../../../environment/RemoteOpenTargets.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as Keybindings from "../../../keybindings.ts";
-import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
-import * as ProjectionSnapshotQuery from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ExternalLauncher from "../../../process/externalLauncher.ts";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
@@ -23,8 +21,6 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
   ServerConfig.ServerConfig,
-  ProjectionSnapshotQuery.ProjectionSnapshotQuery,
-  OrchestrationEngine.OrchestrationEngineService,
   CheckpointDiffQuery.CheckpointDiffQuery,
   Keybindings.Keybindings,
   ServerSettings.ServerSettingsService,

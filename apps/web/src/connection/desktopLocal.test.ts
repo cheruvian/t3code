@@ -2,7 +2,11 @@ import {
   BearerConnectionTarget,
   PrimaryConnectionTarget,
 } from "@t3tools/client-runtime/connection";
-import { EnvironmentId, PRIMARY_LOCAL_ENVIRONMENT_ID } from "@t3tools/contracts";
+import {
+  type DesktopEnvironmentBootstrap,
+  EnvironmentId,
+  PRIMARY_LOCAL_ENVIRONMENT_ID,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -51,6 +55,67 @@ describe("desktop local connection identity", () => {
 });
 
 describe("desktop local topology reads", () => {
+  it("reuses snapshots when polling returns fresh objects for the same topology", async () => {
+    const secondary: DesktopEnvironmentBootstrap = {
+      id: "wsl:default",
+      label: "WSL",
+      runningDistro: "Ubuntu",
+      httpBaseUrl: "http://127.0.0.1:4000",
+      wsBaseUrl: "ws://127.0.0.1:4000",
+      bootstrapToken: "bootstrap-1",
+    };
+    let entries = [secondary];
+    const reader = createDesktopSecondaryBootstrapsReader(() => ({
+      getLocalEnvironmentBootstraps: async () => entries.map((entry) => ({ ...entry })),
+    }));
+
+    await reader.refresh();
+    const connected = reader.readSnapshot();
+    expect(reader.readSnapshot()).toBe(connected);
+    expect(await reader.refresh()).toEqual({ _tag: "Success", bootstraps: connected });
+    expect(reader.readSnapshot()).toBe(connected);
+
+    entries = [];
+    await reader.refresh();
+    const empty = reader.readSnapshot();
+    expect(empty).toEqual([]);
+    expect(reader.readSnapshot()).toBe(empty);
+  });
+
+  it.each<Partial<DesktopEnvironmentBootstrap>>([
+    { id: "wsl:Debian" },
+    { label: "Renamed backend" },
+    { runningDistro: "Debian" },
+    { httpBaseUrl: "http://127.0.0.1:4001" },
+    { wsBaseUrl: "ws://127.0.0.1:4001" },
+    { bootstrapToken: "bootstrap-2" },
+  ])("publishes bootstrap changes: %j", async (change) => {
+    let secondary: DesktopEnvironmentBootstrap = {
+      id: "wsl:default",
+      label: "WSL",
+      runningDistro: "Ubuntu",
+      httpBaseUrl: "http://127.0.0.1:4000",
+      wsBaseUrl: "ws://127.0.0.1:4000",
+      bootstrapToken: "bootstrap-1",
+    };
+    const reader = createDesktopSecondaryBootstrapsReader(() => ({
+      getLocalEnvironmentBootstraps: async () => [{ ...secondary }],
+    }));
+    await reader.refresh();
+    const before = reader.readSnapshot();
+    secondary = { ...secondary, ...change };
+    await reader.refresh();
+    const after = reader.readSnapshot();
+    expect(after).not.toBe(before);
+    expect(after).toEqual([secondary]);
+    expect(reader.readSnapshot()).toBe(after);
+  });
+
+  it("keeps the empty snapshot stable without a desktop bridge", () => {
+    const reader = createDesktopSecondaryBootstrapsReader(() => undefined);
+    expect(reader.readSnapshot()).toBe(reader.readSnapshot());
+  });
+
   it("distinguishes a successful empty topology from a read failure", async () => {
     let readBootstraps = () => [];
     const reader = createDesktopSecondaryBootstrapsReader(() => ({

@@ -8,13 +8,14 @@ import {
   DEFAULT_RUNTIME_MODE,
   EnvironmentHttpApi,
   MessageId,
-  ORCHESTRATION_WS_METHODS,
-  OrchestrationCommand,
+  ORCHESTRATION_V2_WS_METHODS,
+  type OrchestrationV2ThreadLaunchInput,
+  type OrchestrationV2ThreadShell,
+  type OrchestrationV2ConversationMessage,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
   type ModelSelection,
-  type ThreadTurnStartBootstrap,
 } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import * as Console from "effect/Console";
@@ -33,7 +34,10 @@ import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
-import { dispatchBootstrapRpc, withEnvironmentRpc } from "../orchestration/bootstrapRpcClient.ts";
+import {
+  dispatchBootstrapRpc,
+  withEnvironmentRpc,
+} from "../orchestration-v2/bootstrapRpcClient.ts";
 import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import { encodeCliJson, makeEnvironmentHttpClient, withLocalEnvironment } from "./environment.ts";
@@ -69,43 +73,18 @@ export function buildIsolatedThreadStart(input: {
   readonly threadId: ThreadId;
   readonly messageId: MessageId;
   readonly commandId: CommandId;
-  readonly createdAt: string;
-}): Extract<OrchestrationCommand, { type: "thread.turn.start" }> {
-  const bootstrap: ThreadTurnStartBootstrap = {
-    createThread: {
-      projectId: input.project.id,
-      title: input.title,
-      modelSelection: input.modelSelection,
-      runtimeMode: DEFAULT_RUNTIME_MODE,
-      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-      branch: input.baseBranch,
-      worktreePath: null,
-      createdAt: input.createdAt,
-    },
-    prepareWorktree: {
-      projectCwd: input.project.workspaceRoot,
-      baseBranch: input.baseBranch,
-      branch: input.branch,
-      requireWorktree: true,
-    },
-    runSetupScript: true,
-  };
+}): OrchestrationV2ThreadLaunchInput {
   return {
-    type: "thread.turn.start",
     commandId: input.commandId,
+    creationSource: "server",
     threadId: input.threadId,
-    message: {
-      messageId: input.messageId,
-      role: "user",
-      text: input.message,
-      attachments: [],
-    },
+    projectId: input.project.id,
+    title: input.title,
     modelSelection: input.modelSelection,
-    titleSeed: input.title,
     runtimeMode: DEFAULT_RUNTIME_MODE,
     interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-    bootstrap,
-    createdAt: input.createdAt,
+    workspaceStrategy: { type: "worktree", baseRef: input.baseBranch, branch: input.branch },
+    initialMessage: { messageId: input.messageId, text: input.message, attachments: [] },
   };
 }
 
@@ -165,14 +144,16 @@ const startThread = Command.make("start", {
           (issued) =>
             Effect.gen(function* () {
               const client = yield* makeHttpClient(origin);
-              const headers = { authorization: `Bearer ${issued.token}` };
-              const snapshot = yield* client.orchestration.snapshot({ headers });
+              const headers = {
+                authorization: `Bearer ${issued.token}`,
+                "x-t3-orchestration-protocol": "2" as const,
+              };
+              const snapshot = yield* client.orchestration.shellSnapshot({ headers });
               const matches = snapshot.projects.filter(
                 (project) =>
-                  project.deletedAt === null &&
-                  (project.id === flags.project ||
-                    project.title === flags.project ||
-                    project.workspaceRoot === flags.project),
+                  project.id === flags.project ||
+                  project.title === flags.project ||
+                  project.workspaceRoot === flags.project,
               );
               if (matches.length !== 1) {
                 return yield* new ThreadCliError({
@@ -209,7 +190,6 @@ const startThread = Command.make("start", {
                 threadId,
                 messageId: MessageId.make(NodeCrypto.randomUUID()),
                 commandId: CommandId.make(NodeCrypto.randomUUID()),
-                createdAt: DateTime.formatIso(yield* DateTime.now),
               });
               const { thread: created } = yield* dispatchBootstrapRpc({
                 origin,
@@ -255,7 +235,7 @@ const searchThreads = Command.make("search", {
     withLocalEnvironment(flags, ({ origin, sessionId }) =>
       withEnvironmentRpc({ origin, sessionId }, (rpc) =>
         Effect.gen(function* () {
-          const result = yield* rpc[ORCHESTRATION_WS_METHODS.searchThreads]({
+          const result = yield* rpc[ORCHESTRATION_V2_WS_METHODS.searchThreads]({
             query: flags.query,
             ...(Option.isSome(flags.limit) ? { limit: flags.limit.value } : {}),
           });
@@ -279,36 +259,58 @@ const sendMessage = Command.make("send", {
         const text = (yield* fs.readFileString(flags.messageFile)).trim();
         if (!text) return yield* new ThreadCliError({ detail: "The message file is empty." });
         const client = yield* makeEnvironmentHttpClient(origin);
-        const snapshot = yield* client.orchestration.snapshot({
-          headers: { authorization: `Bearer ${token}` },
+        const snapshot = yield* client.orchestration.shellSnapshot({
+          headers: { authorization: `Bearer ${token}`, "x-t3-orchestration-protocol": "2" },
         });
         const thread = snapshot.threads.find((item) => item.id === flags.threadId);
         if (!thread) {
           return yield* new ThreadCliError({ detail: `Thread ${flags.threadId} was not found.` });
         }
         const command = {
-          type: "thread.turn.start" as const,
+          type: "message.dispatch" as const,
+          createdBy: "user" as const,
+          creationSource: "server" as const,
           commandId: CommandId.make(NodeCrypto.randomUUID()),
           threadId: thread.id,
-          message: {
-            messageId: MessageId.make(NodeCrypto.randomUUID()),
-            role: "user" as const,
-            text,
-            attachments: [],
-          },
+          messageId: MessageId.make(NodeCrypto.randomUUID()),
+          text,
+          attachments: [],
           modelSelection: thread.modelSelection,
-          runtimeMode: thread.runtimeMode,
-          interactionMode: thread.interactionMode,
-          createdAt: DateTime.formatIso(yield* DateTime.now),
+          dispatchMode: { type: "start_immediately" as const },
+          deliveryIntent: "auto" as const,
         };
         const result = yield* withEnvironmentRpc({ origin, sessionId }, (rpc) =>
-          rpc[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
+          rpc[ORCHESTRATION_V2_WS_METHODS.dispatchCommand](command),
         );
         yield* Console.log(yield* encodeCliJson(result));
       }),
     ),
   ),
 );
+
+/** A turn can contain several assistant messages, so page at user-message boundaries. */
+export const recentThreadMessages = <
+  Message extends Pick<OrchestrationV2ConversationMessage, "role">,
+>(
+  messages: ReadonlyArray<Message>,
+  turns: number,
+) => {
+  let remaining = turns;
+  let start = 0;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index]!.role === "user" && --remaining === 0) {
+      start = index;
+      break;
+    }
+  }
+  return { messages: messages.slice(start), hasMore: start > 0 };
+};
+
+export const isFinishedThread = (
+  thread: Pick<OrchestrationV2ThreadShell, "latestRunId" | "status">,
+) =>
+  thread.latestRunId !== null &&
+  ["completed", "failed", "interrupted", "cancelled", "rolled_back"].includes(thread.status);
 
 const listMessages = Command.make("messages", {
   ...projectLocationFlags,
@@ -320,12 +322,13 @@ const listMessages = Command.make("messages", {
     withLocalEnvironment(flags, ({ origin, sessionId }) =>
       withEnvironmentRpc({ origin, sessionId }, (rpc) =>
         Effect.gen(function* () {
-          const item = yield* rpc[ORCHESTRATION_WS_METHODS.subscribeThread]({
+          const turns = Option.getOrUndefined(flags.turns) ?? 10;
+          if (turns < 1) return yield* new ThreadCliError({ detail: "Turns must be positive." });
+          const item = yield* rpc[ORCHESTRATION_V2_WS_METHODS.subscribeThread]({
             threadId: ThreadId.make(flags.threadId),
-            turnLimit: Option.getOrUndefined(flags.turns) ?? 10,
           }).pipe(
             Stream.filterMap((item) =>
-              item.kind === "snapshot" ? Result.succeed(item.snapshot) : Result.failVoid,
+              item.kind === "snapshot" ? Result.succeed(item) : Result.failVoid,
             ),
             Stream.runHead,
             Effect.timeout("15 seconds"),
@@ -333,17 +336,18 @@ const listMessages = Command.make("messages", {
           if (Option.isNone(item)) {
             return yield* new ThreadCliError({ detail: "No thread snapshot was received." });
           }
+          const page = recentThreadMessages(item.value.projection.messages, turns);
           yield* Console.log(
             yield* encodeCliJson({
-              threadId: item.value.thread.id,
-              messages: item.value.thread.messages.map((message) => ({
+              threadId: item.value.projection.thread.id,
+              messages: page.messages.map((message) => ({
                 id: message.id,
                 role: message.role,
                 text: message.text,
                 streaming: message.streaming,
-                createdAt: message.createdAt,
+                createdAt: DateTime.formatIso(message.createdAt),
               })),
-              hasMore: item.value.page?.hasMore ?? false,
+              hasMore: page.hasMore,
             }),
           );
         }),
@@ -352,22 +356,15 @@ const listMessages = Command.make("messages", {
   ),
 );
 
-const threadSummary = (thread: {
-  readonly id: ThreadId;
-  readonly projectId: ProjectId;
-  readonly title: string;
-  readonly branch: string | null;
-  readonly worktreePath: string | null;
-  readonly latestTurn: { readonly turnId: string; readonly state: string } | null;
-  readonly updatedAt: string;
-}) => ({
+const threadSummary = (thread: OrchestrationV2ThreadShell) => ({
   threadId: thread.id,
   projectId: thread.projectId,
   title: thread.title,
   branch: thread.branch,
   cwd: thread.worktreePath,
-  latestTurn: thread.latestTurn,
-  updatedAt: thread.updatedAt,
+  latestTurn: thread.latestRunId ? { turnId: thread.latestRunId, state: thread.status } : null,
+  status: thread.status,
+  updatedAt: DateTime.formatIso(thread.updatedAt),
 });
 
 const listThreads = Command.make("list", {
@@ -381,12 +378,14 @@ const listThreads = Command.make("list", {
         const limit = Option.getOrUndefined(flags.limit) ?? 20;
         if (limit < 1) return yield* new ThreadCliError({ detail: "Limit must be positive." });
         const client = yield* makeEnvironmentHttpClient(origin);
-        const snapshot = yield* client.orchestration.snapshot({
-          headers: { authorization: `Bearer ${token}` },
+        const snapshot = yield* client.orchestration.shellSnapshot({
+          headers: { authorization: `Bearer ${token}`, "x-t3-orchestration-protocol": "2" },
         });
         const threads = snapshot.threads
           .filter((thread) => thread.deletedAt === null)
-          .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+          .toSorted(
+            (a, b) => DateTime.toEpochMillis(b.updatedAt) - DateTime.toEpochMillis(a.updatedAt),
+          )
           .slice(0, limit)
           .map(threadSummary);
         yield* Console.log(yield* encodeCliJson({ threads }));
@@ -404,8 +403,8 @@ const threadStatus = Command.make("status", {
     withLocalEnvironment(flags, ({ origin, token }) =>
       Effect.gen(function* () {
         const client = yield* makeEnvironmentHttpClient(origin);
-        const snapshot = yield* client.orchestration.snapshot({
-          headers: { authorization: `Bearer ${token}` },
+        const snapshot = yield* client.orchestration.shellSnapshot({
+          headers: { authorization: `Bearer ${token}`, "x-t3-orchestration-protocol": "2" },
         });
         const thread = snapshot.threads.find(
           (entry) => entry.id === flags.threadId && entry.deletedAt === null,
@@ -435,21 +434,19 @@ const waitForThread = Command.make("wait", {
             return yield* new ThreadCliError({ detail: "Timeout must be positive." });
           }
           const afterSequence = Option.getOrUndefined(flags.afterSequence) ?? 0;
-          const thread = yield* rpc[ORCHESTRATION_WS_METHODS.subscribeShell]({}).pipe(
+          const thread = yield* rpc[ORCHESTRATION_V2_WS_METHODS.subscribeShell]({}).pipe(
             Stream.filterMap((item) => {
               const entry =
                 item.kind === "snapshot"
                   ? item.snapshot.snapshotSequence >= afterSequence
                     ? item.snapshot.threads.find((thread) => thread.id === flags.threadId)
                     : undefined
-                  : item.kind === "thread-upserted" &&
+                  : item.kind === "thread.updated" &&
                       item.sequence >= afterSequence &&
                       item.thread.id === flags.threadId
                     ? item.thread
                     : undefined;
-              return entry?.latestTurn && entry.latestTurn.state !== "running"
-                ? Result.succeed(entry)
-                : Result.failVoid;
+              return entry && isFinishedThread(entry) ? Result.succeed(entry) : Result.failVoid;
             }),
             Stream.runHead,
             Effect.timeout(`${timeoutSeconds} seconds`),

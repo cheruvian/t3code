@@ -3,7 +3,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import { TrimmedString } from "./baseSchemas.ts";
 import { ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
-import { ProjectScriptIcon, ResourceActionHooks } from "./orchestration.ts";
+import { ProjectScriptIcon, ResourceActionHooks } from "./project.ts";
 import type { ProjectScopedServerSettingKey, ServerSettings } from "./settings.ts";
 
 /** File name of the checked-in T3 project file, resolved at the workspace root. */

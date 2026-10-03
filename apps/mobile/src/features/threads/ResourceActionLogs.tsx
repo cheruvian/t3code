@@ -1,16 +1,16 @@
 import { useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, View } from "react-native";
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
+import type { OrchestrationV2TurnItem } from "@t3tools/contracts";
 import { resourceActionLogs, formatResourceActionLog } from "@t3tools/shared/resourceActions";
 import { AppText } from "../../components/AppText";
 
 export function ResourceActionLogs({
-  activities,
+  turnItems,
 }: {
-  activities: readonly OrchestrationThreadActivity[];
+  turnItems: readonly OrchestrationV2TurnItem[];
 }) {
   const [open, setOpen] = useState(false);
-  const logs = useMemo(() => resourceActionLogs(activities), [activities]);
+  const logs = useMemo(() => resourceActionLogs(turnItems), [turnItems]);
   if (logs.length === 0) return null;
   return (
     <>

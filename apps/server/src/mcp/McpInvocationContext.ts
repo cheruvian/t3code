@@ -8,8 +8,15 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 
-export type McpCapability = "preview" | "device" | "pull-requests" | "environment";
-
+const ALL_MCP_CAPABILITIES = [
+  "preview",
+  "orchestration",
+  "worktree",
+  "device",
+  "pull-requests",
+  "environment",
+] as const;
+export type McpCapability = (typeof ALL_MCP_CAPABILITIES)[number];
 /** Streamable HTTP path serving the standard MCP toolkits. */
 export const MCP_HTTP_PATH = "/mcp";
 

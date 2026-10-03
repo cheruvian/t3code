@@ -268,9 +268,7 @@ interface ThreadSwipeableProps {
   readonly resetKey?: string;
   /** Paints the row without swipe machinery; see swipe-row-activation. */
   readonly dormant?: boolean;
-  readonly simultaneousWithExternalGesture?: ComponentProps<
-    typeof ReanimatedSwipeable
-  >["simultaneousWithExternalGesture"];
+  readonly simultaneousWith?: ComponentProps<typeof ReanimatedSwipeable>["simultaneousWith"];
   readonly threadTitle: string;
 }
 
@@ -437,7 +435,7 @@ function ThreadSwipeableRow(props: ThreadSwipeableProps) {
           animationOptions={THREAD_SWIPE_SPRING}
           childrenContainerStyle={{ backgroundColor: props.backgroundColor }}
           containerStyle={[{ backgroundColor: props.backgroundColor }, props.containerStyle]}
-          dragOffsetFromRightEdge={8}
+          dragOffsetFromRight={-8}
           enabled={!isDismissing && props.enabled !== false && gateEnabled}
           enableTrackpadTwoFingerGesture={props.enableTrackpadSwipe ?? true}
           // Fail the swipe once the pan is vertically dominant (patched-in RNGH
@@ -501,7 +499,7 @@ function ThreadSwipeableRow(props: ThreadSwipeableProps) {
             </Animated.View>
           )}
           rightThreshold={actionsWidth * 0.42}
-          simultaneousWithExternalGesture={props.simultaneousWithExternalGesture}
+          simultaneousWith={props.simultaneousWith}
         >
           {props.children(close)}
         </ReanimatedSwipeable>

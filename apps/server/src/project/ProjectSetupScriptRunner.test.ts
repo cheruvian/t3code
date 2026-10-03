@@ -1,7 +1,7 @@
 import { T3ProjectFileLoader } from "./T3ProjectFileLoader.ts";
 import { describe, expect, it, vi } from "@effect/vitest";
 import {
-  type OrchestrationProject,
+  type Project,
   type ProjectScript,
   ProjectId,
   type T3ProjectFileScript,
@@ -13,7 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProjectService from "./ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as ProjectSetupScriptRunner from "./ProjectSetupScriptRunner.ts";
@@ -23,9 +23,9 @@ const isProjectSetupScriptOperationError = Schema.is(
 );
 
 const makeProject = (
-  scripts: OrchestrationProject["scripts"],
+  scripts: Project["scripts"],
   disabledInheritedScriptIds: readonly string[] = [],
-): OrchestrationProject => ({
+): Project => ({
   id: ProjectId.make("project-1"),
   title: "Project",
   workspaceRoot: "/repo/project",
@@ -37,36 +37,20 @@ const makeProject = (
   deletedAt: null,
 });
 
-const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject) =>
-  Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
-    getUserInputActivity: () => Effect.die("unused"),
-    listActivitiesByKind: () => Effect.die("unused"),
-    getCommandReadModel: () => Effect.die("unused"),
-    getSnapshot: () => Effect.die("unused"),
-    getShellSnapshot: () => Effect.die("unused"),
-    getDeletedWorktreeThreads: () => Effect.die("unused"),
-    listThreadsWithPullRequests: () => Effect.die("unused"),
-    getArchivedShellSnapshot: () => Effect.die("unused"),
-    getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
-    getCounts: () => Effect.die("unused"),
-    getEventReplayStats: () => Effect.die("unused"),
-    getActiveProjectByWorkspaceRoot: (workspaceRoot) =>
-      Effect.succeed(
-        workspaceRoot === project.workspaceRoot ? Option.some(project) : Option.none(),
-      ),
-    getProjectShells: () => Effect.die("unused"),
-    getProjectShellById: (projectId) =>
-      Effect.succeed(projectId === project.id ? Option.some(project) : Option.none()),
-    getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
-    getImportedAgentSessionSources: () => Effect.die("unused"),
-    getThreadCheckpointContext: () => Effect.die("unused"),
-    getFullThreadDiffContext: () => Effect.die("unused"),
-    getThreadRuntimeContext: () => Effect.die("unused"),
-    getTurnStartMessage: () => Effect.die("unused"),
-    getThreadShellById: () => Effect.die("unused"),
-    getThreadDetailById: () => Effect.die("unused"),
-    getThreadDetailSnapshot: () => Effect.die("unused"),
-    searchThreads: () => Effect.succeed({ matches: [] }),
+const makeProjectionSnapshotQueryLayer = (project: Project) =>
+  Layer.succeed(ProjectService.ProjectService, {
+    resourceRequest: () => Effect.die("unused"),
+    resourceComplete: () => Effect.die("unused"),
+    create: () => Effect.die("unused"),
+    bootstrap: () => Effect.die("unused"),
+    update: () => Effect.die("unused"),
+    delete: () => Effect.die("unused"),
+    snapshot: Effect.die("unused"),
+    getShell: () => Effect.die("unused"),
+    listShells: () => Effect.die("unused"),
+    getById: (id) => Effect.succeed(id === project.id ? Option.some(project) : Option.none()),
+    getByWorkspaceRoot: (root) =>
+      Effect.succeed(root === project.workspaceRoot ? Option.some(project) : Option.none()),
   });
 
 type TerminalOverrides = Pick<TerminalManager.TerminalManager["Service"], "open" | "write"> &
@@ -86,7 +70,7 @@ const makeTerminalManagerLayer = (overrides: TerminalOverrides) =>
   });
 
 const testLayer = (
-  project: OrchestrationProject,
+  project: Project,
   terminal: TerminalOverrides,
   settings:
     | ReturnType<typeof ServerSettings.layerTest>
@@ -144,6 +128,7 @@ describe("ProjectSetupScriptRunner", () => {
           T3CODE_WORKTREE_PATH: "/repo/worktrees/a",
           NO_COLOR: "1",
           FORCE_COLOR: "0",
+          COLORTERM: "",
         },
       });
       expect(write).toHaveBeenCalledWith({
@@ -245,6 +230,7 @@ describe("ProjectSetupScriptRunner", () => {
           env: {
             NO_COLOR: "1",
             FORCE_COLOR: "0",
+            COLORTERM: "",
             T3CODE_PROJECT_ROOT: "/repo/project",
             T3CODE_WORKTREE_PATH: "/repo/worktrees/a",
           },
@@ -345,22 +331,28 @@ describe("ProjectSetupScriptRunner", () => {
     }).pipe(Effect.provide(testLayer(project, { open, write }, [], fileScripts)));
   });
 
-  it.effect("does not run a disabled t3.json setup action", () => {
-    const open = vi.fn(() => Effect.die("unexpected open"));
-    const write = vi.fn(() => Effect.die("unexpected write"));
-    const fileScripts = [{ name: "Setup", command: "file setup", runOnWorktreeCreate: true }];
-    return Effect.gen(function* () {
-      const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
-      const result = yield* runner.runForThread({
-        threadId: "thread-1",
-        projectId: "project-1",
-        worktreePath: "/repo/worktrees/a",
-      });
-      expect(result).toEqual({ status: "no-script" });
-    }).pipe(
-      Effect.provide(testLayer(makeProject([], ["file:setup"]), { open, write }, [], fileScripts)),
-    );
-  });
+  it.effect.each([false, true])(
+    "does not run a disabled t3.json setup action with supplied project %s",
+    (supplied) => {
+      const open = vi.fn(() => Effect.die("unexpected open"));
+      const write = vi.fn(() => Effect.die("unexpected write"));
+      const fileScripts = [{ name: "Setup", command: "file setup", runOnWorktreeCreate: true }];
+      return Effect.gen(function* () {
+        const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+        const result = yield* runner.runForThread({
+          threadId: "thread-1",
+          projectId: "project-1",
+          ...(supplied ? { project: makeProject([], ["file:setup"]) } : {}),
+          worktreePath: "/repo/worktrees/a",
+        });
+        expect(result).toEqual({ status: "no-script" });
+      }).pipe(
+        Effect.provide(
+          testLayer(makeProject([], ["file:setup"]), { open, write }, [], fileScripts),
+        ),
+      );
+    },
+  );
 
   it.effect("prefers a project setup action over a global one", () => {
     const open = vi.fn(() =>

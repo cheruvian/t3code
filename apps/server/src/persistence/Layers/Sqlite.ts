@@ -8,7 +8,8 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 import { runMigrations } from "../Migrations.ts";
 import { ReadOnlySqlClient } from "../Services/ReadOnlySqlClient.ts";
-import { ServerConfig } from "../../config.ts";
+import { initializeV2Database } from "../initializeV2Database.ts";
+import * as ServerConfig from "../../config.ts";
 
 type RuntimeSqliteLayerConfig = {
   readonly filename: string;
@@ -107,7 +108,8 @@ export const SqlitePersistenceMemory = Layer.provideMerge(
 
 export const layerConfig = Layer.unwrap(
   Effect.gen(function* () {
-    const { dbPath } = yield* ServerConfig;
+    const { dbPath } = yield* ServerConfig.ServerConfig;
+    yield* initializeV2Database(dbPath);
     return makeSqlitePersistenceLive(dbPath);
   }),
 );

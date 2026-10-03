@@ -8,7 +8,8 @@ import * as NetAddress from "effect/unstable/net/NetAddress";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import { PersistenceSqlError } from "../persistence/Errors.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 
@@ -34,21 +35,24 @@ interface ProjectionStubOptions {
 
 const makeProjectionStub = (options: ProjectionStubOptions = {}) =>
   ({
-    getThreadShellById: (threadId: ThreadId) =>
+    getThreadShell: (threadId: ThreadId) =>
       options.failReads
         ? Effect.fail(
             new PersistenceSqlError({ operation: "test.read", detail: "projection unavailable" }),
           )
         : Effect.succeed(
             options.threadProjects?.[threadId] === undefined
-              ? Option.none()
-              : Option.some({ id: threadId, projectId: options.threadProjects[threadId] }),
+              ? null
+              : { id: threadId, projectId: options.threadProjects[threadId] },
           ),
-    getActiveProjectByWorkspaceRoot: (workspaceRoot: string) =>
-      Effect.succeed(
-        workspaceRoot === helperRoot ? Option.some({ id: helperProjectId }) : Option.none(),
-      ),
-  }) as unknown as ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"];
+  }) as unknown as ProjectionStore.ProjectionStoreV2["Service"];
+
+const projectStub = {
+  findActiveByWorkspaceRoot: (workspaceRoot: string) =>
+    Effect.succeed(
+      workspaceRoot === helperRoot ? Option.some({ projectId: helperProjectId }) : Option.none(),
+    ),
+} as unknown as ProjectStore.ProjectStoreV2["Service"];
 
 const makeRegistry = (
   now: () => number,
@@ -64,10 +68,8 @@ const makeRegistry = (
       Effect.provideService(HttpServer.HttpServer, httpServer),
       Effect.provideService(ServerEnvironment.ServerEnvironment, fakeEnvironment),
       Effect.provideService(ServerConfig.ServerConfig, fakeServerConfig),
-      Effect.provideService(
-        ProjectionSnapshotQuery.ProjectionSnapshotQuery,
-        makeProjectionStub(projectionStub),
-      ),
+      Effect.provideService(ProjectionStore.ProjectionStoreV2, makeProjectionStub(projectionStub)),
+      Effect.provideService(ProjectStore.ProjectStoreV2, projectStub),
       Effect.provide(NodeServices.layer),
     );
 
@@ -87,6 +89,9 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
 
     const resolved = yield* registry.resolve(token);
     expect(resolved?.threadId).toBe(threadId);
+    expect(resolved?.capabilities).toEqual(
+      new Set(["preview", "orchestration", "worktree", "pull-requests"]),
+    );
 
     yield* registry.revokeThread(threadId);
     expect(yield* registry.resolve(token)).toBeUndefined();
@@ -118,9 +123,23 @@ it.effect("always grants pull-requests and gates browser and device access indep
         .resolve(issued.config.authorizationHeader.replace(/^Bearer\s+/, ""))
         .pipe(Effect.map((scope) => [...(scope?.capabilities ?? [])].sort()));
 
-    expect(yield* capabilitiesOf(withPreview)).toEqual(["preview", "pull-requests"]);
-    expect(yield* capabilitiesOf(withoutPreview)).toEqual(["pull-requests"]);
-    expect(yield* capabilitiesOf(withDevice)).toEqual(["device", "pull-requests"]);
+    expect(yield* capabilitiesOf(withPreview)).toEqual([
+      "orchestration",
+      "preview",
+      "pull-requests",
+      "worktree",
+    ]);
+    expect(yield* capabilitiesOf(withoutPreview)).toEqual([
+      "orchestration",
+      "pull-requests",
+      "worktree",
+    ]);
+    expect(yield* capabilitiesOf(withDevice)).toEqual([
+      "device",
+      "orchestration",
+      "pull-requests",
+      "worktree",
+    ]);
   }),
 );
 

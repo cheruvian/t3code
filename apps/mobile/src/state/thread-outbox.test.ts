@@ -140,6 +140,15 @@ describe("thread outbox", () => {
       decodeQueuedThreadMessage(JSON.parse(JSON.stringify(encodeQueuedThreadMessage(message)))),
     ).toEqual(message);
   });
+  it("retains queue mode when a queued provider switch reloads from storage", () => {
+    const message: QueuedThreadMessage = {
+      ...queuedMessage({ messageId: "queued-switch", createdAt: "2026-09-17T09:00:00.000Z" }),
+      dispatchMode: "queue",
+    };
+    expect(
+      decodeQueuedThreadMessage(JSON.parse(JSON.stringify(encodeQueuedThreadMessage(message)))),
+    ).toEqual(message);
+  });
   it.each(["read", "json", "schema"] as const)(
     "recovers usable messages without permitting cleanup after a record %s failure",
     async (failure) => {
@@ -1338,29 +1347,6 @@ describe("thread outbox", () => {
         threadBusy: true,
       }),
     ).toBe("wait");
-  });
-
-  it("waits for resource hooks before delivering an existing-thread message", () => {
-    expect(
-      resolveThreadOutboxDeliveryAction({
-        isCreation: false,
-        threadExists: true,
-        shellStatus: "live",
-        environmentConnected: true,
-        threadBusy: false,
-        resourceActionRunning: true,
-      }),
-    ).toBe("wait");
-    expect(
-      resolveThreadOutboxDeliveryAction({
-        isCreation: false,
-        threadExists: true,
-        shellStatus: "live",
-        environmentConnected: true,
-        threadBusy: false,
-        resourceActionRunning: false,
-      }),
-    ).toBe("send");
   });
 
   it("sends queued creations once connected and live, removing already-created ones", () => {

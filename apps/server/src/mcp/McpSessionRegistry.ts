@@ -11,14 +11,21 @@ import * as NetAddress from "effect/unstable/net/NetAddress";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpProviderSession from "./McpProviderSession.ts";
 
 export interface McpCredentialRequest {
   readonly threadId: ThreadId;
   readonly providerInstanceId: ProviderInstanceId;
-  readonly capabilities: ReadonlySet<McpInvocationContext.McpCapability>;
+  /**
+   * When false, the credential is minted without the "preview" capability so
+   * the user's choice to withhold agent browser access holds everywhere the
+   * token is honored (#7083). Defaults to full access.
+   */
+  readonly browserToolsAvailable?: boolean;
+  readonly capabilities?: ReadonlySet<McpInvocationContext.McpCapability>;
 }
 
 export interface McpIssuedCredential {
@@ -97,7 +104,8 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const environmentId = yield* environment.getEnvironmentId;
   const httpServer = yield* HttpServer.HttpServer;
   const serverConfig = yield* ServerConfig.ServerConfig;
-  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+  const projectStore = yield* ProjectStore.ProjectStoreV2;
   const state = yield* SynchronizedRef.make<RegistryState>({ records: new Map() });
   const currentTimeMillis = options.now ? Effect.sync(options.now) : Clock.currentTimeMillis;
   const livenessWindowMs = options.livenessWindowMs ?? DEFAULT_LIVENESS_WINDOW_MS;
@@ -112,16 +120,18 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
    * failing the session start.
    */
   const isHelperThread = (threadId: ThreadId) =>
-    projectionSnapshotQuery.getThreadShellById(threadId).pipe(
+    projectionStore.getThreadShell(threadId).pipe(
+      Effect.map(Option.fromNullishOr),
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.succeed(false),
           onSome: (thread) =>
-            projectionSnapshotQuery
-              .getActiveProjectByWorkspaceRoot(serverConfig.t3CodeProjectDir)
+            projectStore
+              .findActiveByWorkspaceRoot(serverConfig.t3CodeProjectDir)
               .pipe(
                 Effect.map(
-                  (project) => Option.isSome(project) && project.value.id === thread.projectId,
+                  (project) =>
+                    Option.isSome(project) && project.value.projectId === thread.projectId,
                 ),
               ),
         }),
@@ -155,14 +165,19 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       const rawToken = yield* crypto.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie);
       const tokenHash = yield* hashToken(rawToken);
       const helperThread = yield* isHelperThread(request.threadId);
+      const browserToolsAvailable = request.browserToolsAvailable ?? true;
       const scope: McpInvocationContext.McpInvocationScope = {
         environmentId,
         threadId: ThreadId.make(request.threadId),
         providerSessionId,
         providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
         capabilities: new Set<McpInvocationContext.McpCapability>([
+          "orchestration",
+          "worktree",
           "pull-requests",
-          ...Array.from(request.capabilities).filter((capability) => capability !== "environment"),
+          ...Array.from(
+            request.capabilities ?? (browserToolsAvailable ? ["preview" as const] : []),
+          ).filter((capability) => capability !== "environment"),
           ...(helperThread ? ["environment" as const] : []),
         ]),
         issuedAt,
@@ -186,6 +201,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
               : McpInvocationContext.MCP_HTTP_PATH
           }`,
           authorizationHeader: `Bearer ${rawToken}`,
+          browserToolsAvailable: scope.capabilities.has("preview"),
           capabilities: scope.capabilities,
         },
       };
@@ -281,10 +297,10 @@ export const issueActiveMcpCredential = (
 export const touchActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>
   activeMcpSessionRegistry ? activeMcpSessionRegistry.touch(threadId) : Effect.void;
 
-export const revokeActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>
+const revokeActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>
   activeMcpSessionRegistry ? activeMcpSessionRegistry.revokeThread(threadId) : Effect.void;
 
-export const revokeAllActiveMcpCredentials = (): Effect.Effect<void> =>
+const revokeAllActiveMcpCredentials = (): Effect.Effect<void> =>
   activeMcpSessionRegistry ? activeMcpSessionRegistry.revokeAll : Effect.void;
 
 /** Exposed for tests. */

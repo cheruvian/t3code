@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { ORCHESTRATION_WS_METHODS } from "./orchestration.ts";
+import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
 import { WS_METHODS } from "./rpc.ts";
 
 export type AgentApiExposure = "agent" | "ui-only" | "internal";
@@ -20,6 +20,7 @@ const readOnlyNamePatterns = [
 ];
 const destructiveNamePatterns = [
   /remove/,
+  /^projects\.mutate$/,
   /delete/,
   /revert/,
   /signalProcess/,
@@ -27,8 +28,8 @@ const destructiveNamePatterns = [
 ];
 const agentNamePatterns = [
   /^server\.(getConfig|getSettings|updateSettings|upsertKeybinding|removeKeybinding)$/,
-  /^projects\.(listEntries|readFile|searchContents|searchEntries|writeFile)$/,
-  /^orchestration\.(dispatchCommand|getTurnDiff|getFullThreadDiff|searchThreads|subscribeShell|subscribeThread)$/,
+  /^projects\.(listEntries|readFile|searchContents|searchEntries|writeFile|mutate)$/,
+  /^orchestration\.(dispatchCommand|getTurnDiff|getFullThreadDiff|searchThreads|subscribeShell|subscribeThread|launchThread|getThreadProjection)$/,
 ];
 
 function classifyOperation(name: string): Pick<AgentApiOperation, "exposure" | "mutability"> {
@@ -47,7 +48,7 @@ function classifyOperation(name: string): Pick<AgentApiOperation, "exposure" | "
 
 const operationNames = [
   ...Object.values(WS_METHODS).map((name) => ({ name, surface: "rpc" as const })),
-  ...Object.values(ORCHESTRATION_WS_METHODS).map((name) => ({
+  ...Object.values(ORCHESTRATION_V2_WS_METHODS).map((name) => ({
     name,
     surface: "orchestration" as const,
   })),

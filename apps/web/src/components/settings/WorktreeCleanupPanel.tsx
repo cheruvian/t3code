@@ -1,5 +1,6 @@
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -153,7 +154,7 @@ export function WorktreeCleanupPanel() {
     const allThreads: EnvironmentThreadShell[] = [
       ...threads,
       ...archived.snapshots.flatMap(({ environmentId, snapshot }) =>
-        snapshot.threads.map((thread) => ({ ...thread, environmentId })),
+        snapshot.threads.map((thread) => presentThreadShell(environmentId, thread)),
       ),
     ];
     for (const thread of allThreads) {
