@@ -104,8 +104,12 @@ function resolveThreadAwarenessPhaseV2(
     case "waiting":
       return "running";
     case "completed":
-      // Work that will wake the agent keeps the run going; a dev server does not.
-      return backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])
+      // A finished turn remains reviewable while monitors watch for future work.
+      // Subagents and unfinished tasks still hold completion; a later wake
+      // reports running through the active run status above.
+      return backgroundWorkHoldsCompletion(
+        (thread.pendingBackgroundTasks ?? []).filter((task) => task.kind !== "monitor"),
+      )
         ? "running"
         : "completed";
     case "failed":

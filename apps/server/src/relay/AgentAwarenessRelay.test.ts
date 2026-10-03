@@ -419,6 +419,33 @@ describe("AgentAwarenessRelay", () => {
     }),
   );
 
+  it.effect("publishes completion with monitors still running and resumes activity on wake", () =>
+    Effect.gen(function* () {
+      const { relay, currentShell, publications } = yield* makeTestRelay();
+      yield* relay.publishThread(THREAD_ID);
+      const pendingBackgroundTasks = [{ taskId: "watch", kind: "monitor" as const }];
+      yield* Ref.set(
+        currentShell,
+        shell({
+          status: "completed",
+          latestRunCompletedAt: DateTime.add(yield* DateTime.now, { seconds: 1 }),
+          pendingBackgroundTasks,
+        }),
+      );
+      yield* relay.publishThread(THREAD_ID);
+      assert.deepEqual(
+        publications.map((publication) => publication.state?.phase),
+        ["running", "completed"],
+      );
+      yield* Ref.set(currentShell, shell({ status: "running", pendingBackgroundTasks }));
+      yield* relay.publishThread(THREAD_ID);
+      assert.deepEqual(
+        publications.map((publication) => publication.state?.phase),
+        ["running", "completed", "running"],
+      );
+    }),
+  );
+
   it.effect("retries a failed final state without another thread event", () =>
     Effect.gen(function* () {
       const { relay, currentShell, shellReads, publications } = yield* makeTestRelay({
