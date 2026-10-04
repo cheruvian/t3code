@@ -18,6 +18,7 @@ const licenseGeneratorSource = path.join(
 const escapedWorkspaceRoot = workspaceRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const mobileShikiRoot = path.dirname(require.resolve("shiki/package.json", { paths: [__dirname] }));
 const generatedDeviceStreamRoot = path.join(__dirname, ".generated", "device-stream");
+const generatedMermaidRoot = path.join(__dirname, ".generated", "mermaid");
 const resolveShikiDependencyRoot = (packageName) => {
   const entryPath = require.resolve(packageName, { paths: [mobileShikiRoot] });
   let currentDir = path.dirname(entryPath);
@@ -48,6 +49,7 @@ config.resolver = {
     ...config.resolver?.extraNodeModules,
     "@t3tools/mobile-third-party-licenses": generatedLicenseModuleRoot,
     "@t3tools/mobile-device-stream": generatedDeviceStreamRoot,
+    "@t3tools/mobile-mermaid": generatedMermaidRoot,
     shiki: mobileShikiRoot,
     "@shikijs/core": resolveShikiDependencyRoot("@shikijs/core"),
     "@shikijs/engine-javascript": resolveShikiDependencyRoot("@shikijs/engine-javascript"),
@@ -120,7 +122,24 @@ async function prepareDeviceStream() {
   }
 }
 
-module.exports = Promise.all([generateMobileThirdPartyLicenses(), prepareDeviceStream()]).then(() =>
+async function prepareMermaid() {
+  const script = await fs.promises.readFile(require.resolve("mermaid/dist/mermaid.min.js"), "utf8");
+  await fs.promises.mkdir(generatedMermaidRoot, { recursive: true });
+  await writeFileIfChanged(
+    path.join(generatedMermaidRoot, "index.js"),
+    `module.exports = ${JSON.stringify(script)};\n`,
+  );
+  await writeFileIfChanged(
+    path.join(generatedMermaidRoot, "package.json"),
+    '{"main":"index.js"}\n',
+  );
+}
+
+module.exports = Promise.all([
+  generateMobileThirdPartyLicenses(),
+  prepareDeviceStream(),
+  prepareMermaid(),
+]).then(() =>
   withUniwindConfig(config, {
     cssEntryFile: "./global.css",
     extraThemes,

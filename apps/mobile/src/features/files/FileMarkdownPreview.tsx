@@ -29,6 +29,7 @@ import {
   type NativeMarkdownTextStyle,
 } from "../../native/SelectableMarkdownText";
 import { resolveWorkspaceFilePath } from "./filePath";
+import { MarkdownCodeBlock } from "../threads/MarkdownCodeBlock";
 
 interface MarkdownPreviewStyles {
   readonly theme: PartialMarkdownTheme;
@@ -38,7 +39,7 @@ interface MarkdownPreviewStyles {
 }
 
 function useMarkdownPreviewStyles(renderImage?: MarkdownImageRenderer): MarkdownPreviewStyles {
-  const { appearance } = useAppearancePreferences();
+  const { appearance, themeAppearance } = useAppearancePreferences();
   const markdownFontSizes = useMemo(
     () => resolveMarkdownFontSizes(appearance.baseFontSize),
     [appearance.baseFontSize],
@@ -62,6 +63,22 @@ function useMarkdownPreviewStyles(renderImage?: MarkdownImageRenderer): Markdown
 
   return useMemo(() => {
     const renderers: CustomRenderers = {
+      code_block: ({ content = "", language }) =>
+        language?.trim().toLowerCase() === "mermaid" ? (
+          <MarkdownCodeBlock
+            backgroundColor={codeBackground}
+            borderColor={horizontalRule}
+            content={content}
+            copyTintColor={body}
+            headerTextColor={body}
+            fontSize={markdownFontSizes.codeBlockFontSize}
+            highlightCode
+            language={language}
+            lineHeight={markdownFontSizes.codeBlockLineHeight}
+            textColor={codeText}
+            theme={themeAppearance}
+          />
+        ) : undefined,
       link: ({ href, children }) => (
         <NativeText
           className="font-t3-medium"
@@ -185,6 +202,7 @@ function useMarkdownPreviewStyles(renderImage?: MarkdownImageRenderer): Markdown
     regularFontFamily,
     renderImage,
     strong,
+    themeAppearance,
     boldFontFamily,
   ]);
 }

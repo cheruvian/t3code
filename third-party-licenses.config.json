@@ -153,6 +153,11 @@
   ],
   "packageOverrides": [
     {
+      "name": "khroma",
+      "version": "2.1.0",
+      "license": "MIT"
+    },
+    {
       "name": "@bufbuild/protobuf",
       "version": "1.10.0",
       "generatedNotices": [
