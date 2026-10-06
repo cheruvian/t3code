@@ -142,6 +142,15 @@ export function projectThreadProjectionForWire(
 export function projectDomainEventForWire(
   event: OrchestrationV2DomainEvent,
 ): OrchestrationV2DomainEvent {
+  if (
+    event.type === "thread.move.fenced" ||
+    event.type === "thread.move.activation-prepared" ||
+    event.type === "thread.move.unfenced" ||
+    event.type === "thread.moved"
+  ) {
+    // Older protocol-2 clients still receive the thread metadata change.
+    return { ...event, type: "thread.metadata-updated" };
+  }
   return event.type === "turn-item.updated"
     ? { ...event, payload: projectTurnItemForWire(event.payload) }
     : event.type === "context-handoff.updated"

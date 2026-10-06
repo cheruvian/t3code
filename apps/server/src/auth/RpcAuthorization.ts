@@ -1,3 +1,4 @@
+import { THREAD_MOVE_RPC } from "@t3tools/contracts";
 import {
   type DeviceListInput,
   AuthAccessReadScope,
@@ -22,6 +23,7 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
  * runtime failure.
  */
 export const RPC_REQUIRED_SCOPES = {
+  [THREAD_MOVE_RPC]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.getTurnDiff]: AuthOrchestrationReadScope,

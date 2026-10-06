@@ -36,7 +36,7 @@ handoff is also a good choice when the old conversation contains conflicting ins
 
 ## Keeping a recovery copy
 
-T3 Code does not currently have a whole-thread export command. Before a major server update, stop
+Before a major server update, stop
 the server and copy its `userdata` directory to a safe location. The default is
 `~/.t3/userdata`; a server started with `--home-dir <path>` uses `<path>/userdata`.
 
@@ -70,3 +70,31 @@ ORDER BY created_at, message_id;
 Open only the copied database. Do not edit it or point a newer or older server at your recovery
 copy. If the affected environment is remote, make and inspect the copy on the machine that runs
 that environment.
+
+## Moving a thread to another environment
+
+Connect both environments and open the same repository as a project on the destination.
+Configure and sign in to Codex or Claude there. In the thread menu, choose **Move to environment**
+and select the destination. Both servers must support thread moves.
+
+The thread must be stopped and use its own Git worktree. T3 Code transfers its history,
+attachments, checkpoints, committed files, staged changes, and other non-ignored files. The
+provider resumes the same native session. Provider credentials stay on their own machines.
+Ignored files are excluded, so reinstall dependencies or recreate local configuration as needed.
+Threads with child agents or shared lineage, sparse checkouts, submodules, and unsupported Git
+index layouts cannot move.
+
+The destination receives a new worktree and branch at the same commit. After the destination
+confirms success, the source becomes an ordinary settled thread. Its worktree and native session
+files remain available, and you can reopen it normally. If the move is interrupted, reconnect both
+environments and select the move action again to retry. A move that needs reconciliation keeps the
+source intact and blocks new work until its outcome is confirmed.
+
+Moving the thread back updates an untouched matching copy in place, preserving the same T3 thread
+and provider session identities. T3 Code keeps the replaced worktree and session artifacts for
+recovery. If the matching destination copy has new work, a running task, or an open terminal, the
+move stops with a conflict instead of merging or overwriting it.
+
+Before changing or continuing the destination thread, choose **Undo move** in its thread menu.
+Both environments must be connected. Undo settles the destination and reopens the source. It
+refuses to discard changes made after the move.

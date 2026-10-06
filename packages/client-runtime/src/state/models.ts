@@ -86,6 +86,8 @@ function threadRunStatusIsActive(status: ThreadRuntimeSummary["status"]): boolea
 }
 
 export interface EnvironmentThreadShell {
+  readonly environmentMoveOrigin?: OrchestrationV2ThreadShell["environmentMoveOrigin"];
+  readonly environmentMove?: OrchestrationV2ThreadShell["environmentMove"];
   readonly environmentId: EnvironmentId;
   readonly id: ThreadId;
   readonly projectId: ProjectId;
@@ -238,6 +240,8 @@ export function presentThreadShell(
     lineage: thread.lineage,
     forkedFrom: thread.forkedFrom,
     activeProviderThreadId: thread.activeProviderThreadId,
+    environmentMove: thread.environmentMove,
+    environmentMoveOrigin: thread.environmentMoveOrigin,
     latestRun,
     runtime: shellRuntime(thread),
     latestUserMessageAt: nullableIso(thread.latestUserMessageAt),

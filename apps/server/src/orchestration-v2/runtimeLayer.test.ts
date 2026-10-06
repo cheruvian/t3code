@@ -10,6 +10,7 @@ import {
   CommandId,
   ContextTransferId,
   EventId,
+  EnvironmentId,
   MessageId,
   NodeId,
   RuntimeRequestId,
@@ -51,6 +52,7 @@ import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
+import * as TerminalManager from "../terminal/Manager.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import { ROLLBACK_FAILED_MESSAGE } from "./CheckpointRollbackService.ts";
@@ -75,6 +77,7 @@ import { shellStreamItemFromThreadShell } from "./ShellStream.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import * as ThreadMoveService from "./ThreadMoveService.ts";
 
 const PlatformTestLayer = Layer.merge(
   NodeServices.layer,
@@ -108,6 +111,8 @@ const GitWorkflowTestLayer = Layer.mock(GitWorkflow.GitWorkflowService)({
 });
 const ProjectServiceTestLayer = Layer.mock(ProjectService.ProjectService)({
   getById: () => Effect.succeed(Option.none()),
+  withActiveProject: (projectId) =>
+    Effect.fail(new ProjectService.ProjectNotFoundError({ projectId })),
 });
 
 const driver = ProviderDriverKind.make("codex");
@@ -390,6 +395,7 @@ const SharedApplicationDataPlaneTestLayer = Layer.mergeAll(
   ProjectServiceLayerLive,
   OrchestrationV2EventSinkLayerLive,
   OrchestrationEventInfrastructureLayerLive,
+  EffectOutbox.layer,
 ).pipe(
   Layer.provide(
     Layer.mock(WorkspacePaths.WorkspacePaths)({
@@ -423,6 +429,15 @@ const SharedApplicationDataPlaneTestLayer = Layer.mergeAll(
   Layer.provide(TestProviderInstanceRegistry),
   Layer.provide(GitWorkflowTestLayer),
   Layer.provide(PlatformTestLayer),
+);
+
+const ActiveTerminalThreadMoveTestLayer = ThreadMoveService.layer.pipe(
+  Layer.provideMerge(SharedApplicationDataPlaneTestLayer),
+  Layer.provide(
+    Layer.mock(TerminalManager.TerminalManager)({
+      hasOpenForThread: () => Effect.succeed(true),
+    }),
+  ),
 );
 
 it.layer(TestLayer)("OrchestrationV2LayerLive", (it) => {
@@ -3916,6 +3931,289 @@ it.layer(SharedApplicationDataPlaneTestLayer)("visited projection", (it) => {
     }),
   );
 });
+
+it.layer(SharedApplicationDataPlaneTestLayer)("thread environment move fence", (it) => {
+  it.effect("fences mutations, preserves read state, and makes activation abort-proof", () =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectService.ProjectService;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const projectId = ProjectId.make("runtime-layer-move-project");
+      const threadId = ThreadId.make("runtime-layer-move-thread");
+      const providerThreadId = ProviderThreadId.make("runtime-layer-move-provider-thread");
+      const destinationEnvironmentId = EnvironmentId.make("runtime-layer-move-destination");
+      const nativeId = "019fbbc1-b12c-7360-a685-28c181f0025f";
+
+      yield* projects.create({
+        commandId: CommandId.make("runtime-layer-move-project-create"),
+        projectId,
+        title: "Move project",
+        workspaceRoot: "/tmp/runtime-layer-move-project",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-move-thread-create"),
+        threadId,
+        projectId,
+        title: "Move thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: "move-thread",
+        worktreePath: "/tmp/runtime-layer-move-project/worktree",
+      });
+      const now = yield* DateTime.now;
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("runtime-layer-move-provider-thread-event"),
+            type: "provider-thread.updated",
+            threadId,
+            driver,
+            providerInstanceId: modelSelection.instanceId,
+            occurredAt: now,
+            payload: {
+              id: providerThreadId,
+              driver,
+              providerInstanceId: modelSelection.instanceId,
+              providerSessionId: null,
+              appThreadId: threadId,
+              ownerNodeId: null,
+              nativeThreadRef: { driver, nativeId, strength: "strong" },
+              nativeConversationHeadRef: null,
+              status: "idle",
+              firstRunOrdinal: null,
+              lastRunOrdinal: null,
+              handoffIds: [],
+              forkedFrom: null,
+              pendingBackgroundTasks: [],
+              contextUsage: null,
+              nativeMetadata: { itemIdentityVersion: 2 },
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+        ],
+      });
+
+      yield* outbox.enqueue([
+        {
+          id: "effect:runtime-layer-move-pending-checkpoint",
+          commandId: CommandId.make("runtime-layer-move-pending-checkpoint"),
+          threadId,
+          request: { type: "terminal.cleanup" },
+        },
+      ]);
+      const pendingEffectFence = yield* orchestrator
+        .dispatch({
+          type: "thread.move.fence",
+          commandId: CommandId.make("runtime-layer-move-pending-effect-fence"),
+          threadId,
+          moveId: "move-pending-effect",
+          destinationEnvironmentId,
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(pendingEffectFence, Orchestrator.OrchestratorDispatchError);
+      yield* outbox.cancelUnsettled({
+        threadId,
+        effectTypes: ["terminal.cleanup"],
+        reason: "test completed",
+      });
+
+      yield* orchestrator.dispatch({
+        type: "thread.move.fence",
+        commandId: CommandId.make("runtime-layer-move-fence"),
+        threadId,
+        moveId: "move-1",
+        destinationEnvironmentId,
+      });
+      const mutation = yield* orchestrator
+        .dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make("runtime-layer-move-blocked-mutation"),
+          threadId,
+          title: "Must not change",
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(mutation, Orchestrator.OrchestratorDispatchError);
+      yield* orchestrator.dispatch({
+        type: "thread.visit",
+        commandId: CommandId.make("runtime-layer-move-visit"),
+        threadId,
+        visitedAt: "2026-10-05T12:00:00.000Z",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.move.abort",
+        commandId: CommandId.make("runtime-layer-move-abort"),
+        threadId,
+        moveId: "move-1",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("runtime-layer-move-unfenced-mutation"),
+        threadId,
+        title: "Usable again",
+      });
+
+      yield* orchestrator.dispatch({
+        type: "thread.move.fence",
+        commandId: CommandId.make("runtime-layer-move-refence"),
+        threadId,
+        moveId: "move-2",
+        destinationEnvironmentId,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.move.activate",
+        commandId: CommandId.make("runtime-layer-move-activate"),
+        threadId,
+        moveId: "move-2",
+      });
+      const lateAbort = yield* orchestrator
+        .dispatch({
+          type: "thread.move.abort",
+          commandId: CommandId.make("runtime-layer-move-late-abort"),
+          threadId,
+          moveId: "move-2",
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(lateAbort, Orchestrator.OrchestratorDispatchError);
+      yield* orchestrator.dispatch({
+        type: "thread.move.finalize",
+        commandId: CommandId.make("runtime-layer-move-finalize"),
+        threadId,
+        moveId: "move-2",
+        receipt: {
+          version: 1,
+          importId: "import-2",
+          moveId: "move-2",
+          threadId,
+          destinationEnvironmentId,
+          providerDriver: driver,
+          nativeThreadId: nativeId,
+          activatedAt: "2026-10-05T12:01:00.000Z",
+          manifestSha256: "a".repeat(64),
+        },
+      });
+      const moved = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNull(moved.thread.environmentMove);
+      assert.isNull(moved.thread.archivedAt);
+      assert.equal(moved.thread.settledOverride, "settled");
+      assert.isNotNull(moved.thread.settledAt);
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("runtime-layer-move-reopen"),
+        threadId,
+        messageId: MessageId.make("runtime-layer-move-reopen-message"),
+        text: "Continue on the retained source",
+        attachments: [],
+        createdBy: "user",
+        creationSource: "web",
+        dispatchMode: { type: "start_immediately" },
+      });
+      const reopened = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNull(reopened.thread.settledOverride);
+      assert.isNull(reopened.thread.settledAt);
+      yield* orchestrator.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make("runtime-layer-move-delete"),
+        threadId,
+      });
+      const deleted = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNotNull(deleted.thread.deletedAt);
+    }),
+  );
+});
+
+it.layer(ActiveTerminalThreadMoveTestLayer)(
+  "thread environment move terminal eligibility",
+  (it) => {
+    it.effect("rejects an active terminal through the production serialized fence path", () =>
+      Effect.gen(function* () {
+        const projects = yield* ProjectService.ProjectService;
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const moves = yield* ThreadMoveService.ThreadMoveService;
+        const projectId = ProjectId.make("runtime-layer-terminal-move-project");
+        const threadId = ThreadId.make("runtime-layer-terminal-move-thread");
+        const providerThreadId = ProviderThreadId.make("runtime-layer-terminal-move-provider");
+        const now = yield* DateTime.now;
+
+        yield* projects.create({
+          commandId: CommandId.make("runtime-layer-terminal-move-project-create"),
+          projectId,
+          title: "Move project with terminal",
+          workspaceRoot: "/tmp/runtime-layer-terminal-move-project",
+        });
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("runtime-layer-terminal-move-thread-create"),
+          threadId,
+          projectId,
+          title: "Move thread with terminal",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: "move-terminal-thread",
+          worktreePath: "/tmp/runtime-layer-terminal-move-project/worktree",
+        });
+        yield* eventSink.write({
+          events: [
+            {
+              id: EventId.make("runtime-layer-terminal-move-provider-event"),
+              type: "provider-thread.updated",
+              threadId,
+              driver,
+              providerInstanceId: modelSelection.instanceId,
+              occurredAt: now,
+              payload: {
+                id: providerThreadId,
+                driver,
+                providerInstanceId: modelSelection.instanceId,
+                providerSessionId: null,
+                appThreadId: threadId,
+                ownerNodeId: null,
+                nativeThreadRef: {
+                  driver,
+                  nativeId: "019fbbc1-b12c-7360-a685-28c181f0025f",
+                  strength: "strong",
+                },
+                nativeConversationHeadRef: null,
+                status: "idle",
+                firstRunOrdinal: null,
+                lastRunOrdinal: null,
+                handoffIds: [],
+                forkedFrom: null,
+                pendingBackgroundTasks: [],
+                contextUsage: null,
+                nativeMetadata: { itemIdentityVersion: 2 },
+                createdAt: now,
+                updatedAt: now,
+              },
+            },
+          ],
+        });
+
+        const failure = yield* moves
+          .fence({
+            commandId: CommandId.make("runtime-layer-terminal-move-fence"),
+            threadId,
+            moveId: "move-active-terminal",
+            destinationEnvironmentId: EnvironmentId.make("runtime-layer-terminal-destination"),
+          })
+          .pipe(Effect.flip);
+        assert.equal(failure.reason, "active-terminal");
+        assert.isUndefined(
+          (yield* orchestrator.getThreadProjection(threadId)).thread.environmentMove,
+        );
+      }),
+    );
+  },
+);
 
 it.layer(SharedApplicationDataPlaneTestLayer)("shared application data plane", (it) => {
   it.effect("orders retained project transactions and V2 thread transactions in one source", () =>

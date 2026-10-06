@@ -3,6 +3,7 @@ import { runtimeInstructionSettings } from "./RuntimeInstructionSettings.ts";
 import * as NodeCrypto from "node:crypto";
 
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
+import { validateClaudeNativeSession } from "../../provider/Drivers/ClaudeNativeSessionLoader.ts";
 import {
   dynamicToolTitle,
   formatReadToolLabel,
@@ -2947,6 +2948,22 @@ export function makeClaudeAdapterV2(
     driver: CLAUDE_PROVIDER,
     getCapabilities: () => Effect.succeed(ClaudeProviderCapabilitiesV2),
     planSelectionTransition: () => Effect.succeed(turnScopedSelectionTransition()),
+    validateNativeThread: (input) =>
+      validateClaudeNativeSession({
+        nativeThreadId: input.nativeThreadId,
+        cwd: input.cwd,
+        environment: adapterOptions.environment,
+      }).pipe(
+        Effect.asVoid,
+        Effect.mapError(
+          (cause) =>
+            new ProviderAdapter.ProviderAdapterProtocolError({
+              driver: CLAUDE_PROVIDER,
+              detail: "Native session validation failed",
+              cause,
+            }),
+        ),
+      ),
     openSession: Effect.fn("ClaudeAdapterV2.openSession")(
       function* (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) {
         const sessionScope = yield* Effect.scope;

@@ -1,3 +1,5 @@
+import { THREAD_MOVE_RPC } from "@t3tools/contracts";
+import * as ThreadMoveTransfer from "./orchestration-v2/ThreadMoveTransferService.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
@@ -1254,6 +1256,7 @@ const makeWsRpcLayer = (
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager.TerminalManager;
+      const threadMoveTransfer = yield* ThreadMoveTransfer.ThreadMoveTransferService;
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
@@ -1965,6 +1968,10 @@ const makeWsRpcLayer = (
               "orchestration_v2.thread_id": input.threadId,
             },
           ),
+        [THREAD_MOVE_RPC]: (input) =>
+          observeRpcEffect(THREAD_MOVE_RPC, threadMoveTransfer.execute(input), {
+            "rpc.aggregate": "orchestration",
+          }),
         [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.launchThread,

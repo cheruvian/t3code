@@ -1,4 +1,4 @@
-import { isDeepStrictEqual } from "node:util";
+import * as NodeUtil from "node:util";
 import {
   resolveInheritedProjectScripts,
   resolveProjectScripts,
@@ -139,6 +139,10 @@ export class ProjectService extends Context.Service<
     }) => Effect.Effect<Project, ProjectServiceError>;
     readonly update: (input: ProjectUpdateInput) => Effect.Effect<Project, ProjectServiceError>;
     readonly delete: (input: ProjectDeleteInput) => Effect.Effect<Project, ProjectServiceError>;
+    readonly withActiveProject: <A, E, R>(
+      projectId: ProjectId,
+      use: (project: Project) => Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | ProjectServiceError, R>;
     readonly getById: (
       projectId: ProjectId,
       options?: { readonly includeDeleted?: boolean },
@@ -282,7 +286,7 @@ export const make = Effect.gen(function* () {
           currentSettings.globalScripts,
           project.disabledInheritedScriptIds ?? [],
         ).find((script) => script.id === command.script.id);
-        if (!canonical?.resource || !isDeepStrictEqual(canonical, command.script)) {
+        if (!canonical?.resource || !NodeUtil.isDeepStrictEqual(canonical, command.script)) {
           resourceRejection = new ProjectCommandInvariantError({
             commandType: command.type,
             detail: canonical?.resource
@@ -592,6 +596,16 @@ export const make = Effect.gen(function* () {
       ),
   );
 
+  const withActiveProject: ProjectService["Service"]["withActiveProject"] = (projectId, use) =>
+    projectLocks.withLock(
+      projectId,
+      Effect.gen(function* () {
+        const row = yield* readRow(projectId);
+        if (Option.isNone(row)) return yield* new ProjectNotFoundError({ projectId });
+        return yield* use(yield* hydrate(row.value));
+      }),
+    );
+
   const enrichShell = (shell: OrchestrationProjectShell) =>
     projectEnrichment.getAvailable(shell.workspaceRoot).pipe(
       Effect.map((enrichment) => ({
@@ -661,6 +675,7 @@ export const make = Effect.gen(function* () {
     bootstrap,
     update,
     delete: deleteProject,
+    withActiveProject,
     getById,
     getByWorkspaceRoot,
     snapshot,
@@ -670,6 +685,5 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(ProjectService, make).pipe(
-  Layer.provide(ThreadCommandExecutor.layer),
   Layer.provide(T3ProjectFileLoader.layer),
 );

@@ -1,3 +1,4 @@
+import * as ThreadMoveTransfer from "../../../orchestration-v2/ThreadMoveTransferService.ts";
 import {
   type CommandId,
   type RuntimeRequestId,
@@ -76,6 +77,19 @@ const readQuestion = Effect.fn("mcp.readQuestion")(function* (
   return { ...context, request, item };
 });
 export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
+  t3_thread_move: (input) =>
+    Effect.gen(function* () {
+      const { caller } = yield* readMutationCaller();
+      if (caller.runtimeMode !== "full-access" || caller.interactionMode !== "default")
+        return yield* new OrchestratorMcpFailure({
+          code: "capability_denied",
+          message: "Moving threads requires a full-access/default caller.",
+        });
+      const moves = yield* ThreadMoveTransfer.ThreadMoveTransferService;
+      return yield* moves
+        .execute(input.operation, caller.projectId)
+        .pipe(Effect.mapError(unavailable));
+    }),
   run_scheduled_task_now: (input) =>
     Effect.gen(function* () {
       const { caller } = yield* readMutationCaller();

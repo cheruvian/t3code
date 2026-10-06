@@ -1,3 +1,6 @@
+import { ThreadId } from "@t3tools/contracts";
+import * as MoveProjection from "../orchestration-v2/ProjectionStore.ts";
+import * as ThreadCommands from "../orchestration-v2/ThreadCommandExecutor.ts";
 /**
  * TerminalManager - Terminal session orchestration service interface.
  *
@@ -156,6 +159,7 @@ export class TerminalManager extends Context.Service<
      * Reuses an existing session for the same thread/terminal id and restores
      * persisted history on first open.
      */
+    readonly hasOpenForThread: (threadId: string) => Effect.Effect<boolean>;
     readonly open: (
       input: TerminalOpenInput,
     ) => Effect.Effect<TerminalSessionSnapshot, TerminalError>;
@@ -1443,7 +1447,7 @@ export const make = Effect.fn("TerminalManager.make")(function* () {
       env,
     }),
   );
-  return yield* makeWithOptions({
+  const terminals = yield* makeWithOptions({
     logsDir: terminalLogsDir,
     ptyAdapter,
     processTable: nativeTelemetry.processTable.pipe(
@@ -1456,6 +1460,39 @@ export const make = Effect.fn("TerminalManager.make")(function* () {
     registerTerminalProcesses: portDiscovery.registerTerminalProcesses,
     unregisterTerminal: portDiscovery.unregisterTerminal,
     resolveProviderInstanceEnvironment,
+  });
+  const projections = yield* MoveProjection.ProjectionStoreV2;
+  const commands = yield* ThreadCommands.ThreadCommandExecutor;
+  const guard = <A>(
+    input: { threadId: string; terminalId: string },
+    action: Effect.Effect<A, TerminalError>,
+  ) =>
+    commands.withLock(
+      ThreadId.make(input.threadId),
+      Effect.gen(function* () {
+        const thread = yield* projections.getThread(ThreadId.make(input.threadId)).pipe(
+          Effect.catchTag("ProjectionStoreThreadNotFoundError", () => Effect.succeed(null)),
+          Effect.mapError((cause) => new TerminalWriteError({ ...input, terminalPid: 0, cause })),
+        );
+        if (thread?.environmentMove)
+          return yield* new TerminalWriteError({
+            ...input,
+            terminalPid: 0,
+            cause: "The thread is fenced for an environment move.",
+          });
+        return yield* action;
+      }),
+    );
+  return TerminalManager.of({
+    ...terminals,
+    // A fence blocks operations that create or mutate a live terminal. Close,
+    // closeIdle, and subscriptions remain available so cleanup and reads can finish.
+    open: (input) => guard(input, terminals.open(input)),
+    write: (input) => guard(input, terminals.write(input)),
+    restart: (input) => guard(input, terminals.restart(input)),
+    attachStream: (input, listener) => guard(input, terminals.attachStream(input, listener)),
+    resize: (input) => guard(input, terminals.resize(input)),
+    clear: (input) => guard(input, terminals.clear(input)),
   });
 });
 
@@ -3170,6 +3207,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     );
 
   return TerminalManager.of({
+    hasOpenForThread: (threadId) =>
+      sessionsForThread(threadId).pipe(
+        Effect.map((sessions) => sessions.some((session) => session.process !== null)),
+      ),
     open,
     attachStream,
     write,
@@ -3183,4 +3224,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   });
 });
 
-export const layer = Layer.effect(TerminalManager, make()).pipe(Layer.provide(ProcessRunner.layer));
+export const layer = Layer.effect(TerminalManager, make()).pipe(
+  Layer.provide(Layer.mergeAll(ProcessRunner.layer, MoveProjection.layer, ThreadCommands.layer)),
+);

@@ -1,3 +1,5 @@
+import { threadMoveUndoParticipants } from "@t3tools/client-runtime/operations";
+import { undoThreadEnvironmentMove } from "../../lib/threadEnvironmentMove";
 import { Checkbox } from "../ui/checkbox";
 import { useAtomValue } from "@effect/atom-react";
 import { SettingsGroup } from "./SettingsGroup";
@@ -3785,15 +3787,26 @@ export function ArchivedThreadsPanel() {
     async (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
       const api = readLocalApi();
       if (!api) return;
+      const thread = archivedGroups
+        .flatMap((group) => group.threads)
+        .find(
+          (thread) =>
+            thread.id === threadRef.threadId && thread.environmentId === threadRef.environmentId,
+        );
+      const undoMove = thread && threadMoveUndoParticipants(thread);
       const clicked = await api.contextMenu.show(
         [
-          { id: "unarchive", label: "Unarchive" },
+          { id: "unarchive", label: undoMove ? "Undo move" : "Unarchive" },
           { id: "delete", label: "Delete", destructive: true },
         ],
         position,
       );
 
       if (clicked === "unarchive") {
+        if (undoMove && thread) {
+          if (await undoThreadEnvironmentMove(threadRef, thread)) refreshArchivedThreads();
+          return;
+        }
         const result = await unarchiveThread(threadRef);
         if (result._tag === "Success") {
           refreshArchivedThreads();
@@ -3826,7 +3839,7 @@ export function ArchivedThreadsPanel() {
         }
       }
     },
-    [confirmAndDeleteThread, refreshArchivedThreads, unarchiveThread],
+    [archivedGroups, confirmAndDeleteThread, refreshArchivedThreads, unarchiveThread],
   );
 
   return (
@@ -3910,6 +3923,16 @@ export function ArchivedThreadsPanel() {
                     className="shrink-0"
                     onClick={() => {
                       void (async () => {
+                        if (threadMoveUndoParticipants(thread)) {
+                          if (
+                            await undoThreadEnvironmentMove(
+                              scopeThreadRef(thread.environmentId, thread.id),
+                              thread,
+                            )
+                          )
+                            refreshArchivedThreads();
+                          return;
+                        }
                         const result = await unarchiveThread(
                           scopeThreadRef(thread.environmentId, thread.id),
                         );
@@ -3932,7 +3955,7 @@ export function ArchivedThreadsPanel() {
                     }}
                   >
                     <ArchiveX className="size-3.5" />
-                    <span>Unarchive</span>
+                    <span>{threadMoveUndoParticipants(thread) ? "Undo move" : "Unarchive"}</span>
                   </Button>
                 }
               />

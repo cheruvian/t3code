@@ -588,6 +588,11 @@ export interface ProviderAdapterV2Shape {
   readonly planSelectionTransition: (
     input: ProviderSelectionTransitionInput,
   ) => Effect.Effect<ProviderSelectionTransitionPlan, ProviderAdapterV2Error>;
+  /** Reads the provider's native storage through its owning loader without starting a turn. */
+  readonly validateNativeThread?: (input: {
+    readonly nativeThreadId: string;
+    readonly cwd: string;
+  }) => Effect.Effect<void, ProviderAdapterV2Error>;
   readonly openSession: (
     input: ProviderAdapterV2OpenSessionInput,
   ) => Effect.Effect<ProviderAdapterV2SessionRuntime, ProviderAdapterV2Error, Scope.Scope>;

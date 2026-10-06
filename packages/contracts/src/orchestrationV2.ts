@@ -12,6 +12,7 @@ import {
   ContextHandoffId,
   ContextTransferId,
   EventId,
+  EnvironmentId,
   IsoDateTime,
   MessageId,
   NodeId,
@@ -355,6 +356,15 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 );
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
+export const ThreadMoveFence = Schema.Struct({
+  moveId: TrimmedNonEmptyString,
+  destinationEnvironmentId: EnvironmentId,
+  status: Schema.Literals(["fenced", "activating", "moved"]),
+  fencedAt: Schema.DateTimeUtc,
+  movedAt: Schema.optional(Schema.DateTimeUtc),
+});
+export type ThreadMoveFence = typeof ThreadMoveFence.Type;
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -374,6 +384,13 @@ export const OrchestrationV2AppThread = Schema.Struct({
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
+  /** Present while mutations are fenced for a cross-environment move and after finalization. */
+  environmentMove: Schema.optional(Schema.NullOr(ThreadMoveFence)),
+  environmentMoveOrigin: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({ moveId: TrimmedNonEmptyString, sourceEnvironmentId: EnvironmentId }),
+    ),
+  ),
   lineage: OrchestrationV2AppThreadLineage,
   forkedFrom: Schema.NullOr(
     Schema.Union([
@@ -1529,6 +1546,10 @@ export const OrchestrationV2DomainEvent = Schema.Union([
       "thread.interaction-mode-updated",
       "thread.model-selection-updated",
       "thread.provider-switched",
+      "thread.move.fenced",
+      "thread.move.activation-prepared",
+      "thread.move.unfenced",
+      "thread.moved",
     ]),
     payload: OrchestrationV2AppThread,
   }),
@@ -1662,6 +1683,59 @@ export const OrchestrationV2ThreadProjection = Schema.Struct({
 });
 export type OrchestrationV2ThreadProjection = typeof OrchestrationV2ThreadProjection.Type;
 
+export const ThreadMovePayloadPart = Schema.Struct({
+  kind: Schema.Literals([
+    "git_bundle",
+    "git_index",
+    "working_tree",
+    "orchestration_history",
+    "attachments",
+    "native_session",
+  ]),
+  sizeBytes: NonNegativeInt,
+  sha256: TrimmedNonEmptyString,
+});
+export type ThreadMovePayloadPart = typeof ThreadMovePayloadPart.Type;
+
+export const ThreadMovePortableManifest = Schema.Struct({
+  version: Schema.Literal(1),
+  moveId: TrimmedNonEmptyString,
+  threadId: ThreadId,
+  sourceEnvironmentId: EnvironmentId,
+  destinationEnvironmentId: EnvironmentId,
+  repositoryCanonicalKey: TrimmedNonEmptyString,
+  providerDriver: ProviderDriverKind,
+  nativeThreadId: TrimmedNonEmptyString,
+  providerNativeMetadata: Schema.optional(OrchestrationV2ProviderThreadNativeMetadata),
+  worktreeRelativePath: TrimmedNonEmptyString,
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  headCommit: TrimmedNonEmptyString,
+  ignoredFilesIncluded: Schema.Literal(false),
+  parts: Schema.Array(ThreadMovePayloadPart),
+});
+export type ThreadMovePortableManifest = typeof ThreadMovePortableManifest.Type;
+
+export const ThreadMoveCancellationReceipt = Schema.Struct({
+  moveId: TrimmedNonEmptyString,
+  threadId: ThreadId,
+  destinationEnvironmentId: EnvironmentId,
+  manifestSha256: TrimmedNonEmptyString,
+});
+export type ThreadMoveCancellationReceipt = typeof ThreadMoveCancellationReceipt.Type;
+
+export const ThreadMoveImportReceipt = Schema.Struct({
+  version: Schema.Literal(1),
+  importId: TrimmedNonEmptyString,
+  moveId: TrimmedNonEmptyString,
+  threadId: ThreadId,
+  destinationEnvironmentId: EnvironmentId,
+  providerDriver: ProviderDriverKind,
+  nativeThreadId: TrimmedNonEmptyString,
+  activatedAt: IsoDateTime,
+  manifestSha256: TrimmedNonEmptyString,
+});
+export type ThreadMoveImportReceipt = typeof ThreadMoveImportReceipt.Type;
+
 export const OrchestrationV2ShellThreadStatus = Schema.Union([
   Schema.Literal("idle"),
   OrchestrationV2RunStatus,
@@ -1686,6 +1760,16 @@ export type OrchestrationV2LatestVisibleMessageSummary =
   typeof OrchestrationV2LatestVisibleMessageSummary.Type;
 
 export const OrchestrationV2ThreadShell = Schema.Struct({
+  environmentMoveOrigin: OrchestrationV2AppThread.fields.environmentMoveOrigin,
+  environmentMove: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        moveId: TrimmedNonEmptyString,
+        destinationEnvironmentId: EnvironmentId,
+        status: Schema.Literals(["fenced", "activating", "moved"]),
+      }),
+    ),
+  ),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: ProjectId,
@@ -1835,6 +1919,15 @@ export type OrchestrationV2StoredEvent = typeof OrchestrationV2StoredEvent.Type;
 
 export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((fields) => ({
   ...fields,
+  environmentMove: Schema.optional(
+    Schema.NullOr(
+      ThreadMoveFence.mapFields((moveFields) => ({
+        ...moveFields,
+        fencedAt: Schema.DateTimeUtcFromString,
+        movedAt: Schema.optional(Schema.DateTimeUtcFromString),
+      })),
+    ),
+  ),
   createdAt: Schema.DateTimeUtcFromString,
   updatedAt: Schema.DateTimeUtcFromString,
   archivedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
@@ -2321,6 +2414,10 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
       "thread.interaction-mode-updated",
       "thread.model-selection-updated",
       "thread.provider-switched",
+      "thread.move.fenced",
+      "thread.move.activation-prepared",
+      "thread.move.unfenced",
+      "thread.moved",
     ]),
     payload: OrchestrationV2AppThreadJson,
   }),
@@ -2877,6 +2974,40 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
  * send them.
  */
 const OrchestrationV2InternalCommand = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("thread.move.fence"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    moveId: TrimmedNonEmptyString,
+    destinationEnvironmentId: EnvironmentId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.move.activate"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    moveId: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.move.reclaim"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    moveId: TrimmedNonEmptyString,
+    cancellation: ThreadMoveCancellationReceipt,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.move.abort"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    moveId: TrimmedNonEmptyString,
+    cancellation: Schema.optional(ThreadMoveCancellationReceipt),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.move.finalize"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    moveId: TrimmedNonEmptyString,
+    receipt: ThreadMoveImportReceipt,
+  }),
   /**
    * Records what a pull request watch saw, and wakes the agent in the same transaction when
    * `wake` is set. Rejected once the watch started at `startedAt` has ended, and a wake is

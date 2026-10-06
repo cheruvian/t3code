@@ -1,3 +1,8 @@
+import { ThreadMoveTransferError } from "@t3tools/contracts";
+import {
+  THREAD_MOVE_DATA_ROUTE,
+  ThreadMoveTransferService,
+} from "./orchestration-v2/ThreadMoveTransferService.ts";
 import * as Mime from "effect/unstable/http/Mime";
 import {
   AuthOrchestrationOperateScope,
@@ -664,5 +669,58 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
 export const staticAndDevRouteLayer = Layer.unwrap(
   loadImmutableBuildAssets.pipe(
     Effect.map((assets) => HttpRouter.add("GET", "*", handleStaticAndDevRequest(assets))),
+  ),
+);
+
+export const threadMoveDataRouteLayer = Layer.mergeAll(
+  HttpRouter.add(
+    "GET",
+    `${THREAD_MOVE_DATA_ROUTE}/*`,
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const url = HttpServerRequest.toURL(request);
+      if (Option.isNone(url)) return HttpServerResponse.text("Bad Request", { status: 400 });
+      const service = yield* ThreadMoveTransferService;
+      const token = url.value.pathname.slice(THREAD_MOVE_DATA_ROUTE.length + 1);
+      const bytes = yield* service.readChunk(
+        token,
+        Number(url.value.searchParams.get("offset") ?? 0),
+      );
+      return HttpServerResponse.uint8Array(bytes, {
+        headers: {
+          "content-type": "application/octet-stream",
+          "cache-control": "private, no-store",
+        },
+      });
+    }).pipe(
+      Effect.catchTag("ThreadMoveTransferError", (error) =>
+        Effect.succeed(HttpServerResponse.text(error.message, { status: 400 })),
+      ),
+    ),
+  ),
+  HttpRouter.add(
+    "POST",
+    `${THREAD_MOVE_DATA_ROUTE}/*`,
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const url = HttpServerRequest.toURL(request);
+      if (Option.isNone(url)) return HttpServerResponse.text("Bad Request", { status: 400 });
+      const service = yield* ThreadMoveTransferService;
+      const token = url.value.pathname.slice(THREAD_MOVE_DATA_ROUTE.length + 1);
+      const offset = yield* service.writeChunk(
+        token,
+        Number(url.value.searchParams.get("offset") ?? 0),
+        request.stream.pipe(
+          Stream.mapError((error) => new ThreadMoveTransferError({ message: String(error) })),
+        ),
+      );
+      return HttpServerResponse.text(String(offset), {
+        headers: { "cache-control": "private, no-store" },
+      });
+    }).pipe(
+      Effect.catchTag("ThreadMoveTransferError", (error) =>
+        Effect.succeed(HttpServerResponse.text(error.message, { status: 400 })),
+      ),
+    ),
   ),
 );

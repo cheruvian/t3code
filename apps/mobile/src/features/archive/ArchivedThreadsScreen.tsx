@@ -1,3 +1,4 @@
+import { threadMoveUndoParticipants } from "@t3tools/client-runtime/operations";
 import type {
   EnvironmentProject,
   EnvironmentThreadShell,
@@ -214,9 +215,9 @@ function ArchivedThreadRow(props: {
       onSwipeableClose={props.onSwipeableClose}
       onSwipeableWillOpen={props.onSwipeableWillOpen}
       primaryAction={{
-        accessibilityLabel: `Unarchive ${props.thread.title}`,
+        accessibilityLabel: `${threadMoveUndoParticipants(props.thread) ? "Undo move for" : "Unarchive"} ${props.thread.title}`,
         icon: "arrow.uturn.backward",
-        label: "Unarchive",
+        label: threadMoveUndoParticipants(props.thread) ? "Undo move" : "Unarchive",
         onPress: props.onUnarchive,
       }}
       simultaneousWith={props.simultaneousSwipeGesture}
