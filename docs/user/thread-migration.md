@@ -80,11 +80,14 @@ and select the destination. Both servers must support thread moves.
 The thread must be stopped and use its own Git worktree. T3 Code transfers its history,
 attachments, checkpoints, committed files, staged changes, and other non-ignored files. The
 provider resumes the same native session. Provider credentials stay on their own machines.
-Ignored files are excluded, so reinstall dependencies or recreate local configuration as needed.
+Ignored files and untracked `node_modules` are excluded. T3 Code runs the destination project’s
+configured setup script after import to install dependencies and prepare local configuration.
+Without a setup script, install dependencies or recreate local configuration yourself.
 Threads with child agents or shared lineage, sparse checkouts, submodules, and unsupported Git
 index layouts cannot move.
 
-The destination receives a new worktree and branch at the same commit. After the destination
+The destination receives a clean worktree and branch at the same commit, then applies the source’s
+changes. Shared Git history is reused when available. After the destination
 confirms success, the source becomes an ordinary settled thread. Its worktree and native session
 files remain available, and you can reopen it normally. If the move is interrupted, reconnect both
 environments and select the move action again to retry. A move that needs reconciliation keeps the

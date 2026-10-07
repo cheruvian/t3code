@@ -272,6 +272,7 @@ const threadMoveTransferProvided = threadMoveTransferLayer.pipe(
       effectOutboxLayer,
       commandReceiptStoreProvided,
       ProjectServiceLayerLive,
+      ProjectSetupScriptRunnerLayerLive,
       ThreadCommandExecutor.layer,
       nativeSessionResumeProbeLayer.pipe(
         Layer.provide(Layer.merge(providerAdapterRegistryProvided, runtimePolicyProvided)),

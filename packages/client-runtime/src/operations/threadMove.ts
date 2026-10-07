@@ -150,12 +150,19 @@ export async function runThreadMoveSaga(
   };
   report({ phase: "checking" });
   try {
-    const destination = await ports.destination({ ...identity, action: "status" });
+    const destination = await ports.destination({
+      ...identity,
+      action: "status",
+      projectId: input.projectId,
+    });
     report({ phase: "exporting" });
     const source = await ports.source({
       ...identity,
       action: "export",
       destinationEnvironmentId: input.destinationEnvironmentId,
+      ...(destination.repositoryHeadCommit
+        ? { destinationHeadCommit: destination.repositoryHeadCommit }
+        : {}),
     });
     activationPossible = source.state === "activating" || source.state === "moved";
     if (destination.cancellation) {

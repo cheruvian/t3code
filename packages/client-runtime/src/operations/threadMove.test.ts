@@ -334,3 +334,21 @@ it("reports reconciliation on failure without letting presentation errors break 
   ).rejects.toThrow();
   expect(phases.at(-1)).toBe("reconciling");
 });
+
+it("negotiates the destination base while retaining the full-export fallback for older servers", async () => {
+  const f = fixture();
+  const base = "d".repeat(40);
+  const exported: Array<import("@t3tools/contracts").ThreadMoveRequest> = [];
+  await runThreadMoveSaga(input, {
+    ...f.ports,
+    destination: async (request) => {
+      const result = await f.ports.destination(request);
+      return request.action === "status" ? { ...result, repositoryHeadCommit: base } : result;
+    },
+    source: async (request) => {
+      if (request.action === "export") exported.push(request);
+      return f.ports.source(request);
+    },
+  });
+  expect(exported[0]).toMatchObject({ action: "export", destinationHeadCommit: base });
+});

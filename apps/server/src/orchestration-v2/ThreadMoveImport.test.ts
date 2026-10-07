@@ -51,6 +51,7 @@ import * as Probe from "./NativeSessionResumeProbe.ts";
 import * as Transfer from "./ThreadMoveTransferService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+import * as SetupScripts from "../project/ProjectSetupScriptRunner.ts";
 import { makeKeyedSerialExecutor } from "./KeyedSerialExecutor.ts";
 import {
   OrchestrationV2EventSinkLayerLive,
@@ -72,12 +73,14 @@ const git = async (cwd: string, ...args: string[]) =>
 
 async function fixture(options?: {
   readonly failDestinationProbe?: boolean;
+  readonly failSetup?: boolean;
   readonly sourceHasTerminal?: boolean;
   readonly probeGate?: {
     readonly entered: Deferred.Deferred<void>;
     readonly release: Deferred.Deferred<void>;
   };
 }) {
+  const setupCalls: Array<{ environmentId: string; cwd: string }> = [];
   const root = await NodeFSP.realpath(
     await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-thread-move-integration-")),
   );
@@ -336,6 +339,7 @@ async function fixture(options?: {
         const destinationProject = {
           id: projectId,
           workspaceRoot: repositoryRoot,
+          deletedAt: null,
         } as unknown as Project;
         return Layer.mock(Projects.ProjectService)({
           getById: () => Effect.succeed(Option.some(destinationProject)),
@@ -360,6 +364,21 @@ async function fixture(options?: {
       }),
     ).pipe(Layer.provide(stores));
     const dependencies = Layer.mergeAll(
+      Layer.effect(
+        SetupScripts.ProjectSetupScriptRunner,
+        Effect.gen(function* () {
+          const projectionStore = yield* Projections.ProjectionStoreV2;
+          return SetupScripts.ProjectSetupScriptRunner.of({
+            runForThread: (input) =>
+              Effect.gen(function* () {
+                yield* projectionStore.getThread(threadId).pipe(Effect.orDie);
+                setupCalls.push({ environmentId, cwd: input.worktreePath });
+                if (options?.failSetup) return yield* Effect.die(new Error("fixture setup failed"));
+                return { status: "no-script" as const };
+              }),
+          });
+        }),
+      ).pipe(Layer.provide(stores)),
       stores,
       threads.pipe(Layer.provide(stores)),
       moves.pipe(Layer.provide(stores)),
@@ -457,7 +476,17 @@ async function fixture(options?: {
   await source.runPromise(
     Effect.flatMap(Sink.EventSinkV2, (sink) => sink.write({ events: storedEvents })),
   );
-  return { source, destination, cwd, sourceRoot, sourceHome, destinationHome, transcript };
+  return {
+    source,
+    destination,
+    cwd,
+    sourceRoot,
+    destinationRoot,
+    sourceHome,
+    destinationHome,
+    transcript,
+    setupCalls,
+  };
 }
 
 type FixtureRuntime = Awaited<ReturnType<typeof fixture>>["source"];
@@ -1157,3 +1186,74 @@ it("returns idle when destination status has no thread or move journal", async (
     await f.destination.dispose();
   }
 }, 30_000);
+
+it.each([false, true])(
+  "runs destination setup once after import and retains the moved thread when setup fails=%s",
+  async (failSetup) => {
+    const f = await fixture({ failSetup });
+    try {
+      const source = await f.source.runPromise(Transfer.ThreadMoveTransferService);
+      const destination = await f.destination.runPromise(Transfer.ThreadMoveTransferService);
+      await completeMove({
+        moveId: "setup-once",
+        from: f.source,
+        to: f.destination,
+        source,
+        destination,
+        destinationEnvironmentId: EnvironmentId.make("destination"),
+        branch: "moved/setup-once",
+      });
+      expect(f.setupCalls).toHaveLength(1);
+      expect(f.setupCalls[0]?.environmentId).toBe("destination");
+      const projection = await f.destination.runPromise(
+        Effect.flatMap(Projections.ProjectionStoreV2, (store) => store.getThread(threadId)),
+      );
+      expect(f.setupCalls[0]?.cwd).toBe(projection.worktreePath);
+      await f.destination.runPromise(
+        destination.execute({ threadId, moveId: "setup-once", action: "commit" }),
+      );
+      expect(f.setupCalls).toHaveLength(1);
+    } finally {
+      await f.source.dispose();
+      await f.destination.dispose();
+    }
+  },
+);
+
+it("advertises the destination repository HEAD for incremental exports within the project scope", async () => {
+  const f = await fixture();
+  try {
+    await git(f.destinationRoot, "fetch", f.sourceRoot, "HEAD");
+    await git(f.destinationRoot, "checkout", "-b", "shared", "FETCH_HEAD");
+    const destination = await f.destination.runPromise(Transfer.ThreadMoveTransferService);
+    const status = await f.destination.runPromise(
+      destination.execute(
+        {
+          action: "status",
+          moveId: "base-probe",
+          threadId,
+          projectId: ProjectId.make("move-project"),
+        },
+        ProjectId.make("move-project"),
+      ),
+    );
+    expect(status.state).toBe("idle");
+    expect(status.repositoryHeadCommit).toBe(await git(f.destinationRoot, "rev-parse", "HEAD"));
+    await expect(
+      f.destination.runPromise(
+        destination.execute(
+          {
+            action: "status",
+            moveId: "base-probe",
+            threadId,
+            projectId: ProjectId.make("another-project"),
+          },
+          ProjectId.make("move-project"),
+        ),
+      ),
+    ).rejects.toThrow("outside the calling project");
+  } finally {
+    await f.source.dispose();
+    await f.destination.dispose();
+  }
+});

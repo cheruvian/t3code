@@ -83,6 +83,8 @@ import * as Probe from "./NativeSessionResumeProbe.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+import * as SetupScripts from "../project/ProjectSetupScriptRunner.ts";
+import { readThreadMoveRepositoryHead } from "./ThreadMovePortable.ts";
 import { makeKeyedSerialExecutor } from "./KeyedSerialExecutor.ts";
 
 const Part = Schema.Struct({
@@ -129,6 +131,7 @@ const State = Schema.Struct({
   instanceId: Schema.optional(ProviderInstanceId),
   branch: Schema.optional(Schema.NullOr(Schema.String)),
   receipt: Schema.optional(ThreadMoveImportReceipt),
+  setupAttempted: Schema.optional(Schema.Boolean),
 });
 type State = typeof State.Type;
 const encodeState = Schema.encodeSync(State),
@@ -208,6 +211,7 @@ export const layer = Layer.effect(
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
     const effectOutbox = yield* EffectOutbox.EffectOutboxV2;
     const terminals = yield* TerminalManager.TerminalManager;
+    const setupScripts = yield* SetupScripts.ProjectSetupScriptRunner;
     const lane = yield* makeKeyedSerialExecutor<string>();
     const root = NodePath.join(config.stateDir, "thread-moves");
     const directory = (direction: "source" | "destination", moveId: string) =>
@@ -497,7 +501,14 @@ export const layer = Layer.effect(
         );
         const sourceFingerprint = yield* fingerprintSource(cwd, dir);
         const workspace = yield* io(() =>
-          exportThreadWorkspace({ cwd, payloadDirectory: payload, checkpointRefs }),
+          exportThreadWorkspace({
+            cwd,
+            payloadDirectory: payload,
+            checkpointRefs,
+            ...(input.destinationHeadCommit
+              ? { destinationHeadCommit: input.destinationHeadCommit }
+              : {}),
+          }),
         );
         const home = yield* nativeHome(providerThread.providerInstanceId, providerThread.driver);
         const native = yield* io(() =>
@@ -1356,7 +1367,7 @@ export const layer = Layer.effect(
               input.moveId,
               Effect.gen(function* () {
                 if (projectScopeId) {
-                  if (input.action === "begin") {
+                  if (input.action === "begin" || (input.action === "status" && input.projectId)) {
                     if (input.projectId !== projectScopeId)
                       return yield* failure("The move is outside the calling project.");
                   } else {
@@ -1371,7 +1382,51 @@ export const layer = Layer.effect(
                     }
                   }
                 }
-                return yield* execute(input);
+                const result: ThreadMoveResponse = yield* execute(input);
+                if (input.action === "status" && input.projectId) {
+                  const project = yield* projects.getById(input.projectId);
+                  if (Option.isSome(project) && project.value.deletedAt === null) {
+                    const repositoryHeadCommit = yield* io(() =>
+                      readThreadMoveRepositoryHead(project.value.workspaceRoot),
+                    );
+                    if (repositoryHeadCommit) return { ...result, repositoryHeadCommit };
+                  }
+                }
+                if (input.action === "commit" && result.receipt) {
+                  const state = yield* readState("destination", input.moveId);
+                  if (state && !state.setupAttempted && state.projectId) {
+                    yield* store("destination", input.moveId, { ...state, setupAttempted: true });
+                    const thread = yield* projections.getThread(input.threadId);
+                    const worktreePath = thread.worktreePath;
+                    const projectId = state.projectId;
+                    if (worktreePath)
+                      yield* Effect.gen(function* () {
+                        const setup = yield* setupScripts.runForThread({
+                          threadId: input.threadId,
+                          projectId,
+                          worktreePath,
+                          preferredTerminalId: `setup-move-${input.moveId}`,
+                          observeCompletion: {},
+                        });
+                        if (setup.status === "started" && !setup.async && setup.completion) {
+                          const completion = yield* setup.completion;
+                          if (completion.exitCode !== 0)
+                            yield* Effect.logWarning("Moved thread project setup failed", {
+                              threadId: input.threadId,
+                              exitCode: completion.exitCode,
+                            });
+                        }
+                      }).pipe(
+                        Effect.catchCause((cause) =>
+                          Effect.logWarning("Moved thread project setup could not start", {
+                            threadId: input.threadId,
+                            cause: Cause.squash(cause),
+                          }),
+                        ),
+                      );
+                  }
+                }
+                return result;
               }),
             ),
           )

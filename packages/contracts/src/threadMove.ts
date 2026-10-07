@@ -15,6 +15,7 @@ export const ThreadMoveRequest = Schema.Union([
     ...identity,
     action: Schema.Literal("export"),
     destinationEnvironmentId: EnvironmentId,
+    destinationHeadCommit: Schema.optional(TrimmedNonEmptyString),
   }),
   Schema.Struct({
     ...identity,
@@ -26,15 +27,12 @@ export const ThreadMoveRequest = Schema.Union([
   }),
   Schema.Struct({
     ...identity,
-    action: Schema.Literals([
-      "status",
-      "commit",
-      "cancel",
-      "activate",
-      "abort",
-      "prepareUndo",
-      "undo",
-    ]),
+    action: Schema.Literal("status"),
+    projectId: Schema.optional(ProjectId),
+  }),
+  Schema.Struct({
+    ...identity,
+    action: Schema.Literals(["commit", "cancel", "activate", "abort", "prepareUndo", "undo"]),
   }),
   Schema.Struct({
     ...identity,
@@ -60,6 +58,7 @@ export const ThreadMoveResponse = Schema.Struct({
     "moved",
   ]),
   manifest: Schema.optional(ThreadMovePortableManifest),
+  repositoryHeadCommit: Schema.optional(Schema.String),
   relativeUrl: Schema.optional(Schema.String),
   offset: Schema.optional(Schema.Number),
   receipt: Schema.optional(ThreadMoveImportReceipt),

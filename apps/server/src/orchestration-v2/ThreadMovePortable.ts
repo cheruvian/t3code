@@ -29,6 +29,7 @@ export interface ExportThreadWorkspaceInput {
   readonly cwd: string;
   readonly payloadDirectory: string;
   readonly checkpointRefs: ReadonlyArray<string>;
+  readonly destinationHeadCommit?: string;
 }
 
 export interface RestoreThreadWorkspaceInput {
@@ -135,17 +136,77 @@ async function writeOverlayHeader(
   await writeBytes(handle, encoded);
 }
 
-async function writeWorkingTreeOverlay(cwd: string, outputPath: string): Promise<void> {
-  const listed = await runGit(cwd, [
-    "ls-files",
-    "-z",
-    "--cached",
-    "--others",
-    "--exclude-standard",
-  ]);
-  const paths = listed.stdout
+/** Git records only the executable bit; retain other source permission differences too. */
+async function pathsWithCustomModes(cwd: string): Promise<ReadonlyArray<string>> {
+  const entries = (await runGit(cwd, ["ls-files", "--stage", "-z"])).stdout
     .split("\0")
-    .filter((candidate) => candidate.length > 0)
+    .filter(Boolean);
+  const paths: string[] = [];
+  for (let offset = 0; offset < entries.length; offset += 128) {
+    const batch = await Promise.all(
+      entries.slice(offset, offset + 128).map(async (entry) => {
+        const mode = entry.slice(0, 6);
+        if (mode !== "100644" && mode !== "100755") return null;
+        const path = portableWorkspacePath(entry.slice(entry.indexOf("\t") + 1));
+        try {
+          const stat = await NodeFSP.lstat(NodePath.join(cwd, path));
+          return stat.isFile() && (stat.mode & 0o777) !== (mode === "100755" ? 0o755 : 0o644)
+            ? path
+            : null;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+          throw error;
+        }
+      }),
+    );
+    paths.push(...batch.filter((path) => path !== null));
+  }
+  return paths;
+}
+
+async function writeWorkingTreeOverlay(
+  cwd: string,
+  outputPath: string,
+  changesOnly = false,
+): Promise<void> {
+  const [tracked, untracked, flagged, customModes] = await Promise.all([
+    runGit(
+      cwd,
+      changesOnly
+        ? [
+            "-c",
+            "core.fileMode=true",
+            "-c",
+            "core.symlinks=true",
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            "HEAD",
+            "--",
+          ]
+        : ["ls-files", "-z", "--cached"],
+    ),
+    runGit(cwd, ["ls-files", "-z", "--others", "--exclude-standard", "--exclude=node_modules/"]),
+    changesOnly
+      ? runGit(cwd, ["ls-files", "-v", "-z"])
+      : Promise.resolve({ stdout: "", exitCode: 0 }),
+    changesOnly ? pathsWithCustomModes(cwd) : Promise.resolve([]),
+  ]);
+  const paths = [
+    ...new Set([
+      ...tracked.stdout.split("\0"),
+      ...customModes,
+      ...flagged.stdout
+        .split("\0")
+        .filter((entry) => /^[a-zS]/.test(entry))
+        .map((entry) => entry.slice(2)),
+      ...untracked.stdout.split("\0").filter((path) => !path.split("/").includes("node_modules")),
+    ]),
+  ]
+    .filter((path) => path.length > 0)
     .map(portableWorkspacePath)
     .toSorted();
   const handle = await NodeFSP.open(outputPath, "wx");
@@ -343,6 +404,28 @@ async function restoreWorkingTreeOverlay(worktreePath: string, overlayPath: stri
   }
 }
 
+/** Excludes only ancestry confirmed present on the destination, retaining every advertised checkpoint. */
+async function bundlePrerequisite(
+  cwd: string,
+  destinationHead: string | undefined,
+  roots: ReadonlyArray<string>,
+) {
+  if (!destinationHead || !/^[0-9a-f]{40}$/.test(destinationHead)) return [];
+  const exists = await runGit(cwd, ["cat-file", "-e", `${destinationHead}^{commit}`], {
+    allowFailure: true,
+  });
+  if (exists.exitCode !== 0) return [];
+  const common = await runGit(cwd, ["merge-base", "--octopus", destinationHead, ...roots], {
+    allowFailure: true,
+  });
+  if (common.exitCode !== 0 || !common.stdout.trim()) return [];
+  const parent = await runGit(cwd, ["rev-parse", "--verify", `${common.stdout.trim()}^`], {
+    allowFailure: true,
+  });
+  // Keep the common commit itself: checkpoint refs at that commit must still be advertised.
+  return parent.exitCode === 0 ? [`^${parent.stdout.trim()}`] : [];
+}
+
 export async function exportThreadWorkspace(
   input: ExportThreadWorkspaceInput,
 ): Promise<ThreadMoveWorkspaceDescriptor> {
@@ -404,6 +487,10 @@ export async function exportThreadWorkspace(
       "HEAD",
       stagedCommitRef,
       ...checkpointRefs,
+      ...(await bundlePrerequisite(input.cwd, input.destinationHeadCommit, [
+        headCommit,
+        ...checkpointRefs,
+      ])),
     ]);
   } finally {
     await runGit(input.cwd, ["update-ref", "-d", stagedCommitRef], { allowFailure: true });
@@ -420,7 +507,11 @@ export async function exportThreadWorkspace(
   );
 
   const workingTreePath = "working-tree.bin";
-  await writeWorkingTreeOverlay(input.cwd, NodePath.join(input.payloadDirectory, workingTreePath));
+  await writeWorkingTreeOverlay(
+    input.cwd,
+    NodePath.join(input.payloadDirectory, workingTreePath),
+    true,
+  );
   return {
     version: 1,
     headCommit,
@@ -640,4 +731,20 @@ export async function restoreThreadWorkspace(input: RestoreThreadWorkspaceInput)
       });
     }
   }
+}
+
+export async function readThreadMoveRepositoryHead(cwd: string) {
+  const [shallow, partial] = await Promise.all([
+    runGit(cwd, ["rev-parse", "--is-shallow-repository"], { allowFailure: true }),
+    runGit(cwd, ["config", "--get-regexp", "^(extensions.partialclone|remote\\..*\\.promisor)$"], {
+      allowFailure: true,
+    }),
+  ]);
+  // A commit ID alone does not prove a shallow or partial clone owns its ancestry and blobs.
+  if (shallow.exitCode !== 0 || shallow.stdout.trim() !== "false" || partial.exitCode === 0)
+    return undefined;
+  const result = await runGit(cwd, ["rev-parse", "--verify", "HEAD^{commit}"], {
+    allowFailure: true,
+  });
+  return result.exitCode === 0 ? result.stdout.trim() : undefined;
 }
