@@ -1,23 +1,10 @@
+import { getProviderOutageBannerKey } from "@t3tools/client-runtime/provider-outage";
 import { type ServerProvider } from "@t3tools/contracts";
 import { memo } from "react";
 import { AlertTriangleIcon, XIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { formatProviderDriverKindLabel } from "../../providerModels";
-
-export function getProviderOutageBannerKey(status: ServerProvider | null): string | null {
-  const advisory = status?.outageAdvisory;
-  if (!advisory || advisory.severity === "none") return null;
-  return [status.instanceId, advisory.severity, advisory.message ?? ""].join("\u0000");
-}
-
-export function shouldShowProviderOutageBanner(
-  status: ServerProvider | null,
-  dismissedBannerKey: string | null,
-): boolean {
-  const bannerKey = getProviderOutageBannerKey(status);
-  return bannerKey !== null && bannerKey !== dismissedBannerKey;
-}
 
 export const ProviderOutageBanner = memo(function ProviderOutageBanner({
   onDismiss,
@@ -67,10 +54,10 @@ export const ProviderOutageBanner = memo(function ProviderOutageBanner({
         </div>
         <Button
           aria-label={`Dismiss ${providerName} outage notice`}
-          className="absolute top-2 right-2 size-6 text-muted-foreground hover:text-foreground"
+          className="absolute top-2 right-2"
           onClick={onDismiss}
           size="icon-xs"
-          variant="ghost"
+          variant="ghost-muted"
         >
           <XIcon aria-hidden className="size-3.5" />
         </Button>

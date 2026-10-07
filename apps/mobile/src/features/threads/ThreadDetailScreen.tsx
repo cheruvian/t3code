@@ -1,3 +1,4 @@
+import { useProviderOutage } from "../../hooks/useProviderOutage";
 import { useThreadReportedModelSelection } from "../../state/entities";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
 import { useNavigation } from "@react-navigation/native";
@@ -105,7 +106,7 @@ import type {
 } from "../../lib/threadActivity";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerFeedback } from "./ComposerFeedback";
-import { ComposerProviderOutage, getProviderOutageBannerKey } from "./ComposerProviderOutage";
+import { ComposerProviderOutage } from "./ComposerProviderOutage";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import { ProviderSubagentBar } from "./ProviderSubagentBar";
@@ -803,19 +804,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         )
       : [];
   }, [props.projectWorkspaceRoot, props.threadCwd, selectedProviderStatus]);
-  const providerOutageBannerKey = getProviderOutageBannerKey(selectedProviderStatus);
-  const [dismissedProviderOutageBannerKey, setDismissedProviderOutageBannerKey] = useState<
-    string | null
-  >(null);
-  useEffect(() => {
-    if (providerOutageBannerKey === null && dismissedProviderOutageBannerKey !== null) {
-      setDismissedProviderOutageBannerKey(null);
-    }
-  }, [dismissedProviderOutageBannerKey, providerOutageBannerKey]);
-  const visibleProviderOutageStatus =
-    providerOutageBannerKey !== null && providerOutageBannerKey !== dismissedProviderOutageBannerKey
-      ? selectedProviderStatus
-      : null;
+  const { visibleStatus: visibleProviderOutageStatus, dismiss: dismissProviderOutage } =
+    useProviderOutage(selectedProviderStatus);
 
   useLayoutEffect(() => {
     selectedThreadKeyRef.current = selectedThreadKey;
@@ -1208,7 +1198,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 ))}
                 <ComposerProviderOutage
                   status={visibleProviderOutageStatus}
-                  onDismiss={() => setDismissedProviderOutageBannerKey(providerOutageBannerKey)}
+                  onDismiss={dismissProviderOutage}
                 />
                 {usageLimitsReport && activeUserInputRequestId === null ? (
                   <Animated.View

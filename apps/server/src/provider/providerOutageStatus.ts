@@ -36,11 +36,30 @@ const STATUS_PAGE_URLS: Partial<Record<ProviderDriverKind, string>> = {
 
 const StatuspageIndicator = Schema.Literals(["none", "minor", "major", "critical"]);
 
+const StatuspageComponent = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  status: Schema.String,
+});
+
 const StatuspageSummaryResponse = Schema.Struct({
   status: Schema.Struct({
     indicator: StatuspageIndicator,
     description: Schema.optional(Schema.String),
   }),
+  components: Schema.optional(Schema.Array(StatuspageComponent)),
+  incidents: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.String,
+        name: Schema.String,
+        status: Schema.String,
+        impact: Schema.optional(Schema.String),
+        components: Schema.optional(Schema.Array(StatuspageComponent)),
+        incident_updates: Schema.optional(Schema.Array(Schema.Struct({ body: Schema.String }))),
+      }),
+    ),
+  ),
 });
 
 interface ProviderOutageCacheEntry {
@@ -66,6 +85,92 @@ function severityFromIndicator(
     case "critical":
       return "outage";
   }
+}
+
+/** Codex CLI uses Codex and Responses services, not unrelated OpenAI products. */
+function affectsCodex(name: string): boolean {
+  return (
+    (/\bcodex\b/i.test(name) && !/\b(desktop|cloud)\b/i.test(name)) ||
+    /^(apis?|responses(?: api)?)$/i.test(name.trim())
+  );
+}
+
+function severityFromImpact(impact: string): ServerProviderOutageAdvisory["severity"] {
+  return impact === "major" ||
+    impact === "critical" ||
+    impact === "partial_outage" ||
+    impact === "major_outage"
+    ? "outage"
+    : impact === "none" || impact === "operational"
+      ? "none"
+      : "degraded";
+}
+
+function advisoryFromSummary(
+  driver: ProviderDriverKind,
+  summary: typeof StatuspageSummaryResponse.Type,
+) {
+  const incidents = (summary.incidents ?? [])
+    .filter((incident) => !["resolved", "postmortem", "completed"].includes(incident.status))
+    .map((incident) => ({
+      id: incident.id,
+      name: incident.name,
+      message: incident.incident_updates?.[0]?.body.trim() || null,
+      severity: severityFromImpact(incident.impact ?? "minor"),
+      affectsProvider:
+        driver !== "codex" ||
+        (incident.components?.length
+          ? incident.components.some((component) => affectsCodex(component.name))
+          : affectsCodex(incident.name) ||
+            (/\b(responses|api)\b/i.test(incident.name) &&
+              !/\b(embeddings|images|audio|fine.tuning|batch|compliance)\b/i.test(incident.name))),
+    }));
+  // A component can be degraded before an incident is published.
+  for (const component of summary.components ?? []) {
+    if (component.status === "operational" || component.status === "under_maintenance") continue;
+    if (
+      summary.incidents?.some(
+        (incident) =>
+          !["resolved", "postmortem", "completed"].includes(incident.status) &&
+          incident.components?.some((affected) => affected.id === component.id),
+      )
+    )
+      continue;
+    incidents.push({
+      id: `component:${component.id}`,
+      name: `${component.name}: ${component.status.replaceAll("_", " ")}`,
+      message: null,
+      severity: severityFromImpact(component.status),
+      affectsProvider: driver !== "codex" || affectsCodex(component.name),
+    });
+  }
+  if (incidents.length === 0 && summary.status.indicator !== "none") {
+    incidents.push({
+      id: "summary",
+      name: summary.status.description?.trim() || "Service disruption",
+      message: null,
+      severity: severityFromIndicator(summary.status.indicator),
+      affectsProvider: driver !== "codex",
+    });
+  }
+  const relevant = incidents.filter(
+    (incident) => incident.affectsProvider && incident.severity !== "none",
+  );
+  const severity =
+    driver === "codex"
+      ? relevant.some((incident) => incident.severity === "outage")
+        ? "outage"
+        : relevant.length
+          ? "degraded"
+          : "none"
+      : severityFromIndicator(summary.status.indicator);
+  return {
+    severity,
+    message:
+      relevant.map((incident) => incident.name).join("; ") ||
+      (severity === "none" ? null : summary.status.description?.trim() || null),
+    incidents,
+  };
 }
 
 const fetchStatuspageSummary = Effect.fn("fetchStatuspageSummary")(function* (
@@ -130,8 +235,7 @@ export const resolveProviderOutageAdvisory = Effect.fn("resolveProviderOutageAdv
   const summary = yield* fetchStatuspageSummary(driver, summaryUrl);
   const advisory: ServerProviderOutageAdvisory = summary
     ? {
-        severity: severityFromIndicator(summary.status.indicator),
-        message: summary.status.description?.trim() || null,
+        ...advisoryFromSummary(driver, summary),
         statusPageUrl: STATUS_PAGE_URLS[driver] ?? null,
         checkedAt,
       }

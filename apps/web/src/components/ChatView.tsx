@@ -1,3 +1,4 @@
+import { useProviderOutage } from "../hooks/useProviderOutage";
 import type { OfflineMessage } from "../lib/offlineMessageQueue";
 import { offlineMessages } from "../state/offlineMessages";
 import { OfflineMessageOutbox } from "./OfflineMessageOutbox";
@@ -461,11 +462,7 @@ import {
   ProviderStatusBanner,
   shouldShowProviderStatusBanner,
 } from "./chat/ProviderStatusBanner";
-import {
-  getProviderOutageBannerKey,
-  ProviderOutageBanner,
-  shouldShowProviderOutageBanner,
-} from "./chat/ProviderOutageBanner";
+import { ProviderOutageBanner } from "./chat/ProviderOutageBanner";
 import {
   dismissThreadErrorBannerForSession,
   getThreadErrorBannerKey,
@@ -4125,21 +4122,8 @@ export default function ChatView(props: ChatViewProps) {
   )
     ? activeProviderStatus
     : null;
-  const providerOutageBannerKey = getProviderOutageBannerKey(activeProviderStatus);
-  const [dismissedProviderOutageBannerKey, setDismissedProviderOutageBannerKey] = useState<
-    string | null
-  >(null);
-  useEffect(() => {
-    if (providerOutageBannerKey === null && dismissedProviderOutageBannerKey !== null) {
-      setDismissedProviderOutageBannerKey(null);
-    }
-  }, [dismissedProviderOutageBannerKey, providerOutageBannerKey]);
-  const visibleProviderOutage = shouldShowProviderOutageBanner(
-    activeProviderStatus,
-    dismissedProviderOutageBannerKey,
-  )
-    ? activeProviderStatus
-    : null;
+  const { visibleStatus: visibleProviderOutage, dismiss: dismissProviderOutage } =
+    useProviderOutage(activeProviderStatus);
   const hasTimelineTopBanner =
     Boolean(timelineThreadError) ||
     visibleProviderStatus !== null ||
@@ -11126,7 +11110,7 @@ export default function ChatView(props: ChatViewProps) {
               />
               <ProviderOutageBanner
                 status={visibleProviderOutage}
-                onDismiss={() => setDismissedProviderOutageBannerKey(providerOutageBannerKey)}
+                onDismiss={dismissProviderOutage}
               />
               <ThreadErrorBanner
                 error={timelineThreadError}
