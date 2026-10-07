@@ -23,11 +23,20 @@ vi.mock("../../state/threads", () => ({
     cancelQueuedRun: Symbol("cancelQueuedRun"),
     promoteQueuedRun: Symbol("promoteQueuedRun"),
     reorderQueuedRun: Symbol("reorderQueuedRun"),
+    resumeThreadQueue: Symbol("resumeThreadQueue"),
   },
 }));
 
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: () => async () => undefined,
+}));
+
+vi.mock("../../state/use-orchestration-command", () => ({
+  useOrchestrationCommand: () => async () => undefined,
+}));
+
+vi.mock("../../state/session", () => ({
+  useEnvironmentScope: () => true,
 }));
 
 vi.mock("../../assets/assetUrls", () => ({

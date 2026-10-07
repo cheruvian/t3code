@@ -142,6 +142,79 @@ it.effect.each(["checkout", "release"] as const)(
     }).pipe(Effect.provide(testLayer)),
 );
 
+it.effect("unpauses a queue during recovery work without interrupting the active run", () =>
+  Effect.gen(function* () {
+    const { orchestrator, projections } = yield* setup;
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("waiting-message"),
+      threadId,
+      messageId: MessageId.make("waiting-message"),
+      text: "Wait until ready",
+      attachments: [],
+      dispatchMode: { type: "queue_after_active" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const queued = (yield* projections.getThreadProjection(threadId)).runs[0]!;
+    yield* projections.apply({
+      id: EventId.make("held-after-restart"),
+      type: "run.updated",
+      threadId,
+      runId: queued.id,
+      occurredAt: yield* DateTime.now,
+      payload: { ...queued, queueHeld: true },
+    });
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("recovery-hook"),
+      threadId,
+      messageId: MessageId.make("recovery-hook"),
+      text: "Prepare device",
+      attachments: [],
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "system",
+      creationSource: "server",
+      resourceOperationId: operationId,
+    });
+    const active = (yield* projections.getThreadProjection(threadId)).runs.find(
+      (run) => run.userMessageId === "recovery-hook",
+    )!;
+    assert.equal(active.status, "starting");
+    yield* orchestrator.dispatch({
+      type: "queue.resume",
+      commandId: CommandId.make("unpause-during-recovery"),
+      threadId,
+    });
+    let projection = yield* projections.getThreadProjection(threadId);
+    assert.deepEqual(
+      projection.runs.find((run) => run.id === active.id),
+      active,
+    );
+    assert.equal(projection.runs.find((run) => run.id === queued.id)!.status, "queued");
+    assert.equal(projection.runs.find((run) => run.id === queued.id)!.queueHeld, false);
+
+    yield* orchestrator.dispatch({
+      type: "run.interrupt",
+      commandId: CommandId.make("finish-recovery-hook"),
+      threadId,
+      runId: active.id,
+      holdQueue: false,
+    });
+    // Recovery still owns the resource after its hook stops.
+    yield* orchestrator.resumeQueuedRuns;
+    assert.equal(
+      (yield* projections.getThreadProjection(threadId)).runs.find((run) => run.id === queued.id)!
+        .status,
+      "queued",
+    );
+    yield* setLocks([{ ...lock, phase: "held" }]);
+    yield* orchestrator.resumeQueuedRuns;
+    projection = yield* projections.getThreadProjection(threadId);
+    assert.equal(projection.runs.find((run) => run.id === queued.id)!.status, "starting");
+  }).pipe(Effect.provide(testLayer)),
+);
+
 it.effect.each([
   { createdBy: "system" as const, creationSource: "server" as const, operationId, allowed: true },
   { createdBy: "user" as const, creationSource: "web" as const, operationId, allowed: false },

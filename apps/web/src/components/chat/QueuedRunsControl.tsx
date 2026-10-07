@@ -8,12 +8,15 @@ import type {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import {
   Clock3Icon,
   CornerUpRightIcon,
   GripVerticalIcon,
   ListOrderedIcon,
   PencilIcon,
+  PauseIcon,
+  PlayIcon,
 } from "lucide-react";
 import { useId, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 
@@ -21,6 +24,8 @@ import { useAssetUrls } from "../../assets/assetUrls";
 import { threadEnvironment } from "../../state/threads";
 import { useThreadProjection } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useOrchestrationCommand } from "../../state/use-orchestration-command";
+import { useEnvironmentScope } from "../../state/session";
 import { isImageAttachment, type ChatMessage } from "../../types";
 import { cn } from "~/lib/utils";
 import { ComposerBanner } from "./ComposerBanner";
@@ -71,6 +76,10 @@ export function QueuedRunsControl({
   const reorder = useAtomCommand(threadEnvironment.reorderQueuedRun);
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun);
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun);
+  const resume = useOrchestrationCommand(threadEnvironment.resumeThreadQueue);
+  const canOperate = useEnvironmentScope(props.environmentId, AuthOrchestrationOperateScope);
+  const [resuming, setResuming] = useState(false);
+  const resumingRef = useRef(false);
   const [expanded, setExpanded] = useState(true);
   const queueListId = useId();
   const [busyRunId, setBusyRunId] = useState<RunId | null>(null);
@@ -88,6 +97,7 @@ export function QueuedRunsControl({
     [projection],
   );
   const queued = workflow?.queuedRuns ?? [];
+  const isHeld = workflow?.isHeld === true;
   const activeRun = workflow?.activeRun ?? null;
   const canReorder = workflow?.canReorder === true;
   const queuedImageAttachmentIds = useMemo(() => {
@@ -250,6 +260,21 @@ export function QueuedRunsControl({
     }
   };
 
+  const unpause = async () => {
+    if (!canOperate || !isHeld || resumingRef.current) return;
+    resumingRef.current = true;
+    setResuming(true);
+    try {
+      await resume({
+        environmentId: props.environmentId,
+        input: { threadId: props.threadId },
+      });
+    } finally {
+      resumingRef.current = false;
+      setResuming(false);
+    }
+  };
+
   return (
     <ComposerBanner.Attachment>
       <ComposerBanner.Root
@@ -270,12 +295,35 @@ export function QueuedRunsControl({
           <ComposerBanner.Icon>
             <ListOrderedIcon />
           </ComposerBanner.Icon>
-          <ComposerBanner.Content className="text-muted-foreground">Queued</ComposerBanner.Content>
+          <ComposerBanner.Content className="text-muted-foreground">
+            {isHeld ? "Queued · Paused" : "Queued"}
+          </ComposerBanner.Content>
           <ComposerBanner.Actions>
             <ComposerBanner.Count>{items.length}</ComposerBanner.Count>
             <ComposerBanner.ToggleIcon expanded={expanded} />
           </ComposerBanner.Actions>
         </ComposerBanner.Row>
+        {isHeld ? (
+          <ComposerBanner.Row>
+            <ComposerBanner.Icon>
+              <PauseIcon />
+            </ComposerBanner.Icon>
+            <ComposerBanner.Content>
+              Unpause to send when this thread is ready.
+            </ComposerBanner.Content>
+            <ComposerBanner.Actions>
+              <Button
+                variant="ghost"
+                size="xs"
+                disabled={!canOperate || resuming}
+                onClick={() => void unpause()}
+              >
+                <PlayIcon />
+                {resuming ? "Unpausing…" : "Unpause"}
+              </Button>
+            </ComposerBanner.Actions>
+          </ComposerBanner.Row>
+        ) : null}
         <ComposerBanner.Scroll className={cn("max-h-32", !expanded && "hidden")}>
           <ComposerBanner.Children render={<ol />} id={queueListId}>
             {items.map((item) => {
