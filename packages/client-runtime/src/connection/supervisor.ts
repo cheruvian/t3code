@@ -31,13 +31,10 @@ import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 
+import { ConnectionTiming, type ConnectionTimingSettings } from "./timing.ts";
+
 const RETRY_BASE_DELAY_MS = 1_000;
 const RETRY_MAX_DELAY_MS = 300_000;
-const CONNECTION_ESTABLISHMENT_TIMEOUT = "15 seconds";
-const CONNECTION_PROBE_TIMEOUT = "15 seconds";
-// Mobile resumes, explicit retries, and offline events want a fast answer:
-// the user is waiting, or the network may be gone.
-const QUICK_CONNECTION_PROBE_TIMEOUT = "3 seconds";
 const BACKOFF_RESET_AFTER_MS = 30_000;
 
 interface SupervisorIntent {
@@ -108,7 +105,7 @@ export interface EnvironmentSupervisorOptions {
 
 /**
  * Delay before the next attempt after `failureCount` consecutive failures
- * (0 for the first retry). The ceiling doubles from 2s up to 5 minutes, and
+ * (0 for the first retry). The ceiling doubles from 2s up to the configured cap (5 minutes by default), and
  * the delay is a random point in its upper half: never quicker than half the
  * ceiling, and spread out so clients that lost the same server do not all
  * reconnect in the same second. `random` is in [0, 1).
@@ -116,8 +113,12 @@ export interface EnvironmentSupervisorOptions {
  * The long cap only applies to a connection that keeps failing. Returning to
  * the app, the network coming back, and an explicit retry all skip the wait.
  */
-export function retryDelayMs(failureCount: number, random: number): number {
-  const ceiling = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** (failureCount + 1));
+export function retryDelayMs(
+  failureCount: number,
+  random: number,
+  maxDelayMs = RETRY_MAX_DELAY_MS,
+): number {
+  const ceiling = Math.min(maxDelayMs, RETRY_BASE_DELAY_MS * 2 ** (failureCount + 1));
   return Math.round(ceiling / 2 + (ceiling / 2) * random);
 }
 
@@ -243,6 +244,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
 
   const connectivity = yield* Connectivity.Connectivity;
   const driver = yield* ConnectionDriver.ConnectionDriver;
+  const timingSettings = yield* ConnectionTiming;
   const wakeups = yield* ConnectionWakeups.ConnectionWakeups;
   const initialIntent: SupervisorIntent = {
     desired: options?.initiallyDesired ?? false,
@@ -387,8 +389,9 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       const next = yield* Queue.take(signals);
       switch (next._tag) {
         case "DisconnectRequested":
-        case "RetryRequested":
           return false;
+        case "RetryRequested":
+          return true;
         case "NetworkChanged":
           if (next.network === "offline") {
             return false;
@@ -433,18 +436,21 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
 
   // How long a signal waits for the live session to answer a probe, or
   // undefined when the signal does not question the connection.
-  const probeTimeoutFor = (next: SupervisorSignal): Duration.Input | undefined => {
+  const probeTimeoutFor = (
+    next: SupervisorSignal,
+    timing: ConnectionTimingSettings,
+  ): Duration.Input | undefined => {
     switch (next._tag) {
       case "RetryRequested":
-        return QUICK_CONNECTION_PROBE_TIMEOUT;
+        return Duration.seconds(timing.resumeProbeSeconds);
       case "NetworkChanged":
-        return next.network === "offline" ? QUICK_CONNECTION_PROBE_TIMEOUT : undefined;
+        return next.network === "offline" ? Duration.seconds(timing.resumeProbeSeconds) : undefined;
       case "Wakeup":
         if (next.reason === "application-active") {
-          return CONNECTION_PROBE_TIMEOUT;
+          return Duration.seconds(Math.max(15, timing.resumeProbeSeconds));
         }
         return next.reason === "application-active-probe"
-          ? QUICK_CONNECTION_PROBE_TIMEOUT
+          ? Duration.seconds(timing.resumeProbeSeconds)
           : undefined;
       case "ConnectRequested":
       case "DisconnectRequested":
@@ -475,7 +481,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       if (end !== undefined) {
         return end === "reset";
       }
-      const probeTimeout = probeTimeoutFor(next);
+      const probeTimeout = probeTimeoutFor(next, yield* timingSettings.get);
       if (probeTimeout === undefined) {
         continue;
       }
@@ -515,7 +521,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         }
         // A retry or an offline report during a desktop foreground probe wants
         // its quicker answer, so it shortens the running probe.
-        const signalTimeout = probeTimeoutFor(probeEvent.signal);
+        const signalTimeout = probeTimeoutFor(probeEvent.signal, yield* timingSettings.get);
         if (signalTimeout !== undefined) {
           const signalDeadline =
             (yield* Clock.monotonicTimeNanos) + Duration.toNanosUnsafe(signalTimeout);
@@ -533,6 +539,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     ignoreOffline: boolean,
   ) {
     yield* SubscriptionRef.set(prepared, Option.none());
+    const timing = yield* timingSettings.get;
     const establishment = yield* Effect.raceAllFirst([
       exitUnlessInterrupted(
         establishTracedConnection(attempt, generation, lastFailure, pendingRetry),
@@ -548,7 +555,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           resetRetry,
         })),
       ),
-      Effect.sleep(CONNECTION_ESTABLISHMENT_TIMEOUT).pipe(
+      Effect.sleep(Duration.seconds(timing.setupSeconds)).pipe(
         Effect.as<EstablishmentEvent>({ _tag: "TimedOut" }),
       ),
     ]);
@@ -769,7 +776,11 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       }
 
       failureCount += 1;
-      const delayMs = retryDelayMs(failureCount - 1, yield* Random.next);
+      const delayMs = retryDelayMs(
+        failureCount - 1,
+        yield* Random.next,
+        (yield* timingSettings.get).retryMaxSeconds * 1_000,
+      );
       pendingRetry = Option.map(attemptSpan, (previousAttempt) => ({
         previousAttempt,
         failureCount,

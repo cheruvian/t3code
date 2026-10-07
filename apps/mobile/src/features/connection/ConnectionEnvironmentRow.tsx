@@ -78,6 +78,14 @@ export function ConnectionEnvironmentRow(props: {
 
   return (
     <Animated.View layout={LinearTransition.duration(250)} className="bg-grouped-card">
+      {enabled && props.environment.connectionState !== "connected" ? (
+        <View className="px-4 pt-3">
+          <MaterialButton
+            label="Retry now"
+            onPress={() => props.onReconnect(props.environment.environmentId)}
+          />
+        </View>
+      ) : null}
       <Pressable
         className="flex-row items-center gap-3 px-4 py-3.5 active:opacity-70"
         accessibilityRole="button"

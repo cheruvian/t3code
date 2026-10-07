@@ -1,3 +1,4 @@
+import { ConnectionTiming } from "../connection/timing.ts";
 import {
   type ClientConnectionMethod,
   EnvironmentId,
@@ -79,7 +80,6 @@ export class RemoteEnvironmentAuthorization extends Context.Service<
   }
 >()("@t3tools/client-runtime/authorization/service/RemoteEnvironmentAuthorization") {}
 
-const CACHED_ENDPOINT_SOCKET_TIMEOUT_MS = 3_000;
 const BEARER_DESCRIPTOR_CACHE_TTL_MS = 10_000;
 const DPOP_AUTHORIZATION_TIMEOUT_MS = 30_000;
 
@@ -413,7 +413,10 @@ export const make = Effect.gen(function* () {
             ),
           ),
           Effect.timeoutOrElse({
-            duration: DPOP_AUTHORIZATION_TIMEOUT_MS,
+            duration: Math.max(
+              DPOP_AUTHORIZATION_TIMEOUT_MS,
+              (yield* (yield* ConnectionTiming).get).setupSeconds * 1_000,
+            ),
             orElse: () =>
               Effect.fail(
                 new ConnectionTransientError({
@@ -467,7 +470,7 @@ export const make = Effect.gen(function* () {
     if (selected.fromCache) {
       const cachedSocket = yield* createDpopSocketUrl(
         selected.token,
-        CACHED_ENDPOINT_SOCKET_TIMEOUT_MS,
+        (yield* (yield* ConnectionTiming).get).resumeProbeSeconds * 1_000,
       ).pipe(Effect.result);
       if (Result.isSuccess(cachedSocket)) {
         yield* assertSession(selected.identity);

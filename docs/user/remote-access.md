@@ -62,6 +62,25 @@ created in Settings can only be copied from the client that created them while
 its Connections page stays open. If you leave or reload that page, create
 another link to share.
 
+### Recover on a slow connection
+
+If an environment stays disconnected, choose **Retry now** on its row in
+**Settings → Connections** (web and desktop) or **Settings → Environments**
+(mobile). Retry is available during automatic reconnection and skips the wait
+before the next attempt. The chat's reconnecting banner also offers **Retry now**
+on web and desktop.
+
+Under **Connection timeouts** in the same settings page, increase connection
+setup, authentication request, foreground health-check, or heartbeat limits for
+slow networks. Allow enough setup time for authentication and initial server
+configuration together. You can also reduce the maximum automatic retry delay.
+Longer timeouts tolerate temporary stalls but take longer to detect a lost
+connection.
+
+Settings are saved separately on each client and apply to the next connection
+attempt or health check. Heartbeat changes require a new connection. Choose
+**Reset defaults** to restore the standard limits.
+
 ### Balance new threads across machines
 
 Auto balance is off by default. On web and desktop, enable it in

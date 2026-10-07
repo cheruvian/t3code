@@ -1,4 +1,9 @@
 import {
+  ConnectionTiming,
+  DEFAULT_CONNECTION_TIMING,
+  makeConnectionTiming,
+} from "../connection/timing.ts";
+import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   ProviderDriverKind,
@@ -1085,13 +1090,25 @@ describe("RpcSessionFactory", () => {
     }),
   );
 
-  for (const missedPongLimit of [undefined, 5] as const) {
-    it.effect(`closes after the ${missedPongLimit ?? 3}-window missed pong limit`, () =>
+  it.effect.each([
+    { missedPongLimit: undefined, heartbeatSeconds: 0 },
+    { missedPongLimit: 5, heartbeatSeconds: 0 },
+    { missedPongLimit: 3, heartbeatSeconds: 45 },
+  ] as const)(
+    "closes with saved heartbeat $heartbeatSeconds and default limit $missedPongLimit",
+    ({ missedPongLimit, heartbeatSeconds }) =>
       Effect.gen(function* () {
         const { factory, sockets } = yield* makeFactory(
           missedPongLimit === undefined ? {} : { missedPongLimit },
         );
-        const session = yield* factory.connect(PREPARED);
+        const timing = yield* makeConnectionTiming({
+          read: Effect.succeed({ ...DEFAULT_CONNECTION_TIMING, heartbeatSeconds }),
+          write: () => Effect.void,
+        });
+        const session = yield* factory
+          .connect(PREPARED)
+          .pipe(Effect.provideService(ConnectionTiming, timing));
+        const limit = heartbeatSeconds === 0 ? (missedPongLimit ?? 3) : heartbeatSeconds / 5;
         const readyFiber = yield* Effect.forkChild(session.ready);
         const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
         const socket = yield* awaitSocket(sockets);
@@ -1100,10 +1117,10 @@ describe("RpcSessionFactory", () => {
         yield* completeInitialConfig(socket);
         yield* Fiber.join(readyFiber);
 
-        yield* TestClock.adjust((missedPongLimit ?? 3) * 5_000);
+        yield* TestClock.adjust(limit * 5_000);
         expect(closedFiber.pollUnsafe()).toBeUndefined();
         expect(socket.sent.map((message) => decodeJson(message)).filter(isPing)).toEqual(
-          Array.from({ length: missedPongLimit ?? 3 }, () => ({ _tag: "Ping" })),
+          Array.from({ length: limit }, () => ({ _tag: "Ping" })),
         );
 
         yield* TestClock.adjust("5 seconds");
@@ -1111,8 +1128,7 @@ describe("RpcSessionFactory", () => {
         expect(error).toBeInstanceOf(ConnectionTransientError);
         expect(error).toMatchObject({ reason: "transport" });
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
-    );
-  }
+  );
 
   it.effect("reaches ready when a newer server sends unknown config members", () =>
     Effect.gen(function* () {

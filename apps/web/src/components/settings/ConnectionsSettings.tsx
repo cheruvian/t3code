@@ -76,6 +76,7 @@ import {
 } from "./EnvironmentRow";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { LoadBalancingSettings } from "./LoadBalancingSettings";
+import { ConnectionTimingSettings } from "./ConnectionTimingSettings";
 import { GitHubRoutingSettings } from "./GitHubRoutingSettings";
 import { Input } from "../ui/input";
 import { CommandShortcut } from "../ui/command";
@@ -1483,6 +1484,7 @@ function SavedBackendListRow({
   onSetEnabled,
   onRemove,
 }: SavedBackendListRowProps) {
+  const retry = useAtomCommand(environmentCatalog.retryNow);
   const environmentId = environment.environmentId;
   const unsupported = environment.connection.phase === "unsupported";
   const enabled = environment.entry.enabled && !unsupported;
@@ -1610,6 +1612,17 @@ function SavedBackendListRow({
           targetVersion={APP_VERSION}
           label={serverUpdateState.status === "failed" ? "Retry update" : "Update"}
         />
+      ) : null}
+      {enabled && !isConnected ? (
+        <Button
+          size="xs"
+          variant="ghost-muted"
+          disabled={isRemoving}
+          aria-label={`Retry connection to ${environment.label}`}
+          onClick={() => void retry(environmentId)}
+        >
+          Retry now
+        </Button>
       ) : null}
       {showUpdateAction ? (
         <ServerUpdateAction
@@ -3801,6 +3814,7 @@ export function ConnectionsSettings() {
         />
       ) : null}
       <LoadBalancingSettings environments={loadBalancingEnvironments} />
+      <ConnectionTimingSettings />
       <GitHubRoutingSettings environments={loadBalancingEnvironments} />
     </SettingsPageContainer>
   );

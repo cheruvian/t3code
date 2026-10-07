@@ -5,6 +5,11 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
+import {
+  ConnectionTiming,
+  DEFAULT_CONNECTION_TIMING,
+  type ConnectionTimingSettings,
+} from "../connection/timing.ts";
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
 import { AVAILABLE_CONNECTION_STATE } from "../connection/model.ts";
@@ -96,6 +101,21 @@ export function createEnvironmentCatalogAtoms<R, E>(
     }),
   });
 
+  const timingAtom = runtime.atom(
+    Stream.unwrap(ConnectionTiming.pipe(Effect.map((timing) => timing.changes))),
+    { initialValue: DEFAULT_CONNECTION_TIMING },
+  );
+  const timingValueAtom = Atom.make((get) =>
+    Option.getOrElse(AsyncResult.value(get(timingAtom)), () => DEFAULT_CONNECTION_TIMING),
+  );
+  const setTiming = createRuntimeCommand(runtime, {
+    label: "environment-catalog:connection-timing",
+    scheduler: commandScheduler,
+    concurrency: serial,
+    execute: (settings: ConnectionTimingSettings) =>
+      ConnectionTiming.pipe(Effect.flatMap((timing) => timing.set(settings))),
+  });
+
   const networkStatusAtom = runtime.atom(
     Stream.unwrap(
       EnvironmentRegistry.EnvironmentRegistry.pipe(
@@ -172,6 +192,8 @@ export function createEnvironmentCatalogAtoms<R, E>(
   });
 
   return {
+    timingValueAtom,
+    setTiming,
     catalogAtom,
     catalogValueAtom,
     githubRoutingPermissionsValueAtom,

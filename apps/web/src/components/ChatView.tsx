@@ -3077,19 +3077,17 @@ export default function ChatView(props: ChatViewProps) {
         title: `${activeEnvironmentUnavailableState.label} is ${environmentReconnecting ? "reconnecting" : "offline"}`,
         actions: (
           <>
-            {!environmentReconnecting ? (
-              <Button
-                size="xs"
-                variant="ghost"
-                onClick={() =>
-                  void handleReconnectActiveEnvironment(
-                    activeEnvironmentUnavailableState.environmentId,
-                  )
-                }
-              >
-                Reconnect
-              </Button>
-            ) : null}
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() =>
+                void handleReconnectActiveEnvironment(
+                  activeEnvironmentUnavailableState.environmentId,
+                )
+              }
+            >
+              {environmentReconnecting ? "Retry now" : "Reconnect"}
+            </Button>
             {disconnectAction}
           </>
         ),

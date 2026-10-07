@@ -872,6 +872,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "connection-timing",
+    title: "Connection timeouts",
+    to: "/settings/connections",
+    searchTerms: ["slow weak network reconnect retry timeout heartbeat latency airplane"],
+  },
+  {
     id: "github-routing",
     title: "GitHub sharing",
     to: "/settings/connections",
