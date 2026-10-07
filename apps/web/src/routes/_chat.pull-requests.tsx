@@ -1843,7 +1843,6 @@ function PullRequestsRouteView() {
       threadPanelOpen={false}
       threadPanelPresentation="inline"
       threadPanelShortcutLabel={null}
-      threadPanelHasAttention={false}
       liveAgentCount={0}
       onToggleThreadPanel={() => undefined}
       showMessageWidthControl={false}
