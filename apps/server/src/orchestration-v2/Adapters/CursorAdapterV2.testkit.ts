@@ -493,7 +493,7 @@ export function makeCursorAgentSdkReplayRunner(
   };
 }
 
-function makeCursorAgentSdkReplayLayer(
+function layerCursorAgentSdkReplay(
   transcript: CursorAgentSdkReplayTranscript,
   options?: {
     readonly runner?: CursorAgentSdk.CursorAgentSdkRunnerShape;
@@ -600,20 +600,20 @@ function makeReplayServerConfig(
   });
 }
 
-export function makeCursorProviderAdapterRegistryReplayLayer(
+export function layer(
   transcript: CursorAgentSdkReplayTranscript,
   options?: {
     readonly runner?: CursorAgentSdk.CursorAgentSdkRunnerShape;
     readonly assertCompleteOnFinalize?: boolean;
   },
 ) {
-  const serverConfigLayer = Layer.effect(
+  const layerServerConfig = Layer.effect(
     ServerConfig.ServerConfig,
     makeReplayServerConfig(transcript.scenario).pipe(Effect.orDie),
   ).pipe(Layer.provide(NodeServices.layer));
   // Skill discovery also scans user roots under HOME; an empty HOME keeps
   // replays from picking up the host's own skills.
-  const hostEnvironmentLayer = Layer.effect(
+  const layerHostEnvironment = Layer.effect(
     HostProcessEnvironment,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -621,7 +621,7 @@ export function makeCursorProviderAdapterRegistryReplayLayer(
       return { HOME: home };
     }).pipe(Effect.orDie),
   ).pipe(Layer.provide(NodeServices.layer));
-  return ProviderAdapterRegistry.makeDriverLayer({
+  return ProviderAdapterRegistry.layerFromDrivers({
     drivers: [CursorAdapterV2Driver],
     configMap: {
       [CURSOR_DEFAULT_INSTANCE_ID]: {
@@ -632,9 +632,9 @@ export function makeCursorProviderAdapterRegistryReplayLayer(
     Layer.provide(
       Layer.mergeAll(
         ServerSettings.layerTest().pipe(Layer.orDie),
-        makeCursorAgentSdkReplayLayer(transcript, options),
-        serverConfigLayer,
-        hostEnvironmentLayer,
+        layerCursorAgentSdkReplay(transcript, options),
+        layerServerConfig,
+        layerHostEnvironment,
         NodeServices.layer,
         IdAllocator.layer,
       ),
@@ -669,8 +669,7 @@ export const CursorOrchestratorReplayHarness: OrchestratorV2ProviderReplayHarnes
           }),
       ),
     ),
-  makeProviderAdapterRegistryLayer: (transcript) =>
-    makeCursorProviderAdapterRegistryReplayLayer(transcript),
+  makeProviderAdapterRegistryLayer: (transcript) => layer(transcript),
 };
 
 function sanitizeReplayText(

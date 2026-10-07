@@ -1,16 +1,16 @@
 /**
- * MigrationsLive - Migration runner with inline loader
+ * Migration runner with inline loader
  *
  * Uses Migrator.make with fromRecord to define migrations inline.
  * All migrations are statically imported - no dynamic file system loading.
  *
- * Migrations run automatically when the MigrationLayer is provided,
+ * SQLite persistence runs migrations during initialization,
  * ensuring the database schema is always up-to-date before the application starts.
  */
 
-import * as Migrator from "effect/unstable/sql/Migrator";
+import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
 // Import all migrations statically
@@ -80,6 +80,9 @@ import Migration0057 from "./Migrations/057_ProjectionThreadTitleState.ts";
 import Migration0059 from "./Migrations/059_ProjectResourceLocks.ts";
 import Migration0060 from "./Migrations/060_ProjectionThreadsAutoSettleDisabledAt.ts";
 import Migration0058 from "./Migrations/058_PullRequestFilesViewed.ts";
+import Migration0064 from "./Migrations/057_ScheduledTaskWebhooks.ts";
+import Migration0065 from "./Migrations/058_WebhookRelayDeliveries.ts";
+import Migration0066 from "./Migrations/059_McpAppModelContext.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -160,6 +163,9 @@ export const migrationEntries = [
   [61, "OrchestrationV2", Migration0061],
   [62, "RemoveRedundantProjectionIndexes", Migration0062],
   [63, "ThreadWorkspaceMoveFence", Migration0063],
+  [64, "ScheduledTaskWebhooks", Migration0064],
+  [65, "WebhookRelayDeliveries", Migration0065],
+  [66, "McpAppModelContext", Migration0066],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -209,22 +215,3 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
   return executedMigrations;
 });
-
-/**
- * Layer that runs migrations when the layer is built.
- *
- * Use this to ensure migrations run before your application starts.
- * Migrations are run automatically - no separate script is needed.
- *
- * @example
- * ```typescript
- * import { MigrationsLive } from "@acme/db/Migrations"
- * import * as SqliteClient from "@acme/db/SqliteClient"
- *
- * // Migrations run automatically when SqliteClient is provided
- * const AppLayer = MigrationsLive.pipe(
- *   Layer.provideMerge(SqliteClient.layer({ filename: "database.sqlite" }))
- * )
- * ```
- */
-export const MigrationsLive = Layer.effectDiscard(runMigrations());

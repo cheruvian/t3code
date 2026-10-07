@@ -47,6 +47,7 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const { height: windowHeight } = useWindowDimensions();
   const gitActions = useSelectedThreadGitActions();
+  const { canWriteSourceControl, canChangeThreadBranch } = gitActions;
 
   const params = props.route.params;
 
@@ -95,17 +96,27 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
   );
 
   const continuePendingAction = useCallback(async () => {
-    if (!confirmAction || !confirmationReady) return;
+    if (!canWriteSourceControl || !confirmAction || !confirmationReady) return;
     navigation.dispatch(StackActions.replace("Thread", { environmentId, threadId }));
     await gitActions.onRunSelectedThreadGitAction({
       action: confirmAction,
       ...(params.commitMessage ? { commitMessage: params.commitMessage } : {}),
       ...(params.filePaths ? { filePaths: params.filePaths.split(",") } : {}),
     });
-  }, [confirmAction, confirmationReady, environmentId, gitActions, params, navigation, threadId]);
+  }, [
+    canWriteSourceControl,
+    canChangeThreadBranch,
+    confirmAction,
+    confirmationReady,
+    environmentId,
+    gitActions,
+    params,
+    navigation,
+    threadId,
+  ]);
 
   const movePendingActionToFeatureBranch = useCallback(async () => {
-    if (!confirmAction || !confirmationReady) return;
+    if (!canChangeThreadBranch || !confirmAction || !confirmationReady) return;
     navigation.dispatch(StackActions.replace("Thread", { environmentId, threadId }));
 
     if (includesCommit) {
@@ -129,6 +140,7 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
       runAction: () => gitActions.onRunSelectedThreadGitAction({ action: confirmAction }),
     });
   }, [
+    canChangeThreadBranch,
     confirmAction,
     confirmationReady,
     gitActions,
@@ -199,13 +211,13 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
             <SheetActionButton
               icon="arrow.right.circle"
               label={copy?.continueLabel ?? "Continue"}
-              disabled={!confirmationReady}
+              disabled={!canWriteSourceControl || !confirmationReady}
               onPress={() => void continuePendingAction()}
             />
             <SheetActionButton
               icon="arrow.branch"
               label="Feature branch & continue"
-              disabled={!confirmationReady}
+              disabled={!canChangeThreadBranch || !confirmationReady}
               tone="primary"
               onPress={() => void movePendingActionToFeatureBranch()}
             />

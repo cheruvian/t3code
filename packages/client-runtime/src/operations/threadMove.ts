@@ -9,7 +9,7 @@ import {
   type ThreadMoveResponse,
   type ServerConfig,
 } from "@t3tools/contracts";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import * as Effect from "effect/Effect";
 import * as Crypto from "effect/Crypto";
 import * as Option from "effect/Option";

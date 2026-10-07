@@ -12,14 +12,14 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import { layerMemory } from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import { layerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
 
 const instanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId, model: "gpt-5.1-codex" };
@@ -30,13 +30,13 @@ const adapter = {
   planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
   openSession: () => Effect.die("Resource queue tests must not launch a provider"),
 } as ProviderAdapterV2Shape;
-const database = SqlitePersistenceMemory;
+const database = layerMemory;
 const testLayer = Layer.mergeAll(
   ProjectStore.layer.pipe(Layer.provide(database)),
   ProjectionStore.layer.pipe(Layer.provide(database)),
-  makeOrchestratorV2ReplayLayerWithRegistry(
+  layerWithRegistry(
     { name: "resource-queue" },
-    ProviderAdapterRegistry.makeLayer([adapter]),
+    ProviderAdapterRegistry.layerFromAdapters([adapter]),
     { databaseLayer: database, runEffectWorker: false },
   ),
 );
@@ -108,43 +108,41 @@ const setup = Effect.gen(function* () {
   return { orchestrator, projections: yield* ProjectionStore.ProjectionStoreV2 };
 });
 
-for (const phase of ["checkout", "release"] as const) {
-  it.effect(
-    `queues messages during ${phase} without an active provider and resumes after completion`,
-    () =>
-      Effect.gen(function* () {
-        const { orchestrator, projections } = yield* setup;
-        yield* setLocks([{ ...lock, phase }]);
-        yield* orchestrator.dispatch({
-          type: "message.dispatch",
-          commandId: CommandId.make("send"),
-          threadId,
-          messageId: MessageId.make("message"),
-          text: "Continue",
-          attachments: [],
-          dispatchMode: { type: "start_immediately" },
-          createdBy: "user",
-          creationSource: "web",
-        });
-        let projection = yield* projections.getThreadProjection(threadId);
-        assert.equal(projection.runs.length, 1);
-        assert.equal(projection.runs[0]!.status, "queued");
-        assert.equal(projection.providerSessions.length, 0);
-        yield* orchestrator.dispatch({
-          type: "queue.resume",
-          commandId: CommandId.make("resume-blocked"),
-          threadId,
-        });
-        assert.equal((yield* projections.getThreadProjection(threadId)).runs[0]!.status, "queued");
-        yield* setLocks(phase === "checkout" ? [{ ...lock, phase: "held" }] : []);
-        yield* orchestrator.resumeQueuedRuns;
-        projection = yield* projections.getThreadProjection(threadId);
-        assert.equal(projection.runs[0]!.status, "starting");
-      }).pipe(Effect.provide(testLayer)),
-  );
-}
+it.effect.each(["checkout", "release"] as const)(
+  "queues messages during %s without an active provider and resumes after completion",
+  (phase) =>
+    Effect.gen(function* () {
+      const { orchestrator, projections } = yield* setup;
+      yield* setLocks([{ ...lock, phase }]);
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("send"),
+        threadId,
+        messageId: MessageId.make("message"),
+        text: "Continue",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      let projection = yield* projections.getThreadProjection(threadId);
+      assert.equal(projection.runs.length, 1);
+      assert.equal(projection.runs[0]!.status, "queued");
+      assert.equal(projection.providerSessions.length, 0);
+      yield* orchestrator.dispatch({
+        type: "queue.resume",
+        commandId: CommandId.make("resume-blocked"),
+        threadId,
+      });
+      assert.equal((yield* projections.getThreadProjection(threadId)).runs[0]!.status, "queued");
+      yield* setLocks(phase === "checkout" ? [{ ...lock, phase: "held" }] : []);
+      yield* orchestrator.resumeQueuedRuns;
+      projection = yield* projections.getThreadProjection(threadId);
+      assert.equal(projection.runs[0]!.status, "starting");
+    }).pipe(Effect.provide(testLayer)),
+);
 
-for (const identity of [
+it.effect.each([
   { createdBy: "system" as const, creationSource: "server" as const, operationId, allowed: true },
   { createdBy: "user" as const, creationSource: "web" as const, operationId, allowed: false },
   { createdBy: "system" as const, creationSource: "web" as const, operationId, allowed: false },
@@ -154,29 +152,25 @@ for (const identity of [
     operationId: CommandId.make("other"),
     allowed: false,
   },
-]) {
-  it.effect(
-    `checks resource hook identity ${identity.createdBy}/${identity.creationSource}/${identity.operationId}`,
-    () =>
-      Effect.gen(function* () {
-        const { orchestrator, projections } = yield* setup;
-        yield* orchestrator.dispatch({
-          type: "message.dispatch",
-          commandId: CommandId.make("hook"),
-          threadId,
-          messageId: MessageId.make("hook-message"),
-          text: "Resource hook",
-          attachments: [],
-          dispatchMode: { type: "start_immediately" },
-          createdBy: identity.createdBy,
-          creationSource: identity.creationSource,
-          resourceOperationId: identity.operationId,
-        });
-        const projection = yield* projections.getThreadProjection(threadId);
-        assert.equal(projection.runs[0]!.status, identity.allowed ? "starting" : "queued");
-      }).pipe(Effect.provide(testLayer)),
-  );
-}
+])("checks resource hook identity $createdBy/$creationSource/$operationId", (identity) =>
+  Effect.gen(function* () {
+    const { orchestrator, projections } = yield* setup;
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("hook"),
+      threadId,
+      messageId: MessageId.make("hook-message"),
+      text: "Resource hook",
+      attachments: [],
+      dispatchMode: { type: "start_immediately" },
+      createdBy: identity.createdBy,
+      creationSource: identity.creationSource,
+      resourceOperationId: identity.operationId,
+    });
+    const projection = yield* projections.getThreadProjection(threadId);
+    assert.equal(projection.runs[0]!.status, identity.allowed ? "starting" : "queued");
+  }).pipe(Effect.provide(testLayer)),
+);
 
 it.effect(
   "runs a trusted hook ahead of waiting messages and preserves their queue at hook termination",
@@ -229,33 +223,31 @@ it.effect(
     }).pipe(Effect.provide(testLayer)),
 );
 
-for (const phase of ["checkout", "release", "held", "failed"] as const) {
-  for (const type of ["thread.archive", "thread.delete"] as const) {
-    it.effect(`${type} retains a thread with a ${phase} reservation until release`, () =>
-      Effect.gen(function* () {
-        const { orchestrator, projections } = yield* setup;
-        yield* setLocks([{ ...lock, phase }]);
-        const rejected = yield* Effect.exit(
-          orchestrator.dispatch({ type, commandId: CommandId.make("remove-blocked"), threadId }),
-        );
-        assert.equal(rejected._tag, "Failure");
-        const before = yield* projections.getThreadProjection(threadId);
-        assert.equal(before.thread.archivedAt, null);
-        assert.equal(before.thread.deletedAt, null);
-        yield* setLocks([]);
-        yield* orchestrator.dispatch({
-          type,
-          commandId: CommandId.make("remove-released"),
-          threadId,
-        });
-        const after = yield* projections.getThreadProjection(threadId);
-        assert.isNotNull(
-          type === "thread.archive" ? after.thread.archivedAt : after.thread.deletedAt,
-        );
-      }).pipe(Effect.provide(testLayer)),
+it.effect.each(
+  (["checkout", "release", "held", "failed"] as const).flatMap((phase) =>
+    (["thread.archive", "thread.delete"] as const).map((type) => ({ phase, type })),
+  ),
+)("$type retains a thread with a $phase reservation until release", ({ phase, type }) =>
+  Effect.gen(function* () {
+    const { orchestrator, projections } = yield* setup;
+    yield* setLocks([{ ...lock, phase }]);
+    const rejected = yield* Effect.exit(
+      orchestrator.dispatch({ type, commandId: CommandId.make("remove-blocked"), threadId }),
     );
-  }
-}
+    assert.equal(rejected._tag, "Failure");
+    const before = yield* projections.getThreadProjection(threadId);
+    assert.equal(before.thread.archivedAt, null);
+    assert.equal(before.thread.deletedAt, null);
+    yield* setLocks([]);
+    yield* orchestrator.dispatch({
+      type,
+      commandId: CommandId.make("remove-released"),
+      threadId,
+    });
+    const after = yield* projections.getThreadProjection(threadId);
+    assert.isNotNull(type === "thread.archive" ? after.thread.archivedAt : after.thread.deletedAt);
+  }).pipe(Effect.provide(testLayer)),
+);
 
 it.effect("keeps server-originated notifications queued during a resource action", () =>
   Effect.gen(function* () {

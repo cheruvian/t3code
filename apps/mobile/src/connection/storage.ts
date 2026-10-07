@@ -3,6 +3,7 @@ import {
   registerConnectionInCatalog,
   removeConnectionFromCatalog,
   setConnectionEnabledInCatalog,
+  setRoutesInCatalog,
   removeCatalogValue,
   replaceCatalogValue,
   Persistence,
@@ -21,6 +22,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 
 import * as CatalogStore from "./catalog-store";
 
@@ -29,6 +31,7 @@ function targetPersistenceError(
     | "list-targets"
     | "list-disabled-targets"
     | "register-connection"
+    | "set-connection-routes"
     | "remove-connection"
     | "set-connection-enabled",
   error: ConnectionTransientError,
@@ -39,7 +42,7 @@ function targetPersistenceError(
   });
 }
 
-export const connectionStorageLayer = Layer.effectContext(
+export const layer = Layer.effectContext(
   Effect.gen(function* () {
     const catalog = yield* CatalogStore.make();
     const githubRoutingPermissions = yield* makeGitHubRoutingPermissions({
@@ -48,10 +51,15 @@ export const connectionStorageLayer = Layer.effectContext(
         catalog.update((document) => ({ ...document, githubRoutingPermissions })),
     });
 
-    const connectionTiming = yield* makeConnectionTiming({
+    const loadConnectionTiming = yield* makeConnectionTiming({
       read: catalog.read.pipe(Effect.map((document) => document.connectionTiming)),
       write: (connectionTiming) =>
         catalog.update((document) => ({ ...document, connectionTiming })),
+    }).pipe(Effect.orDie, Effect.cached);
+    const connectionTiming = ConnectionTiming.of({
+      get: Effect.flatMap(loadConnectionTiming, (timing) => timing.get),
+      changes: Stream.unwrap(Effect.map(loadConnectionTiming, (timing) => timing.changes)),
+      set: (settings) => Effect.flatMap(loadConnectionTiming, (timing) => timing.set(settings)),
     });
 
     const targetStore = Persistence.ConnectionTargetStore.of({
@@ -65,13 +73,17 @@ export const connectionStorageLayer = Layer.effectContext(
       ),
     });
     const registrationStore = Persistence.ConnectionRegistrationStore.of({
-      register: (registration) =>
+      register: (registration, routes) =>
         catalog
-          .update((document) => registerConnectionInCatalog(document, registration))
+          .update((document) => registerConnectionInCatalog(document, registration, routes))
           .pipe(Effect.mapError((error) => targetPersistenceError("register-connection", error))),
-      remove: (target) =>
+      setRoutes: (environmentId, routes) =>
         catalog
-          .update((document) => removeConnectionFromCatalog(document, target))
+          .update((document) => setRoutesInCatalog(document, environmentId, routes))
+          .pipe(Effect.mapError((error) => targetPersistenceError("set-connection-routes", error))),
+      remove: (environmentId) =>
+        catalog
+          .update((document) => removeConnectionFromCatalog(document, environmentId))
           .pipe(Effect.mapError((error) => targetPersistenceError("remove-connection", error))),
       setEnabled: (environmentId, enabled) =>
         catalog

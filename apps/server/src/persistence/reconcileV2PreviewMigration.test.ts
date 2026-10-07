@@ -2,13 +2,15 @@ import { assert, describe, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Migrator from "effect/unstable/sql/Migrator";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Migrator from "effect/sql/Migrator";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { migrationEntries, migrationManifest, runMigrations } from "./Migrations.ts";
 
 // These are the published upstream ids, deliberately independent of the fork ledger.
-const upstreamForkIds = [45, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 60, 61, 62];
+const upstreamForkIds = [
+  45, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 60, 61, 62, 64, 65, 66,
+];
 const seedUpstream = (variant: "main" | "preview53" | "preview54" | "preview54Indexes") =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;

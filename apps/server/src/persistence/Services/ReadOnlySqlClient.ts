@@ -16,7 +16,7 @@
  * @module ReadOnlySqlClient
  */
 import * as Context from "effect/Context";
-import type * as SqlClient from "effect/unstable/sql/SqlClient";
+import type * as SqlClient from "effect/sql/SqlClient";
 
 export class ReadOnlySqlClient extends Context.Service<ReadOnlySqlClient, SqlClient.SqlClient>()(
   "t3/persistence/Services/ReadOnlySqlClient",

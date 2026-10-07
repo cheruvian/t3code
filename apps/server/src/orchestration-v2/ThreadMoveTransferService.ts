@@ -36,7 +36,7 @@ import * as ServerConfig from "../config.ts";
 import * as Settings from "../serverSettings.ts";
 import * as Projects from "../project/ProjectService.ts";
 import * as RepositoryIdentity from "../project/RepositoryIdentityResolver.ts";
-import * as Providers from "../provider/Services/ProviderRegistry.ts";
+import * as Providers from "../provider/ProviderRegistry.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Secrets from "../auth/ServerSecretStore.ts";
 import {
@@ -45,7 +45,7 @@ import {
   base64UrlEncode,
   base64UrlDecodeUtf8,
 } from "../auth/utils.ts";
-import { deriveProviderInstanceConfigMap } from "../provider/Layers/ProviderInstanceRegistryHydration.ts";
+import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
 import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
@@ -85,7 +85,7 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as SetupScripts from "../project/ProjectSetupScriptRunner.ts";
 import { readThreadMoveRepositoryHead } from "./ThreadMovePortable.ts";
-import { makeKeyedSerialExecutor } from "./KeyedSerialExecutor.ts";
+import * as KeyedLock from "@t3tools/shared/KeyedLock";
 
 const Part = Schema.Struct({
   payloadPath: Schema.String,
@@ -212,7 +212,7 @@ export const layer = Layer.effect(
     const effectOutbox = yield* EffectOutbox.EffectOutboxV2;
     const terminals = yield* TerminalManager.TerminalManager;
     const setupScripts = yield* SetupScripts.ProjectSetupScriptRunner;
-    const lane = yield* makeKeyedSerialExecutor<string>();
+    const lane = yield* KeyedLock.make<string>();
     const root = NodePath.join(config.stateDir, "thread-moves");
     const directory = (direction: "source" | "destination", moveId: string) =>
       NodePath.join(root, `${direction}-${decodeMoveId(moveId)}`);
@@ -702,7 +702,7 @@ export const layer = Layer.effect(
           const existingThread = yield* projections
             .getThread(input.threadId)
             .pipe(
-              Effect.catchTag("ProjectionStoreThreadNotFoundError", () => Effect.succeed(null)),
+              Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.succeed(null) }),
             );
           if (existingThread)
             return yield* failure(
@@ -1023,11 +1023,11 @@ export const layer = Layer.effect(
               return yield* failure(
                 "Destination provider is no longer compatible and authenticated.",
               );
-            const existing = yield* projections
-              .getThread(state.manifest.threadId)
-              .pipe(
-                Effect.catchTag("ProjectionStoreThreadNotFoundError", () => Effect.succeed(null)),
-              );
+            const existing = yield* projections.getThread(state.manifest.threadId).pipe(
+              Effect.catchTags({
+                ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
+              }),
+            );
             let replaceCheckpointRefs: ReadonlyArray<string> | undefined;
             if (existing) {
               const projection = yield* projections.getThreadRecords(state.manifest.threadId, [

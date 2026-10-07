@@ -47,6 +47,7 @@ import * as ServerSettings from "../../../serverSettings.ts";
 import * as WorkspaceEntries from "../../../workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "../../../workspace/WorkspaceFileSystem.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
 import { ApiToolkit } from "./tools.ts";
 
 const EmptyInput = Schema.Struct({});
@@ -347,8 +348,8 @@ const requireEnvironmentCapability = (operation: string) =>
     }
   });
 
-export const ApiToolkitHandlersLive = ApiToolkit.toLayer({
-  api_call: ({ operation, input }) =>
+export const ApiToolkitHandlersLive = McpToolAccess.toLayer(ApiToolkit, {
+  api_call: McpToolAccess.actsAsCaller(({ operation, input }) =>
     Effect.gen(function* () {
       const runner = lookupRunner(operation);
       if (runner === undefined) {
@@ -361,4 +362,5 @@ export const ApiToolkitHandlersLive = ApiToolkit.toLayer({
       yield* requireEnvironmentCapability(operation);
       return yield* runner(input);
     }),
+  ),
 });

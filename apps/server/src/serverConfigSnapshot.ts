@@ -9,7 +9,7 @@ import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
-import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);

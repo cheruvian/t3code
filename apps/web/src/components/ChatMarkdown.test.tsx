@@ -1,20 +1,18 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+// @vitest-environment jsdom
+
+import { EnvironmentId, ThreadId, type AuthEnvironmentScope } from "@t3tools/contracts";
 import { act, type ComponentProps, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
-import { renderMermaidDiagram } from "../lib/mermaidRendering";
 import { GitHubIcon } from "./Icons";
 import { Button } from "./ui/button";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
 import { FileMarkdownPreview } from "./files/FileMarkdownPreview";
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
-vi.mock("../lib/mermaidRendering", () => ({
-  renderMermaidDiagram: vi.fn(async () => "<svg><text>Start</text></svg>"),
-}));
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("../hooks/useSettings", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../hooks/useSettings")>();
@@ -44,10 +42,19 @@ vi.mock("../state/use-atom-query-runner", () => {
   return { useAtomQueryRunner: () => query };
 });
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
-vi.mock("../state/session", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../state/session")>()),
-  usePreparedConnection: () => ({ _tag: "Loading" }),
-}));
+vi.mock("../state/session", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/session")>();
+  const { AuthStandardClientScopes } = await import("@t3tools/contracts");
+  const grantedScopes = new Set<AuthEnvironmentScope>(AuthStandardClientScopes);
+  const hasScope = (environmentId: EnvironmentId | null, scope: AuthEnvironmentScope) =>
+    environmentId !== null && grantedScopes.has(scope);
+  return {
+    ...actual,
+    useEnvironmentScope: hasScope,
+    readEnvironmentScope: hasScope,
+    usePreparedConnection: () => ({ _tag: "Loading" }),
+  };
+});
 vi.mock("../state/entities", () => ({
   readThreadShell: () => null,
   useProjects: () => [],
@@ -81,100 +88,79 @@ function codeButton(renderer: ReactTestRenderer, label: string) {
   return button.props as ComponentProps<typeof Button>;
 }
 
-describe("ChatMarkdown Mermaid diagrams", () => {
-  it("renders Mermaid in a Markdown file preview and exposes its original source", async () => {
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    const code = "flowchart TD\nA[Markdown file] --> B[Rendered diagram]\n";
-    let renderer: ReactTestRenderer | undefined;
-    try {
-      await act(async () => {
-        renderer = create(
-          <FileMarkdownPreview
-            cwd="/workspace"
-            relativePath="docs/diagram.md"
-            text={`# Diagram\n\n\`\`\`mermaid\n${code}\`\`\``}
-            threadRef={{
-              environmentId: EnvironmentId.make("mermaid-file-environment"),
-              threadId: ThreadId.make("mermaid-file-thread"),
-            }}
-          />,
-        );
-      });
-      expect(renderMermaidDiagram).toHaveBeenCalledWith(code, "dark");
-      expect(renderer!.root.findAllByProps({ "aria-label": "Mermaid diagram" })).toHaveLength(1);
-      await act(async () => {
-        codeButton(renderer!, "Show source code").onClick?.({} as never);
-        await getSyntaxHighlighterPromise("mermaid");
-      });
-      expect(renderer!.root.findAllByProps({ "aria-label": "Mermaid diagram" })).toHaveLength(0);
-      expect(JSON.stringify(renderer!.toJSON())).toContain("flowchart");
-      await act(async () => {
-        codeButton(renderer!, "Show diagram").onClick?.({} as never);
-      });
-      expect(renderer!.root.findAllByProps({ "aria-label": "Mermaid diagram" })).toHaveLength(1);
-    } finally {
-      await act(async () => renderer?.unmount());
-      vi.unstubAllGlobals();
-    }
+describe("ChatMarkdown bare anchor placeholders", () => {
+  it.each(["<A>", "<a>", "<a >", "<a/>", "<A/>", "<a />"])(
+    "preserves unmatched %s without linking later blocks",
+    (token) => {
+      const text = `- **"From ${token}"** appears in the header.\n\n- **Tests:** cover inheritance.\n\nThe deferred move continues on B.\n\nSee <a href="https://example.com">the link</a>.`;
+      const document = new DOMParser().parseFromString(
+        renderToStaticMarkup(<ChatMarkdown cwd="/tmp/project" text={text} />),
+        "text/html",
+      );
+
+      expect(document.querySelector("strong")?.textContent).toBe(`"From ${token}"`);
+      expect([...document.querySelectorAll("a")].map((link) => link.textContent)).toEqual([
+        "the link",
+      ]);
+      expect(document.querySelectorAll("li")).toHaveLength(2);
+      expect(
+        [...document.querySelectorAll("p")].map((paragraph) => paragraph.textContent),
+      ).toContain("The deferred move continues on B.");
+    },
+  );
+
+  it.each(["</a>  ", "<div>more</div>\n</a>"])(
+    "preserves a paired anchor closing in the raw block %s",
+    (closing) => {
+      const document = new DOMParser().parseFromString(
+        renderToStaticMarkup(
+          <ChatMarkdown cwd="/tmp/project" text={`See <a>label\n\n${closing}\n\nfinish`} />,
+        ),
+        "text/html",
+      );
+      expect(document.querySelector("p")?.textContent).toBe("See label");
+    },
+  );
+
+  it("preserves a paired anchor after comment-looking raw text", () => {
+    const document = new DOMParser().parseFromString(
+      renderToStaticMarkup(
+        <ChatMarkdown cwd="/tmp/project" text="See <a>label<script><!-- </script> --></a>" />,
+      ),
+      "text/html",
+    );
+    expect(document.querySelector("p")?.textContent).toBe("See label -->");
   });
 
-  it("renders by default and switches between source and diagram", async () => {
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    const code = "flowchart LR\n  A[Start] --> B[Finish]\n";
-    let renderer: ReactTestRenderer | undefined;
-    try {
-      await act(async () => {
-        renderer = create(<ChatMarkdown cwd={undefined} text={`\`\`\`mermaid\n${code}\`\`\``} />);
-      });
-      expect(renderMermaidDiagram).toHaveBeenCalledWith(code, "dark");
-      expect(renderer!.root.findAllByType("pre")).toHaveLength(0);
-      expect(renderer!.root.findAllByProps({ "aria-label": "Mermaid diagram" })).toHaveLength(1);
-      await act(async () => {
-        codeButton(renderer!, "Show source code").onClick?.({} as never);
-        await getSyntaxHighlighterPromise("mermaid");
-      });
-      expect(JSON.stringify(renderer!.toJSON())).toContain("flowchart");
-      expect(renderer!.root.findAllByProps({ "aria-label": "Mermaid diagram" })).toHaveLength(0);
-      await act(async () => {
-        codeButton(renderer!, "Show diagram").onClick?.({} as never);
-      });
-      expect(renderer!.root.findAllByProps({ "aria-label": "Mermaid diagram" })).toHaveLength(1);
-    } finally {
-      await act(async () => renderer?.unmount());
-      vi.unstubAllGlobals();
-    }
-  });
+  it.each(["<!-- </a> -->", '<div title="</a>">more</div>', '<script>"</a>"</script>'])(
+    "ignores apparent closing anchors inside %s",
+    (html) => {
+      const document = new DOMParser().parseFromString(
+        renderToStaticMarkup(
+          <ChatMarkdown cwd="/tmp/project" text={`Before <A>.\n\n${html}\n\nAfter.`} />,
+        ),
+        "text/html",
+      );
+      expect(document.querySelector("p")?.textContent).toBe("Before <A>.");
+      expect(document.querySelectorAll("a")).toHaveLength(0);
+    },
+  );
 
-  it("waits for an open streaming fence and recovers from invalid diagram source", async () => {
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    vi.mocked(renderMermaidDiagram).mockClear();
-    let renderer: ReactTestRenderer | undefined;
-    try {
-      await act(async () => {
-        renderer = create(
-          <ChatMarkdown cwd={undefined} text={"```mermaid\nflowchart LR\nA -->"} isStreaming />,
-        );
-      });
-      expect(renderMermaidDiagram).not.toHaveBeenCalled();
-      vi.mocked(renderMermaidDiagram).mockRejectedValueOnce(new Error("Syntax error"));
-      await act(async () => {
-        renderer!.update(
-          <ChatMarkdown cwd={undefined} text={"```mermaid\ninvalid diagram\n```"} />,
-        );
-        await getSyntaxHighlighterPromise("mermaid");
-      });
-      expect(JSON.stringify(renderer!.toJSON())).toContain("Could not render this Mermaid diagram");
-      expect(JSON.stringify(renderer!.toJSON())).toContain("invalid diagram");
-      await act(async () => {
-        renderer!.update(
-          <ChatMarkdown cwd={undefined} text={"```mermaid\nflowchart LR\nA --> B\n```"} />,
-        );
-      });
-      expect(renderer!.root.findAllByProps({ "aria-label": "Mermaid diagram" })).toHaveLength(1);
-    } finally {
-      await act(async () => renderer?.unmount());
-      vi.unstubAllGlobals();
-    }
+  it("preserves paired HTML anchors, details, markdown links, and inline code", () => {
+    const text =
+      'Bare <a>label</a>, <a id="section"></a>, `<A>`, and [docs](https://example.com).\n\n<details><summary>More</summary>Details</details>';
+    const document = new DOMParser().parseFromString(
+      renderToStaticMarkup(<ChatMarkdown cwd="/tmp/project" text={text} />),
+      "text/html",
+    );
+
+    expect([...document.querySelectorAll("a")].map((link) => link.textContent)).toEqual([
+      "label",
+      "",
+      "docs",
+    ]);
+    expect(document.querySelector("code")?.textContent).toBe("<A>");
+    expect(document.querySelector("[data-markdown-details]")?.textContent).toContain("More");
   });
 });
 

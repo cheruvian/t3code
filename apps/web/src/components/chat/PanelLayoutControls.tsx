@@ -1,10 +1,6 @@
-import {
-  Maximize2Icon,
-  Minimize2Icon,
-  PanelBottomIcon,
-  PanelRightIcon,
-  SquareMenuIcon,
-} from "lucide-react";
+import { PanelBottomIcon, PanelRightIcon, SquareMenuIcon } from "lucide-react";
+import { Maximize2, Minimize2 } from "lucide";
+import { MorphIcon } from "~/components/MorphIcon";
 import { memo, type ReactElement } from "react";
 
 import type { ThreadPanelPresentation } from "../../rightPanelLayout";
@@ -145,9 +141,9 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
                 size="sm"
               >
                 {fullWidthThreadMessages ? (
-                  <Minimize2Icon className="size-4" />
+                  <MorphIcon icon={Minimize2} size={16} />
                 ) : (
-                  <Maximize2Icon className="size-4" />
+                  <MorphIcon icon={Maximize2} size={16} />
                 )}
               </Toggle>
             </TooltipTrigger>
@@ -222,11 +218,7 @@ export const RightPanelMaximizeControl = memo(function RightPanelMaximizeControl
             variant="ghost"
             size="sm"
           >
-            {maximized ? (
-              <Minimize2Icon className="size-4" />
-            ) : (
-              <Maximize2Icon className="size-4" />
-            )}
+            <MorphIcon className="size-4" icon={maximized ? Minimize2 : Maximize2} />
           </Toggle>
         }
       />

@@ -27,7 +27,7 @@ import { OrchestratorV2 } from "./Orchestrator.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { ProjectService } from "../project/ProjectService.ts";
-import { OrchestrationEventStore } from "../persistence/Services/OrchestrationEventStore.ts";
+import { OrchestrationEventStore } from "../persistence/OrchestrationEventStore.ts";
 
 class ResourceHookError extends Schema.TaggedError<ResourceHookError>()("ResourceHookError", {
   message: Schema.String,

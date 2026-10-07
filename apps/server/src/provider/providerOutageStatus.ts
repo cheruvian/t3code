@@ -9,7 +9,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest } from "effect/http";
 
 const OUTAGE_STATUS_TIMEOUT_MS = 4_000;
 const OUTAGE_STATUS_CACHE_TTL_MS = 4 * 60 * 1_000;

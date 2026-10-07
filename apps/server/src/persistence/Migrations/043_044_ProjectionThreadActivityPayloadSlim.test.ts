@@ -1,7 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import {
   ACTIVITY_PAYLOAD_SLIM_VERSION,
@@ -68,11 +68,7 @@ layer("043_044_ProjectionThreadActivityPayloadSlim", (it) => {
       // Nothing to slim: the read falls back to the identical payload_json.
       assert.equal(byId.get("activity-plain")?.slim, null);
       assert.equal(byId.get("activity-plain")?.version, ACTIVITY_PAYLOAD_SLIM_VERSION);
-      assert.equal(
-        byId.get("activity-bulky")?.slim,
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
-        JSON.stringify(projectPayload(bulkyPayload)),
-      );
+      assert.equal(byId.get("activity-bulky")?.slim, JSON.stringify(projectPayload(bulkyPayload)));
       assert.equal(byId.get("activity-bulky")?.version, ACTIVITY_PAYLOAD_SLIM_VERSION);
     }),
   );

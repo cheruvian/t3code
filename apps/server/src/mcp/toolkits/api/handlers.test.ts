@@ -19,13 +19,13 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as RpcClient from "effect/unstable/rpc/RpcClient";
+import * as RpcClient from "effect/rpc/RpcClient";
 import * as Schema from "effect/Schema";
 import { vi } from "vite-plus/test";
 import { withEnvironmentRpc } from "../../../orchestration-v2/bootstrapRpcClient.ts";
 import { persistServerRuntimeState } from "../../../serverRuntimeState.ts";
-import { McpSchema, McpServer } from "effect/unstable/ai";
-import { HttpBody, HttpClient, HttpRouter } from "effect/unstable/http";
+import { McpSchema, McpServer } from "effect/ai";
+import { HttpBody, HttpClient, HttpRouter } from "effect/http";
 
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
@@ -36,12 +36,15 @@ import * as RemoteOpenTargets from "../../../environment/RemoteOpenTargets.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as Keybindings from "../../../keybindings.ts";
 import * as ExternalLauncher from "../../../process/externalLauncher.ts";
-import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
+import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as WorkspaceEntries from "../../../workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "../../../workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "../../../workspace/WorkspacePaths.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
+import * as SecretRequests from "../../../secrets/SecretRequests.ts";
+import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
+import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpSessionRegistry from "../../McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
@@ -75,11 +78,15 @@ const previewOnlyCapabilities: ReadonlySet<McpInvocationContext.McpCapability> =
 
 const invocationFor = (
   capabilities: ReadonlySet<McpInvocationContext.McpCapability>,
-): McpInvocationContext.McpInvocationScope => ({
+): McpInvocationContext.McpThreadInvocationScope => ({
   environmentId,
-  threadId: helperThreadId,
-  providerSessionId: "provider-session-mcp-api-test",
-  providerInstanceId: ProviderInstanceId.make("codex"),
+  requestNamespace: "provider-session-mcp-api-test",
+  client: undefined,
+  thread: {
+    threadId: helperThreadId,
+    providerSessionId: "provider-session-mcp-api-test",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
   capabilities,
   issuedAt: 1,
 });
@@ -98,6 +105,9 @@ const client = McpSchema.McpServerClient.of({
 });
 
 const unusedServicesLayer = Layer.mergeAll(
+  Layer.mock(SecretRequests.SecretRequests)({}),
+  Layer.mock(PreviewBrowser.PreviewBrowser)({}),
+  McpToolAccessTestkit.liveThreadsLayer,
   Layer.succeed(
     CheckpointDiffQuery.CheckpointDiffQuery,
     CheckpointDiffQuery.CheckpointDiffQuery.of({
@@ -155,7 +165,7 @@ const serviceLayers = Keybindings.layer.pipe(
   Layer.provideMerge(NodeServices.layer),
 );
 
-const TestLayer = McpHttpServer.ApiToolkitRegistrationLive.pipe(
+const TestLayer = McpHttpServer.layerApiToolkit.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(serviceLayers),
 );

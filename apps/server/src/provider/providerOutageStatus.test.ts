@@ -1,7 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import { ProviderDriverKind } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import {
   ProviderOutageStatusCache,
   resolveProviderOutageAdvisory,

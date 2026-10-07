@@ -3,7 +3,7 @@ import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
-import { Command, Flag } from "effect/unstable/cli";
+import { Command, Flag } from "effect/cli";
 
 import { withEnvironmentRpc } from "../orchestration-v2/bootstrapRpcClient.ts";
 import { projectLocationFlags } from "./config.ts";

@@ -57,7 +57,7 @@ import {
   updateThreadMetadata,
 } from "./commands.ts";
 
-const TEST_CRYPTO_LAYER = Layer.succeed(
+const layerTestCrypto = Layer.succeed(
   Crypto.Crypto,
   Crypto.make({
     randomBytes: (size) => new Uint8Array(size),
@@ -171,7 +171,7 @@ describe("V2 environment commands", () => {
           createWorkspaceRootIfMissing: true,
         },
       ]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("routes resource actions and abort operation identity through project mutations", () =>
@@ -203,7 +203,7 @@ describe("V2 environment commands", () => {
           commandId: "00000000-0000-4000-8000-000000000000",
         },
       ]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("persists and clears project presentation and environment settings", () =>
@@ -251,7 +251,7 @@ describe("V2 environment commands", () => {
           defaultThreadEnvMode: null,
         },
       ]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("preserves caller command ids for idempotent V2 commands", () =>
@@ -267,7 +267,7 @@ describe("V2 environment commands", () => {
       expect(commands).toEqual([
         { type: "thread.archive", commandId: "queued-command", threadId: "thread-1" },
       ]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("resolves run ordinal zero to the persisted thread-start checkpoint", () =>
@@ -311,7 +311,7 @@ describe("V2 environment commands", () => {
           checkpointId,
         },
       ]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("preserves plan implementation provenance on V2 runs", () =>
@@ -351,7 +351,7 @@ describe("V2 environment commands", () => {
         deliveryIntent: "auto",
         dispatchMode: { type: "start_immediately" },
       });
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("preserves an existing worktree and branch during first-message launch", () =>
@@ -395,7 +395,7 @@ describe("V2 environment commands", () => {
           branch: "feature",
         },
       });
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("provisions an origin-based worktree for an existing empty thread", () =>
@@ -435,7 +435,7 @@ describe("V2 environment commands", () => {
           startFromOrigin: true,
         },
       });
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("uses server-resolved delivery intent without fetching the full projection", () =>
@@ -471,7 +471,7 @@ describe("V2 environment commands", () => {
         });
       }
       expect(projectionRequests).toEqual([]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("retains projection-shaped delivery for servers without command context support", () =>
@@ -536,7 +536,61 @@ describe("V2 environment commands", () => {
         expect(commands.at(-1)).not.toHaveProperty("deliveryIntent");
       }
       expect(projectionRequests).toEqual([v2ThreadId, v2ThreadId, v2ThreadId, v2ThreadId]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
+  it.effect("Stop with no run left ends the thread's pull request watches", () =>
+    Effect.gen(function* () {
+      const link = {
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        url: "https://github.com/pingdotgg/t3code/pull/7",
+        source: "agent" as const,
+        linkedAt: "2026-10-05T00:00:00.000Z",
+        snapshot: null,
+        stack: null,
+      };
+      const watch = {
+        startedAt: "2026-10-05T00:00:00.000Z",
+        headSha: null,
+        failedChecks: [],
+        passed: false,
+        passedChecks: [],
+        remarksThrough: "2026-10-05T00:00:00.000Z",
+        remarkIds: [],
+        conflicting: false,
+        wakes: 0,
+      };
+      const projection: OrchestrationV2ThreadProjection = {
+        ...v2Projection,
+        thread: {
+          ...v2Projection.thread,
+          pullRequests: [
+            { ...link, number: 7, watch },
+            { ...link, number: 8 },
+            { ...link, number: 9, source: "stack-dismissed", watch },
+          ],
+        },
+      };
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [], projection });
+
+      yield* interruptThreadTurn({ threadId: v2ThreadId }).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      );
+
+      expect(commands).toEqual([
+        {
+          type: "thread.pull-request.watch",
+          commandId: expect.any(String),
+          threadId: v2ThreadId,
+          host: "github.com",
+          repository: "pingdotgg/t3code",
+          number: 7,
+          watching: false,
+        },
+      ]);
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect.each([
@@ -612,7 +666,7 @@ describe("V2 environment commands", () => {
               },
             ],
       );
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect(
@@ -700,7 +754,7 @@ describe("V2 environment commands", () => {
         ]);
         // A text-only edit must not send an attachments replacement list.
         expect(commands[5]).not.toHaveProperty("attachments");
-      }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+      }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("delegates model selection to the server without fetching the full projection", () =>
@@ -742,7 +796,7 @@ describe("V2 environment commands", () => {
         },
       ]);
       expect(projectionRequests).toEqual([]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("retains provider-switch shaping for servers without command context support", () =>
@@ -774,7 +828,7 @@ describe("V2 environment commands", () => {
           modelSelection: { instanceId: "claude", model: "claude-sonnet-4-6" },
         },
       ]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect.each([true, false])(
@@ -804,7 +858,7 @@ describe("V2 environment commands", () => {
             restoreFiles,
           },
         ]);
-      }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+      }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("validates identified checkpoints locally for older servers", () =>
@@ -867,7 +921,7 @@ describe("V2 environment commands", () => {
         }
         expect(projectionRequests).toEqual([v2ThreadId]);
       }
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("dispatches settle and unsettle commands without timestamps", () =>
@@ -898,7 +952,7 @@ describe("V2 environment commands", () => {
           reason: "user",
         },
       ]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("sends an active order key without changing activity timestamps", () =>
@@ -918,7 +972,7 @@ describe("V2 environment commands", () => {
           orderKey: "mf",
         },
       ]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("dismisses a pending user-input request", () =>
@@ -940,7 +994,7 @@ describe("V2 environment commands", () => {
           requestId: "request-1",
         },
       ]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("dispatches an explicit idle start without fetching the full projection", () =>
@@ -975,7 +1029,7 @@ describe("V2 environment commands", () => {
           dispatchMode: { type: "start_immediately" },
         },
       ]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("interrupts a known run without fetching the full projection", () =>
@@ -1004,6 +1058,6 @@ describe("V2 environment commands", () => {
           holdQueue: true,
         },
       ]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 });

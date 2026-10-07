@@ -21,7 +21,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ProcessRunner, type ProcessRunInput, type ProcessRunOutput } from "../processRunner.ts";
 import { ProjectService } from "../project/ProjectService.ts";
-import { OrchestrationEventStore } from "../persistence/Services/OrchestrationEventStore.ts";
+import { OrchestrationEventStore } from "../persistence/OrchestrationEventStore.ts";
 import { OrchestratorV2 } from "./Orchestrator.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import { EventSinkV2 } from "./EventSink.ts";
@@ -181,8 +181,9 @@ it.layer(NodeServices.layer)("resource action reactor V2", (it) => {
       expect(h.resumed()).toBe(1);
     }),
   );
-  for (const status of ["completed", "failed"] as const) {
-    it.effect(`observes a prompt ${status} during dispatch`, () =>
+  it.effect.each(["completed", "failed"] as const)(
+    "observes a prompt %s during dispatch",
+    (status) =>
       Effect.gen(function* () {
         const h = yield* harness({ prompt: status });
         yield* h.reactor.start();
@@ -203,8 +204,7 @@ it.layer(NodeServices.layer)("resource action reactor V2", (it) => {
           creationSource: "server",
         });
       }),
-    );
-  }
+  );
   it.effect("uses release hooks and reports shell failure", () =>
     Effect.gen(function* () {
       const h = yield* harness({ fail: true });

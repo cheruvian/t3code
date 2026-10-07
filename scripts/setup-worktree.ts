@@ -27,41 +27,48 @@ const install = NodeChildProcess.spawnSync("vp i", {
 });
 if (install.status !== 0) process.exit(install.status ?? 1);
 
-// In the main checkout itself, relinking would replace the real env files.
-if (NodeFS.realpathSync(projectRoot) !== NodeFS.realpathSync(worktree)) {
-  for (const file of ENV_FILES) {
-    const source = NodePath.join(projectRoot, file);
-    if (!NodeFS.existsSync(source)) continue;
-    const target = NodePath.join(worktree, file);
-    NodeFS.rmSync(target, { force: true });
-    NodeFS.symlinkSync(source, target);
+// Env files live as real files in the main checkout; worktrees only get
+// symlinks to them. Only a symlink is ever replaced, so a real env file is
+// never deleted, including when this runs in the main checkout itself.
+for (const file of ENV_FILES) {
+  const source = NodePath.join(projectRoot, file);
+  const sourceStat = NodeFS.lstatSync(source, { throwIfNoEntry: false });
+  if (!sourceStat) continue;
+  if (!sourceStat.isFile()) {
+    process.stderr.write(`Skipping ${file}: ${source} is not a regular file.\n`);
+    continue;
   }
+  const target = NodePath.join(worktree, file);
+  const existing = NodeFS.lstatSync(target, { throwIfNoEntry: false });
+  if (existing && !existing.isSymbolicLink()) continue;
+  if (existing) NodeFS.rmSync(target);
+  NodeFS.symlinkSync(source, target);
+}
 
-  const envFile = NodePath.join(worktree, ".env");
-  if (NodeFS.existsSync(envFile)) {
-    const direnv = NodeChildProcess.spawnSync("direnv", ["allow", envFile], {
-      cwd: worktree,
-      stdio: "inherit",
-    });
-    if (direnv.error && (direnv.error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw direnv.error;
-    }
-    if (!direnv.error && direnv.status !== 0) process.exit(direnv.status ?? 1);
+const envFile = NodePath.join(worktree, ".env");
+if (NodeFS.existsSync(envFile)) {
+  const direnv = NodeChildProcess.spawnSync("direnv", ["allow", envFile], {
+    cwd: worktree,
+    stdio: "inherit",
+  });
+  if (direnv.error && (direnv.error as NodeJS.ErrnoException).code !== "ENOENT") {
+    throw direnv.error;
+  }
+  if (!direnv.error && direnv.status !== 0) process.exit(direnv.status ?? 1);
 
-    const authFile =
-      process.env.AUTOENV_AUTH_FILE ?? NodePath.join(process.env.HOME ?? "", ".autoenv_authorized");
-    if (process.env.AUTOENV_AUTH_FILE || NodeFS.existsSync(authFile)) {
-      // autoenv authorizes the path and SHA-1 of each env file.
-      const hash = NodeCrypto.createHash("sha1").update(NodeFS.readFileSync(envFile)).digest("hex");
-      const entry = `${envFile}:${hash}`;
-      const entries = NodeFS.existsSync(authFile)
-        ? NodeFS.readFileSync(authFile, "utf8")
-            .split(/\r?\n/)
-            .filter((line) => line && !line.startsWith(`${envFile}:`))
-        : [];
-      NodeFS.mkdirSync(NodePath.dirname(authFile), { recursive: true });
-      NodeFS.writeFileSync(authFile, [...entries, entry].join("\n") + "\n");
-    }
+  const authFile =
+    process.env.AUTOENV_AUTH_FILE ?? NodePath.join(process.env.HOME ?? "", ".autoenv_authorized");
+  if (process.env.AUTOENV_AUTH_FILE || NodeFS.existsSync(authFile)) {
+    // autoenv authorizes the path and SHA-1 of each env file.
+    const hash = NodeCrypto.createHash("sha1").update(NodeFS.readFileSync(envFile)).digest("hex");
+    const entry = `${envFile}:${hash}`;
+    const entries = NodeFS.existsSync(authFile)
+      ? NodeFS.readFileSync(authFile, "utf8")
+          .split(/\r?\n/)
+          .filter((line) => line && !line.startsWith(`${envFile}:`))
+      : [];
+    NodeFS.mkdirSync(NodePath.dirname(authFile), { recursive: true });
+    NodeFS.writeFileSync(authFile, [...entries, entry].join("\n") + "\n");
   }
 }
 

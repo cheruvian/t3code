@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
-import * as Migrator from "effect/unstable/sql/Migrator";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Migrator from "effect/sql/Migrator";
+import * as SqlClient from "effect/sql/SqlClient";
 
 /** Published upstream ids after the shared migration 40, before fork-only additions. */
 const upstreamNames = [
@@ -20,6 +20,9 @@ const upstreamNames = [
   "ProjectionThreadsAutoSettleDisabledAt",
   "OrchestrationV2",
   "RemoveRedundantProjectionIndexes",
+  "ScheduledTaskWebhooks",
+  "WebhookRelayDeliveries",
+  "McpAppModelContext",
 ];
 
 /** Reconcile known upstream ledgers atomically; never renumber a published fork ledger. */

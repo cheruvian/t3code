@@ -29,7 +29,7 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as ServerConfig from "../../config.ts";
 import * as IdAllocator from "../IdAllocator.ts";
@@ -408,18 +408,18 @@ function makePiReplaySpawner(
  * spawner that tees a live `pi`; replay passes the transcript-backed one. The
  * launch arguments are part of the recorded argv, so replay reuses them.
  */
-export function makePiProviderAdapterRegistryLayer<E, R>(input: {
+export function layer<E, R>(input: {
   readonly scenario: string;
   readonly spawner: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner, E, R>;
   readonly binaryPath: string;
   readonly launchArgs: string;
   readonly environment?: ProviderInstanceEnvironment;
 }) {
-  const serverConfigLayer = Layer.effect(
+  const layerServerConfig = Layer.effect(
     ServerConfig.ServerConfig,
     makeReplayServerConfig(`pi-${input.scenario}`).pipe(Effect.orDie),
   ).pipe(Layer.provide(NodeServices.layer));
-  return ProviderAdapterRegistry.makeDriverLayer({
+  return ProviderAdapterRegistry.layerFromDrivers({
     drivers: [PiAdapterV2Driver],
     configMap: {
       [PI_PROVIDER]: {
@@ -434,7 +434,7 @@ export function makePiProviderAdapterRegistryLayer<E, R>(input: {
     Layer.provide(
       Layer.mergeAll(
         ServerSettings.layerTest().pipe(Layer.orDie),
-        serverConfigLayer,
+        layerServerConfig,
         NodeServices.layer,
         IdAllocator.layer,
       ),
@@ -465,7 +465,7 @@ export const PiOrchestratorReplayHarness: OrchestratorV2ProviderReplayHarness<
       ),
     ),
   makeProviderAdapterRegistryLayer: (transcript) =>
-    makePiProviderAdapterRegistryLayer({
+    layer({
       scenario: transcript.scenario,
       binaryPath: "pi",
       launchArgs: metadataString(transcript, "launchArgs"),

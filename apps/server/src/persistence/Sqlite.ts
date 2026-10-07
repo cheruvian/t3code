@@ -1,0 +1,113 @@
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+
+import { runMigrations } from "./Migrations.ts";
+import { initializeV2Database } from "./initializeV2Database.ts";
+import * as ServerConfig from "../config.ts";
+import { ReadOnlySqlClient } from "./Services/ReadOnlySqlClient.ts";
+
+type RuntimeSqliteLayerConfig = {
+  readonly filename: string;
+  readonly readonly?: boolean;
+  readonly spanAttributes?: Record<string, unknown>;
+};
+// Size the -wal file is cut back to on the first commit after a WAL reset.
+export const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
+
+const layerSetup = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    // CLI and server write from separate processes; wait rather than fail with SQLITE_BUSY.
+    yield* sql`PRAGMA busy_timeout = 5000;`;
+    yield* sql`PRAGMA foreign_keys = ON;`;
+    yield* sql`PRAGMA journal_mode = WAL;`;
+    // PASSIVE checkpoints never shrink the -wal file, so it otherwise keeps its
+    // largest size until the last connection closes.
+    yield* sql.unsafe(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES};`);
+    yield* runMigrations();
+  }),
+);
+
+/**
+ * `:memory:` and its URI spellings name a database private to one connection:
+ * opening a second connection on the same name yields a different, empty
+ * database rather than the first one's contents. Tests run on these, so the
+ * read client aliases the write client there instead of opening anything.
+ */
+const isInMemoryDatabase = (filename: string): boolean =>
+  filename === "" ||
+  filename === ":memory:" ||
+  filename.startsWith("file::memory:") ||
+  /[?&]mode=memory(?:&|$)/.test(filename);
+
+const readOnlyConnectionLayer = (config: RuntimeSqliteLayerConfig) =>
+  NodeSqliteClient.layer({
+    ...config,
+    readonly: true,
+    spanAttributes: { ...config.spanAttributes, "db.connection.role": "read" },
+  }).pipe(
+    Layer.flatMap((context) => {
+      const client = Context.get(context, SqlClient.SqlClient);
+      return Layer.effect(
+        ReadOnlySqlClient,
+        // Two connections on one file can now briefly contend (a reader
+        // arriving while the writer rewrites the WAL index, an auto-checkpoint
+        // racing a reader). SQLite's default is to fail such a wait
+        // immediately; wait instead.
+        Effect.as(client`PRAGMA busy_timeout = 5000;`, client),
+      );
+    }),
+  );
+
+/**
+ * Read connection layer. It depends on the write client, which is what orders
+ * it after `setup`: migrations create and upgrade the file on the write
+ * connection, and a read-only connection can do neither — opening one against
+ * a missing or unmigrated database fails.
+ */
+const readOnlySqlClientLayer = (config: RuntimeSqliteLayerConfig) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const writeClient = yield* SqlClient.SqlClient;
+      return isInMemoryDatabase(config.filename)
+        ? Layer.succeed(ReadOnlySqlClient, writeClient)
+        : readOnlyConnectionLayer(config);
+    }),
+  );
+
+export const layerFromPath = Effect.fn("layerFromPath")(function* (dbPath: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
+
+  const config = {
+    filename: dbPath,
+    spanAttributes: {
+      "db.name": path.basename(dbPath),
+      "service.name": "t3-server",
+    },
+  } satisfies RuntimeSqliteLayerConfig;
+
+  return Layer.provideMerge(
+    readOnlySqlClientLayer(config),
+    Layer.provideMerge(layerSetup, NodeSqliteClient.layer(config)),
+  );
+}, Layer.unwrap);
+
+export const layerMemory = Layer.provideMerge(
+  readOnlySqlClientLayer({ filename: ":memory:" }),
+  Layer.provideMerge(layerSetup, NodeSqliteClient.layer({ filename: ":memory:" })),
+);
+
+export const layerConfig = Layer.unwrap(
+  Effect.gen(function* () {
+    const { dbPath } = yield* ServerConfig.ServerConfig;
+    yield* initializeV2Database(dbPath);
+    return layerFromPath(dbPath);
+  }),
+);

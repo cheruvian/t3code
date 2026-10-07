@@ -34,10 +34,10 @@ import * as Config from "../config.ts";
 import * as Settings from "../serverSettings.ts";
 import * as Projects from "../project/ProjectService.ts";
 import * as Repositories from "../project/RepositoryIdentityResolver.ts";
-import * as Providers from "../provider/Services/ProviderRegistry.ts";
+import * as Providers from "../provider/ProviderRegistry.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Secrets from "../auth/ServerSecretStore.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import { layerMemory } from "../persistence/Sqlite.ts";
 import { validateClaudeNativeSession } from "../provider/Drivers/ClaudeNativeSessionLoader.ts";
 import { encodeClaudeProjectPath } from "../provider/Drivers/NativeSessionTransfer.ts";
 import * as Projections from "./ProjectionStore.ts";
@@ -52,11 +52,8 @@ import * as Transfer from "./ThreadMoveTransferService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as SetupScripts from "../project/ProjectSetupScriptRunner.ts";
-import { makeKeyedSerialExecutor } from "./KeyedSerialExecutor.ts";
-import {
-  OrchestrationV2EventSinkLayerLive,
-  OrchestrationEventInfrastructureLayerLive,
-} from "./runtimeLayer.ts";
+import * as KeyedLock from "@t3tools/shared/KeyedLock";
+import { layerEventSink, layerEventInfrastructure } from "./runtimeLayer.ts";
 
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
 const roots: string[] = [];
@@ -225,11 +222,11 @@ async function fixture(options?: {
     },
   ];
   function runtime(environmentId: string, repositoryRoot: string, home: string) {
-    const infrastructure = OrchestrationEventInfrastructureLayerLive;
+    const infrastructure = layerEventInfrastructure;
     const eventStore = Events.layerFromOrchestrationEventStore.pipe(Layer.provide(infrastructure));
     const receiptStore = Receipts.layerFromApplicationReceipts.pipe(Layer.provide(infrastructure));
     const stores = Layer.mergeAll(
-      OrchestrationV2EventSinkLayerLive,
+      layerEventSink,
       eventStore,
       receiptStore,
       Projections.layer,
@@ -335,7 +332,7 @@ async function fixture(options?: {
     const projectService = Layer.unwrap(
       Effect.gen(function* () {
         const projectionStore = yield* Projections.ProjectionStoreV2;
-        const projectLifecycle = yield* makeKeyedSerialExecutor<ProjectId>();
+        const projectLifecycle = yield* KeyedLock.make<ProjectId>();
         const destinationProject = {
           id: projectId,
           workspaceRoot: repositoryRoot,
@@ -350,7 +347,9 @@ async function fixture(options?: {
               input.projectId,
               Effect.gen(function* () {
                 const existing = yield* projectionStore.getThread(threadId).pipe(
-                  Effect.catchTag("ProjectionStoreThreadNotFoundError", () => Effect.succeed(null)),
+                  Effect.catchTags({
+                    ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
+                  }),
                   Effect.orDie,
                 );
                 if (existing) return yield* new Projects.ProjectNotEmptyError({ projectId });
@@ -462,7 +461,7 @@ async function fixture(options?: {
     // eslint-disable-next-line t3code/no-manual-effect-runtime-in-tests
     return ManagedRuntime.make(
       Layer.mergeAll(Transfer.layer.pipe(Layer.provide(dependencies)), dependencies).pipe(
-        Layer.provide(SqlitePersistenceMemory),
+        Layer.provide(layerMemory),
         Layer.provide(Settings.layerTest({ providers: { claudeAgent: { homePath: home } } })),
         Layer.provideMerge(
           Config.layerTest(repositoryRoot, { prefix: `t3-move-${environmentId}-` }),
@@ -1082,9 +1081,9 @@ it("keeps project deletion behind an import blocked at the native probe", async 
             threadId,
             projections.getThread(threadId).pipe(
               Effect.as("exists" as const),
-              Effect.catchTag("ProjectionStoreThreadNotFoundError", () =>
-                Effect.succeed("missing" as const),
-              ),
+              Effect.catchTags({
+                ProjectionStoreThreadNotFoundError: () => Effect.succeed("missing" as const),
+              }),
             ),
           )
           .pipe(Effect.forkChild({ startImmediately: true }));

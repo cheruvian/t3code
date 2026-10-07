@@ -1,4 +1,4 @@
-import * as NodeCrypto from "node:crypto";
+import * as Crypto from "effect/Crypto";
 
 import {
   AuthOrchestrationOperateScope,
@@ -28,9 +28,9 @@ import * as References from "effect/References";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { Argument, Command, Flag, GlobalFlag } from "effect/unstable/cli";
-import { FetchHttpClient } from "effect/unstable/http";
-import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
+import { Argument, Command, Flag, GlobalFlag } from "effect/cli";
+import { FetchHttpClient } from "effect/http";
+import * as HttpApiClient from "effect/http-api/HttpApiClient";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
@@ -176,10 +176,16 @@ const startThread = Command.make("start", {
                 project.defaultModelSelection.model === model
                   ? project.defaultModelSelection
                   : { instanceId: ProviderInstanceId.make(instanceId), model };
-              const threadId = ThreadId.make(NodeCrypto.randomUUID());
+              const threadId = ThreadId.make(
+                yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie),
+              );
+              const branchSuffix = Array.from(
+                yield* (yield* Crypto.Crypto).randomBytes(4).pipe(Effect.orDie),
+                (byte) => byte.toString(16).padStart(2, "0"),
+              ).join("");
               const branch =
                 Option.getOrUndefined(flags.branch) ??
-                buildTemporaryWorktreeBranchName(() => NodeCrypto.randomBytes(4).toString("hex"));
+                buildTemporaryWorktreeBranchName(() => branchSuffix);
               const command = buildIsolatedThreadStart({
                 project,
                 title,
@@ -188,8 +194,12 @@ const startThread = Command.make("start", {
                 baseBranch,
                 branch,
                 threadId,
-                messageId: MessageId.make(NodeCrypto.randomUUID()),
-                commandId: CommandId.make(NodeCrypto.randomUUID()),
+                messageId: MessageId.make(
+                  yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie),
+                ),
+                commandId: CommandId.make(
+                  yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie),
+                ),
               });
               const { thread: created } = yield* dispatchBootstrapRpc({
                 origin,
@@ -214,7 +224,7 @@ const startThread = Command.make("start", {
         );
       }).pipe(
         Effect.provide(
-          EnvironmentAuth.runtimeLayer.pipe(
+          EnvironmentAuth.layerRuntime.pipe(
             Layer.provideMerge(FetchHttpClient.layer),
             Layer.provide(ServerConfig.layer(config)),
             Layer.provide(Layer.succeed(References.MinimumLogLevel, config.logLevel)),
@@ -270,9 +280,9 @@ const sendMessage = Command.make("send", {
           type: "message.dispatch" as const,
           createdBy: "user" as const,
           creationSource: "server" as const,
-          commandId: CommandId.make(NodeCrypto.randomUUID()),
+          commandId: CommandId.make(yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie)),
           threadId: thread.id,
-          messageId: MessageId.make(NodeCrypto.randomUUID()),
+          messageId: MessageId.make(yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie)),
           text,
           attachments: [],
           modelSelection: thread.modelSelection,
@@ -450,13 +460,12 @@ const waitForThread = Command.make("wait", {
             }),
             Stream.runHead,
             Effect.timeout(`${timeoutSeconds} seconds`),
-            Effect.catchTag(
-              "TimeoutError",
-              () =>
+            Effect.catchTags({
+              TimeoutError: () =>
                 new ThreadCliError({
                   detail: `Timed out waiting for thread ${flags.threadId} after ${timeoutSeconds} seconds.`,
                 }),
-            ),
+            }),
           );
           if (Option.isNone(thread)) {
             return yield* new ThreadCliError({ detail: "The thread subscription ended." });

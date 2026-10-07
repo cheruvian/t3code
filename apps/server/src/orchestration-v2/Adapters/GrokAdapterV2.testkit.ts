@@ -7,7 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
 
@@ -34,16 +34,16 @@ import { GROK_DEFAULT_INSTANCE_ID, GROK_PROVIDER, makeGrokAdapterV2 } from "./Gr
 
 const DEFAULT_GROK_SETTINGS = Schema.decodeUnknownSync(GrokSettings)({});
 
-function makeGrokProviderAdapterRegistryReplayLayer(
+function layerGrokProviderAdapterRegistryReplay(
   transcript: AcpReplayTranscript,
   options: { readonly replayGate?: ProviderReplayGate } = {},
 ) {
-  const serverConfigLayer = Layer.effect(
+  const layerServerConfig = Layer.effect(
     ServerConfig.ServerConfig,
     makeReplayServerConfig(`grok-${transcript.scenario}`).pipe(Effect.orDie),
   ).pipe(Layer.provide(NodeServices.layer));
 
-  return ProviderAdapterRegistry.makeLayerEffect(
+  return ProviderAdapterRegistry.layerFromAdaptersEffect(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -106,7 +106,7 @@ function makeGrokProviderAdapterRegistryReplayLayer(
     Layer.provide(
       Layer.mergeAll(
         ServerSettings.layerTest().pipe(Layer.orDie),
-        serverConfigLayer,
+        layerServerConfig,
         NodeServices.layer,
         IdAllocator.layer,
       ),
@@ -126,5 +126,5 @@ export const GrokOrchestratorReplayHarness: OrchestratorV2ProviderReplayHarness<
 > = {
   driver: GROK_PROVIDER,
   decodeTranscript: (transcript) => decodeAcpReplayTranscript(transcript, GROK_PROVIDER),
-  makeProviderAdapterRegistryLayer: makeGrokProviderAdapterRegistryReplayLayer,
+  makeProviderAdapterRegistryLayer: layerGrokProviderAdapterRegistryReplay,
 };

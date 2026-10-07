@@ -8,7 +8,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 
 import * as ServerConfig from "../../config.ts";
 import * as IdAllocator from "../IdAllocator.ts";
@@ -34,16 +34,16 @@ const REPLAY_SETTINGS = Schema.decodeUnknownSync(AcpRegistrySettings)({
   authMethodId: "replay",
 });
 
-function makeAcpRegistryProviderAdapterRegistryReplayLayer(
+function layerAcpRegistryProviderAdapterRegistryReplay(
   transcript: AcpReplayTranscript,
   options: { readonly replayGate?: ProviderReplayGate } = {},
 ) {
-  const serverConfigLayer = Layer.effect(
+  const layerServerConfig = Layer.effect(
     ServerConfig.ServerConfig,
     makeReplayServerConfig(`acp-registry-${transcript.scenario}`).pipe(Effect.orDie),
   ).pipe(Layer.provide(NodeServices.layer));
 
-  return ProviderAdapterRegistry.makeLayerEffect(
+  return ProviderAdapterRegistry.layerFromAdaptersEffect(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -90,7 +90,7 @@ function makeAcpRegistryProviderAdapterRegistryReplayLayer(
     Layer.provide(
       Layer.mergeAll(
         ServerSettings.layerTest().pipe(Layer.orDie),
-        serverConfigLayer,
+        layerServerConfig,
         NodeServices.layer,
         IdAllocator.layer,
       ),
@@ -113,5 +113,5 @@ export const AcpRegistryOrchestratorReplayHarness: OrchestratorV2ProviderReplayH
     decodeAcpReplayTranscript(transcript, ACP_REGISTRY_PROVIDER, {
       retargetProvider: true,
     }),
-  makeProviderAdapterRegistryLayer: makeAcpRegistryProviderAdapterRegistryReplayLayer,
+  makeProviderAdapterRegistryLayer: layerAcpRegistryProviderAdapterRegistryReplay,
 };
