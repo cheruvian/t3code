@@ -214,6 +214,17 @@ Include the diagnostic message and trace ID when reporting a persistent failure.
 For a connection that still fails after linking, check the date and time on both
 devices. For server version warnings, follow [Updating T3 Code](./updating.md).
 
+## Sending messages while offline
+
+In web and desktop clients, send a message while an environment is disconnected
+to save it on that device. Messages and attachment bytes survive a reload and
+send in order when the environment reconnects and the client is open. Keep using
+the same browser profile; clearing its site data also clears saved messages.
+
+Review or cancel saved messages in the conversation or **Settings → Connections**.
+A delivery failure keeps the message available to retry. Cancellation is available
+until delivery starts. Mobile clients also save outgoing messages for reconnection.
+
 ## Using the Desktop App as a Remote Only
 
 If a computer should only drive work running elsewhere, turn off its local environment. In the

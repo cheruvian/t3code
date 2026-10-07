@@ -1,3 +1,4 @@
+import { OfflineMessageOutbox } from "../OfflineMessageOutbox";
 import {
   ChevronsLeftRightEllipsisIcon,
   EllipsisIcon,
@@ -3814,6 +3815,7 @@ export function ConnectionsSettings() {
         />
       ) : null}
       <LoadBalancingSettings environments={loadBalancingEnvironments} />
+      <OfflineMessageOutbox />
       <ConnectionTimingSettings />
       <GitHubRoutingSettings environments={loadBalancingEnvironments} />
     </SettingsPageContainer>
