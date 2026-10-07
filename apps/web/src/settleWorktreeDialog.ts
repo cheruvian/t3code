@@ -4,7 +4,6 @@ export type SettleWorktreeChoice = "keep" | "delete" | null;
 export type SettleWorktreeDecision =
   | { choice: "keep" }
   | { choice: "delete"; status: VcsStatusLocalResult }
-  | { choice: "clean" }
   | null;
 
 export interface SettleWorktreePrompt {
@@ -50,10 +49,6 @@ async function load(pending: PendingPrompt) {
   try {
     const status = await pending.prompt.loadStatus();
     if (active !== pending || version !== pending.loadVersion) return;
-    if (!status.hasWorkingTreeChanges) {
-      finish({ choice: "clean" });
-      return;
-    }
     pending.state = { ...pending.state, phase: "ready", status };
   } catch {
     if (active !== pending || version !== pending.loadVersion) return;

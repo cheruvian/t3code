@@ -119,8 +119,9 @@ export function ConfirmDialogHost() {
           <AlertDialogHeader>
             <AlertDialogTitle>Settle this conversation?</AlertDialogTitle>
             <AlertDialogDescription>
-              This worktree has local changes. You can keep it when settling, or review the changes
-              before deleting it. Deleting also removes untracked and ignored files in the worktree.
+              Choose whether to keep or delete this worktree when settling. Deleting removes the
+              entire folder, including untracked and ignored files such as .env. The conversation
+              and Git branch are kept.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {settlePrompt && (
@@ -151,18 +152,20 @@ export function ConfirmDialogHost() {
                     {settlePrompt.status.workingTree.insertions} −
                     {settlePrompt.status.workingTree.deletions} lines
                   </div>
-                  <ul className="max-h-48 space-y-1 overflow-auto rounded-md border p-2 font-mono text-xs">
-                    {settlePrompt.status.workingTree.files
-                      .slice(0, SETTLE_WORKTREE_VISIBLE_FILES)
-                      .map((file) => (
-                        <li key={file.path} className="flex justify-between gap-3">
-                          <span className="min-w-0 break-all">{file.path}</span>
-                          <span className="shrink-0 text-muted-foreground">
-                            +{file.insertions} −{file.deletions}
-                          </span>
-                        </li>
-                      ))}
-                  </ul>
+                  {settlePrompt.status.workingTree.files.length > 0 && (
+                    <ul className="max-h-48 space-y-1 overflow-auto rounded-md border p-2 font-mono text-xs">
+                      {settlePrompt.status.workingTree.files
+                        .slice(0, SETTLE_WORKTREE_VISIBLE_FILES)
+                        .map((file) => (
+                          <li key={file.path} className="flex justify-between gap-3">
+                            <span className="min-w-0 break-all">{file.path}</span>
+                            <span className="shrink-0 text-muted-foreground">
+                              +{file.insertions} −{file.deletions}
+                            </span>
+                          </li>
+                        ))}
+                    </ul>
+                  )}
                   {settlePrompt.status.workingTree.files.length > SETTLE_WORKTREE_VISIBLE_FILES && (
                     <p className="text-muted-foreground">
                       Showing the first {SETTLE_WORKTREE_VISIBLE_FILES} changed files.
@@ -188,7 +191,7 @@ export function ConfirmDialogHost() {
                 disabled={settlePrompt.phase !== "ready"}
                 onClick={() => respondToSettleWorktreeDialog("delete")}
               >
-                Delete worktree and discard local changes
+                Settle and delete worktree
               </Button>
             )}
             <Button

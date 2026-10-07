@@ -710,7 +710,6 @@ export const make = Effect.gen(function* () {
             });
           if (
             !status.isRepo ||
-            !status.hasWorkingTreeChanges ||
             status.branch !== current.branch ||
             status.branch !== input.expectedRefName ||
             !filesMatch
