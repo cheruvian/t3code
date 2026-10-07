@@ -4,7 +4,7 @@ import {
   threadMoveUndoParticipants,
 } from "@t3tools/client-runtime/operations";
 import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, VcsStatusLocalResult } from "@t3tools/contracts";
 import { environmentProjects } from "../../state/projects";
 import { allowUnpinnedReorderAtom } from "../../state/preferences";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
@@ -23,6 +23,8 @@ import { pinOrderKeyBetween } from "@t3tools/client-runtime/state/thread-sort";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
+import { vcsEnvironment } from "../../state/vcs";
+import { terminalEnvironment } from "../../state/terminal";
 import { queuedThreadKeysAtom } from "../../state/use-thread-outbox";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
@@ -186,6 +188,35 @@ function actionFailureTitle(action: ThreadListAction): string {
   return "Could not delete thread";
 }
 
+function confirmSettleWorktree(status: VcsStatusLocalResult | null, canDelete: boolean) {
+  return new Promise<"keep" | "delete" | null>((resolve) => {
+    const changes = status
+      ? `${status.workingTree.files.length} changed files · +${status.workingTree.insertions} −${status.workingTree.deletions} lines.\n${status.workingTree.files
+          .slice(0, 5)
+          .map((file) => file.path)
+          .join("\n")}`
+      : "Could not load the worktree changes. You can settle and keep the worktree.";
+    Alert.alert(
+      "Settle this conversation?",
+      `${changes}\n\nDeleting removes the entire worktree, including untracked and ignored files such as .env. The conversation and Git branch are kept.${canDelete ? "" : "\nThis worktree is shared or still in use, so it can only be kept."}`,
+      [
+        { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
+        { text: "Settle and keep", onPress: () => resolve("keep") },
+        ...(canDelete && status
+          ? [
+              {
+                text: "Settle and delete",
+                style: "destructive" as const,
+                onPress: () => resolve("delete"),
+              },
+            ]
+          : []),
+      ],
+      { cancelable: true, onDismiss: () => resolve(null) },
+    );
+  });
+}
+
 /** Resolves to true iff the action was dispatched and succeeded. */
 function useThreadActionExecutor(
   onCompleted?: (action: ThreadListAction, thread: EnvironmentThreadShell) => void,
@@ -195,6 +226,12 @@ function useThreadActionExecutor(
   const deleteMutation = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const settleMutation = useAtomCommand(threadEnvironment.settle, { reportFailure: false });
   const unsettleMutation = useAtomCommand(threadEnvironment.unsettle, { reportFailure: false });
+  const readWorktreeStatus = useAtomCommand(vcsEnvironment.localStatus, { reportFailure: false });
+  const stopSession = useAtomCommand(threadEnvironment.stopSession, { reportFailure: false });
+  const closeTerminal = useAtomCommand(terminalEnvironment.close, { reportFailure: false });
+  const removeConfirmedWorktree = useAtomCommand(vcsEnvironment.removeConfirmedWorktree, {
+    reportFailure: false,
+  });
   const inFlightThreadKeys = useRef(new Set<string>());
 
   const executeAction = useCallback(
@@ -228,6 +265,24 @@ function useThreadActionExecutor(
           );
           return false;
         }
+        let deleteWorktreePreview: VcsStatusLocalResult | null = null;
+        if (action === "settle" && thread.worktreePath) {
+          const shells = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
+          const owners = shells.filter(
+            (entry) =>
+              entry.environmentId === thread.environmentId &&
+              entry.worktreePath === thread.worktreePath,
+          );
+          const canDelete = owners.length === 1 && threadCanArchive(thread.runtime);
+          const status = await readWorktreeStatus({
+            environmentId: thread.environmentId,
+            input: { cwd: thread.worktreePath },
+          });
+          const preview = status._tag === "Success" ? status.value : null;
+          const choice = await confirmSettleWorktree(preview, canDelete);
+          if (choice === null) return false;
+          if (choice === "delete") deleteWorktreePreview = preview;
+        }
         const result = await withThreadDismissal(
           key,
           async () =>
@@ -256,6 +311,38 @@ function useThreadActionExecutor(
           Alert.alert(actionFailureTitle(action), actionFailureMessage(action, result.cause));
           return false;
         }
+        if (deleteWorktreePreview) {
+          const target = { environmentId: thread.environmentId, input: { threadId: thread.id } };
+          const stopped = thread.runtime ? await stopSession(target) : null;
+          const closed =
+            stopped === null || stopped._tag === "Success"
+              ? await closeTerminal({
+                  ...target,
+                  input: { threadId: thread.id, deleteHistory: false },
+                })
+              : stopped;
+          const removal =
+            closed._tag === "Success"
+              ? await removeConfirmedWorktree({
+                  environmentId: thread.environmentId,
+                  input: {
+                    threadId: thread.id,
+                    expectedRefName: deleteWorktreePreview.refName,
+                    expectedFiles: deleteWorktreePreview.workingTree.files,
+                  },
+                })
+              : null;
+          if (
+            closed._tag === "Failure" ||
+            removal?._tag === "Failure" ||
+            (removal?._tag === "Success" && !removal.value.removed)
+          ) {
+            Alert.alert(
+              "Conversation settled, but worktree was kept",
+              "The worktree changed or is still in use. Review it before deleting.",
+            );
+          }
+        }
         // Settled threads stay in the live shell stream; only the archive
         // lifecycle still feeds the archived-snapshot surface.
         if (action === "archive" || action === "unarchive" || action === "delete") {
@@ -269,9 +356,13 @@ function useThreadActionExecutor(
     },
     [
       archiveMutation,
+      closeTerminal,
       deleteMutation,
       onCompleted,
+      readWorktreeStatus,
+      removeConfirmedWorktree,
       settleMutation,
+      stopSession,
       unarchiveMutation,
       unsettleMutation,
     ],

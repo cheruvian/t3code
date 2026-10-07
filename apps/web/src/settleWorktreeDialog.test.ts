@@ -100,14 +100,35 @@ describe("settle worktree dialog", () => {
     expect(readSettleWorktreeDialog()).toBeNull();
   });
 
-  it("dismisses the prompt if the worktree became clean while details loaded", async () => {
+  it("keeps a clean worktree open for an explicit keep or delete decision", async () => {
     unregister = registerSettleWorktreeDialog();
+    const cleanStatus = {
+      ...dirtyStatus,
+      hasWorkingTreeChanges: false,
+      workingTree: { files: [], insertions: 0, deletions: 0 },
+    };
     const choice = requestSettleWorktreeDialog({
       path: "/worktree",
       canDelete: true,
-      loadStatus: async () => ({ ...dirtyStatus, hasWorkingTreeChanges: false }),
+      loadStatus: async () => cleanStatus,
     });
-    expect(await choice).toEqual({ choice: "clean" });
-    expect(readSettleWorktreeDialog()).toBeNull();
+    await vi.waitFor(() => expect(readSettleWorktreeDialog()?.phase).toBe("ready"));
+    expect(readSettleWorktreeDialog()?.status).toEqual(cleanStatus);
+    respondToSettleWorktreeDialog("delete");
+    expect(await choice).toEqual({ choice: "delete", status: cleanStatus });
+  });
+
+  it("keeps a shared clean worktree when deletion is unavailable", async () => {
+    unregister = registerSettleWorktreeDialog();
+    const choice = requestSettleWorktreeDialog({
+      path: "/worktree",
+      canDelete: false,
+      initialStatus: { ...dirtyStatus, hasWorkingTreeChanges: false },
+      loadStatus: async () => dirtyStatus,
+    });
+    respondToSettleWorktreeDialog("delete");
+    expect(readSettleWorktreeDialog()).not.toBeNull();
+    respondToSettleWorktreeDialog("keep");
+    expect(await choice).toEqual({ choice: "keep" });
   });
 });

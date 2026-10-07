@@ -267,10 +267,6 @@ export function useThreadActions() {
     reportFailure: false,
     reportDefect: false,
   });
-  const readWorktreeChanges = useAtomCommand(vcsEnvironment.hasWorkingTreeChanges, {
-    reportFailure: false,
-    reportDefect: false,
-  });
   const unsettleThreadMutation = useAtomCommand(threadEnvironment.unsettle, {
     reportFailure: false,
   });
@@ -757,55 +753,35 @@ export function useThreadActions() {
       let deleteWorktreePreview: VcsStatusLocalResult | null = null;
       if (resolved?.thread.worktreePath) {
         const worktreePath = resolved.thread.worktreePath;
-        const changes = await readWorktreeChanges({
+        const project = readProject({
           environmentId: target.environmentId,
-          input: { cwd: worktreePath },
+          projectId: resolved.thread.projectId,
         });
-        let initialStatus: VcsStatusLocalResult | undefined;
-        if (changes._tag !== "Success") {
-          const status = await readWorktreeStatus({
-            environmentId: target.environmentId,
-            input: { cwd: worktreePath },
-          });
-          if (status._tag !== "Success") {
-            return AsyncResult.failure(
-              Cause.fail(new Error("Could not check the worktree before settling.")),
-            );
-          }
-          initialStatus = status.value;
-        }
-        if (changes._tag === "Success" ? changes.value : initialStatus?.hasWorkingTreeChanges) {
-          const project = readProject({
-            environmentId: target.environmentId,
-            projectId: resolved.thread.projectId,
-          });
-          const onlyThread =
-            getOrphanedWorktreePathForThread(
-              readThreadShells().filter((thread) => thread.environmentId === target.environmentId),
-              target.threadId,
-            ) === worktreePath;
-          const canDelete =
-            onlyThread && project !== null && threadRuntimeCanArchive(resolved.thread.runtime);
-          const decision = await requestSettleWorktreeDialog({
-            path: worktreePath,
-            canDelete,
-            ...(initialStatus ? { initialStatus } : {}),
-            loadStatus: async () => {
-              const status = await readWorktreeStatus({
-                environmentId: target.environmentId,
-                input: { cwd: worktreePath },
-              });
-              if (status._tag !== "Success") {
-                throw new Error("Could not load worktree changes.");
-              }
-              return status.value;
-            },
-          });
-          if (decision === null) return AsyncResult.failure(Cause.interrupt());
-          if (decision.choice === "delete" && canDelete) {
-            deleteWorktreePath = worktreePath;
-            deleteWorktreePreview = decision.status;
-          }
+        const onlyThread =
+          getOrphanedWorktreePathForThread(
+            readThreadShells().filter((thread) => thread.environmentId === target.environmentId),
+            target.threadId,
+          ) === worktreePath;
+        const canDelete =
+          onlyThread && project !== null && threadRuntimeCanArchive(resolved.thread.runtime);
+        const decision = await requestSettleWorktreeDialog({
+          path: worktreePath,
+          canDelete,
+          loadStatus: async () => {
+            const status = await readWorktreeStatus({
+              environmentId: target.environmentId,
+              input: { cwd: worktreePath },
+            });
+            if (status._tag !== "Success") {
+              throw new Error("Could not load worktree changes.");
+            }
+            return status.value;
+          },
+        });
+        if (decision === null) return AsyncResult.failure(Cause.interrupt());
+        if (decision.choice === "delete" && canDelete) {
+          deleteWorktreePath = worktreePath;
+          deleteWorktreePreview = decision.status;
         }
       }
       const wokeAt = resolved
@@ -907,7 +883,6 @@ export function useThreadActions() {
       closeTerminal,
       markThreadVisited,
       readWorktreeStatus,
-      readWorktreeChanges,
       removeConfirmedWorktree,
       pinThread,
       resolveThreadTarget,
