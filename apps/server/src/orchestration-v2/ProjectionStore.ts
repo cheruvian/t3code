@@ -335,6 +335,10 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadShell: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadShell | null, ProjectionStoreV2Error>;
+  readonly getWorkspaceMoveFence: (input: {
+    readonly worktreePath: string;
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<OrchestrationV2AppThread | null, ProjectionStoreV2Error>;
   readonly getThread: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2AppThread, ProjectionStoreV2Error>;
@@ -657,6 +661,10 @@ export function applyToProjection(
     case "thread.interaction-mode-updated":
     case "thread.model-selection-updated":
     case "thread.provider-switched":
+    case "thread.move.fenced":
+    case "thread.move.activation-prepared":
+    case "thread.move.unfenced":
+    case "thread.moved":
       return {
         ...base,
         thread: event.payload,
@@ -1360,6 +1368,8 @@ export function threadShellFromProjection(
     lineage: projection.thread.lineage,
     forkedFrom: projection.thread.forkedFrom,
     activeProviderThreadId: projection.thread.activeProviderThreadId,
+    environmentMove: projection.thread.environmentMove ?? null,
+    environmentMoveOrigin: projection.thread.environmentMoveOrigin ?? null,
     ...(projection.thread.historyOrigin === undefined
       ? {}
       : { historyOrigin: projection.thread.historyOrigin }),
@@ -1593,6 +1603,8 @@ function shellFromState(input: {
     lineage: input.state.thread.lineage,
     forkedFrom: input.state.thread.forkedFrom,
     activeProviderThreadId: input.state.thread.activeProviderThreadId,
+    environmentMove: input.state.thread.environmentMove ?? null,
+    environmentMoveOrigin: input.state.thread.environmentMoveOrigin ?? null,
     ...(input.state.thread.historyOrigin === undefined
       ? {}
       : { historyOrigin: input.state.thread.historyOrigin }),
@@ -1683,7 +1695,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           case "thread.runtime-mode-updated":
           case "thread.interaction-mode-updated":
           case "thread.model-selection-updated":
-          case "thread.provider-switched": {
+          case "thread.provider-switched":
+          case "thread.move.fenced":
+          case "thread.move.activation-prepared":
+          case "thread.move.unfenced":
+          case "thread.moved": {
             const payloadJson = yield* encodeThreadPayload(event.payload);
             const payload = parseEncodedPayload(payloadJson);
             yield* sql`
@@ -2513,7 +2529,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           event.type !== "thread.runtime-mode-updated" &&
           event.type !== "thread.interaction-mode-updated" &&
           event.type !== "thread.model-selection-updated" &&
-          event.type !== "thread.provider-switched"
+          event.type !== "thread.provider-switched" &&
+          event.type !== "thread.move.fenced" &&
+          event.type !== "thread.move.activation-prepared" &&
+          event.type !== "thread.move.unfenced" &&
+          event.type !== "thread.moved"
         ) {
           const rows = yield* sql<PayloadRow>`
             SELECT payload_json
@@ -4021,6 +4041,19 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ),
       );
 
+    const getWorkspaceMoveFence: ProjectionStoreV2Shape["getWorkspaceMoveFence"] = (input) =>
+      Effect.gen(function* () {
+        const rows =
+          yield* sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_threads
+        WHERE deleted_at IS NULL AND json_extract(payload_json, '$.environmentMove') IS NOT NULL
+          AND json_extract(payload_json, '$.worktreePath') = ${input.worktreePath} LIMIT 1`;
+        return rows[0] ? yield* decodeThreadPayload(rows[0].payload_json) : null;
+      }).pipe(
+        Effect.mapError(
+          (cause) => new ProjectionStoreReadError({ threadId: input.threadId, cause }),
+        ),
+      );
+
     const getThread: ProjectionStoreV2Shape["getThread"] = (threadId) =>
       Effect.gen(function* () {
         const rows = yield* sql<PayloadRow>`
@@ -5454,6 +5487,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getShellSnapshot,
       getThreadShell,
       getThread,
+      getWorkspaceMoveFence,
       getSettlementCandidates,
       getThreadsWithPullRequests,
       getThreadProjection,
@@ -5555,6 +5589,18 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             .pipe(Effect.map(threadShellFromProjection));
           return shell.deletedAt === null ? shell : null;
         }),
+      getWorkspaceMoveFence: (input) =>
+        Ref.get(replayState).pipe(
+          Effect.map(
+            (state) =>
+              [...state.projections.values()].find(
+                (projection) =>
+                  projection.thread.deletedAt === null &&
+                  projection.thread.environmentMove &&
+                  projection.thread.worktreePath === input.worktreePath,
+              )?.thread ?? null,
+          ),
+        ),
       getThread: (threadId) =>
         Effect.gen(function* () {
           const projection = (yield* Ref.get(replayState)).projections.get(threadId);

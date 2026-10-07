@@ -26,6 +26,7 @@
     "./markdown": "./src/nativeMarkdownText.ts",
     "./primitive": "./src/MarkdownTextPrimitive.tsx",
     "./renderer": "./src/SelectableMarkdownText.tsx",
+    "./mermaid": "./src/MermaidDiagram.tsx",
     "./types": "./src/SelectableMarkdownText.types.ts"
   },
   "peerDependencies": {
@@ -38,7 +39,8 @@
     "expo-symbols": "*",
     "react": "*",
     "react-native": "*",
-    "react-native-nitro-markdown": "*"
+    "react-native-nitro-markdown": "*",
+    "react-native-webview": "*"
   },
   "codegenConfig": {
     "name": "T3MarkdownTextSpec",

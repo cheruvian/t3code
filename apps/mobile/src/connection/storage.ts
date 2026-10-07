@@ -12,6 +12,8 @@ import {
   ConnectionTransientError,
   CredentialStore,
   ProfileStore,
+  ConnectionTiming,
+  makeConnectionTiming,
   GitHubRoutingPermissions,
   makeGitHubRoutingPermissions,
 } from "@t3tools/client-runtime/connection";
@@ -44,6 +46,12 @@ export const connectionStorageLayer = Layer.effectContext(
       read: catalog.read.pipe(Effect.map((document) => document.githubRoutingPermissions ?? [])),
       write: (githubRoutingPermissions) =>
         catalog.update((document) => ({ ...document, githubRoutingPermissions })),
+    });
+
+    const connectionTiming = yield* makeConnectionTiming({
+      read: catalog.read.pipe(Effect.map((document) => document.connectionTiming)),
+      write: (connectionTiming) =>
+        catalog.update((document) => ({ ...document, connectionTiming })),
     });
 
     const targetStore = Persistence.ConnectionTargetStore.of({
@@ -145,6 +153,7 @@ export const connectionStorageLayer = Layer.effectContext(
     });
     return Context.make(Persistence.ConnectionTargetStore, targetStore).pipe(
       Context.add(GitHubRoutingPermissions, githubRoutingPermissions),
+      Context.add(ConnectionTiming, connectionTiming),
       Context.add(Persistence.ConnectionRegistrationStore, registrationStore),
       Context.add(ProfileStore.ConnectionProfileStore, profileStore),
       Context.add(CredentialStore.ConnectionCredentialStore, credentialStore),

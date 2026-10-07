@@ -100,6 +100,10 @@ export function shouldPublishAgentAwarenessEvent(
     case "thread.pull-request-synced":
     case "thread.model-selection-updated":
     case "thread.provider-switched":
+    case "thread.move.fenced":
+    case "thread.move.activation-prepared":
+    case "thread.move.unfenced":
+    case "thread.moved":
     case "run.created":
     case "run.updated":
     case "runtime-request.updated":

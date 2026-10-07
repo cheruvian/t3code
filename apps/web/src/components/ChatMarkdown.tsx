@@ -201,6 +201,7 @@ import {
 } from "../browser/openFileInPreview";
 import { resolveLinkTarget } from "../browser/browserLinkTarget";
 import { PullRequestLinkPreview } from "./pullRequest/PullRequestLinkPreview";
+import { MermaidDiagram } from "./chat/MermaidDiagram";
 
 interface ChatMarkdownProps {
   text: string;
@@ -983,6 +984,7 @@ function MarkdownCodeBlock({
   theme,
   onRunShellCommand,
   isStreaming,
+  isFenceClosed,
   children,
 }: {
   code: string;
@@ -991,8 +993,11 @@ function MarkdownCodeBlock({
   theme: "light" | "dark";
   onRunShellCommand?: ((command: string) => void) | undefined;
   isStreaming: boolean;
+  isFenceClosed: boolean;
   children: ReactNode;
 }) {
+  const [showSource, setShowSource] = useState(false);
+  const isMermaid = language.toLowerCase() === "mermaid";
   const [copied, setCopied] = useState(false);
   const [wrapped, setWrapped] = useState(readInitialWordWrapSetting);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1063,6 +1068,18 @@ function MarkdownCodeBlock({
           />
         </span>
         <span className="flex items-center gap-0.5" role="toolbar" aria-label="Code block actions">
+          {isMermaid ? (
+            <Button
+              type="button"
+              variant="ghost-muted"
+              size="xs"
+              aria-label={showSource ? "Show diagram" : "Show source code"}
+              aria-pressed={showSource}
+              onClick={() => setShowSource((value) => !value)}
+            >
+              {showSource ? "Diagram" : "Code"}
+            </Button>
+          ) : null}
           <Tooltip>
             <TooltipTrigger
               render={
@@ -1116,7 +1133,13 @@ function MarkdownCodeBlock({
           </Tooltip>
         </span>
       </div>
-      {children}
+      {isMermaid && !showSource ? (
+        <MermaidDiagram code={code} theme={theme} pending={isStreaming && !isFenceClosed}>
+          {children}
+        </MermaidDiagram>
+      ) : (
+        children
+      )}
     </div>
   );
 }
@@ -3357,6 +3380,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
             : undefined
         }
         isStreaming={isStreaming}
+        isFenceClosed={isClosedCodeFence(node, text)}
       >
         <RenderErrorBoundary
           resetKeys={[codeBlock.code, language, diffThemeName, isStreaming]}

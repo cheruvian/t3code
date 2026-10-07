@@ -42,7 +42,7 @@ import {
 } from "../state/serverConfigProjection.ts";
 import { environmentMismatchError } from "../connection/errors.ts";
 
-const SOCKET_OPEN_TIMEOUT = "15 seconds";
+import { ConnectionTiming } from "../connection/timing.ts";
 
 export interface RpcSession {
   readonly client: WsRpcProtocolClient;
@@ -169,10 +169,14 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       "connection.environment.id": connection.environmentId,
     });
 
+    const timing = yield* (yield* ConnectionTiming).get;
     const connected = yield* Deferred.make<void>();
     const disconnected = yield* Deferred.make<never, ConnectionTransientError>();
     const hooks = RpcClient.ConnectionHooks.of({
-      missedPongLimit: options.missedPongLimit,
+      missedPongLimit:
+        timing.heartbeatSeconds === 0
+          ? options.missedPongLimit
+          : Math.ceil(timing.heartbeatSeconds / 5),
       onConnect: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
       onDisconnect: Deferred.isDone(connected).pipe(
         Effect.flatMap((wasConnected) =>
@@ -192,7 +196,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       ),
     });
     const socketLayer = Socket.layerWebSocket(connection.socketUrl, {
-      openTimeout: SOCKET_OPEN_TIMEOUT,
+      openTimeout: `${timing.setupSeconds} seconds`,
     }).pipe(Layer.provide(Layer.succeed(Socket.WebSocketConstructor, webSocketConstructor)));
     const protocolLayer = Layer.effect(
       RpcClient.Protocol,

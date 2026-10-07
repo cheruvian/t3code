@@ -1,3 +1,7 @@
+import { useProviderOutage } from "../hooks/useProviderOutage";
+import type { OfflineMessage } from "../lib/offlineMessageQueue";
+import { offlineMessages } from "../state/offlineMessages";
+import { OfflineMessageOutbox } from "./OfflineMessageOutbox";
 import { ThreadResources } from "./ThreadResources";
 import { groupedResourceLocks } from "@t3tools/client-runtime/state/resource-lock-grouping";
 import { projectEnvironment } from "../state/projects";
@@ -458,11 +462,7 @@ import {
   ProviderStatusBanner,
   shouldShowProviderStatusBanner,
 } from "./chat/ProviderStatusBanner";
-import {
-  getProviderOutageBannerKey,
-  ProviderOutageBanner,
-  shouldShowProviderOutageBanner,
-} from "./chat/ProviderOutageBanner";
+import { ProviderOutageBanner } from "./chat/ProviderOutageBanner";
 import {
   dismissThreadErrorBannerForSession,
   getThreadErrorBannerKey,
@@ -1506,7 +1506,6 @@ function chatActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
 }
 
-const ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE = 3;
 const EMPTY_HELD_TURN_DIFF_SUMMARIES: readonly never[] = [];
 const noopHeldTurnDiff = (_turnId: RunId, _filePath?: string) => {};
 const noopHeldRevert = (_targetTurnCount: number) => {};
@@ -1954,7 +1953,6 @@ export default function ChatView(props: ChatViewProps) {
   const multipleModelSelectionsRef = useRef(multipleModelSelections);
   multipleModelSelectionsRef.current = multipleModelSelections;
   const uncertainMultipleSubmissionsRef = fanoutState.uncertainSubmissions;
-  const environmentUnavailableSendToastSlotRef = useRef(0);
   const feedbackUploadsInFlightRef = useRef(new Set<string>());
   const terminalUiOpenByThreadRef = useRef<Record<string, boolean>>({});
 
@@ -3077,19 +3075,17 @@ export default function ChatView(props: ChatViewProps) {
         title: `${activeEnvironmentUnavailableState.label} is ${environmentReconnecting ? "reconnecting" : "offline"}`,
         actions: (
           <>
-            {!environmentReconnecting ? (
-              <Button
-                size="xs"
-                variant="ghost"
-                onClick={() =>
-                  void handleReconnectActiveEnvironment(
-                    activeEnvironmentUnavailableState.environmentId,
-                  )
-                }
-              >
-                Reconnect
-              </Button>
-            ) : null}
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() =>
+                void handleReconnectActiveEnvironment(
+                  activeEnvironmentUnavailableState.environmentId,
+                )
+              }
+            >
+              {environmentReconnecting ? "Retry now" : "Reconnect"}
+            </Button>
             {disconnectAction}
           </>
         ),
@@ -4126,21 +4122,8 @@ export default function ChatView(props: ChatViewProps) {
   )
     ? activeProviderStatus
     : null;
-  const providerOutageBannerKey = getProviderOutageBannerKey(activeProviderStatus);
-  const [dismissedProviderOutageBannerKey, setDismissedProviderOutageBannerKey] = useState<
-    string | null
-  >(null);
-  useEffect(() => {
-    if (providerOutageBannerKey === null && dismissedProviderOutageBannerKey !== null) {
-      setDismissedProviderOutageBannerKey(null);
-    }
-  }, [dismissedProviderOutageBannerKey, providerOutageBannerKey]);
-  const visibleProviderOutage = shouldShowProviderOutageBanner(
-    activeProviderStatus,
-    dismissedProviderOutageBannerKey,
-  )
-    ? activeProviderStatus
-    : null;
+  const { visibleStatus: visibleProviderOutage, dismiss: dismissProviderOutage } =
+    useProviderOutage(activeProviderStatus);
   const hasTimelineTopBanner =
     Boolean(timelineThreadError) ||
     visibleProviderStatus !== null ||
@@ -8383,7 +8366,7 @@ export default function ChatView(props: ChatViewProps) {
     if (
       !activeThread ||
       isSendBusy ||
-      isConnecting ||
+      (isConnecting && !activeEnvironmentUnavailable) ||
       isRevertingCheckpoint ||
       !clientSettingsHydrated ||
       threadDetailLoading ||
@@ -8402,20 +8385,6 @@ export default function ChatView(props: ChatViewProps) {
         description: loadBalancing.pending
           ? "Resource checks are still running. You can choose a machine in the composer."
           : "No eligible machine has available resources. Choose a machine in the composer to override.",
-      });
-      return;
-    }
-    if (activeEnvironmentUnavailable) {
-      const toastSlot = environmentUnavailableSendToastSlotRef.current;
-      environmentUnavailableSendToastSlotRef.current =
-        (toastSlot + 1) % ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE;
-      toastManager.add({
-        ...stackedThreadToast({
-          type: "warning",
-          title: "Not connected: message not sent",
-          description: "Reconnecting to the environment. Try again once it is connected.",
-        }),
-        id: `chat-send-environment-unavailable:${toastSlot}`,
       });
       return;
     }
@@ -8948,6 +8917,133 @@ export default function ChatView(props: ChatViewProps) {
           interactionMode: sendInteractionMode,
         }).interactionMode,
       });
+    }
+
+    if (
+      activeEnvironmentUnavailable ||
+      offlineMessages
+        .getSnapshot()
+        .some(
+          (message) =>
+            message.environmentId === environmentId && message.ownerThreadId === activeThread.id,
+        )
+    ) {
+      sendInFlightRef.current = true;
+      try {
+        const selections =
+          multipleTargets.length > 0
+            ? multipleTargets
+            : [
+                {
+                  selection: ctxSelectedModelSelection,
+                  text: outgoingMessageText,
+                  interactionMode: sendInteractionMode,
+                },
+              ];
+        const queuedMessages: OfflineMessage[] = [];
+        for (const [index, selection] of selections.entries()) {
+          const fanout = multipleTargets.length > 0;
+          const queuedThreadId = fanout ? newThreadId() : threadIdForSend;
+          const queuedMessageId = index === 0 ? messageIdForSend : newMessageId();
+          const alreadyQueuedCreation = offlineMessages
+            .getSnapshot()
+            .some(
+              (message) =>
+                message.environmentId === environmentId &&
+                message.input.threadId === queuedThreadId,
+            );
+          const createQueuedThread = fanout || (isLocalDraftThread && !alreadyQueuedCreation);
+          const queuedBaseBranch = fanout ? activeThreadBranch : baseBranchForWorktree;
+          queuedMessages.push({
+            environmentId,
+            ownerThreadId: activeThread.id,
+            input: {
+              commandId: CommandId.make(`offline:${queuedMessageId}`),
+              createdAt: messageCreatedAt,
+              threadId: queuedThreadId,
+              message: {
+                messageId: queuedMessageId,
+                role: "user",
+                text: selection.text,
+                attachments: [],
+                ...(outgoingMessageContext ? { context: outgoingMessageContext } : {}),
+              },
+              modelSelection: selection.selection,
+              runtimeMode,
+              interactionMode: selection.interactionMode,
+              dispatchMode: "queue",
+              ...(createQueuedThread || queuedBaseBranch
+                ? {
+                    bootstrap: {
+                      ...(createQueuedThread
+                        ? {
+                            createThread: {
+                              projectId: activeProject.id,
+                              title: truncate(
+                                assistantCitationsToPlainText(
+                                  stripInlineContextReferences(trimmed),
+                                ).trim() || "New thread",
+                              ),
+                              modelSelection: selection.selection,
+                              runtimeMode,
+                              interactionMode: selection.interactionMode,
+                              branch: activeThreadBranch,
+                              worktreePath: fanout ? null : activeThread.worktreePath,
+                              createdAt: fanout ? messageCreatedAt : activeThread.createdAt,
+                            },
+                          }
+                        : {}),
+                      ...(queuedBaseBranch && !alreadyQueuedCreation
+                        ? {
+                            prepareWorktree: {
+                              projectCwd: activeProject.workspaceRoot,
+                              baseBranch: queuedBaseBranch,
+                              ...(fanout ? { requireWorktree: true } : {}),
+                              ...(startFromOrigin ? { startFromOrigin: true } : {}),
+                            },
+                            runSetupScript: true,
+                          }
+                        : {}),
+                    },
+                  }
+                : {}),
+            },
+            attachments: composerAttachmentsSnapshot.map((attachment) => ({
+              id: attachment.id,
+              type: attachment.type,
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+              file: attachment.file,
+              ...(attachment.type === "file" &&
+              attachment.uploadEnvironmentId === environmentId &&
+              attachment.uploadedAttachmentId
+                ? { uploadedAttachmentId: attachment.uploadedAttachmentId }
+                : {}),
+            })),
+          });
+        }
+        await offlineMessages.enqueueAll(queuedMessages);
+        promptRef.current = "";
+        clearComposerDraftContent(composerDraftTarget);
+        composerRef.current?.resetCursorState();
+        setThreadError(threadIdForSend, null);
+        toastManager.add({
+          type: "info",
+          title: "Message queued",
+          description: "Saved on this device. Sends when the environment reconnects.",
+        });
+      } catch (error) {
+        setThreadError(
+          threadIdForSend,
+          error instanceof Error
+            ? error.message
+            : "Could not save the message for offline delivery.",
+        );
+      } finally {
+        sendInFlightRef.current = false;
+      }
+      return;
     }
 
     sendInFlightRef.current = true;
@@ -11014,7 +11110,7 @@ export default function ChatView(props: ChatViewProps) {
               />
               <ProviderOutageBanner
                 status={visibleProviderOutage}
-                onDismiss={() => setDismissedProviderOutageBannerKey(providerOutageBannerKey)}
+                onDismiss={dismissProviderOutage}
               />
               <ThreadErrorBanner
                 error={timelineThreadError}
@@ -11271,28 +11367,34 @@ export default function ChatView(props: ChatViewProps) {
                               }
                               isPreparingWorktree={isPreparingWorktree}
                               queuedRunsControl={
-                                isServerThread && activeThread ? (
-                                  <QueuedRunsControl
-                                    resourceActionRunning={resourceActionRunning}
-                                    ref={queuedRunsControlRef}
-                                    steerShortcutLabel={shortcutLabelForCommand(
-                                      keybindings,
-                                      "thread.steerQueuedMessage",
-                                      { context: { terminalFocus: false } },
-                                    )}
-                                    editShortcutLabel={shortcutLabelForCommand(
-                                      keybindings,
-                                      "thread.editQueuedMessage",
-                                      { context: { composerFocus: true } },
-                                    )}
-                                    environmentId={activeThread.environmentId}
-                                    threadId={activeThread.id}
-                                    optimisticMessages={optimisticUserMessages}
-                                    editingRunId={editingQueuedRun?.runId ?? null}
-                                    onEditQueuedRun={beginEditingQueuedRun}
-                                    onCancelEdit={cancelEditingQueuedRun}
+                                <>
+                                  <OfflineMessageOutbox
+                                    environmentId={environmentId}
+                                    threadId={activeThread?.id}
                                   />
-                                ) : null
+                                  {isServerThread && activeThread ? (
+                                    <QueuedRunsControl
+                                      resourceActionRunning={resourceActionRunning}
+                                      ref={queuedRunsControlRef}
+                                      steerShortcutLabel={shortcutLabelForCommand(
+                                        keybindings,
+                                        "thread.steerQueuedMessage",
+                                        { context: { terminalFocus: false } },
+                                      )}
+                                      editShortcutLabel={shortcutLabelForCommand(
+                                        keybindings,
+                                        "thread.editQueuedMessage",
+                                        { context: { composerFocus: true } },
+                                      )}
+                                      environmentId={activeThread.environmentId}
+                                      threadId={activeThread.id}
+                                      optimisticMessages={optimisticUserMessages}
+                                      editingRunId={editingQueuedRun?.runId ?? null}
+                                      onEditQueuedRun={beginEditingQueuedRun}
+                                      onCancelEdit={cancelEditingQueuedRun}
+                                    />
+                                  ) : null}
+                                </>
                               }
                               bannerItems={composerBannerItems}
                               // With attachments or contexts aboard the pick just inserts the
@@ -11304,6 +11406,7 @@ export default function ChatView(props: ChatViewProps) {
                                   ? openUsageLimits
                                   : undefined
                               }
+                              allowOfflineQueue={!editingQueuedRun && !activePendingProgress}
                               environmentUnavailable={activeEnvironmentUnavailableState}
                               activePendingApproval={activePendingApproval}
                               pendingApprovals={pendingApprovals}

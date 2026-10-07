@@ -1,3 +1,11 @@
+import {
+  beginThreadMoveProgress,
+  threadMoveDestinations,
+  threadMoveUndoParticipants,
+} from "@t3tools/client-runtime/operations";
+import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import type { EnvironmentId } from "@t3tools/contracts";
+import { environmentProjects } from "../../state/projects";
 import { allowUnpinnedReorderAtom } from "../../state/preferences";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -30,6 +38,75 @@ import {
 import { getThreadListV2OrderedSection } from "../threads/threadListV2";
 import { threadCanArchive } from "./threadArchive";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
+
+export function readMobileThreadMoveDestinations(thread: EnvironmentThreadShell) {
+  return threadMoveDestinations({
+    thread,
+    projects: appAtomRegistry.get(environmentProjects.projectsAtom),
+    configs: appAtomRegistry.get(environmentServerConfigsAtom),
+  });
+}
+
+export async function moveMobileThreadToEnvironment(
+  thread: EnvironmentThreadShell,
+  environmentId: EnvironmentId,
+) {
+  const destination = readMobileThreadMoveDestinations(thread).find(
+    (candidate) => candidate.environmentId === environmentId,
+  );
+  if (!destination) return;
+  const progress = beginThreadMoveProgress(
+    { environmentId: thread.environmentId, threadId: thread.id },
+    destination.label,
+  );
+  if (!progress) return;
+  try {
+    const result = await runAtomCommand(
+      appAtomRegistry,
+      threadEnvironment.move,
+      {
+        environmentId: thread.environmentId,
+        input: {
+          threadId: thread.id,
+          destinationEnvironmentId: environmentId,
+          projectId: destination.projectId,
+          instanceId: destination.instanceId,
+          onProgress: progress.update,
+          ...(thread.environmentMove?.moveId ? { moveId: thread.environmentMove.moveId } : {}),
+        },
+      },
+      { reportFailure: false },
+    );
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      Alert.alert(
+        "Thread move needs attention",
+        `${error instanceof Error ? error.message : String(error)} Open the move action again to retry or reconcile it.`,
+      );
+    } else Alert.alert("Thread moved", `Continue this thread on ${destination.label}.`);
+  } finally {
+    progress.finish();
+  }
+}
+
+export async function undoMobileThreadMove(thread: EnvironmentThreadShell) {
+  const input = threadMoveUndoParticipants(thread);
+  if (!input) return false;
+  const result = await runAtomCommand(
+    appAtomRegistry,
+    threadEnvironment.undoMove,
+    { environmentId: thread.environmentId, input },
+    { reportFailure: false },
+  );
+  if (result._tag === "Failure") {
+    const error = squashAtomCommandFailure(result);
+    Alert.alert("Could not undo move", error instanceof Error ? error.message : String(error));
+    return false;
+  }
+  refreshArchivedThreadsForEnvironment(thread.environmentId);
+  Alert.alert("Move undone", "Continue this thread in its source environment.");
+  return true;
+}
 
 /** Version skew: never send settle/unsettle to a server that predates them
     (capability defaults false on decode for older servers). */
@@ -130,6 +207,8 @@ function useThreadActionExecutor(
       inFlightThreadKeys.current.add(key);
       selectionHaptic();
       try {
+        if (action === "unarchive" && threadMoveUndoParticipants(thread))
+          return await undoMobileThreadMove(thread);
         if (
           (action === "settle" || action === "unsettle") &&
           !environmentSupportsSettlement(thread.environmentId)

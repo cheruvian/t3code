@@ -48,6 +48,9 @@ import { layer as runtimeRequestServiceLayer } from "./RuntimeRequestService.ts"
 import { layerWithLegacyImporter as threadManagementServiceLayer } from "./ThreadManagementService.ts";
 import { layer as threadLaunchServiceLayer } from "./ThreadLaunchService.ts";
 import { layer as threadLifecycleServiceLayer } from "./ThreadLifecycleService.ts";
+import { layer as threadMoveTransferLayer } from "./ThreadMoveTransferService.ts";
+import { layer as nativeSessionResumeProbeLayer } from "./NativeSessionResumeProbe.ts";
+import { layer as threadMoveServiceLayer } from "./ThreadMoveService.ts";
 import { layer as threadForkServiceLayer } from "./ThreadForkService.ts";
 import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts";
 import { layer as scheduledTaskServiceLayer } from "../scheduledTasks/ScheduledTaskService.ts";
@@ -94,6 +97,7 @@ export const ProjectServiceLayerLive = projectServiceLayer.pipe(
       eventSinkProvided,
       idAllocatorLayer,
       legacyV1ThreadImporterProvided,
+      ThreadCommandExecutor.layer,
     ),
   ),
 );
@@ -256,6 +260,26 @@ const threadLaunchProvided = threadLaunchServiceLayer.pipe(
 const threadLifecycleProvided = threadLifecycleServiceLayer.pipe(
   Layer.provide(threadManagementProvided),
 );
+const threadMoveProvided = threadMoveServiceLayer.pipe(Layer.provide(threadManagementProvided));
+const threadMoveTransferProvided = threadMoveTransferLayer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      projectionStoreLayer,
+      threadMoveProvided,
+      threadManagementProvided,
+      eventStoreProvided,
+      eventSinkProvided,
+      effectOutboxLayer,
+      commandReceiptStoreProvided,
+      ProjectServiceLayerLive,
+      ProjectSetupScriptRunnerLayerLive,
+      ThreadCommandExecutor.layer,
+      nativeSessionResumeProbeLayer.pipe(
+        Layer.provide(Layer.merge(providerAdapterRegistryProvided, runtimePolicyProvided)),
+      ),
+    ),
+  ),
+);
 const scheduledTaskProvided = scheduledTaskServiceLayer.pipe(
   Layer.provide(Layer.mergeAll(threadLaunchProvided, threadManagementProvided)),
 );
@@ -313,6 +337,8 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   managedProjectFoldersProvided,
   threadLaunchProvided,
   threadLifecycleProvided,
+  threadMoveProvided,
+  threadMoveTransferProvided,
   scheduledTaskProvided,
   UsageLimitRecoveryWorker.workerLive.pipe(
     Layer.provide(Layer.mergeAll(projectionStoreLayer, threadManagementProvided)),

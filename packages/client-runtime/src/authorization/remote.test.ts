@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -17,6 +18,11 @@ import {
   RemoteEnvironmentAuthTimeoutError,
   resolveRemoteWebSocketConnectionUrl,
 } from "./remote.ts";
+import {
+  ConnectionTiming,
+  DEFAULT_CONNECTION_TIMING,
+  makeConnectionTiming,
+} from "../connection/timing.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import { remoteHttpClientLayer } from "../rpc/http.ts";
 
@@ -377,6 +383,80 @@ describe("remote environment authorization", () => {
         },
       });
     }),
+  );
+
+  it.effect("uses saved request timeouts for discovery and authentication", () =>
+    Effect.gen(function* () {
+      const timing = yield* makeConnectionTiming({
+        read: Effect.succeed({ ...DEFAULT_CONNECTION_TIMING, requestSeconds: 30 }),
+        write: () => Effect.void,
+      });
+      for (const request of [
+        fetchRemoteEnvironmentDescriptor({ httpBaseUrl: "http://remote.example.com/" }).pipe(
+          Effect.asVoid,
+        ),
+        issueRemoteWebSocketTicket({
+          httpBaseUrl: "http://remote.example.com/",
+          bearerToken: "test-token",
+        }).pipe(Effect.asVoid),
+      ]) {
+        const fetch = hangingFetch();
+        const fiber = yield* request.pipe(
+          provideRemoteHttp(fetch.fetchFn),
+          Effect.provideService(ConnectionTiming, timing),
+          Effect.flip,
+          Effect.forkScoped,
+        );
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("30 seconds");
+        const error = yield* Fiber.join(fiber);
+        expect(error).toBeInstanceOf(RemoteEnvironmentAuthTimeoutError);
+        expect(error.message).toContain("timed out after 30000ms");
+      }
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect.each(["timeout", "retry interruption"] as const)(
+    "aborts a stalled fetch on %s and ignores its late response",
+    (cancellation) =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        let oldSignal: AbortSignal | null | undefined;
+        let resolveOld: (response: Response) => void = () => {};
+        let callCount = 0;
+        const response = (ticket: string) =>
+          Response.json({ ticket, expiresAt: "2026-05-01T12:05:00.000Z" });
+        const fetchFn = ((_input, init) => {
+          callCount += 1;
+          if (callCount > 1) return Promise.resolve(response("fresh-ticket"));
+          oldSignal = init?.signal;
+          const pending = new Promise<Response>((resolve) => {
+            resolveOld = resolve;
+          });
+          Deferred.doneUnsafe(started, Effect.void);
+          return pending;
+        }) satisfies typeof fetch;
+        const request = issueRemoteWebSocketTicket({
+          httpBaseUrl: "https://remote.example.com/",
+          bearerToken: "test-token",
+          timeoutMs: 25,
+        }).pipe(provideRemoteHttp(fetchFn));
+        const old = yield* request.pipe(Effect.result, Effect.forkScoped);
+        yield* Deferred.await(started);
+        if (cancellation === "timeout") {
+          yield* TestClock.adjust("25 millis");
+          yield* Fiber.join(old);
+        } else {
+          yield* Fiber.interrupt(old);
+        }
+        expect(oldSignal?.aborted).toBe(true);
+        const current = yield* request;
+        expect(current.ticket).toBe("fresh-ticket");
+        resolveOld(response("stale-ticket"));
+        yield* Effect.yieldNow;
+        expect(current.ticket).toBe("fresh-ticket");
+        expect(callCount).toBe(2);
+      }).pipe(Effect.provide(TestClock.layer())),
   );
 
   it.effect("fails hung fetch requests on the configured timeout", () =>

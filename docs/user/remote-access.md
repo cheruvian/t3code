@@ -62,6 +62,25 @@ created in Settings can only be copied from the client that created them while
 its Connections page stays open. If you leave or reload that page, create
 another link to share.
 
+### Recover on a slow connection
+
+If an environment stays disconnected, choose **Retry now** on its row in
+**Settings → Connections** (web and desktop) or **Settings → Environments**
+(mobile). Retry is available during automatic reconnection and skips the wait
+before the next attempt. The chat's reconnecting banner also offers **Retry now**
+on web and desktop.
+
+Under **Connection timeouts** in the same settings page, increase connection
+setup, authentication request, foreground health-check, or heartbeat limits for
+slow networks. Allow enough setup time for authentication and initial server
+configuration together. You can also reduce the maximum automatic retry delay.
+Longer timeouts tolerate temporary stalls but take longer to detect a lost
+connection.
+
+Settings are saved separately on each client and apply to the next connection
+attempt or health check. Heartbeat changes require a new connection. Choose
+**Reset defaults** to restore the standard limits.
+
 ### Balance new threads across machines
 
 Auto balance is off by default. On web and desktop, enable it in
@@ -194,6 +213,17 @@ Include the diagnostic message and trace ID when reporting a persistent failure.
 
 For a connection that still fails after linking, check the date and time on both
 devices. For server version warnings, follow [Updating T3 Code](./updating.md).
+
+## Sending messages while offline
+
+In web and desktop clients, send a message while an environment is disconnected
+to save it on that device. Messages and attachment bytes survive a reload and
+send in order when the environment reconnects and the client is open. Keep using
+the same browser profile; clearing its site data also clears saved messages.
+
+Review or cancel saved messages in the conversation or **Settings → Connections**.
+A delivery failure keeps the message available to retry. Cancellation is available
+until delivery starts. Mobile clients also save outgoing messages for reconnection.
 
 ## Using the Desktop App as a Remote Only
 

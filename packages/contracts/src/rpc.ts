@@ -1,5 +1,11 @@
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 import {
+  THREAD_MOVE_RPC,
+  ThreadMoveRequest,
+  ThreadMoveResponse,
+  ThreadMoveTransferError,
+} from "./threadMove.ts";
+import {
   ChatGptReconnectProfileInput,
   ChatGptReconnectProfile,
   ChatGptImportProfileInput,
@@ -1536,6 +1542,12 @@ const WsSubscribeDeviceStateRpc = Rpc.make(WS_METHODS.subscribeDeviceState, {
   stream: true,
 });
 
+const WsThreadMoveRpc = Rpc.make(THREAD_MOVE_RPC, {
+  payload: ThreadMoveRequest,
+  success: ThreadMoveResponse,
+  error: Schema.Union([ThreadMoveTransferError, EnvironmentAuthorizationError]),
+});
+
 const WsOrchestrationV2DispatchCommandRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, {
   payload: OrchestrationV2RpcSchemas.dispatchCommand.input,
   success: OrchestrationV2RpcSchemas.dispatchCommand.output,
@@ -1892,6 +1904,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeAuthAccessRpc,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
+  WsThreadMoveRpc,
   WsOrchestrationV2DispatchCommandRpc,
   WsOrchestrationV2GetWorkflowScriptRpc,
   WsOrchestrationV2GetTurnDiffRpc,

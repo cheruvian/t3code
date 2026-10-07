@@ -1,3 +1,11 @@
+import { isThreadMoveInProgress } from "@t3tools/client-runtime/operations";
+import { threadMoveUndoParticipants } from "@t3tools/client-runtime/operations";
+import {
+  readThreadMoveDestinations,
+  moveThreadToEnvironment,
+  undoThreadEnvironmentMove,
+} from "../lib/threadEnvironmentMove";
+import { EnvironmentId as MoveEnvironmentId } from "@t3tools/contracts";
 import { threadResourceColor } from "@t3tools/shared/resourceActions";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "./ThreadHoverCard";
 import { CollapsibleSectionHeader } from "./ui/collapsible-section-header";
@@ -4491,6 +4499,9 @@ export default function Sidebar() {
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             buildThreadActionMenuItems({
+              moveDestinations: readThreadMoveDestinations(threadRef),
+              isMovingEnvironment: isThreadMoveInProgress(threadRef),
+              canUndoEnvironmentMove: threadMoveUndoParticipants(thread) !== null,
               branch: thread.branch ?? null,
               projectFilter: threadProjectGroup
                 ? {
@@ -4518,6 +4529,17 @@ export default function Sidebar() {
           ),
         );
         if (clicked._tag === "Failure") return;
+        if (clicked.value?.startsWith("move-environment:")) {
+          const environmentId = MoveEnvironmentId.make(
+            clicked.value.slice("move-environment:".length),
+          );
+          if (await moveThreadToEnvironment(threadRef, environmentId))
+            await router.navigate({
+              to: "/$environmentId/$threadId",
+              params: { environmentId, threadId: thread.id },
+            });
+          return;
+        }
         if (clicked.value?.startsWith("snooze:")) {
           const preset =
             clicked.value === "snooze:custom"
@@ -4527,6 +4549,15 @@ export default function Sidebar() {
           return;
         }
         switch (clicked.value) {
+          case "undo-environment-move": {
+            const undo = threadMoveUndoParticipants(thread);
+            if (undo && (await undoThreadEnvironmentMove(threadRef)))
+              await router.navigate({
+                to: "/$environmentId/$threadId",
+                params: { environmentId: undo.sourceEnvironmentId, threadId: thread.id },
+              });
+            return;
+          }
           case "filter-by-project":
             // This item is the only scope control here, so picking the
             // already-scoped project again is the way back to all projects.

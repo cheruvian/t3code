@@ -274,6 +274,13 @@ export interface ThreadManagementServiceShape {
   readonly dispatch: (
     command: OrchestrationV2ServerCommand,
   ) => Effect.Effect<Orchestrator.OrchestratorV2DispatchResult, Orchestrator.OrchestratorV2Error>;
+  readonly dispatchWithPrecondition: <E>(
+    command: OrchestrationV2ServerCommand,
+    precondition: Effect.Effect<void, E>,
+  ) => Effect.Effect<
+    Orchestrator.OrchestratorV2DispatchResult,
+    Orchestrator.OrchestratorV2Error | E
+  >;
   readonly getTimelinePage: Orchestrator.OrchestratorV2["Service"]["getTimelinePage"];
   readonly getMessageCount: Orchestrator.OrchestratorV2["Service"]["getMessageCount"];
   readonly getThreadRecords: Orchestrator.OrchestratorV2["Service"]["getThreadRecords"];
@@ -444,6 +451,13 @@ const make = Effect.gen(function* () {
 
   const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
     ensureCommandTranscripts(command).pipe(Effect.andThen(orchestrator.dispatch(command)));
+  const dispatchWithPrecondition: ThreadManagementServiceShape["dispatchWithPrecondition"] = (
+    command,
+    precondition,
+  ) =>
+    ensureCommandTranscripts(command).pipe(
+      Effect.andThen(orchestrator.dispatchWithPrecondition(command, precondition)),
+    );
 
   const getProjectThread: ThreadManagementServiceShape["getProjectThread"] = (input) =>
     getThreadProjection(input.threadId).pipe(
@@ -711,6 +725,7 @@ const make = Effect.gen(function* () {
   return ThreadManagementService.of({
     ensureLegacyTranscript,
     dispatch,
+    dispatchWithPrecondition,
     getTimelinePage: (threadId, options) =>
       ensureProjectionTranscript(threadId).pipe(
         Effect.andThen(orchestrator.getTimelinePage(threadId, options)),

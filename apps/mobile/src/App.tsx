@@ -1,3 +1,4 @@
+import { ThreadMoveProgressBanner } from "./components/ThreadMoveProgressBanner";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
@@ -92,6 +93,7 @@ function AppContent() {
             {/* Anchored-menu overlays render here — in-window, so the
                 keyboard stays up while a dropdown is open. */}
             <OverlayPortalHost />
+            <ThreadMoveProgressBanner />
           </SafeAreaProvider>
         </KeyboardProvider>
       </GestureHandlerRootView>

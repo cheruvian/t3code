@@ -77,7 +77,11 @@ import { notificationTurnItem } from "./Notification.ts";
 import { isRestartNoteSource } from "./RestartBackgroundNote.ts";
 import { isUndeliveredMailboxSteer } from "./NotificationMailbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
-import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
+import {
+  EffectOutboxV2,
+  type OrchestrationEffectRequestV2,
+  type PendingOrchestrationEffectV2,
+} from "./EffectOutbox.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
 import {
   ThreadCommandExecutor,
@@ -245,6 +249,10 @@ export interface OrchestratorV2Shape {
   readonly dispatch: (
     command: OrchestrationV2ServerCommand,
   ) => Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error>;
+  readonly dispatchWithPrecondition: <E>(
+    command: OrchestrationV2ServerCommand,
+    precondition: Effect.Effect<void, E>,
+  ) => Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error | E>;
   readonly getTimelinePage: (
     threadId: ThreadId,
     options: ProjectionTimelinePageOptions,
@@ -356,6 +364,11 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.create":
     case "thread.archive":
     case "thread.unarchive":
+    case "thread.move.fence":
+    case "thread.move.reclaim":
+    case "thread.move.activate":
+    case "thread.move.abort":
+    case "thread.move.finalize":
     case "thread.delete":
     case "thread.settle":
     case "thread.auto-settle":
@@ -714,6 +727,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const commandPolicy = yield* CommandPolicyV2;
   const contextHandoffService = yield* ContextHandoffServiceV2;
   const eventSink = yield* EventSinkV2;
+  const effectOutbox = yield* EffectOutboxV2;
   const commandReceipts = yield* CommandReceiptStoreV2;
   const idAllocator = yield* IdAllocatorV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
@@ -3312,6 +3326,332 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         } satisfies PendingOrchestrationEffectV2,
       ]);
     }
+  });
+
+  const dispatchThreadMove = Effect.fn("orchestrationV2.dispatch.threadMove")(function* (
+    command: Extract<
+      OrchestrationV2ServerCommand,
+      {
+        readonly type:
+          | "thread.move.fence"
+          | "thread.move.reclaim"
+          | "thread.move.activate"
+          | "thread.move.abort"
+          | "thread.move.finalize";
+      }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) {
+    const projection = yield* loadProjectionForCommand(command, [
+      "runs",
+      "providerThreads",
+      "providerTurns",
+      "providerSessions",
+      "runtimeRequests",
+      "subagents",
+      "contextTransfers",
+    ]);
+    const thread = projection.thread;
+    const current = thread.environmentMove ?? null;
+    const now = yield* DateTime.now;
+
+    if (command.type === "thread.move.fence") {
+      if (thread.archivedAt !== null || thread.deletedAt !== null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} is not active.`,
+        });
+      }
+      if (
+        current !== null &&
+        (current.status !== "fenced" ||
+          current.moveId !== command.moveId ||
+          current.destinationEnvironmentId !== command.destinationEnvironmentId)
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} already belongs to another move.`,
+        });
+      }
+      const providerThread =
+        projection.providerThreads.find(
+          (candidate) => candidate.id === thread.activeProviderThreadId,
+        ) ?? projection.providerThreads.at(-1);
+      if (
+        (providerThread?.driver !== "codex" && providerThread?.driver !== "claudeAgent") ||
+        providerThread.nativeThreadRef?.strength !== "strong" ||
+        providerThread.nativeThreadRef.nativeId === null ||
+        thread.lineage.parentThreadId !== null ||
+        projection.subagents.length > 0 ||
+        projection.contextTransfers.some((transfer) =>
+          ["pending", "resolved_native", "resolved_portable"].includes(transfer.status),
+        )
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} does not have a self-contained portable native session.`,
+        });
+      }
+      const workspaceThreads = yield* projectionStore
+        .getShellSnapshot()
+        .pipe(mapDispatchError(command));
+      if (
+        thread.worktreePath &&
+        [...workspaceThreads.threads, ...workspaceThreads.archivedThreads].some(
+          (candidate) =>
+            candidate.id !== thread.id && candidate.worktreePath === thread.worktreePath,
+        )
+      )
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Move requires a worktree owned by one thread.",
+        });
+      const hasActiveWork =
+        projection.runs.some((run) =>
+          ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
+        ) ||
+        projection.providerTurns.some((turn) => turn.status === "running") ||
+        projection.runtimeRequests.some((request) => request.status === "pending") ||
+        projection.providerThreads.some(
+          (providerThread) => (providerThread.pendingBackgroundTasks?.length ?? 0) > 0,
+        ) ||
+        projection.subagents.some((subagent) => subagent.status === "running") ||
+        projection.contextTransfers.some((transfer) => transfer.status === "pending") ||
+        (yield* threadHoldsResources(thread).pipe(mapDispatchError(command))) ||
+        (yield* effectOutbox.hasUnsettledForThread(thread.id).pipe(mapDispatchError(command)));
+      if (hasActiveWork) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} has active or pending work and cannot be moved.`,
+        });
+      }
+      const updated = {
+        ...thread,
+        environmentMove: {
+          moveId: command.moveId,
+          destinationEnvironmentId: command.destinationEnvironmentId,
+          status: "fenced" as const,
+          fencedAt: current?.fencedAt ?? now,
+        },
+        updatedAt: current === null ? now : thread.updatedAt,
+      };
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.move.fenced",
+        threadId: command.threadId,
+        occurredAt: now,
+        payload: updated,
+      });
+      return;
+    }
+
+    if (
+      command.type === "thread.move.reclaim" &&
+      current === null &&
+      thread.deletedAt === null &&
+      command.cancellation.moveId === command.moveId &&
+      command.cancellation.threadId === thread.id
+    ) {
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.unsettled",
+        threadId: thread.id,
+        occurredAt: now,
+        payload: {
+          ...thread,
+          environmentMove: null,
+          archivedAt: null,
+          settledOverride: "active",
+          settledAt: null,
+          unsettledAt: now,
+          updatedAt: now,
+        },
+      });
+      return;
+    }
+    if (current === null || current.moveId !== command.moveId) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Thread ${command.threadId} is not fenced for move ${command.moveId}.`,
+      });
+    }
+    if (command.type === "thread.move.reclaim") {
+      if (
+        thread.deletedAt !== null ||
+        (current.status !== "moved" && current.status !== "activating") ||
+        command.cancellation.moveId !== current.moveId ||
+        command.cancellation.threadId !== thread.id ||
+        command.cancellation.destinationEnvironmentId !== current.destinationEnvironmentId
+      )
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "The undo receipt does not match the moved source.",
+        });
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.unarchived",
+        threadId: thread.id,
+        occurredAt: now,
+        payload: { ...thread, environmentMove: null, archivedAt: null, updatedAt: now },
+      });
+      return;
+    }
+    if (command.type === "thread.move.activate") {
+      if (current.status === "activating") return;
+      if (current.status !== "fenced") {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Move ${command.moveId} is already activated and cannot be changed.`,
+        });
+      }
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.move.activation-prepared",
+        threadId: command.threadId,
+        occurredAt: now,
+        payload: {
+          ...thread,
+          environmentMove: { ...current, status: "activating" as const },
+          updatedAt: now,
+        },
+      });
+      return;
+    }
+    if (
+      command.type === "thread.move.abort" &&
+      current.status !== "fenced" &&
+      !(
+        current.status === "activating" &&
+        command.cancellation?.moveId === current.moveId &&
+        command.cancellation.threadId === thread.id &&
+        command.cancellation.destinationEnvironmentId === current.destinationEnvironmentId
+      )
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Move ${command.moveId} is already activated and cannot be changed.`,
+      });
+    }
+
+    if (command.type === "thread.move.abort") {
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.move.unfenced",
+        threadId: command.threadId,
+        occurredAt: now,
+        payload: { ...thread, environmentMove: null, updatedAt: now },
+      });
+      return;
+    }
+    if (current.status !== "activating") {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Move ${command.moveId} must prepare destination activation before finalization.`,
+      });
+    }
+
+    const providerThread =
+      projection.providerThreads.find(
+        (candidate) => candidate.id === thread.activeProviderThreadId,
+      ) ?? projection.providerThreads.at(-1);
+    const nativeRef = providerThread?.nativeThreadRef;
+    if (
+      command.receipt.threadId !== command.threadId ||
+      command.receipt.moveId !== command.moveId ||
+      command.receipt.destinationEnvironmentId !== current.destinationEnvironmentId ||
+      nativeRef?.nativeId !== command.receipt.nativeThreadId ||
+      providerThread?.driver !== command.receipt.providerDriver
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "The destination receipt does not match the fenced thread move.",
+      });
+    }
+    const moved = {
+      ...thread,
+      archivedAt: null,
+      settledOverride: "settled" as const,
+      settledAt: now,
+      unsettledAt: null,
+      pinnedAt: null,
+      pinOrderKey: null,
+      activeOrderKey: null,
+      titleRegeneration: null,
+      environmentMove: null,
+      updatedAt: now,
+    };
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "thread.settled",
+      threadId: command.threadId,
+      occurredAt: now,
+      payload: moved,
+    });
+    for (const session of projection.providerSessions.filter(
+      (candidate) => candidate.status !== "stopped" && candidate.status !== "error",
+    )) {
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "provider-session.detached",
+        threadId: command.threadId,
+        driver: session.driver,
+        providerInstanceId: session.providerInstanceId,
+        occurredAt: now,
+        payload: {
+          providerSessionId: session.id,
+          detachedAt: now,
+          reason: "Thread moved and settled.",
+        },
+      });
+      yield* Ref.update(effects, (existing) => [
+        ...existing,
+        {
+          id: `effect:${command.commandId}:provider-session.detach:${session.id}`,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          request: {
+            type: "provider-session.detach",
+            providerSessionId: session.id,
+            detail: "Thread moved and settled.",
+          },
+        } satisfies PendingOrchestrationEffectV2,
+      ]);
+    }
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "thread.moved",
+      threadId: command.threadId,
+      occurredAt: now,
+      payload: moved,
+    });
   });
 
   const dispatchProviderSessionDetach = Effect.fn("orchestrationV2.dispatch.providerSessionDetach")(
@@ -7518,7 +7858,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
 
   const loadProjectionForCommand = <K extends ProjectionRecordField>(
-    command: OrchestrationV2Command,
+    command: OrchestrationV2ServerCommand,
     fields: ReadonlyArray<K>,
     filter?: ProjectionRecordFilter,
   ) =>
@@ -9228,6 +9568,58 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }),
     );
 
+  const assertMoveFenceAllowsCommand = Effect.fn("orchestrationV2.assertMoveFenceAllowsCommand")(
+    function* (command: OrchestrationV2ServerCommand) {
+      if (command.type === "thread.create" && command.worktreePath) {
+        const fence = yield* projectionStore
+          .getWorkspaceMoveFence({ worktreePath: command.worktreePath, threadId: command.threadId })
+          .pipe(mapDispatchError(command));
+        if (fence)
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "This worktree belongs to an environment move.",
+          });
+      }
+      if (
+        command.type === "thread.create" ||
+        command.type === "thread.move.fence" ||
+        command.type === "thread.move.reclaim" ||
+        command.type === "thread.move.activate" ||
+        command.type === "thread.move.abort" ||
+        command.type === "thread.move.finalize"
+      ) {
+        return;
+      }
+      const threadIds = (() => {
+        switch (command.type) {
+          case "thread.fork":
+            return [command.sourceThreadId];
+          case "thread.merge_back":
+            return [command.sourceThreadId, command.targetThreadId];
+          default:
+            return [commandThreadId(command)];
+        }
+      })();
+      for (const threadId of new Set(threadIds)) {
+        const thread = yield* projectionStore
+          .getThread(threadId)
+          .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
+        if (thread.environmentMove == null) continue;
+        if (command.type === "thread.visit" || command.type === "thread.mark-unread") continue;
+        if (thread.environmentMove.status === "moved" && command.type === "thread.delete") continue;
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause:
+            thread.environmentMove.status === "moved"
+              ? `Thread ${threadId} was moved to another environment.`
+              : `Thread ${threadId} is fenced while it moves to another environment.`,
+        });
+      }
+    },
+  );
+
   const dispatchOnce = Effect.fn("orchestrationV2.dispatch.once")(function* (
     command: OrchestrationV2ServerCommand,
   ): Effect.fn.Return<
@@ -9249,6 +9641,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
     const events = yield* Ref.make<Array<OrchestrationV2DomainEvent>>([]);
     const effects = yield* Ref.make<Array<PendingOrchestrationEffectV2>>([]);
+    yield* assertMoveFenceAllowsCommand(command);
     let cancelUnsettledEffects:
       | {
           readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
@@ -9354,6 +9747,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.model-selection.set":
       case "provider.switch":
         yield* dispatchThreadMutation(command, events, effects);
+        break;
+      case "thread.move.fence":
+      case "thread.move.reclaim":
+      case "thread.move.activate":
+      case "thread.move.abort":
+      case "thread.move.finalize":
+        yield* dispatchThreadMove(command, events, effects);
         break;
       case "thread.pull-request-watch.sync":
         yield* dispatchPullRequestWatchSync(command, events, effects);
@@ -9698,6 +10098,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   const dispatchWithReceipt = (command: OrchestrationV2ServerCommand) =>
     threadDispatch.withLock(commandThreadId(command), dispatchWithReceiptEffect(command));
+  const dispatchWithPrecondition: OrchestratorV2Shape["dispatchWithPrecondition"] = (
+    command,
+    precondition,
+  ) =>
+    threadDispatch.withLock(
+      commandThreadId(command),
+      precondition.pipe(Effect.andThen(dispatchWithReceiptEffect(command))),
+    );
 
   const handleTerminalRun = (stored: OrchestrationV2StoredEvent) =>
     Effect.gen(function* () {
@@ -9852,6 +10260,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   return OrchestratorV2.of({
     resumeQueuedRuns,
     dispatch: dispatchWithReceipt,
+    dispatchWithPrecondition,
     getTimelinePage: (threadId, options) =>
       projectionStore
         .getTimelinePage(threadId, options)
@@ -9944,6 +10353,7 @@ export const layer: Layer.Layer<
   | CommandPolicyV2
   | CommandReceiptStoreV2
   | ContextHandoffServiceV2
+  | EffectOutboxV2
   | EventSinkV2
   | IdAllocatorV2
   | ProjectStore.ProjectStoreV2
@@ -9974,6 +10384,18 @@ const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
           commandType: command.type,
           cause: "Orchestration V2 live runtime is not configured.",
         }),
+      ),
+    dispatchWithPrecondition: (command, precondition) =>
+      precondition.pipe(
+        Effect.andThen(
+          Effect.fail(
+            new OrchestratorDispatchError({
+              commandId: command.commandId,
+              commandType: command.type,
+              cause: "Orchestration V2 live runtime is not configured.",
+            }),
+          ),
+        ),
       ),
     getTimelinePage: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
     getMessageCount: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),

@@ -45,6 +45,7 @@ const makeProjectionSnapshotQueryLayer = (project: Project) =>
     bootstrap: () => Effect.die("unused"),
     update: () => Effect.die("unused"),
     delete: () => Effect.die("unused"),
+    withActiveProject: () => Effect.die("unused"),
     snapshot: Effect.die("unused"),
     getShell: () => Effect.die("unused"),
     listShells: () => Effect.die("unused"),
@@ -58,6 +59,7 @@ type TerminalOverrides = Pick<TerminalManager.TerminalManager["Service"], "open"
 
 const makeTerminalManagerLayer = (overrides: TerminalOverrides) =>
   Layer.succeed(TerminalManager.TerminalManager, {
+    hasOpenForThread: () => Effect.succeed(false),
     attachStream: () => Effect.die(new Error("unused")),
     resize: () => Effect.void,
     clear: () => Effect.void,

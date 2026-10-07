@@ -1,3 +1,4 @@
+import { SidebarProviderOutageIcon } from "./SidebarProviderOutageIcon";
 import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
@@ -69,6 +70,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
         className="relative top-auto z-10 translate-y-0 md:hidden"
       />
       <SidebarBrand onBackdrop={backdropVariant !== null} />
+      <SidebarProviderOutageIcon />
       {pillLabel ? (
         <Badge
           className="relative z-10 ml-1 hidden @[15rem]/sidebar-header:inline-flex"

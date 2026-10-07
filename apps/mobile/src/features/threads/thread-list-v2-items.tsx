@@ -1,3 +1,9 @@
+import {
+  getActiveThreadMoves,
+  subscribeThreadMoves,
+  threadMoveUndoParticipants,
+} from "@t3tools/client-runtime/operations";
+import { EnvironmentId as MoveEnvironmentId } from "@t3tools/contracts";
 import { threadResourceColor } from "@t3tools/shared/resourceActions";
 import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import {
@@ -21,7 +27,15 @@ import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state
 import type { EnvironmentMachineKind } from "@t3tools/contracts";
 import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import type { MenuAction } from "@react-native-menu/menu";
-import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  type ComponentProps,
+} from "react";
 import { Alert, Pressable, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
@@ -495,6 +509,15 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
+  readonly moveEnvironmentDestinations?: ReadonlyArray<{
+    readonly environmentId: string;
+    readonly label: string;
+  }>;
+  readonly onMoveThreadToEnvironment?: (
+    thread: EnvironmentThreadShell,
+    environmentId: import("@t3tools/contracts").EnvironmentId,
+  ) => void;
+  readonly onUndoThreadMove?: (thread: EnvironmentThreadShell) => void;
   readonly onRenameThread: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
@@ -727,15 +750,47 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         : [],
     [props.autoSettleOptOutSupported, thread.autoSettleDisabledAt],
   );
+  const activeMoves = useSyncExternalStore(subscribeThreadMoves, getActiveThreadMoves);
+  const isMovingEnvironment = activeMoves.some(
+    (move) => move.key === `${thread.environmentId}:${thread.id}`,
+  );
   const titleMenuItems = useMemo<MenuAction[]>(
     () => [
+      ...(props.moveEnvironmentDestinations?.length
+        ? [
+            {
+              id: "move-environment",
+              title: isMovingEnvironment
+                ? "Moving to environment…"
+                : thread.environmentMove
+                  ? "Resume environment move"
+                  : "Move to environment",
+              attributes: { disabled: isMovingEnvironment },
+              image: "arrow.right",
+              subactions: props.moveEnvironmentDestinations.map((destination) => ({
+                id: `move-environment:${destination.environmentId}`,
+                title: destination.label,
+              })),
+            },
+          ]
+        : []),
+      ...(threadMoveUndoParticipants(thread)
+        ? [{ id: "undo-environment-move", title: "Undo move", image: "arrow.uturn.backward" }]
+        : []),
       { id: "rename", title: "Rename", image: "square.and.pencil" },
       ...buildThreadTitleRegenerationMenuItems({
         supported: props.titleRegenerationSupported,
         isRegenerating: thread.titleRegeneration != null,
       }),
     ],
-    [props.titleRegenerationSupported, thread.titleRegeneration],
+    [
+      props.titleRegenerationSupported,
+      props.moveEnvironmentDestinations,
+      isMovingEnvironment,
+      thread.environmentMove,
+      thread.environmentMoveOrigin,
+      thread.titleRegeneration,
+    ],
   );
   const snoozableCardMenuActions = useMemo<MenuAction[]>(
     () => [
@@ -810,6 +865,12 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "move-down") handleMoveDown();
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "rename") handleRename();
+      if (nativeEvent.event === "undo-environment-move") props.onUndoThreadMove?.(thread);
+      if (nativeEvent.event.startsWith("move-environment:"))
+        void props.onMoveThreadToEnvironment?.(
+          thread,
+          MoveEnvironmentId.make(nativeEvent.event.slice("move-environment:".length)),
+        );
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
       if (nativeEvent.event === "copy-thread-id") {
         copyTextWithHaptic(thread.id, { target: "thread-id" });
@@ -837,6 +898,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       handleDelete,
       handleRegenerateTitle,
       handleRename,
+      props.onMoveThreadToEnvironment,
+      thread,
       handleMoveDown,
       handleMoveUp,
       handlePin,

@@ -1,3 +1,4 @@
+import { MarkdownCodeBlock } from "./MarkdownCodeBlock";
 import { useMarkdownFileResolutions } from "../../lib/useMarkdownFileResolutions";
 import { resolvedMarkdownFileHref } from "@t3tools/client-runtime/markdown-file-resolution";
 import { ThreadContextDivider } from "./thread-context-divider";
@@ -134,7 +135,6 @@ import {
 } from "../../lib/videoPreviewSource";
 import { CopyTextButton } from "../../components/CopyTextButton";
 import { parseReviewCommentMessageSegments } from "../review/reviewCommentSelection";
-import type { ReviewDiffTheme } from "../review/shikiReviewHighlighter";
 import {
   ReviewCommentCard,
   useReviewCommentColors,
@@ -189,7 +189,6 @@ import {
 import { appendPendingThreadMessages, type PendingThreadFeedEntry } from "./pending-thread-feed";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { resolveThreadFeedFixedItemSize } from "./thread-feed-item-size";
-import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import {
   assetEnvironment,
   useAssetUrl,
@@ -966,123 +965,6 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
     );
   });
 });
-
-function MarkdownCodeBlock(props: {
-  readonly backgroundColor: string;
-  readonly borderColor: string;
-  readonly content: string;
-  readonly copyTintColor: ColorValue;
-  readonly headerTextColor: string;
-  readonly fontSize: number;
-  readonly highlightCode: boolean;
-  readonly language?: string | null;
-  readonly lineHeight: number;
-  readonly textColor: string;
-  readonly theme: ReviewDiffTheme;
-}) {
-  const content = props.content.replace(/\n$/, "");
-  const languageLabel = props.language?.trim() || "text";
-  const highlighted = useMarkdownCodeHighlight({
-    code: content,
-    enabled: props.highlightCode && Boolean(props.language?.trim()),
-    language: props.language,
-    theme: props.theme,
-  });
-  let tokenOffset = 0;
-
-  return (
-    <View
-      className="my-3 min-w-0 max-w-full self-stretch overflow-hidden rounded-lg border"
-      style={{ backgroundColor: props.backgroundColor, borderColor: props.borderColor }}
-    >
-      <View
-        className="flex-row items-center justify-between gap-2 border-b py-1 pr-1.5 pl-3.5"
-        style={{ borderBottomColor: props.borderColor }}
-      >
-        <NativeText
-          className="flex-1 font-mono uppercase opacity-70"
-          numberOfLines={1}
-          style={{
-            color: props.headerTextColor,
-            fontSize: props.fontSize,
-            ...(Platform.OS === "android" ? { includeFontPadding: false } : null),
-          }}
-        >
-          {languageLabel}
-        </NativeText>
-        <CopyTextButton
-          accessibilityLabel="Copy code"
-          text={content}
-          tintColor={props.copyTintColor}
-          buttonSize={32}
-          iconSize={16}
-        />
-      </View>
-      <ScrollView
-        horizontal
-        bounces={false}
-        nestedScrollEnabled={Platform.OS === "android"}
-        showsHorizontalScrollIndicator={false}
-        contentContainerClassName="px-3.5 py-3"
-      >
-        <NativeText
-          selectable
-          selectionColorClassName={Platform.OS === "android" ? "accent-focus/32" : undefined}
-          className="font-mono"
-          style={{
-            color: props.textColor,
-            fontSize: props.fontSize,
-            lineHeight: props.lineHeight,
-            ...(Platform.OS === "android" ? { includeFontPadding: false } : null),
-          }}
-        >
-          {highlighted
-            ? highlighted.map((line, lineIndex) => {
-                const lineStartOffset = tokenOffset;
-                const lineText = line.map((token) => token.content).join("");
-                const renderedLine = (
-                  <NativeText key={`line:${lineStartOffset}:${lineText}`}>
-                    {line.map((token) => {
-                      const startOffset = tokenOffset;
-                      tokenOffset += token.content.length;
-                      const fontStyle =
-                        token.fontStyle !== null && (token.fontStyle & 1) === 1
-                          ? ("italic" as const)
-                          : ("normal" as const);
-                      const fontWeight =
-                        token.fontStyle !== null && (token.fontStyle & 2) === 2
-                          ? ("700" as const)
-                          : ("400" as const);
-
-                      return (
-                        <NativeText
-                          key={`${startOffset}:${token.content}:${token.color ?? ""}:${
-                            token.fontStyle ?? ""
-                          }`}
-                          style={{
-                            color: token.color ?? props.textColor,
-                            fontStyle,
-                            fontWeight,
-                          }}
-                        >
-                          {token.content}
-                        </NativeText>
-                      );
-                    })}
-                    {lineIndex + 1 < highlighted.length ? "\n" : ""}
-                  </NativeText>
-                );
-                if (lineIndex + 1 < highlighted.length) {
-                  tokenOffset += 1;
-                }
-                return renderedLine;
-              })
-            : content}
-        </NativeText>
-      </ScrollView>
-    </View>
-  );
-}
 
 function useMarkdownStyles(
   onLinkPress: (href: string) => void,

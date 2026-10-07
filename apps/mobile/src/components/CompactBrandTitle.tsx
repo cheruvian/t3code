@@ -1,3 +1,4 @@
+import { ProviderOutageIcon } from "./ProviderOutageIcon";
 import Constants from "expo-constants";
 import type { NativeStackNavigationOptions } from "@react-navigation/native-stack";
 import { Platform, View } from "react-native";
@@ -31,21 +32,26 @@ export function CompactBrandTitle(
 
   return (
     <View
-      aria-level={1}
-      accessibilityLabel="T3 Code, Threads"
-      accessible
-      role="heading"
+      accessible={false}
       className="flex-row items-center gap-1.5"
       style={[{ marginLeft: titleOffset }, Platform.OS === "android" && { gap: 5.25 * scale }]}
     >
-      <T3Wordmark colorClassName="accent-icon" height={Math.round(15 * scale)} />
-      <Text
-        allowFontScaling={props.allowFontScaling}
-        className="font-t3-medium text-foreground-muted"
-        style={{ fontSize: 21 * scale, letterSpacing: -0.5 * scale }}
+      <View
+        accessible
+        accessibilityRole="header"
+        accessibilityLabel="T3 Code, Threads"
+        className="flex-row items-center gap-1.5"
       >
-        Code
-      </Text>
+        <T3Wordmark colorClassName="accent-icon" height={Math.round(15 * scale)} />
+        <Text
+          allowFontScaling={props.allowFontScaling}
+          className="font-t3-medium text-foreground-muted"
+          style={{ fontSize: 21 * scale, letterSpacing: -0.5 * scale }}
+        >
+          Code
+        </Text>
+      </View>
+      <ProviderOutageIcon />
       <View
         className="rounded-full bg-subtle px-1.5 py-0.5"
         style={

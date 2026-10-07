@@ -20,6 +20,8 @@ import {
   ConnectionBlockedError,
   CredentialStore,
   ProfileStore,
+  ConnectionTiming,
+  makeConnectionTiming,
   GitHubRoutingPermissions,
   StoredGitHubRoutingPermission,
   gitHubRoutingConnectionKey,
@@ -460,6 +462,12 @@ export const connectionStorageLayer = Layer.effectContext(
     const catalog = yield* makeCatalogStore(makeCatalogBackend(database));
     const githubRoutingPermissions = makeBrowserGitHubRoutingPermissions();
 
+    const connectionTiming = yield* makeConnectionTiming({
+      read: catalog.read.pipe(Effect.map((document) => document.connectionTiming)),
+      write: (connectionTiming) =>
+        catalog.update((document) => ({ ...document, connectionTiming })),
+    });
+
     const targetStore = Persistence.ConnectionTargetStore.of({
       list: catalog.read.pipe(
         Effect.map((document) => document.targets),
@@ -758,6 +766,7 @@ export const connectionStorageLayer = Layer.effectContext(
 
     return Context.make(Persistence.ConnectionTargetStore, targetStore).pipe(
       Context.add(GitHubRoutingPermissions, githubRoutingPermissions),
+      Context.add(ConnectionTiming, connectionTiming),
       Context.add(Persistence.ConnectionRegistrationStore, registrationStore),
       Context.add(ProfileStore.ConnectionProfileStore, profileStore),
       Context.add(CredentialStore.ConnectionCredentialStore, credentialStore),

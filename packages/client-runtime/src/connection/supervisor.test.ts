@@ -35,6 +35,7 @@ import {
 } from "./model.ts";
 import * as RpcSession from "../rpc/session.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
+import { ConnectionTiming, DEFAULT_CONNECTION_TIMING, makeConnectionTiming } from "./timing.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 
@@ -465,6 +466,76 @@ describe("EnvironmentSupervisor", () => {
       });
       expect(yield* Ref.get(harness.releaseCount)).toBe(1);
       expect(Option.isNone(yield* SubscriptionRef.get(supervisor.prepared))).toBe(true);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("keeps a slow setup alive using the saved timeout", () =>
+    Effect.gen(function* () {
+      const ready = yield* Deferred.make<void>();
+      const harness = yield* makeHarness({ ready: () => Deferred.await(ready) });
+      const timing = yield* makeConnectionTiming({
+        read: Effect.succeed({ ...DEFAULT_CONNECTION_TIMING, setupSeconds: 60 }),
+        write: () => Effect.void,
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(
+        Effect.provide(harness.dependencies),
+        Effect.provideService(ConnectionTiming, timing),
+      );
+      yield* awaitState(supervisor.state, (state) => state.stage === "synchronizing");
+      yield* TestClock.adjust("25 seconds");
+      expect((yield* SubscriptionRef.get(supervisor.state)).phase).toBe("connecting");
+      yield* Deferred.succeed(ready, undefined);
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      expect(yield* Ref.get(harness.prepareCount)).toBe(1);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("retry now replaces a stalled setup immediately", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        ready: (attempt) => (attempt === 1 ? Effect.never : Effect.void),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+      yield* awaitState(supervisor.state, (state) => state.stage === "synchronizing");
+      yield* supervisor.retryNow;
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      expect(yield* Ref.get(harness.prepareCount)).toBe(2);
+      expect(yield* Ref.get(harness.releaseCount)).toBe(1);
+    }),
+  );
+
+  it.effect("uses updated foreground probe timeouts without replacing a live session", () =>
+    Effect.gen(function* () {
+      const probeStarted = yield* Deferred.make<void>();
+      const probeReply = yield* Deferred.make<void>();
+      const harness = yield* makeHarness({
+        probe: () =>
+          Deferred.succeed(probeStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(probeReply)),
+          ),
+      });
+      const timing = yield* makeConnectionTiming({
+        read: Effect.succeed(undefined),
+        write: () => Effect.void,
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(
+        Effect.provide(harness.dependencies),
+        Effect.provideService(ConnectionTiming, timing),
+      );
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      yield* timing.set({ ...DEFAULT_CONNECTION_TIMING, resumeProbeSeconds: 30 });
+      yield* harness.wake("application-active-probe");
+      yield* Deferred.await(probeStarted);
+      yield* TestClock.adjust("10 seconds");
+      expect((yield* SubscriptionRef.get(supervisor.state)).phase).toBe("connected");
+      expect(yield* Ref.get(harness.prepareCount)).toBe(1);
+      yield* Deferred.succeed(probeReply, undefined);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 

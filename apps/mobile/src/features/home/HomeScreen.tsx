@@ -1,3 +1,8 @@
+import {
+  readMobileThreadMoveDestinations,
+  moveMobileThreadToEnvironment,
+  undoMobileThreadMove,
+} from "./useThreadListActions";
 import { useAndroidControlSizing } from "../../components/useAndroidControlSizing";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import { computeThreadMoveAvailability } from "../threads/threadOrder";
@@ -729,6 +734,11 @@ export function HomeScreen(props: HomeScreenProps) {
           onSelectThread={props.onSelectThread}
           onDeleteThread={handleDeleteThread}
           onArchiveThread={props.onArchiveThread}
+          moveEnvironmentDestinations={readMobileThreadMoveDestinations(thread)}
+          onMoveThreadToEnvironment={moveMobileThreadToEnvironment}
+          onUndoThreadMove={(thread) => {
+            void undoMobileThreadMove(thread);
+          }}
           onRenameThread={handleRenameThread}
           onRegenerateThreadTitle={handleRegenerateThreadTitle}
           titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}

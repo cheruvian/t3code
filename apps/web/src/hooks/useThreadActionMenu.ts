@@ -1,3 +1,11 @@
+import { isThreadMoveInProgress } from "@t3tools/client-runtime/operations";
+import { threadMoveUndoParticipants } from "@t3tools/client-runtime/operations";
+import {
+  readThreadMoveDestinations,
+  moveThreadToEnvironment,
+  undoThreadEnvironmentMove,
+} from "../lib/threadEnvironmentMove";
+import { EnvironmentId as MoveEnvironmentId } from "@t3tools/contracts";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
 import {
@@ -142,6 +150,9 @@ export function useThreadActionMenu(input: {
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const snoozePresets = resolveSnoozePresets(now, timestampFormat);
         const items = buildThreadActionMenuItems({
+          moveDestinations: readThreadMoveDestinations(threadRef),
+          isMovingEnvironment: isThreadMoveInProgress(threadRef),
+          canUndoEnvironmentMove: threadMoveUndoParticipants(thread) !== null,
           branch: thread.branch ?? null,
           projectFilter: null,
           isPinned: thread.pinnedAt != null,
@@ -157,6 +168,15 @@ export function useThreadActionMenu(input: {
         const clicked = await settlePromise(() => api.contextMenu.show(items, position));
         if (clicked._tag === "Failure" || clicked.value === null) return;
         const action: ThreadActionMenuId = clicked.value;
+        if (action.startsWith("move-environment:")) {
+          const environmentId = MoveEnvironmentId.make(action.slice("move-environment:".length));
+          if (await moveThreadToEnvironment(threadRef, environmentId))
+            await router.navigate({
+              to: "/$environmentId/$threadId",
+              params: { environmentId, threadId: thread.id },
+            });
+          return;
+        }
         if (action.startsWith("snooze:")) {
           const preset =
             action === "snooze:custom"
@@ -179,6 +199,15 @@ export function useThreadActionMenu(input: {
           }
         };
         switch (action) {
+          case "undo-environment-move": {
+            const undo = threadMoveUndoParticipants(thread);
+            if (undo && (await undoThreadEnvironmentMove(threadRef)))
+              await router.navigate({
+                to: "/$environmentId/$threadId",
+                params: { environmentId: undo.sourceEnvironmentId, threadId: thread.id },
+              });
+            return;
+          }
           case "project-settings": {
             const project = projects.find(
               (candidate) =>

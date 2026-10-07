@@ -1,3 +1,9 @@
+import {
+  moveThread,
+  undoThreadMove,
+  type MoveThreadInput,
+  type UndoThreadMoveInput,
+} from "../operations/threadMove.ts";
 import type { ThreadId } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -146,6 +152,18 @@ export function createThreadEnvironmentAtoms<R, E>(
       JSON.stringify([environmentId, input.threadId]),
   };
   const commands = {
+    undoMove: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:undo-move",
+      execute: (input: UndoThreadMoveInput) => undoThreadMove(input),
+      scheduler,
+      concurrency,
+    }),
+    move: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:move",
+      execute: (input: MoveThreadInput) => moveThread(input),
+      scheduler,
+      concurrency,
+    }),
     create: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:create",
       execute: (input: CreateThreadInput) => createThread(input),

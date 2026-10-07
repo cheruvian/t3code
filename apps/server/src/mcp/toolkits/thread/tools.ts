@@ -1,3 +1,5 @@
+import { ThreadMoveRequest, ThreadMoveResponse } from "@t3tools/contracts";
+import * as ThreadMoveTransfer from "../../../orchestration-v2/ThreadMoveTransferService.ts";
 import {
   ScheduledTaskId,
   ScheduledTask,
@@ -258,7 +260,22 @@ const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
+const ThreadMoveTool = Tool.make("t3_thread_move", {
+  description:
+    "Operate the local side of a thread/environment move: export, stage, commit, status, activate, finalize, abort, or recover. Codex and Claude only; stopped dedicated worktrees only. Signed HTTP URLs carry bytes. A client connected to both environments coordinates the move; this tool does not contact another environment or transfer credentials.",
+  parameters: Schema.Struct({ operation: ThreadMoveRequest }),
+  success: ThreadMoveResponse,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    ThreadMoveTransfer.ThreadMoveTransferService,
+  ],
+}).annotate(Tool.Destructive, true);
+
 export const ThreadToolkit = Toolkit.make(
+  ThreadMoveTool,
   ScheduledTaskRunTool,
   ThreadSearchTool,
   ThreadForkTool,

@@ -1,3 +1,4 @@
+import { getProviderOutageBannerKey } from "@t3tools/client-runtime/provider-outage";
 import type { ServerProvider } from "@t3tools/contracts";
 import { Linking, Pressable, View } from "react-native";
 
@@ -10,12 +11,6 @@ const DRIVER_LABEL: Partial<Record<string, string>> = {
   cursor: "Cursor",
   grok: "Grok",
 };
-
-export function getProviderOutageBannerKey(status: ServerProvider | null): string | null {
-  const advisory = status?.outageAdvisory;
-  if (!advisory || advisory.severity === "none") return null;
-  return [status.instanceId, advisory.severity, advisory.message ?? ""].join("\u0000");
-}
 
 /** Docked above the composer, alongside `ComposerFeedback`/`ComposerUsageLimits`. */
 export function ComposerProviderOutage({

@@ -1545,6 +1545,7 @@ export interface ChatComposerProps {
   bannerItems: readonly ComposerBannerStackItem[];
   /** Picking /usage-limits from the menu is the action itself; the draft keeps nothing of it. */
   onUsageLimitsCommand?: (() => void) | undefined;
+  allowOfflineQueue?: boolean;
   environmentUnavailable: {
     readonly label: string;
     readonly connection: EnvironmentConnectionPresentation;
@@ -1719,6 +1720,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     sendDisabledReason: externalSendDisabledReason,
     isPreparingWorktree,
     environmentUnavailable,
+    allowOfflineQueue = false,
     activePendingApproval,
     pendingApprovals,
     pendingUserInputs,
@@ -1954,11 +1956,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         ? needsReattachFileCount === 1
           ? "Attach the interrupted file again or remove it"
           : "Attach the interrupted files again or remove them"
-        : attachmentUploadBlockReason({
-            imageIds: [...composerImages, ...composerFiles].map((attachment) => attachment.id),
-            uploadsByImageId,
-            environmentId,
-          })
+        : allowOfflineQueue && environmentUnavailable !== null
+          ? null
+          : attachmentUploadBlockReason({
+              imageIds: [...composerImages, ...composerFiles].map((attachment) => attachment.id),
+              uploadsByImageId,
+              environmentId,
+            })
       : null);
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
@@ -2952,10 +2956,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     phase === "running" ||
     isSendBusy ||
     isSendDisabled ||
-    isConnecting ||
+    (isConnecting && !(allowOfflineQueue && environmentUnavailable !== null)) ||
     noProviderAvailable ||
     projectSelectionRequired ||
-    environmentUnavailable !== null ||
+    (environmentUnavailable !== null && !allowOfflineQueue) ||
     (!composerSendState.hasSendableContent && !showResumeAction);
   const collapsedComposerPrimaryActionLabel = props.isResourceActionRunning
     ? "Queue message"
@@ -4117,9 +4121,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (
       isSendBusy ||
       isSendDisabled ||
-      isConnecting ||
+      (isConnecting && !(allowOfflineQueue && environmentUnavailable !== null)) ||
       noProviderAvailable ||
-      environmentUnavailable !== null ||
+      (environmentUnavailable !== null && !allowOfflineQueue) ||
       phase === "running"
     ) {
       return false;
@@ -4133,6 +4137,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activePendingResolvedAnswers,
     composerSendState.hasSendableContent,
     environmentUnavailable,
+    allowOfflineQueue,
     isConnecting,
     isMobileViewport,
     isSendBusy,
@@ -6774,9 +6779,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               promptHasText={false}
                               isSendBusy={isSendBusy}
                               sendDisabledReason={sendDisabledReason}
-                              isConnecting={isConnecting}
+                              isConnecting={
+                                isConnecting &&
+                                !(allowOfflineQueue && environmentUnavailable !== null)
+                              }
                               isEnvironmentUnavailable={
-                                environmentUnavailable !== null ||
+                                (environmentUnavailable !== null && !allowOfflineQueue) ||
                                 noProviderAvailable ||
                                 projectSelectionRequired
                               }
@@ -7485,9 +7493,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       promptHasText={false}
                       isSendBusy={isSendBusy}
                       sendDisabledReason={sendDisabledReason}
-                      isConnecting={isConnecting}
+                      isConnecting={
+                        isConnecting && !(allowOfflineQueue && environmentUnavailable !== null)
+                      }
                       isEnvironmentUnavailable={
-                        environmentUnavailable !== null ||
+                        (environmentUnavailable !== null && !allowOfflineQueue) ||
                         noProviderAvailable ||
                         projectSelectionRequired
                       }
@@ -7613,9 +7623,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     sendDisabledReason={
                       voiceInput.busy ? "Finish dictation before sending" : sendDisabledReason
                     }
-                    isConnecting={isConnecting}
+                    isConnecting={
+                      isConnecting && !(allowOfflineQueue && environmentUnavailable !== null)
+                    }
                     isEnvironmentUnavailable={
-                      environmentUnavailable !== null ||
+                      (environmentUnavailable !== null && !allowOfflineQueue) ||
                       noProviderAvailable ||
                       projectSelectionRequired
                     }

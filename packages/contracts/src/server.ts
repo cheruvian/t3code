@@ -197,6 +197,17 @@ export const ServerProviderOutageAdvisory = Schema.Struct({
   message: Schema.NullOr(TrimmedNonEmptyString),
   statusPageUrl: Schema.NullOr(TrimmedNonEmptyString),
   checkedAt: IsoDateTime,
+  incidents: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.String,
+        name: Schema.String,
+        message: Schema.NullOr(Schema.String),
+        severity: ProviderOutageSeverity,
+        affectsProvider: Schema.Boolean,
+      }),
+    ),
+  ),
 });
 export type ServerProviderOutageAdvisory = typeof ServerProviderOutageAdvisory.Type;
 

@@ -1,15 +1,20 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { act, type ComponentProps, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
+import { renderMermaidDiagram } from "../lib/mermaidRendering";
 import { GitHubIcon } from "./Icons";
 import { Button } from "./ui/button";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
+import { FileMarkdownPreview } from "./files/FileMarkdownPreview";
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
+vi.mock("../lib/mermaidRendering", () => ({
+  renderMermaidDiagram: vi.fn(async () => "<svg><text>Start</text></svg>"),
+}));
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("../hooks/useSettings", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../hooks/useSettings")>();
@@ -75,6 +80,103 @@ function codeButton(renderer: ReactTestRenderer, label: string) {
   if (!button) throw new Error(`Missing code button: ${label}`);
   return button.props as ComponentProps<typeof Button>;
 }
+
+describe("ChatMarkdown Mermaid diagrams", () => {
+  it("renders Mermaid in a Markdown file preview and exposes its original source", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const code = "flowchart TD\nA[Markdown file] --> B[Rendered diagram]\n";
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(
+          <FileMarkdownPreview
+            cwd="/workspace"
+            relativePath="docs/diagram.md"
+            text={`# Diagram\n\n\`\`\`mermaid\n${code}\`\`\``}
+            threadRef={{
+              environmentId: EnvironmentId.make("mermaid-file-environment"),
+              threadId: ThreadId.make("mermaid-file-thread"),
+            }}
+          />,
+        );
+      });
+      expect(renderMermaidDiagram).toHaveBeenCalledWith(code, "dark");
+      expect(renderer!.root.findAllByProps({ "aria-label": "Mermaid diagram" })).toHaveLength(1);
+      await act(async () => {
+        codeButton(renderer!, "Show source code").onClick?.({} as never);
+        await getSyntaxHighlighterPromise("mermaid");
+      });
+      expect(renderer!.root.findAllByProps({ "aria-label": "Mermaid diagram" })).toHaveLength(0);
+      expect(JSON.stringify(renderer!.toJSON())).toContain("flowchart");
+      await act(async () => {
+        codeButton(renderer!, "Show diagram").onClick?.({} as never);
+      });
+      expect(renderer!.root.findAllByProps({ "aria-label": "Mermaid diagram" })).toHaveLength(1);
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("renders by default and switches between source and diagram", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const code = "flowchart LR\n  A[Start] --> B[Finish]\n";
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(<ChatMarkdown cwd={undefined} text={`\`\`\`mermaid\n${code}\`\`\``} />);
+      });
+      expect(renderMermaidDiagram).toHaveBeenCalledWith(code, "dark");
+      expect(renderer!.root.findAllByType("pre")).toHaveLength(0);
+      expect(renderer!.root.findAllByProps({ "aria-label": "Mermaid diagram" })).toHaveLength(1);
+      await act(async () => {
+        codeButton(renderer!, "Show source code").onClick?.({} as never);
+        await getSyntaxHighlighterPromise("mermaid");
+      });
+      expect(JSON.stringify(renderer!.toJSON())).toContain("flowchart");
+      expect(renderer!.root.findAllByProps({ "aria-label": "Mermaid diagram" })).toHaveLength(0);
+      await act(async () => {
+        codeButton(renderer!, "Show diagram").onClick?.({} as never);
+      });
+      expect(renderer!.root.findAllByProps({ "aria-label": "Mermaid diagram" })).toHaveLength(1);
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("waits for an open streaming fence and recovers from invalid diagram source", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.mocked(renderMermaidDiagram).mockClear();
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(
+          <ChatMarkdown cwd={undefined} text={"```mermaid\nflowchart LR\nA -->"} isStreaming />,
+        );
+      });
+      expect(renderMermaidDiagram).not.toHaveBeenCalled();
+      vi.mocked(renderMermaidDiagram).mockRejectedValueOnce(new Error("Syntax error"));
+      await act(async () => {
+        renderer!.update(
+          <ChatMarkdown cwd={undefined} text={"```mermaid\ninvalid diagram\n```"} />,
+        );
+        await getSyntaxHighlighterPromise("mermaid");
+      });
+      expect(JSON.stringify(renderer!.toJSON())).toContain("Could not render this Mermaid diagram");
+      expect(JSON.stringify(renderer!.toJSON())).toContain("invalid diagram");
+      await act(async () => {
+        renderer!.update(
+          <ChatMarkdown cwd={undefined} text={"```mermaid\nflowchart LR\nA --> B\n```"} />,
+        );
+      });
+      expect(renderer!.root.findAllByProps({ "aria-label": "Mermaid diagram" })).toHaveLength(1);
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+});
 
 describe("ChatMarkdown context references", () => {
   it("renders text and image references through the chip renderer, with readable fallback", async () => {

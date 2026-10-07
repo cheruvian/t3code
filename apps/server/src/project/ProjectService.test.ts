@@ -824,6 +824,38 @@ it.effect("rejects an update that waited on the lock while its project was delet
   }).pipe(Effect.provide(ProjectServiceDependenciesLayer)),
 );
 
+it.effect("holds the project lifecycle lock through an active-project callback", () =>
+  Effect.gen(function* () {
+    const service = yield* ProjectService.make;
+    const projectId = ProjectId.make("project:lifecycle-guard");
+    yield* service.create({
+      commandId: CommandId.make("command:lifecycle-guard:create"),
+      projectId,
+      title: "Lifecycle guard",
+      workspaceRoot: "/work/lifecycle-guard",
+    });
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const guarded = yield* service
+      .withActiveProject(projectId, (project) =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as(project),
+        ),
+      )
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(entered);
+    const deletion = yield* service
+      .delete({ commandId: CommandId.make("command:lifecycle-guard:delete"), projectId })
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Effect.yieldNow;
+    assert.isUndefined(deletion.pollUnsafe());
+    yield* Deferred.succeed(release, undefined);
+    assert.equal((yield* Fiber.join(guarded)).id, projectId);
+    assert.isNotNull((yield* Fiber.join(deletion)).deletedAt);
+  }).pipe(Effect.provide(ProjectServiceDependenciesLayer)),
+);
+
 function nativeThreadCreated(projectId: ProjectId, threadId: ThreadId) {
   const createdAt = DateTime.makeUnsafe("2026-01-01T00:00:00.000Z");
   const providerInstanceId = ProviderInstanceId.make("codex");

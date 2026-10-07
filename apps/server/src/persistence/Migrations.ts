@@ -94,6 +94,8 @@ import Migration0058 from "./Migrations/058_PullRequestFilesViewed.ts";
 import Migration0061 from "./Migrations/055_OrchestrationV2.ts";
 import Migration0062 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 
+import Migration0063 from "./Migrations/063_ThreadWorkspaceMoveFence.ts";
+
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
@@ -157,6 +159,7 @@ export const migrationEntries = [
   [60, "ProjectionThreadsAutoSettleDisabledAt", Migration0060],
   [61, "OrchestrationV2", Migration0061],
   [62, "RemoveRedundantProjectionIndexes", Migration0062],
+  [63, "ThreadWorkspaceMoveFence", Migration0063],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

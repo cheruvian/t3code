@@ -371,6 +371,10 @@
     "./device/duo-control": {
       "types": "./src/device/duoControl.ts",
       "default": "./src/device/duoControl.ts"
+    },
+    "./provider-outage": {
+      "types": "./src/providerOutage.ts",
+      "default": "./src/providerOutage.ts"
     }
   },
   "scripts": {

@@ -7,6 +7,9 @@ import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled"
  * remains data-driven.
  */
 export type ThreadActionMenuId =
+  | "undo-environment-move"
+  | "move-environment"
+  | `move-environment:${string}`
   | "new-thread-on-branch"
   | "filter-by-project"
   | "project-settings"
@@ -31,6 +34,12 @@ export type ThreadActionMenuId =
   | "delete";
 
 export interface ThreadActionMenuState {
+  readonly canUndoEnvironmentMove?: boolean;
+  readonly isMovingEnvironment?: boolean;
+  readonly moveDestinations?: ReadonlyArray<{
+    readonly environmentId: string;
+    readonly label: string;
+  }>;
   readonly branch: string | null;
   /**
    * Project scoping for the thread list. Null on surfaces with no scoped
@@ -70,6 +79,30 @@ export function buildThreadActionMenuItems(
   state: ThreadActionMenuState,
 ): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
   return [
+    ...(state.canUndoEnvironmentMove
+      ? [
+          {
+            id: "undo-environment-move" as const,
+            label: "Undo environment move",
+            icon: "undo",
+            disabled: state.isRunning || state.isMovingEnvironment === true,
+          },
+        ]
+      : []),
+    ...(state.moveDestinations?.length
+      ? [
+          {
+            id: "move-environment" as const,
+            label: state.isMovingEnvironment ? "Moving to environment…" : "Move to environment",
+            icon: "arrow-right",
+            disabled: state.isRunning || state.isMovingEnvironment === true,
+            children: state.moveDestinations.map((destination) => ({
+              id: `move-environment:${destination.environmentId}` as const,
+              label: destination.label,
+            })),
+          },
+        ]
+      : []),
     ...(state.branch
       ? [
           {
