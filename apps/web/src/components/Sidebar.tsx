@@ -1,3 +1,4 @@
+import { isThreadMoveInProgress } from "@t3tools/client-runtime/operations";
 import { threadMoveUndoParticipants } from "@t3tools/client-runtime/operations";
 import {
   readThreadMoveDestinations,
@@ -4499,6 +4500,7 @@ export default function Sidebar() {
           api.contextMenu.show(
             buildThreadActionMenuItems({
               moveDestinations: readThreadMoveDestinations(threadRef),
+              isMovingEnvironment: isThreadMoveInProgress(threadRef),
               canUndoEnvironmentMove: threadMoveUndoParticipants(thread) !== null,
               branch: thread.branch ?? null,
               projectFilter: threadProjectGroup

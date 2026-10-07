@@ -1,4 +1,5 @@
 import {
+  beginThreadMoveProgress,
   threadMoveDestinations,
   threadMoveUndoParticipants,
 } from "@t3tools/client-runtime/operations";
@@ -54,28 +55,38 @@ export async function moveMobileThreadToEnvironment(
     (candidate) => candidate.environmentId === environmentId,
   );
   if (!destination) return;
-  const result = await runAtomCommand(
-    appAtomRegistry,
-    threadEnvironment.move,
-    {
-      environmentId: thread.environmentId,
-      input: {
-        threadId: thread.id,
-        destinationEnvironmentId: environmentId,
-        projectId: destination.projectId,
-        instanceId: destination.instanceId,
-        ...(thread.environmentMove?.moveId ? { moveId: thread.environmentMove.moveId } : {}),
-      },
-    },
-    { reportFailure: false },
+  const progress = beginThreadMoveProgress(
+    { environmentId: thread.environmentId, threadId: thread.id },
+    destination.label,
   );
-  if (result._tag === "Failure") {
-    const error = squashAtomCommandFailure(result);
-    Alert.alert(
-      "Thread move needs attention",
-      `${error instanceof Error ? error.message : String(error)} Open the move action again to retry or reconcile it.`,
+  if (!progress) return;
+  try {
+    const result = await runAtomCommand(
+      appAtomRegistry,
+      threadEnvironment.move,
+      {
+        environmentId: thread.environmentId,
+        input: {
+          threadId: thread.id,
+          destinationEnvironmentId: environmentId,
+          projectId: destination.projectId,
+          instanceId: destination.instanceId,
+          onProgress: progress.update,
+          ...(thread.environmentMove?.moveId ? { moveId: thread.environmentMove.moveId } : {}),
+        },
+      },
+      { reportFailure: false },
     );
-  } else Alert.alert("Thread moved", `Continue this thread on ${destination.label}.`);
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      Alert.alert(
+        "Thread move needs attention",
+        `${error instanceof Error ? error.message : String(error)} Open the move action again to retry or reconcile it.`,
+      );
+    } else Alert.alert("Thread moved", `Continue this thread on ${destination.label}.`);
+  } finally {
+    progress.finish();
+  }
 }
 
 export async function undoMobileThreadMove(thread: EnvironmentThreadShell) {

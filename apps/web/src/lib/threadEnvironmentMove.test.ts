@@ -9,10 +9,13 @@ const mocks = vi.hoisted(() => ({
   threadMoveDestinations: vi.fn(),
   threadMoveUndoParticipants: vi.fn(),
   toast: vi.fn(),
+  updateToast: vi.fn(),
+  closeToast: vi.fn(),
   waitForThreadShell: vi.fn(),
 }));
 
-vi.mock("@t3tools/client-runtime/operations", () => ({
+vi.mock("@t3tools/client-runtime/operations", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@t3tools/client-runtime/operations")>()),
   threadMoveDestinations: mocks.threadMoveDestinations,
   threadMoveUndoParticipants: mocks.threadMoveUndoParticipants,
 }));
@@ -44,7 +47,7 @@ vi.mock("../state/threads", () => ({
 }));
 
 vi.mock("../components/ui/toast", () => ({
-  toastManager: { add: mocks.toast },
+  toastManager: { add: mocks.toast, update: mocks.updateToast, close: mocks.closeToast },
 }));
 
 import { moveThreadToEnvironment, undoThreadEnvironmentMove } from "./threadEnvironmentMove";
@@ -145,4 +148,42 @@ describe("thread environment move navigation readiness", () => {
         "The undo completed, but the source thread has not appeared yet. Refresh before opening it.",
     });
   });
+});
+
+it("shows persistent progress and rejects duplicate moves while export is pending", async () => {
+  let finish!: (value: { _tag: "Success" }) => void;
+  const pending = new Promise<{ _tag: "Success" }>((resolve) => {
+    finish = resolve;
+  });
+  mocks.readThreadShell.mockReturnValue({ environmentMove: null });
+  mocks.threadMoveDestinations.mockReturnValue([
+    {
+      environmentId: destinationEnvironmentId,
+      projectId: "project",
+      instanceId: "instance",
+      label: "Destination",
+    },
+  ]);
+  mocks.runAtomCommand.mockImplementation(async (_registry, _command, args) => {
+    args.input.onProgress({
+      phase: "uploading",
+      transferredBytes: 5_000_000,
+      totalBytes: 10_000_000,
+    });
+    return pending;
+  });
+  mocks.waitForThreadShell.mockResolvedValue(true);
+  mocks.toast.mockReturnValue("progress-toast");
+  const move = moveThreadToEnvironment(sourceRef, destinationEnvironmentId);
+  expect(mocks.toast).toHaveBeenCalledWith(
+    expect.objectContaining({ type: "loading", timeout: 0 }),
+  );
+  expect(mocks.updateToast).toHaveBeenCalledWith("progress-toast", {
+    description: "Transferring 5.0 / 10.0 MB (50%)",
+  });
+  await expect(moveThreadToEnvironment(sourceRef, destinationEnvironmentId)).resolves.toBe(false);
+  expect(mocks.runAtomCommand).toHaveBeenCalledTimes(1);
+  finish({ _tag: "Success" });
+  await expect(move).resolves.toBe(true);
+  expect(mocks.closeToast).toHaveBeenCalledWith("progress-toast");
 });

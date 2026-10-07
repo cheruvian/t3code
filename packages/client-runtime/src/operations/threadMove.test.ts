@@ -294,3 +294,43 @@ it("undo retries a lost destination acknowledgement without reactivating the des
   expect(calls.filter((call) => call === "destination:undo")).toHaveLength(1);
   expect(calls.at(-1)).toBe("source:restore");
 });
+
+it("reports export, byte progress, activation and final confirmation in order", async () => {
+  const progress: Array<import("./threadMove.ts").ThreadMoveProgress> = [];
+  const f = fixture();
+  await runThreadMoveSaga({ ...input, onProgress: (state) => progress.push(state) }, f.ports);
+  expect(progress.map((state) => state.phase)).toEqual([
+    "checking",
+    "exporting",
+    "uploading",
+    "uploading",
+    "uploading",
+    "uploading",
+    "activating",
+    "finalizing",
+  ]);
+  expect(progress.filter((state) => state.phase === "uploading")).toEqual([
+    { phase: "uploading", transferredBytes: 0, totalBytes: 12 },
+    { phase: "uploading", transferredBytes: 4, totalBytes: 12 },
+    { phase: "uploading", transferredBytes: 8, totalBytes: 12 },
+    { phase: "uploading", transferredBytes: 12, totalBytes: 12 },
+  ]);
+});
+
+it("reports reconciliation on failure without letting presentation errors break recovery", async () => {
+  const phases: string[] = [];
+  const f = fixture({ uploadFailure: true });
+  await expect(
+    runThreadMoveSaga(
+      {
+        ...input,
+        onProgress: (state) => {
+          phases.push(state.phase);
+          throw new Error("unmounted UI");
+        },
+      },
+      f.ports,
+    ),
+  ).rejects.toThrow();
+  expect(phases.at(-1)).toBe("reconciling");
+});

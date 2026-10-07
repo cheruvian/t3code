@@ -19,12 +19,40 @@ import * as Supervisor from "../connection/supervisor.ts";
 import { request } from "../rpc/client.ts";
 import { resolveAssetUrl } from "../state/assets.ts";
 
+export type ThreadMoveProgress =
+  | { readonly phase: "checking" | "exporting" | "activating" | "finalizing" | "reconciling" }
+  | { readonly phase: "uploading"; readonly transferredBytes: number; readonly totalBytes: number };
+
+export function threadMoveProgressDescription(progress: ThreadMoveProgress) {
+  switch (progress.phase) {
+    case "checking":
+      return "Checking both environments…";
+    case "exporting":
+      return "Preparing worktree and session export…";
+    case "activating":
+      return "Activating worktree and native session on the destination…";
+    case "finalizing":
+      return "Confirming the move and settling the source…";
+    case "reconciling":
+      return "Reconciling the interrupted move…";
+    case "uploading": {
+      const percent =
+        progress.totalBytes === 0
+          ? 100
+          : Math.floor((progress.transferredBytes / progress.totalBytes) * 100);
+      const mb = (bytes: number) => (bytes / 1_000_000).toFixed(1);
+      return `Transferring ${mb(progress.transferredBytes)} / ${mb(progress.totalBytes)} MB (${percent}%)`;
+    }
+  }
+}
+
 export interface MoveThreadInput {
   readonly threadId: ThreadId;
   readonly destinationEnvironmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly instanceId: ProviderInstanceId;
   readonly moveId?: string;
+  readonly onProgress?: (progress: ThreadMoveProgress) => void;
 }
 export interface UndoThreadMoveInput {
   readonly threadId: ThreadId;
@@ -112,8 +140,18 @@ export async function runThreadMoveSaga(
 ): Promise<void> {
   const identity = { moveId: input.moveId, threadId: input.threadId };
   let activationPossible = false;
+  const report = (progress: ThreadMoveProgress) => {
+    // Presentation must never change transfer or recovery behavior.
+    try {
+      input.onProgress?.(progress);
+    } catch {
+      /* Ignore unavailable UI observers. */
+    }
+  };
+  report({ phase: "checking" });
   try {
     const destination = await ports.destination({ ...identity, action: "status" });
+    report({ phase: "exporting" });
     const source = await ports.source({
       ...identity,
       action: "export",
@@ -129,6 +167,7 @@ export async function runThreadMoveSaga(
       throw new Error("The destination cancelled this move. The source is usable again.");
     }
     if (destination.receipt) {
+      report({ phase: "finalizing" });
       if (source.state === "fenced") await ports.source({ ...identity, action: "activate" });
       await ports.source({ ...identity, action: "finalize", receipt: destination.receipt });
       return;
@@ -147,18 +186,28 @@ export async function runThreadMoveSaga(
     let offset = begin.offset ?? 0;
     const size = source.manifest.parts[0]?.sizeBytes;
     if (size === undefined) throw new Error("The source archive has no size.");
+    report({ phase: "uploading", transferredBytes: offset, totalBytes: size });
+    let reportedPercent = size === 0 ? 100 : Math.floor((offset / size) * 100);
     while (offset < size) {
       const next = await ports.transfer(source.relativeUrl, begin.relativeUrl, offset);
       if (next <= offset || next > size) throw new Error("Invalid upload progress.");
       offset = next;
+      const percent = Math.floor((offset / size) * 100);
+      if (percent !== reportedPercent || offset === size) {
+        reportedPercent = percent;
+        report({ phase: "uploading", transferredBytes: offset, totalBytes: size });
+      }
     }
     // A lost activation acknowledgement is uncertain: preserve the source fence.
+    report({ phase: "activating" });
     activationPossible = true;
     await ports.source({ ...identity, action: "activate" });
     const committed = await ports.destination({ ...identity, action: "commit" });
     if (!committed.receipt) throw new Error("The destination has no durable import receipt.");
+    report({ phase: "finalizing" });
     await ports.source({ ...identity, action: "finalize", receipt: committed.receipt });
   } catch (error) {
+    report({ phase: "reconciling" });
     if (!activationPossible) {
       await ports.destination({ ...identity, action: "cancel" }).catch(() => null);
       await ports.source({ ...identity, action: "abort" }).catch(() => undefined);

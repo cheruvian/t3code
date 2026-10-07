@@ -35,6 +35,7 @@ export type ThreadActionMenuId =
 
 export interface ThreadActionMenuState {
   readonly canUndoEnvironmentMove?: boolean;
+  readonly isMovingEnvironment?: boolean;
   readonly moveDestinations?: ReadonlyArray<{
     readonly environmentId: string;
     readonly label: string;
@@ -84,7 +85,7 @@ export function buildThreadActionMenuItems(
             id: "undo-environment-move" as const,
             label: "Undo environment move",
             icon: "undo",
-            disabled: state.isRunning,
+            disabled: state.isRunning || state.isMovingEnvironment === true,
           },
         ]
       : []),
@@ -92,9 +93,9 @@ export function buildThreadActionMenuItems(
       ? [
           {
             id: "move-environment" as const,
-            label: "Move to environment",
+            label: state.isMovingEnvironment ? "Moving to environment…" : "Move to environment",
             icon: "arrow-right",
-            disabled: state.isRunning,
+            disabled: state.isRunning || state.isMovingEnvironment === true,
             children: state.moveDestinations.map((destination) => ({
               id: `move-environment:${destination.environmentId}` as const,
               label: destination.label,

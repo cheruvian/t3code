@@ -1,4 +1,6 @@
 import {
+  beginThreadMoveProgress,
+  threadMoveProgressDescription,
   threadMoveDestinations,
   threadMoveUndoParticipants,
 } from "@t3tools/client-runtime/operations";
@@ -30,45 +32,63 @@ export async function moveThreadToEnvironment(
   );
   const thread = readThreadShell(ref);
   if (!destination || !thread) return false;
-  const result = await runAtomCommand(
-    appAtomRegistry,
-    threadEnvironment.move,
-    {
-      environmentId: ref.environmentId,
-      input: {
-        threadId: ref.threadId,
-        destinationEnvironmentId,
-        projectId: destination.projectId,
-        instanceId: destination.instanceId,
-        ...(thread.environmentMove?.moveId ? { moveId: thread.environmentMove.moveId } : {}),
-      },
-    },
-    { reportFailure: false },
-  );
-  if (result._tag === "Failure") {
-    const error = squashAtomCommandFailure(result);
-    toastManager.add({
-      type: "error",
-      title: "Thread move needs attention",
-      description: `${error instanceof Error ? error.message : String(error)} Open the move action again to retry or reconcile it.`,
-    });
-    return false;
-  }
-  const destinationReady = await waitForThreadShell({
-    environmentId: destinationEnvironmentId,
-    threadId: ref.threadId,
+  const progress = beginThreadMoveProgress(ref, destination.label);
+  if (!progress) return false;
+  const toastId = toastManager.add({
+    type: "loading",
+    title: `Moving thread to ${destination.label}`,
+    description: "Checking both environments…",
+    timeout: 0,
   });
-  if (!destinationReady) {
-    toastManager.add({
-      type: "warning",
-      title: "Thread moved; refresh needed",
-      description:
-        "The move completed, but the destination thread has not appeared yet. Refresh before opening it.",
+  try {
+    const result = await runAtomCommand(
+      appAtomRegistry,
+      threadEnvironment.move,
+      {
+        environmentId: ref.environmentId,
+        input: {
+          threadId: ref.threadId,
+          destinationEnvironmentId,
+          projectId: destination.projectId,
+          instanceId: destination.instanceId,
+          onProgress: (state) => {
+            progress.update(state);
+            toastManager.update(toastId, { description: threadMoveProgressDescription(state) });
+          },
+          ...(thread.environmentMove?.moveId ? { moveId: thread.environmentMove.moveId } : {}),
+        },
+      },
+      { reportFailure: false },
+    );
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: "Thread move needs attention",
+        description: `${error instanceof Error ? error.message : String(error)} Open the move action again to retry or reconcile it.`,
+      });
+      return false;
+    }
+    toastManager.update(toastId, { description: "Opening the destination thread…" });
+    const destinationReady = await waitForThreadShell({
+      environmentId: destinationEnvironmentId,
+      threadId: ref.threadId,
     });
-    return false;
+    if (!destinationReady) {
+      toastManager.add({
+        type: "warning",
+        title: "Thread moved; refresh needed",
+        description:
+          "The move completed, but the destination thread has not appeared yet. Refresh before opening it.",
+      });
+      return false;
+    }
+    toastManager.add({ type: "success", title: `Thread moved to ${destination.label}` });
+    return true;
+  } finally {
+    progress.finish();
+    toastManager.close(toastId);
   }
-  toastManager.add({ type: "success", title: `Thread moved to ${destination.label}` });
-  return true;
 }
 
 export async function undoThreadEnvironmentMove(
