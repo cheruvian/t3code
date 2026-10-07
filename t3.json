@@ -4,7 +4,7 @@
   "scripts": [
     {
       "name": "Setup Worktree",
-      "command": "node scripts/setup-worktree.ts",
+      "command": "NO_COLOR=1 node scripts/setup-worktree.ts",
       "icon": "configure",
       "runOnWorktreeCreate": true
     }
