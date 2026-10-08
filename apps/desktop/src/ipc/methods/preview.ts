@@ -42,6 +42,9 @@ export const installPreviewEventForwarding = Effect.fn(
 )(function* () {
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const manager = yield* PreviewManager.PreviewManager;
+  yield* manager.subscribeAllAudioMuted((muted) =>
+    electronWindow.sendAll(IpcChannels.PREVIEW_ALL_AUDIO_MUTED_CHANGED_CHANNEL, muted),
+  );
   yield* manager.subscribeStateChanges((tabId, state) =>
     electronWindow.sendAll(IpcChannels.PREVIEW_STATE_CHANGE_CHANNEL, tabId, state),
   );
@@ -191,6 +194,26 @@ export const setAudioMuted = DesktopIpc.makeIpcMethod({
     yield* manager.setAudioMuted(tabId, audioMuted);
   }),
 });
+export const getAllAudioMuted = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_GET_ALL_AUDIO_MUTED_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.preview.getAllAudioMuted")(function* () {
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.getAllAudioMuted;
+  }),
+});
+
+export const setAllAudioMuted = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_SET_ALL_AUDIO_MUTED_CHANNEL,
+  payload: Schema.Boolean,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.setAllAudioMuted")(function* (muted) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.setAllAudioMuted(muted);
+  }),
+});
+
 export const openDevTools = tabMethod(
   IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL,
   "desktop.ipc.preview.openDevTools",
@@ -447,6 +470,8 @@ export const methods = [
   setColorScheme,
   setZoomFactor,
   setAudioMuted,
+  getAllAudioMuted,
+  setAllAudioMuted,
   openDevTools,
   clearCookies,
   clearCache,

@@ -40,6 +40,7 @@ import {
 } from "react";
 
 import { isElectron } from "~/env";
+import { setAllBrowsersMuted, useAllBrowsersMuted } from "~/browser/browserAudio";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
 import type { RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
@@ -192,6 +193,7 @@ type TabContextMenuAction =
   | "rename"
   | "copy-path"
   | "toggle-mute"
+  | "toggle-mute-all"
   | "close"
   | "close-others"
   | "close-to-right"
@@ -238,9 +240,9 @@ type TabAudioState = "none" | "audible" | "muted";
  * A muted tab that is not making sound shows nothing: mute is armed silently,
  * and the indicator only appears once there is audio to speak of.
  */
-function tabAudioState(overlay: DesktopPreviewOverlay | null): TabAudioState {
+function tabAudioState(overlay: DesktopPreviewOverlay | null, allMuted: boolean): TabAudioState {
   if (!overlay?.audible) return "none";
-  return overlay.audioMuted ? "muted" : "audible";
+  return overlay.audioMuted || allMuted ? "muted" : "audible";
 }
 
 type SurfaceShortcutEvent = Pick<
@@ -794,6 +796,7 @@ function PullRequestSurfaceIcon({
 }
 
 export function RightPanelTabs(props: RightPanelTabsProps) {
+  const allBrowsersMuted = useAllBrowsersMuted();
   const ownsDesktopTitleBar = isElectron && props.mode === "inline";
   const browserProfiles = useBrowserDefaults().profiles;
   const { resolvedTheme } = useTheme();
@@ -964,7 +967,15 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             overlay: menuOverlay,
             canResolveRuntimeTabId: props.previewRuntimeTabId !== undefined,
           }),
+          ...(allBrowsersMuted ? { disabled: true } : {}),
         });
+        if (isElectron) {
+          items.push({
+            id: "toggle-mute-all",
+            label: allBrowsersMuted ? "Unmute all browsers" : "Mute all browsers",
+            disabled: allBrowsersMuted === null,
+          });
+        }
       }
       items.push(
         { id: "close", label: "Close" },
@@ -995,6 +1006,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             props.onCopyFilePath(surface.relativePath);
           }
           break;
+        case "toggle-mute-all":
+          if (allBrowsersMuted !== null) void setAllBrowsersMuted(!allBrowsersMuted);
+          break;
         case "toggle-mute": {
           // menuOverlay repeats the disabled gate above: the desktop tab must
           // exist before it can be addressed, however the menu was dismissed.
@@ -1023,7 +1037,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
           break;
       }
     },
-    [props],
+    [props, allBrowsersMuted],
   );
   const handleTabMouseDown = useCallback((event: ReactMouseEvent) => {
     if (event.button !== 1) return;
@@ -1124,6 +1138,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
               // must be addressed with the runtime id.
               const audio = tabAudioState(
                 previewTabId ? (props.desktopByTabId[previewTabId] ?? null) : null,
+                allBrowsersMuted === true,
               );
               const audioRuntimeTabId = previewTabId
                 ? (props.previewRuntimeTabId?.(previewTabId) ?? null)
@@ -1169,7 +1184,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                           <button
                             type="button"
                             className="cursor-pointer flex size-4 shrink-0 items-center justify-center rounded-sm hover:bg-muted"
-                            aria-label={audio === "muted" ? `Unmute ${title}` : `Mute ${title}`}
+                            disabled={allBrowsersMuted === true}
+                            aria-label={
+                              allBrowsersMuted
+                                ? "All browsers muted"
+                                : audio === "muted"
+                                  ? `Unmute ${title}`
+                                  : `Mute ${title}`
+                            }
                             onClick={(event) => {
                               // Sibling of the close button, inside a tab that
                               // activates on click: keep this to the toggle.
@@ -1186,7 +1208,13 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                           </button>
                         }
                       />
-                      <TooltipPopup>{audio === "muted" ? "Unmute tab" : "Mute tab"}</TooltipPopup>
+                      <TooltipPopup>
+                        {allBrowsersMuted
+                          ? "All browsers muted"
+                          : audio === "muted"
+                            ? "Unmute tab"
+                            : "Mute tab"}
+                      </TooltipPopup>
                     </Tooltip>
                   )}
                   {renamingDevice === surface.id ? (

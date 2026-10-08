@@ -1282,6 +1282,10 @@ export interface DesktopPreviewBridge {
    * allowed; it simply takes effect once the page plays something.
    */
   setAudioMuted: (tabId: string, audioMuted: boolean) => Promise<void>;
+  /** App-wide audio override. Individual tab mute choices are preserved. */
+  getAllAudioMuted: () => Promise<boolean>;
+  setAllAudioMuted: (muted: boolean) => Promise<void>;
+  onAllAudioMutedChanged: (listener: (muted: boolean) => void) => () => void;
   /** Open the guest webview's DevTools (detached). */
   openDevTools: (tabId: string) => Promise<void>;
   /** Drop cookies + storage data for the preview partition (all tabs). */

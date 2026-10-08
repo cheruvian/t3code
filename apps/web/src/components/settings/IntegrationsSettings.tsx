@@ -120,6 +120,7 @@ import { searchableSetting } from "./settingsSearch";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { BrowserImportWizard, type WizardTarget } from "./BrowserImportWizard";
+import { setAllBrowsersMuted, useAllBrowsersMuted } from "~/browser/browserAudio";
 import type { ImportOutcome } from "./browserImportWizard.logic";
 
 const FILL_VALUE = "fill";
@@ -483,6 +484,24 @@ function BrowserAppearanceSetting({ disabled }: { readonly disabled: boolean }) 
             ))}
           </SelectPopup>
         </Select>
+      }
+    />
+  );
+}
+
+function BrowserAudioSetting({ disabled }: { readonly disabled: boolean }) {
+  const muted = useAllBrowsersMuted();
+  return (
+    <SettingsRow
+      {...searchableSetting("browser-mute-all")}
+      description="Silence all Browser panels across threads, including new tabs, until you unmute or quit T3 Code. Individual tab mute choices are preserved."
+      control={
+        <Switch
+          disabled={disabled || muted === null}
+          checked={muted ?? false}
+          aria-label="Mute all browsers"
+          onCheckedChange={(checked) => void setAllBrowsersMuted(Boolean(checked))}
+        />
       }
     />
   );
@@ -1525,6 +1544,7 @@ export function IntegrationsSettingsPanel() {
       <BrowserViewportSetting disabled={previewDefaultsDisabled} />
       <BrowserZoomSetting disabled={previewDefaultsDisabled} />
       <BrowserAppearanceSetting disabled={previewDefaultsDisabled} />
+      <BrowserAudioSetting disabled={previewDefaultsDisabled} />
       <BrowserRecordingFrameRateSetting disabled={previewDefaultsDisabled} />
       <BrowserRecordingInputSettings disabled={previewDefaultsDisabled} />
       <BrowserLinkTargetSetting disabled={previewDefaultsDisabled} />

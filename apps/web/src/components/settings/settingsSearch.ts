@@ -699,6 +699,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["preview color scheme light dark system os"],
   },
   {
+    id: "browser-mute-all",
+    title: "Mute all browsers",
+    to: "/settings/integrations",
+    searchTerms: ["audio sound silence unmute all tabs panels"],
+  },
+  {
     id: "browser-recording-frame-rate",
     title: "Browser recording frame rate",
     to: "/settings/integrations",

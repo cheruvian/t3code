@@ -1986,6 +1986,121 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect("mutes all browsers and preserves individual mute choices when released", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const first = makeAudioWebContents(42);
+        const second = makeAudioWebContents(43);
+        fromId.mockImplementation((id) => (id === 42 ? first.wc : second.wc));
+        yield* manager.createTab("first");
+        yield* manager.createTab("second");
+        yield* manager.registerWebview("first", 42);
+        yield* manager.registerWebview("second", 43);
+        yield* manager.setAudioMuted("first", true);
+        const changes: boolean[] = [];
+        yield* manager.subscribeAllAudioMuted((muted) =>
+          Effect.sync(() => {
+            changes.push(muted);
+          }),
+        );
+
+        yield* manager.setAllAudioMuted(true);
+        expect(yield* manager.getAllAudioMuted).toBe(true);
+        expect(first.setAudioMuted).toHaveBeenLastCalledWith(true);
+        expect(second.setAudioMuted).toHaveBeenLastCalledWith(true);
+        // A per-tab change cannot bypass the app-wide override.
+        yield* manager.setAudioMuted("second", false);
+        expect(second.setAudioMuted).toHaveBeenLastCalledWith(true);
+
+        yield* manager.setAllAudioMuted(false);
+        expect(first.setAudioMuted).toHaveBeenLastCalledWith(true);
+        expect(second.setAudioMuted).toHaveBeenLastCalledWith(false);
+        expect(changes).toEqual([true, false]);
+      }),
+    ),
+  );
+
+  effectIt.effect("keeps new and replacement guests muted across navigation", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        yield* manager.setAllAudioMuted(true);
+        const first = makeAudioWebContents(42);
+        fromId.mockReturnValue(first.wc);
+        yield* manager.createTab("new");
+        yield* manager.registerWebview("new", 42);
+        expect(first.setAudioMuted).toHaveBeenLastCalledWith(true);
+
+        const replacement = makeAudioWebContents(43);
+        fromId.mockReturnValue(replacement.wc);
+        yield* manager.registerWebview("new", 43);
+        yield* manager.navigate("new", "https://example.com/next");
+        expect(replacement.setAudioMuted).toHaveBeenLastCalledWith(true);
+        yield* manager.setAllAudioMuted(false);
+        expect(replacement.setAudioMuted).toHaveBeenLastCalledWith(false);
+      }),
+    ),
+  );
+
+  effectIt.effect("rolls every browser back when a guest refuses the global mute", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const first = makeAudioWebContents(42);
+        const second = makeAudioWebContents(43);
+        const third = makeAudioWebContents(44);
+        fromId.mockImplementation((id) =>
+          id === 42 ? first.wc : id === 43 ? second.wc : third.wc,
+        );
+        for (const [tabId, id] of [
+          ["first", 42],
+          ["second", 43],
+          ["third", 44],
+        ] as const) {
+          yield* manager.createTab(tabId);
+          yield* manager.registerWebview(tabId, id);
+        }
+        const changes: boolean[] = [];
+        yield* manager.subscribeAllAudioMuted((muted) =>
+          Effect.sync(() => {
+            changes.push(muted);
+          }),
+        );
+        second.setAudioMuted.mockImplementation(() => {
+          throw new Error("guest refused");
+        });
+        const result = yield* manager.setAllAudioMuted(true).pipe(Effect.exit);
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(yield* manager.getAllAudioMuted).toBe(false);
+        expect(first.setAudioMuted).toHaveBeenLastCalledWith(false);
+        expect(third.setAudioMuted).toHaveBeenLastCalledWith(false);
+        expect(changes).toEqual([]);
+      }),
+    ),
+  );
+
+  effectIt.effect("restores the global mute if a guest refuses to unmute", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const first = makeAudioWebContents(42);
+        const second = makeAudioWebContents(43);
+        fromId.mockImplementation((id) => (id === 42 ? first.wc : second.wc));
+        yield* manager.createTab("first");
+        yield* manager.createTab("second");
+        yield* manager.registerWebview("first", 42);
+        yield* manager.registerWebview("second", 43);
+        yield* manager.setAllAudioMuted(true);
+        second.setAudioMuted.mockImplementationOnce(() => {
+          throw new Error("guest refused");
+        });
+
+        const result = yield* manager.setAllAudioMuted(false).pipe(Effect.exit);
+        expect(Exit.isFailure(result)).toBe(true);
+        expect(yield* manager.getAllAudioMuted).toBe(true);
+        expect(first.setAudioMuted).toHaveBeenLastCalledWith(true);
+        expect(second.setAudioMuted).toHaveBeenLastCalledWith(true);
+      }),
+    ),
+  );
+
   effectIt.effect("fails and rolls back when the guest refuses a mute", () =>
     withManager((manager) =>
       Effect.gen(function* () {

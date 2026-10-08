@@ -339,6 +339,19 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_COLOR_SCHEME_CHANNEL, { tabId, colorScheme }),
     setAudioMuted: (tabId, audioMuted) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_AUDIO_MUTED_CHANNEL, { tabId, audioMuted }),
+    getAllAudioMuted: () => ipcRenderer.invoke(IpcChannels.PREVIEW_GET_ALL_AUDIO_MUTED_CHANNEL),
+    setAllAudioMuted: (muted) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_SET_ALL_AUDIO_MUTED_CHANNEL, muted),
+    onAllAudioMutedChanged: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, muted: boolean) =>
+        listener(muted);
+      ipcRenderer.on(IpcChannels.PREVIEW_ALL_AUDIO_MUTED_CHANGED_CHANNEL, wrappedListener);
+      return () =>
+        ipcRenderer.removeListener(
+          IpcChannels.PREVIEW_ALL_AUDIO_MUTED_CHANGED_CHANNEL,
+          wrappedListener,
+        );
+    },
     openDevTools: (tabId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL, { tabId }),
     listBrowserImportSources: () => ipcRenderer.invoke(IpcChannels.PREVIEW_IMPORT_SOURCES_CHANNEL),

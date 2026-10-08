@@ -563,6 +563,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const annotationSendEnabled = new Map<string, boolean>();
   const mainWindowRef = yield* Ref.make<Option.Option<BrowserWindow>>(Option.none());
   const tabsRef = yield* SynchronizedRef.make<ReadonlyMap<string, PreviewTabState>>(new Map());
+  const allAudioMutedRef = yield* Ref.make(false);
+  const audioMutationSemaphore = yield* Semaphore.make(1);
+  const audioListenersRef = yield* Ref.make<ReadonlySet<(muted: boolean) => Effect.Effect<void>>>(
+    new Set(),
+  );
   const attachedRef = yield* Ref.make<ReadonlyMap<number, ManagedListeners>>(new Map());
   const listenersRef = yield* Ref.make<ReadonlySet<Listener>>(new Set());
   const pointerEventListenersRef = yield* Ref.make<ReadonlySet<PointerEventListener>>(new Set());
@@ -836,7 +841,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   });
 
   const deliverEvent = (
-    eventKind: "state-change" | "recording-frame" | "recording-input" | "pointer-event",
+    eventKind:
+      | "state-change"
+      | "recording-frame"
+      | "recording-input"
+      | "pointer-event"
+      | "audio-muted",
     tabId: string,
     delivery: () => Effect.Effect<void>,
   ) =>
@@ -924,8 +934,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   });
 
   /**
-   * Mute counterpart to {@link assertTabZoom}: pushes the tab's committed mute
-   * onto whichever guest it currently owns, reading both at call time so an
+   * Mute counterpart to {@link assertTabZoom}: combines the app-wide override
+   * with the tab's own mute, reading both at call time so an
    * older snapshot can never roll back a mute action that landed after it.
    *
    * Failures propagate so the user-facing setter can roll its commit back.
@@ -940,7 +950,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const wc = webContents.fromId(tab.webContentsId);
     if (!wc || wc.isDestroyed()) return;
     yield* attempt({ operation: "assertTabAudioMuted", tabId, webContentsId: wc.id }, () =>
-      wc.setAudioMuted(tab.audioMuted),
+      wc.setAudioMuted(tab.audioMuted || Ref.getUnsafe(allAudioMutedRef)),
     );
   });
 
@@ -1859,7 +1869,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     // is published rather than letting it emit audio the user already silenced.
     // Settled again after attach, below, the same way zoom is.
     yield* attempt({ operation: "registerWebview.restoreAudioMuted", tabId, webContentsId }, () =>
-      wc.setAudioMuted(currentTab.audioMuted),
+      wc.setAudioMuted(currentTab.audioMuted || Ref.getUnsafe(allAudioMutedRef)),
     );
     yield* attachListeners(tabId, wc);
     const readAudible = attempt(
@@ -2446,6 +2456,36 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           ),
         );
       }),
+    );
+  });
+
+  /** Overrides each tab's own mute without replacing it, including guests that attach later. */
+  const setAllAudioMuted = Effect.fn("PreviewManager.setAllAudioMuted")(function* (muted: boolean) {
+    yield* audioMutationSemaphore.withPermit(
+      Effect.gen(function* () {
+        const previous = yield* Ref.get(allAudioMutedRef);
+        yield* Ref.set(allAudioMutedRef, muted);
+        const apply = Effect.gen(function* () {
+          for (const tabId of (yield* SynchronizedRef.get(tabsRef)).keys()) {
+            yield* withTabLifecycleLock(tabId, assertTabAudioMuted(tabId));
+          }
+        });
+        yield* apply.pipe(
+          Effect.tapError(() =>
+            Effect.gen(function* () {
+              yield* Ref.set(allAudioMutedRef, previous);
+              for (const tabId of (yield* SynchronizedRef.get(tabsRef)).keys()) {
+                yield* withTabLifecycleLock(tabId, assertTabAudioMuted(tabId)).pipe(Effect.ignore);
+              }
+            }),
+          ),
+        );
+        if (previous !== muted) {
+          for (const listener of yield* Ref.get(audioListenersRef)) {
+            yield* deliverEvent("audio-muted", "all", () => listener(muted));
+          }
+        }
+      }).pipe(Effect.uninterruptible),
     );
   });
 
@@ -3340,6 +3380,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     yield* Effect.all(
       [
         Ref.set(listenersRef, new Set()),
+        Ref.set(audioListenersRef, new Set()),
         Ref.set(pointerEventListenersRef, new Set()),
         Ref.set(recordingFrameListenersRef, new Set()),
         Ref.set(recordingInputListenersRef, new Set()),
@@ -3375,6 +3416,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     setAnnotationTheme,
     setAnnotationSendEnabled,
     setAudioMuted,
+    getAllAudioMuted: audioMutationSemaphore.withPermit(Ref.get(allAudioMutedRef)),
+    setAllAudioMuted,
+    subscribeAllAudioMuted: (listener: (muted: boolean) => Effect.Effect<void>) =>
+      subscribe(audioListenersRef, listener),
     setColorScheme,
     setMainWindow,
     setForwardedShortcuts: (shortcuts: ReadonlyArray<PreviewForwardedShortcut>) =>
@@ -3583,6 +3628,11 @@ export class PreviewManager extends Context.Service<
       tabId: string,
       audioMuted: boolean,
     ) => Effect.Effect<void, PreviewManagerError>;
+    readonly getAllAudioMuted: Effect.Effect<boolean>;
+    readonly setAllAudioMuted: (muted: boolean) => Effect.Effect<void, PreviewManagerError>;
+    readonly subscribeAllAudioMuted: (
+      listener: (muted: boolean) => Effect.Effect<void>,
+    ) => Effect.Effect<void, never, Scope.Scope>;
     readonly openDevTools: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly clearCookies: (
       partitions?: ReadonlyArray<string>,
@@ -3690,6 +3740,9 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     setColorScheme: operations.setColorScheme,
     setZoomFactor: operations.setZoomFactor,
     setAudioMuted: operations.setAudioMuted,
+    getAllAudioMuted: operations.getAllAudioMuted,
+    setAllAudioMuted: operations.setAllAudioMuted,
+    subscribeAllAudioMuted: operations.subscribeAllAudioMuted,
     openDevTools: operations.openDevTools,
     clearCookies: Effect.fn("PreviewManager.clearCookies")(function* (partitions) {
       yield* browserSession

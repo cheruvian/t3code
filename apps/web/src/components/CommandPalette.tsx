@@ -66,6 +66,7 @@ import {
   SettingsIcon,
   SquarePenIcon,
   SunIcon,
+  VolumeOffIcon,
   TextSearchIcon,
 } from "lucide-react";
 import {
@@ -89,6 +90,8 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { useClientSettings } from "../hooks/useSettings";
+import { isElectron } from "~/env";
+import { toggleAllBrowsersMuted, useAllBrowsersMuted } from "~/browser/browserAudio";
 import { useTheme } from "../hooks/useTheme";
 import { useCustomThemes } from "../hooks/useCustomThemes";
 import { useEnvironmentThemeDefinitions } from "../hooks/useEnvironmentTheme";
@@ -529,6 +532,12 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           modelPickerOpen: composerHandleRef.current?.isModelPickerOpen() ?? false,
         },
       });
+      if (command === "preview.toggleMuteAll" && isElectron) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) void toggleAllBrowsersMuted();
+        return;
+      }
       if (command === "appearance.cycle") {
         event.preventDefault();
         event.stopPropagation();
@@ -715,6 +724,7 @@ function OpenCommandPaletteDialog(props: {
     setHighlightedItemValue(null);
   }
   const clientSettings = useClientSettings();
+  const allBrowsersMuted = useAllBrowsersMuted();
   const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,
   });
@@ -2180,6 +2190,18 @@ function OpenCommandPaletteDialog(props: {
     ],
   };
   actionItems.push(changeAppearanceItem);
+  if (isElectron) {
+    actionItems.push({
+      kind: "action",
+      value: "action:toggle-mute-all-browsers",
+      title: allBrowsersMuted ? "Unmute all browsers" : "Mute all browsers",
+      searchTerms: ["browser", "audio", "sound", "silence", "all", "tabs", "panels"],
+      icon: <VolumeOffIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "preview.toggleMuteAll",
+      disabled: allBrowsersMuted === null,
+      run: toggleAllBrowsersMuted,
+    });
+  }
 
   useLayoutEffect(() => {
     if (openIntent?.kind !== "change-theme") return;
