@@ -20,6 +20,7 @@ interface Options {
   /** Replaces a failed launch's error with the host setup it is missing, if any. */
   readonly diagnose?: (executable: string, cause: unknown) => Promise<unknown>;
   readonly env?: NodeJS.ProcessEnv;
+  readonly hostPlatform: NodeJS.Platform;
   readonly onContextClose?: (context: BrowserContext) => void;
 }
 
@@ -39,10 +40,12 @@ export class ServerBrowserContexts {
   private async launchOptions() {
     const executablePath = await this.options.executable();
     const env = this.options.env ?? process.env;
+    // Let macOS select its GPU driver; headless otherwise forces SwiftShader.
+    const gpu = this.options.hostPlatform === "darwin" ? "--enable-gpu" : "--disable-gpu";
     return {
       executablePath,
       env,
-      args: ["--disable-gpu", "--force-device-scale-factor=2"],
+      args: [gpu, "--force-device-scale-factor=2"],
       headless: true,
       // Only an explicit operator opt-out disables sandboxing. Launch errors never do.
       chromiumSandbox: !sandboxDisabled(env),

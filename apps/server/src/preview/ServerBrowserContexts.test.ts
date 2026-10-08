@@ -50,6 +50,7 @@ const makeBrowser = () => {
 };
 
 const options = () => ({
+  hostPlatform: "linux" as const,
   profilesDir: "/test/profiles",
   executable: vi.fn(async () => "/test/chromium"),
   env: {},
@@ -63,6 +64,30 @@ beforeEach(() => {
 });
 
 describe("ServerBrowserContexts", () => {
+  it.each([
+    ["darwin", "--enable-gpu", "--disable-gpu"],
+    ["linux", "--disable-gpu", "--enable-gpu"],
+    ["win32", "--disable-gpu", "--enable-gpu"],
+  ] as const)(
+    "uses the %s graphics backend for isolated and persistent previews",
+    async (hostPlatform, expectedGpuFlag, otherGpuFlag) => {
+      const browser = makeBrowser();
+      launches.launch.mockResolvedValue(browser as unknown as Browser);
+      launches.persistent.mockResolvedValue(makeContext() as unknown as BrowserContext);
+      const pool = new ServerBrowserContexts({ ...options(), hostPlatform });
+      await pool.contextFor("default", "agent");
+      await pool.contextFor("default");
+      for (const launch of [
+        launches.launch.mock.calls[0]?.[0],
+        launches.persistent.mock.calls[0]?.[1],
+      ]) {
+        expect(launch?.args).toContain(expectedGpuFlag);
+        expect(launch?.args).not.toContain(otherGpuFlag);
+      }
+      await pool.close();
+    },
+  );
+
   it("lazily shares one browser across concurrent isolated sessions and reuses each context", async () => {
     const browser = makeBrowser();
     const launch = Promise.withResolvers<Browser>();

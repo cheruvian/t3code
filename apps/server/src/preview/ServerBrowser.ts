@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Playwright callbacks run outside the Effect runtime.
 // Screencasts ignore emulated device scale; real 2x keeps captures sharp.
-// --disable-gpu uses cheaper software compositing while preserving SwiftShader WebGL.
 import {
   FILL_PREVIEW_VIEWPORT,
   INCOGNITO_BROWSER_PROFILE_ID,
@@ -36,7 +35,7 @@ import {
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   type PreviewAppearancePreference,
 } from "@t3tools/contracts";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
 import { resolvePreviewViewport } from "@t3tools/shared/previewViewport";
 import * as NodeCrypto from "node:crypto";
@@ -435,6 +434,7 @@ const CLIPBOARD_SCRIPT = `(() => {
 
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
+  const hostPlatform = yield* HostProcessPlatform;
   const manager = yield* PreviewManager.PreviewManager;
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
   const environment = yield* ServerEnvironment.ServerEnvironment;
@@ -457,6 +457,7 @@ const make = Effect.gen(function* () {
   let viewerResizeOrder = 0;
 
   const contexts = new ServerBrowserContexts({
+    hostPlatform,
     profilesDir: NodePath.join(config.stateDir, "server-browser", "profiles"),
     executable: () => Effect.runPromise(previewBrowser.executable),
     // Playwright's launch error drops Chrome's own output; its sandbox note survives.
