@@ -660,9 +660,25 @@ export const make = Effect.gen(function* () {
         worktreePath,
         Effect.gen(function* () {
           const latest = yield* readThreads();
-          const owners = latest.threads.filter(
-            (entry) =>
-              entry.worktreePath !== null && path.resolve(entry.worktreePath) === worktreePath,
+          const realWorktreePath = yield* fs.realPath(worktreePath);
+          const canonicalPath = (cwd: string) =>
+            fs.realPath(cwd).pipe(Effect.orElseSucceed(() => path.resolve(cwd)));
+          const owners = yield* Effect.filter(latest.threads, (entry) =>
+            entry.worktreePath === null
+              ? Effect.succeed(false)
+              : canonicalPath(entry.worktreePath).pipe(
+                  Effect.map((cwd) => cwd === realWorktreePath),
+                ),
+          );
+          const terminalPaths = yield* Effect.forEach(
+            [...liveTerminals.values()].flatMap((entries) =>
+              [...entries.values()].flatMap((terminal) =>
+                terminal.status === "starting" || terminal.status === "running"
+                  ? [terminal.cwd, ...(terminal.worktreePath ? [terminal.worktreePath] : [])]
+                  : [],
+              ),
+            ),
+            canonicalPath,
           );
           const current = owners[0];
           const now = yield* Clock.currentTimeMillis;
@@ -671,15 +687,19 @@ export const make = Effect.gen(function* () {
             current?.id !== input.threadId ||
             current.settledAt === null ||
             !storageCleanupThreadIdle(current, now) ||
-            hasTerminal(worktreePath) ||
+            terminalPaths.some(
+              (cwd) => cwd === realWorktreePath || inside(realWorktreePath, cwd),
+            ) ||
             (yield* containsProjectRoot(worktreePath, latest.projects))
           )
             return false;
           const root = yield* fs.realPath(config.worktreesDir);
+          const realParent = yield* fs.realPath(path.dirname(worktreePath));
           if (
-            !inside(root, worktreePath) ||
+            !inside(root, realWorktreePath) ||
             !(yield* fs.exists(worktreePath)) ||
-            (yield* fs.realPath(worktreePath)) !== worktreePath ||
+            // Linked parents are supported; a linked worktree directory is not.
+            realWorktreePath !== path.join(realParent, path.basename(worktreePath)) ||
             (yield* fs.stat(path.join(worktreePath, ".git"))).type !== "File"
           )
             return false;
@@ -690,12 +710,10 @@ export const make = Effect.gen(function* () {
           const sessions = yield* Effect.forEach(sessionRows, (row) =>
             decodeCleanupSession(row.payload_json),
           );
-          if (
-            sessions.some((session) => {
-              const cwd = path.resolve(session.cwd);
-              return cwd === worktreePath || inside(worktreePath, cwd);
-            })
-          )
+          const sessionPaths = yield* Effect.forEach(sessions, (session) =>
+            canonicalPath(session.cwd),
+          );
+          if (sessionPaths.some((cwd) => cwd === realWorktreePath || inside(realWorktreePath, cwd)))
             return false;
           const status = yield* git.statusDetailsLocal(worktreePath);
           const filesMatch =

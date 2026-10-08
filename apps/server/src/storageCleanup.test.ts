@@ -2,14 +2,19 @@
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import {
+  OrchestrationV2ProviderSessionJson,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
+  ProviderSessionId,
   RunId,
   RuntimeRequestId,
   ThreadId,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 import {
   storageCleanupActivityAt,
   storageCleanupPullRequestMerged,
@@ -32,9 +37,13 @@ import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { layerMemory } from "./persistence/Sqlite.ts";
+import { CodexProviderCapabilitiesV2 } from "./orchestration-v2/Adapters/CodexAdapterV2.ts";
 
 const NOW_MS = Date.parse("2026-06-10T12:00:00.000Z");
 const DAY_MS = 24 * 60 * 60 * 1_000;
+const encodeCleanupSession = Schema.encodeEffect(
+  Schema.fromJsonString(OrchestrationV2ProviderSessionJson),
+);
 
 function at(offsetMs: number): DateTime.Utc {
   return DateTime.makeUnsafe(NOW_MS + offsetMs);
@@ -217,7 +226,16 @@ describe("merged pull request cleanup", () => {
 });
 
 describe("confirmed worktree removal", () => {
-  it.effect.each(["delete", "shared", "changed", "active"] as const)(
+  it.effect.each([
+    "delete",
+    "linked-parent",
+    "linked-parent-shared",
+    "linked-session",
+    "linked-worktree",
+    "shared",
+    "changed",
+    "active",
+  ] as const)(
     "%s: honors a clean preview while retaining shared, changed, and active worktrees",
     (scenario) =>
       Effect.scoped(
@@ -243,12 +261,29 @@ describe("confirmed worktree removal", () => {
             "initial",
           );
           git("worktree", "add", "-b", "feature", worktree);
+          const linkedBaseDir = `${baseDir}/linked`;
+          if (
+            scenario === "linked-parent" ||
+            scenario === "linked-parent-shared" ||
+            scenario === "linked-session"
+          ) {
+            yield* fs.symlink(baseDir, linkedBaseDir);
+          }
+          if (scenario === "linked-worktree") {
+            yield* fs.symlink(worktree, `${baseDir}/worktrees/linked-feature`);
+          }
+          const threadWorktree =
+            scenario === "linked-parent" || scenario === "linked-parent-shared"
+              ? `${linkedBaseDir}/worktrees/feature`
+              : scenario === "linked-worktree"
+                ? `${baseDir}/worktrees/linked-feature`
+                : worktree;
           yield* fs.writeFileString(`${worktree}/.env`, "LOCAL_CONFIG=fixture\n");
           if (scenario === "changed")
             yield* fs.writeFileString(`${worktree}/new.txt`, "new work\n");
           const thread = shell({
             branch: "feature",
-            worktreePath: worktree,
+            worktreePath: threadWorktree,
             settledAt: at(-1000),
             ...(scenario === "active"
               ? { status: "running", activeRunId: RunId.make("active") }
@@ -278,8 +313,11 @@ describe("confirmed worktree removal", () => {
                   threads:
                     options?.location === "archive"
                       ? []
-                      : scenario === "shared"
-                        ? [thread, { ...thread, id: ThreadId.make("other") }]
+                      : scenario === "shared" || scenario === "linked-parent-shared"
+                        ? [
+                            thread,
+                            { ...thread, id: ThreadId.make("other"), worktreePath: worktree },
+                          ]
                         : [thread],
                 }),
             }),
@@ -289,19 +327,48 @@ describe("confirmed worktree removal", () => {
             GitVcsDriver.layer.pipe(Layer.provide(VcsProcess.layer)),
             layerMemory,
           ).pipe(
-            Layer.provideMerge(ServerConfig.layerTest(baseDir, baseDir)),
+            Layer.provideMerge(
+              ServerConfig.layerTest(
+                scenario === "linked-parent" || scenario === "linked-parent-shared"
+                  ? linkedBaseDir
+                  : baseDir,
+                baseDir,
+              ),
+            ),
             Layer.provide(NodeServices.layer),
           );
           const removed = yield* Effect.gen(function* () {
             const cleanup = yield* make;
+            if (scenario === "linked-session") {
+              const sql = yield* SqlClient.SqlClient;
+              const payload = yield* encodeCleanupSession({
+                id: ProviderSessionId.make("live-session"),
+                driver: ProviderDriverKind.make("codex"),
+                providerInstanceId: thread.providerInstanceId,
+                status: "ready",
+                cwd: `${linkedBaseDir}/worktrees/feature`,
+                model: null,
+                capabilities: CodexProviderCapabilitiesV2,
+                createdAt: at(-1000),
+                updatedAt: at(-1000),
+                lastError: null,
+              });
+              yield* sql`
+                INSERT INTO orchestration_v2_projection_provider_sessions
+                  (provider_session_id, thread_id, provider, status, updated_at, payload_json)
+                VALUES ('live-session', ${thread.id}, 'codex', 'ready',
+                  '2026-06-10T11:59:59.000Z', ${payload})
+              `;
+            }
             return yield* cleanup.removeConfirmedWorktree({
               threadId: thread.id,
               expectedRefName: "feature",
               expectedFiles: [],
             });
           }).pipe(Effect.provide(dependencies));
-          expect(removed).toBe(scenario === "delete");
-          expect(yield* fs.exists(`${worktree}/.env`)).toBe(scenario !== "delete");
+          const shouldRemove = scenario === "delete" || scenario === "linked-parent";
+          expect(removed).toBe(shouldRemove);
+          expect(yield* fs.exists(`${worktree}/.env`)).toBe(!shouldRemove);
           expect(git("branch", "--list", "feature")).toContain("feature");
         }).pipe(Effect.provide(NodeServices.layer)),
       ),
