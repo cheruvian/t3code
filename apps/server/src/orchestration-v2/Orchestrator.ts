@@ -3419,6 +3419,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 // detach reasons keep them so a re-attaching provider process
                 // stays authorized.
                 ...(command.type === "thread.archive" ? { revokeMcpCredential: true } : {}),
+                ...(command.type === "thread.settle" ? { releaseIfUnused: true } : {}),
               },
             } satisfies PendingOrchestrationEffectV2;
             yield* Ref.update(effects, (existing) => [...existing, pendingEffect]);

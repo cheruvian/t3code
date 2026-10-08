@@ -2,6 +2,7 @@ import * as NetAddress from "effect/net/NetAddress";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
+  CommandId,
   EnvironmentId,
   type ModelSelection,
   type OrchestrationV2AppThread,
@@ -13,7 +14,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
-  type ProviderSessionId,
+  ProviderSessionId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -58,6 +59,9 @@ import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import * as Orchestrator from "./Orchestrator.ts";
+import * as EffectWorker from "./EffectWorker.ts";
+import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 
 const layerTestDatabase = SqlitePersistence.layerMemory;
 const layerTestStores = Layer.mergeAll(
@@ -2580,6 +2584,148 @@ it.effect("ProviderSessionManagerV2 terminal detach revokes the thread's MCP cre
     });
 
     yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1_000, mcpConfigs })));
+  }),
+);
+
+it.effect.each(["unused", "shared"] as const)(
+  "settling stops an unused shared Codex runtime immediately: %s",
+  (scenario) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const test = Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const providerSessionId = ProviderSessionId.make(`settle-session:${scenario}`);
+        const threadId = ThreadId.make(`settle-session:${scenario}:a`);
+        const otherThreadId = ThreadId.make(`settle-session:${scenario}:b`);
+        for (const id of [threadId, otherThreadId]) {
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make(`create:${id}`),
+            threadId: id,
+            projectId: ProjectId.make(`settle-session:${scenario}`),
+            title: "Settle idle Codex",
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            createdBy: "user",
+            creationSource: "web",
+          });
+        }
+        const open = (id: ThreadId) =>
+          manager.open({ threadId: id, providerSessionId, modelSelection, runtimePolicy });
+        yield* open(threadId);
+        if (scenario === "shared") yield* open(otherThreadId);
+        assert.equal((yield* Ref.get(state)).openCount, 1);
+
+        yield* orchestrator.dispatch({
+          type: "thread.settle",
+          commandId: CommandId.make(`settle:${threadId}`),
+          threadId,
+        });
+        yield* worker.drain();
+        assert.isTrue(
+          Option.isSome(yield* manager.get(providerSessionId)) === (scenario === "shared"),
+        );
+        const settled = yield* orchestrator.getThreadProjection(threadId);
+        assert.isNotNull(settled.thread.settledAt);
+        assert.deepEqual(settled.providerSessions, []);
+        assert.equal((yield* Ref.get(state)).closeCount, scenario === "shared" ? 0 : 1);
+
+        if (scenario === "shared") {
+          yield* orchestrator.dispatch({
+            type: "thread.settle",
+            commandId: CommandId.make(`settle:${otherThreadId}`),
+            threadId: otherThreadId,
+          });
+          yield* worker.drain();
+          assert.isTrue(Option.isNone(yield* manager.get(providerSessionId)));
+          assert.equal((yield* Ref.get(state)).closeCount, 1);
+        }
+        yield* orchestrator.dispatch({
+          type: "thread.unsettle",
+          commandId: CommandId.make(`unsettle:${threadId}`),
+          threadId,
+          reason: "user",
+        });
+        yield* open(threadId);
+        assert.equal((yield* Ref.get(state)).openCount, 2);
+        assert.isTrue(Option.isSome(yield* manager.get(providerSessionId)));
+      });
+      yield* test.pipe(
+        Effect.provide(
+          ProviderReplayHarness.layerWithRegistry(
+            { name: `settle-unused-codex-${scenario}` },
+            ProviderAdapterRegistry.layerFromAdapters([makeProviderAdapter(state)]),
+          ),
+        ),
+      );
+    }),
+);
+
+it.effect("ProviderSessionManagerV2 keeps a runtime attached during settle's unload", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const unloading = yield* Deferred.make<void>();
+    const continueUnload = yield* Deferred.make<void>();
+    const test = Effect.gen(function* () {
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const events = yield* EventSink.EventSinkV2;
+      const allocator = yield* IdAllocator.IdAllocatorV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("settle-unload:first");
+      const otherThreadId = ThreadId.make("settle-unload:other");
+      const providerSessionId = ProviderSessionId.make("settle-unload:session");
+      const providerThread = makeProviderThread({
+        idAllocator: allocator,
+        threadId,
+        providerSessionId,
+        now,
+      });
+      yield* events.write({
+        events: [
+          yield* makeThreadCreatedEvent({ idAllocator: allocator, threadId, now }),
+          yield* makeThreadCreatedEvent({ idAllocator: allocator, threadId: otherThreadId, now }),
+          {
+            id: yield* allocator.allocate.event({ threadId }),
+            type: "provider-thread.updated",
+            threadId,
+            driver: CODEX_DRIVER,
+            occurredAt: now,
+            payload: providerThread,
+          },
+        ],
+      });
+      const open = (id: ThreadId) =>
+        manager.open({ threadId: id, providerSessionId, modelSelection, runtimePolicy });
+      const runtime = yield* open(threadId);
+      const detach = yield* manager
+        .detach({ providerSessionId, threadId, releaseIfUnused: true })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(unloading);
+      // A different thread attaches while the adapter unload is still in flight.
+      assert.strictEqual(yield* open(otherThreadId), runtime);
+      yield* Deferred.succeed(continueUnload, undefined);
+      yield* Fiber.join(detach);
+      assert.equal((yield* Ref.get(state)).closeCount, 0);
+      assert.isTrue(Option.isSome(yield* manager.get(providerSessionId)));
+      yield* manager.detach({ providerSessionId, threadId: otherThreadId, releaseIfUnused: true });
+      assert.equal((yield* Ref.get(state)).closeCount, 1);
+    });
+    yield* test.pipe(
+      Effect.provide(
+        layerTest({
+          state,
+          idleTimeoutMs: 60_000,
+          beforeUnload: Deferred.succeed(unloading, undefined).pipe(
+            Effect.andThen(Deferred.await(continueUnload)),
+          ),
+        }),
+      ),
+    );
   }),
 );
 

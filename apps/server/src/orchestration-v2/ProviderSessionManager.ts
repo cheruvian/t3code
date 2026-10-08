@@ -191,6 +191,8 @@ export interface ProviderSessionManagerV2Shape {
      * potential re-attach.
      */
     readonly revokeMcpCredential?: boolean;
+    /** Settling releases an unused shared runtime instead of waiting for idle expiry. */
+    readonly releaseIfUnused?: boolean;
   }) => Effect.Effect<void, ProviderSessionManagerV2Error>;
 }
 
@@ -864,6 +866,7 @@ export const layerWithOptions = (
       const removeLiveEntry = (input: {
         readonly providerSessionId: ProviderSessionId;
         readonly onlyIfIdleGeneration?: number;
+        readonly onlyIfUnusedRuntime?: ProviderAdapterV2SessionRuntime;
       }): Effect.Effect<readonly [Option.Option<LiveSessionEntry>, DateTime.Utc]> =>
         Effect.gen(function* () {
           const key = sessionKey(input.providerSessionId);
@@ -876,6 +879,14 @@ export const layerWithOptions = (
               const existing = current.get(key);
               if (existing !== candidate) {
                 return [existing === undefined ? "gone" : "changed", current] as const;
+              }
+              if (
+                input.onlyIfUnusedRuntime !== undefined &&
+                (existing.runtime !== input.onlyIfUnusedRuntime ||
+                  existing.attachedThreadIds.size > 0 ||
+                  existing.busyTurns.size > 0)
+              ) {
+                return ["kept", current] as const;
               }
               if (
                 input.onlyIfIdleGeneration !== undefined &&
@@ -944,6 +955,7 @@ export const layerWithOptions = (
         readonly detail?: string;
         readonly cancelIdleFiber?: boolean;
         readonly onlyIfIdleGeneration?: number;
+        readonly onlyIfUnusedRuntime?: ProviderAdapterV2SessionRuntime;
         readonly gracefulSubscribers?: boolean;
       }) =>
         Effect.acquireUseRelease(
@@ -2439,6 +2451,16 @@ export const layerWithOptions = (
                   );
                 }),
               );
+            }
+            if (input.releaseIfUnused === true) {
+              yield* releaseEntry({
+                providerSessionId: input.providerSessionId,
+                reason: "manual_shutdown",
+                ...(input.detail === undefined ? {} : { detail: input.detail }),
+                // Revalidate after unloading: another thread can attach or a
+                // replacement runtime can open while the adapter yields.
+                onlyIfUnusedRuntime: detached.value.runtime,
+              });
             }
             yield* scheduleIdleRelease(input.providerSessionId);
           }).pipe(

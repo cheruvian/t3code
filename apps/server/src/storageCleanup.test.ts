@@ -2,6 +2,7 @@
 import { describe, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import {
+  DEFAULT_SERVER_SETTINGS,
   OrchestrationV2ProviderSessionJson,
   ProjectId,
   ProviderDriverKind,
@@ -38,6 +39,7 @@ import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { layerMemory } from "./persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./orchestration-v2/Adapters/CodexAdapterV2.ts";
+import { ClaudeProviderCapabilitiesV2 } from "./orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 
 const NOW_MS = Date.parse("2026-06-10T12:00:00.000Z");
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -225,12 +227,16 @@ describe("merged pull request cleanup", () => {
   });
 });
 
-describe("confirmed worktree removal", () => {
+describe.each(["confirmed", "settled"] as const)("%s worktree removal", (mode) => {
   it.effect.each([
     "delete",
     "linked-parent",
     "linked-parent-shared",
     "linked-session",
+    "stale-shared-session",
+    "attached-shared-session",
+    "nested-shared-session",
+    "dedicated-session",
     "linked-worktree",
     "shared",
     "changed",
@@ -249,6 +255,7 @@ describe("confirmed worktree removal", () => {
           const git = (...args: string[]) =>
             NodeChildProcess.execFileSync("git", args, { cwd: repo, stdio: "pipe" }).toString();
           git("init");
+          git("remote", "add", "origin", repo);
           yield* fs.writeFileString(`${repo}/.gitignore`, ".env\n");
           git("add", ".gitignore");
           git(
@@ -278,7 +285,8 @@ describe("confirmed worktree removal", () => {
               : scenario === "linked-worktree"
                 ? `${baseDir}/worktrees/linked-feature`
                 : worktree;
-          yield* fs.writeFileString(`${worktree}/.env`, "LOCAL_CONFIG=fixture\n");
+          if (mode === "confirmed")
+            yield* fs.writeFileString(`${worktree}/.env`, "LOCAL_CONFIG=fixture\n");
           if (scenario === "changed")
             yield* fs.writeFileString(`${worktree}/new.txt`, "new work\n");
           const thread = shell({
@@ -289,6 +297,11 @@ describe("confirmed worktree removal", () => {
               ? { status: "running", activeRunId: RunId.make("active") }
               : {}),
           });
+          const otherThread = shell({
+            id: ThreadId.make("other"),
+            worktreePath: scenario === "nested-shared-session" ? `${worktree}/nested` : null,
+          });
+          if (scenario === "nested-shared-session") yield* fs.makeDirectory(`${worktree}/nested`);
           const project = {
             id: thread.projectId,
             title: "Fixture",
@@ -300,7 +313,9 @@ describe("confirmed worktree removal", () => {
             updatedAt: "2026-01-01T00:00:00.000Z",
           };
           const dependencies = Layer.mergeAll(
-            Layer.mock(Settings.ServerSettingsService)({}),
+            Layer.mock(Settings.ServerSettingsService)({
+              getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+            }),
             Layer.mock(ProjectStore.ProjectStoreV2)({
               listShells: () => Effect.succeed([project]),
             }),
@@ -318,7 +333,10 @@ describe("confirmed worktree removal", () => {
                             thread,
                             { ...thread, id: ThreadId.make("other"), worktreePath: worktree },
                           ]
-                        : [thread],
+                        : scenario === "stale-shared-session" ||
+                            scenario === "nested-shared-session"
+                          ? [thread, otherThread]
+                          : [thread],
                 }),
             }),
             Layer.mock(Orchestrator.OrchestratorV2)({}),
@@ -339,16 +357,30 @@ describe("confirmed worktree removal", () => {
           );
           const removed = yield* Effect.gen(function* () {
             const cleanup = yield* make;
-            if (scenario === "linked-session") {
+            if (
+              scenario === "linked-session" ||
+              scenario === "stale-shared-session" ||
+              scenario === "attached-shared-session" ||
+              scenario === "nested-shared-session" ||
+              scenario === "dedicated-session"
+            ) {
               const sql = yield* SqlClient.SqlClient;
               const payload = yield* encodeCleanupSession({
                 id: ProviderSessionId.make("live-session"),
-                driver: ProviderDriverKind.make("codex"),
+                driver: ProviderDriverKind.make(
+                  scenario === "dedicated-session" || scenario === "linked-session"
+                    ? "claudeAgent"
+                    : "codex",
+                ),
                 providerInstanceId: thread.providerInstanceId,
                 status: "ready",
-                cwd: `${linkedBaseDir}/worktrees/feature`,
+                cwd:
+                  scenario === "linked-session" ? `${linkedBaseDir}/worktrees/feature` : worktree,
                 model: null,
-                capabilities: CodexProviderCapabilitiesV2,
+                capabilities:
+                  scenario === "dedicated-session" || scenario === "linked-session"
+                    ? ClaudeProviderCapabilitiesV2
+                    : CodexProviderCapabilitiesV2,
                 createdAt: at(-1000),
                 updatedAt: at(-1000),
                 lastError: null,
@@ -356,9 +388,43 @@ describe("confirmed worktree removal", () => {
               yield* sql`
                 INSERT INTO orchestration_v2_projection_provider_sessions
                   (provider_session_id, thread_id, provider, status, updated_at, payload_json)
-                VALUES ('live-session', ${thread.id}, 'codex', 'ready',
+                VALUES ('live-session', ${otherThread.id}, 'codex', 'ready',
                   '2026-06-10T11:59:59.000Z', ${payload})
               `;
+              if (scenario !== "dedicated-session" && scenario !== "linked-session") {
+                const boundThreadId =
+                  scenario === "stale-shared-session" || scenario === "nested-shared-session"
+                    ? otherThread.id
+                    : thread.id;
+                yield* sql`
+                  INSERT INTO orchestration_v2_projection_provider_session_bindings
+                    (provider_session_id, thread_id)
+                  VALUES ('live-session', ${boundThreadId})
+                `;
+                // Bindings, rather than the session row's most recent thread,
+                // identify every workspace still attached to a shared runtime.
+                for (const boundThread of [thread, otherThread]) {
+                  yield* sql`
+                    INSERT INTO orchestration_v2_projection_threads
+                      (thread_id, project_id, title, default_provider, runtime_mode,
+                        interaction_mode, created_at, updated_at, payload_json)
+                    VALUES (${boundThread.id}, ${boundThread.projectId}, ${boundThread.title},
+                      'codex', 'full-access', 'default', '2026-06-10T11:59:59.000Z',
+                      '2026-06-10T11:59:59.000Z',
+                      ${JSON.stringify({ worktreePath: boundThread.worktreePath })})
+                  `;
+                }
+                yield* sql`
+                  INSERT INTO projection_projects
+                    (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+                  VALUES (${project.id}, ${project.title}, ${repo},
+                    '[]', '2026-06-10T11:59:59.000Z', '2026-06-10T11:59:59.000Z')
+                `;
+              }
+            }
+            if (mode === "settled") {
+              const paths = yield* cleanup.removeSettledWorktrees("pushed");
+              return paths.length > 0;
             }
             return yield* cleanup.removeConfirmedWorktree({
               threadId: thread.id,
@@ -366,9 +432,14 @@ describe("confirmed worktree removal", () => {
               expectedFiles: [],
             });
           }).pipe(Effect.provide(dependencies));
-          const shouldRemove = scenario === "delete" || scenario === "linked-parent";
+          const shouldRemove =
+            scenario === "delete" ||
+            scenario === "linked-parent" ||
+            scenario === "stale-shared-session";
           expect(removed).toBe(shouldRemove);
-          expect(yield* fs.exists(`${worktree}/.env`)).toBe(!shouldRemove);
+          expect(yield* fs.exists(worktree)).toBe(!shouldRemove);
+          if (mode === "confirmed")
+            expect(yield* fs.exists(`${worktree}/.env`)).toBe(!shouldRemove);
           expect(git("branch", "--list", "feature")).toContain("feature");
         }).pipe(Effect.provide(NodeServices.layer)),
       ),

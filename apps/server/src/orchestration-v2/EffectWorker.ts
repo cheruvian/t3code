@@ -138,6 +138,9 @@ export const layerExecutor: Layer.Layer<
                 ...(effect.request.revokeMcpCredential === undefined
                   ? {}
                   : { revokeMcpCredential: effect.request.revokeMcpCredential }),
+                ...(effect.request.releaseIfUnused === undefined
+                  ? {}
+                  : { releaseIfUnused: effect.request.releaseIfUnused }),
               })
               .pipe(
                 Effect.mapError(

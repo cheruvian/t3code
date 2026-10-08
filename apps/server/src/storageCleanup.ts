@@ -185,6 +185,8 @@ export const make = Effect.gen(function* () {
       !path.isAbsolute(relative)
     );
   };
+  const canonicalPath = (cwd: string) =>
+    fs.realPath(cwd).pipe(Effect.orElseSucceed(() => path.resolve(cwd)));
   const hasTerminal = (worktreePath: string) =>
     [...liveTerminals.values()]
       .flatMap((entries) => [...entries.values()])
@@ -205,6 +207,35 @@ export const make = Effect.gen(function* () {
     const projects = yield* projectStore.listShells();
     return { projects, threads: [...active.threads, ...archived.threads] };
   });
+
+  const readSessionWorkspacePaths = Effect.fn("StorageCleanup.readSessionWorkspacePaths")(
+    function* () {
+      const rows = yield* sql<{ payload_json: string; boundCwd: string | null }>`
+        SELECT session.payload_json,
+          COALESCE(json_extract(thread.payload_json, '$.worktreePath'), project.workspace_root)
+            AS "boundCwd"
+        FROM orchestration_v2_projection_provider_sessions AS session
+        LEFT JOIN orchestration_v2_projection_provider_session_bindings AS binding
+          ON binding.provider_session_id = session.provider_session_id
+        LEFT JOIN orchestration_v2_projection_threads AS thread
+          ON thread.thread_id = binding.thread_id
+        LEFT JOIN projection_projects AS project ON project.project_id = thread.project_id
+        WHERE session.status != 'stopped'
+      `;
+      const paths = yield* Effect.forEach(rows, (row) =>
+        Effect.gen(function* () {
+          const session = yield* decodeCleanupSession(row.payload_json);
+          // A shared runtime's startup cwd does not describe its current use.
+          // Each attached thread supplies its own workspace for provider turns.
+          const cwd = session.capabilities.sessions.supportsMultipleProviderThreadsPerSession
+            ? row.boundCwd
+            : session.cwd;
+          return cwd === null ? null : yield* canonicalPath(cwd);
+        }),
+      );
+      return paths.filter((cwd) => cwd !== null);
+    },
+  );
 
   // Local threads under another project need not have a worktreePath of their own.
   const containsProjectRoot = Effect.fn("StorageCleanup.containsProjectRoot")(function* (
@@ -425,9 +456,10 @@ export const make = Effect.gen(function* () {
         // thread sharing this path cancels the removal.
         const latestSnapshot = yield* readThreads();
         if (yield* containsProjectRoot(worktreePath, [project, ...latestSnapshot.projects])) return;
-        const latest = latestSnapshot.threads.filter(
-          (entry) =>
-            entry.worktreePath !== null && path.resolve(entry.worktreePath) === worktreePath,
+        const latest = yield* Effect.filter(latestSnapshot.threads, (entry) =>
+          entry.worktreePath === null
+            ? Effect.succeed(false)
+            : canonicalPath(entry.worktreePath).pipe(Effect.map((cwd) => cwd === realPath)),
         );
         if (hasTerminal(worktreePath)) return;
         if (deleted) {
@@ -451,21 +483,8 @@ export const make = Effect.gen(function* () {
           storageCleanupActivityAt(latest[0]!) !== storageCleanupActivityAt(thread)
         )
           return;
-        // Sessions can outlive their run and can be shared across app threads.
-        const sessionRows = yield* sql<{ payload_json: string }>`
-          SELECT payload_json FROM orchestration_v2_projection_provider_sessions
-          WHERE status != 'stopped'
-        `;
-        const sessions = yield* Effect.forEach(sessionRows, (row) =>
-          decodeCleanupSession(row.payload_json),
-        );
-        if (
-          sessions.some((session) => {
-            const cwd = path.resolve(session.cwd);
-            return cwd === worktreePath || inside(worktreePath, cwd);
-          })
-        )
-          return;
+        const sessionPaths = yield* readSessionWorkspacePaths();
+        if (sessionPaths.some((cwd) => cwd === realPath || inside(realPath, cwd))) return;
         const finalStatus = yield* git.statusDetailsLocal(worktreePath);
         if (
           !finalStatus.isRepo ||
@@ -661,8 +680,6 @@ export const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const latest = yield* readThreads();
           const realWorktreePath = yield* fs.realPath(worktreePath);
-          const canonicalPath = (cwd: string) =>
-            fs.realPath(cwd).pipe(Effect.orElseSucceed(() => path.resolve(cwd)));
           const owners = yield* Effect.filter(latest.threads, (entry) =>
             entry.worktreePath === null
               ? Effect.succeed(false)
@@ -703,16 +720,7 @@ export const make = Effect.gen(function* () {
             (yield* fs.stat(path.join(worktreePath, ".git"))).type !== "File"
           )
             return false;
-          const sessionRows = yield* sql<{ payload_json: string }>`
-            SELECT payload_json FROM orchestration_v2_projection_provider_sessions
-            WHERE status != 'stopped'
-          `;
-          const sessions = yield* Effect.forEach(sessionRows, (row) =>
-            decodeCleanupSession(row.payload_json),
-          );
-          const sessionPaths = yield* Effect.forEach(sessions, (session) =>
-            canonicalPath(session.cwd),
-          );
+          const sessionPaths = yield* readSessionWorkspacePaths();
           if (sessionPaths.some((cwd) => cwd === realWorktreePath || inside(realWorktreePath, cwd)))
             return false;
           const status = yield* git.statusDetailsLocal(worktreePath);
