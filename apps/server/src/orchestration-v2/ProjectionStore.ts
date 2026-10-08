@@ -2782,7 +2782,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   END AS ordinal
                   FROM user_anchors
                 ), selected AS (
-                  SELECT payload_json, ordinal, turn_item_id, run_id, type
+                  SELECT ordinal, turn_item_id, run_id, type
                   FROM eligible
                   WHERE ordinal >= (SELECT ordinal FROM boundary)
                   ORDER BY ordinal DESC, turn_item_id DESC
@@ -2792,9 +2792,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     ELSE ${window.rowLimit}
                   END
                 ), retained AS (
-                  SELECT payload_json, ordinal, turn_item_id FROM selected
+                  -- Deduplicate IDs before loading tool outputs into temporary result sets.
+                  SELECT ordinal, turn_item_id FROM selected
                   UNION
-                  SELECT request.payload_json, request.ordinal, request.turn_item_id
+                  SELECT request.ordinal, request.turn_item_id
                   FROM orchestration_v2_projection_turn_items AS request
                   WHERE request.run_id IN (
                       SELECT run_id FROM selected
@@ -2802,9 +2803,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     )
                     AND request.type = 'run_interrupt_request'
                   UNION
-                  SELECT latest.payload_json, latest.ordinal, latest.turn_item_id
+                  SELECT latest.ordinal, latest.turn_item_id
                   FROM (
-                    SELECT payload_json, ordinal, turn_item_id
+                    SELECT ordinal, turn_item_id
                     FROM orchestration_v2_projection_turn_items
                     WHERE thread_id = ${threadId}
                       AND ${window.anchorItemId ?? null} IS NULL
@@ -2813,9 +2814,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     LIMIT 1
                   ) AS latest
                 )
-                SELECT payload_json
+                SELECT item.payload_json
                 FROM retained
-                ORDER BY ordinal ASC, turn_item_id ASC
+                INNER JOIN orchestration_v2_projection_turn_items AS item
+                  ON item.turn_item_id = retained.turn_item_id
+                ORDER BY retained.ordinal ASC, retained.turn_item_id ASC
               `;
         // Reuse the decoded items for cohort IDs and the resulting projection.
         // Parsing these rows separately duplicates every retained tool output.
