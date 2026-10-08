@@ -26,6 +26,8 @@ import {
   type TurnItemId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Cache from "effect/Cache";
+import * as Exit from "effect/Exit";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -317,6 +319,11 @@ export interface ThreadManagementServiceShape {
     readonly location?: "active" | "archive";
   }) => Effect.Effect<OrchestrationV2ThreadShellSnapshot, Orchestrator.OrchestratorV2Error>;
   readonly getThreadShell: Orchestrator.OrchestratorV2["Service"]["getThreadShell"];
+  /** Share committed-event shell reads across client subscriptions; ordinary reads remain fresh. */
+  readonly getThreadShellForEvent: (input: {
+    readonly threadId: ThreadId;
+    readonly sequence: number;
+  }) => ReturnType<Orchestrator.OrchestratorV2["Service"]["getThreadShell"]>;
   readonly listProjectThreads: (input: {
     readonly projectId: ProjectId;
     readonly includeSubagents: boolean;
@@ -406,6 +413,16 @@ function latestSteerableRun(
 const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
+  const eventShells = yield* Cache.makeWith(
+    (key: string) => {
+      const [threadId] = JSON.parse(key) as [ThreadId, number];
+      return orchestrator.getThreadShell(threadId);
+    },
+    {
+      capacity: 512,
+      timeToLive: (exit) => (Exit.isFailure(exit) ? Duration.zero : Duration.seconds(1)),
+    },
+  );
 
   const ensureLegacyTranscript = Effect.fn(
     "orchestrationV2.threadManagement.ensureLegacyTranscript",
@@ -834,6 +851,8 @@ const make = Effect.gen(function* () {
     getProjectThread,
     getShellSnapshot: orchestrator.getShellSnapshot,
     getThreadShell: orchestrator.getThreadShell,
+    getThreadShellForEvent: ({ threadId, sequence }) =>
+      Cache.get(eventShells, JSON.stringify([threadId, sequence])),
     listProjectThreads,
     sendToThread,
     waitForThread,

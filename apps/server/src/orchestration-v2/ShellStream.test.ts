@@ -6,16 +6,27 @@ import type {
   OrchestrationV2StoredEvent,
   OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
-import { ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_PERFORMANCE_SETTINGS,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as Ref from "effect/Ref";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
 
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
+  batchShellApplicationEvents,
+  isTranscriptOnlyShellEvent,
   coalesceShellApplicationEvents,
   coalesceStoredThreadEvents,
   composeShellStreamWithEnrichment,
@@ -90,6 +101,133 @@ describe("coalesceShellApplicationEvents", () => {
         project(6, "project-a"),
       ]).map((event) => event.sequence),
     ).toEqual([4, 5, 6]);
+  });
+});
+
+describe("batchShellApplicationEvents", () => {
+  it.effect("uses updated timing for new windows while preserving a pending deadline", () =>
+    Effect.gen(function* () {
+      const settings = yield* Ref.make({
+        ...DEFAULT_PERFORMANCE_SETTINGS,
+        shellStateBatchMs: 10,
+        shellTextBatchMs: 100,
+      });
+      const input = yield* Queue.unbounded<{ sequence: number; transcriptOnly: boolean }>();
+      const output = yield* Queue.unbounded<ReadonlyArray<number>>();
+      yield* Stream.fromQueue(input).pipe(
+        (stream) => batchShellApplicationEvents(stream, Ref.get(settings)),
+        Stream.runForEach((batch) =>
+          Queue.offer(
+            output,
+            batch.map((event) => event.sequence),
+          ),
+        ),
+        Effect.forkScoped,
+      );
+      yield* Queue.offer(input, { sequence: 1, transcriptOnly: true });
+      yield* TestClock.adjust("30 millis");
+      yield* Ref.set(settings, {
+        ...DEFAULT_PERFORMANCE_SETTINGS,
+        shellStateBatchMs: 20,
+        shellTextBatchMs: 300,
+      });
+      const first = yield* Queue.take(output).pipe(Effect.forkScoped);
+      yield* TestClock.adjust("69 millis");
+      expect(first.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("1 milli");
+      expect(yield* Fiber.join(first)).toEqual([1]);
+      yield* Queue.offer(input, { sequence: 2, transcriptOnly: true });
+      const second = yield* Queue.take(output).pipe(Effect.forkScoped);
+      yield* TestClock.adjust("299 millis");
+      expect(second.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("1 milli");
+      expect(yield* Fiber.join(second)).toEqual([2]);
+    }),
+  );
+  it.effect("flushes pending text from every thread before an urgent state change", () =>
+    Effect.gen(function* () {
+      const input = yield* Queue.unbounded<{ sequence: number; transcriptOnly: boolean }>();
+      const output = yield* Queue.unbounded<ReadonlyArray<number>>();
+      yield* Stream.fromQueue(input).pipe(
+        batchShellApplicationEvents,
+        Stream.runForEach((batch) =>
+          Queue.offer(
+            output,
+            batch.map((event) => event.sequence),
+          ),
+        ),
+        Effect.forkScoped,
+      );
+      yield* Queue.offerAll(input, [
+        { sequence: 1, transcriptOnly: true },
+        { sequence: 2, transcriptOnly: true },
+        { sequence: 3, transcriptOnly: false },
+      ]);
+      yield* TestClock.adjust("50 millis");
+      expect(yield* Queue.take(output)).toEqual([1, 2, 3]);
+    }),
+  );
+
+  it.effect("bounds a text-only window to 250ms without waiting for completion", () =>
+    Effect.gen(function* () {
+      const pulled = yield* Deferred.make<void>();
+      const input = yield* Queue.unbounded<{ sequence: number; transcriptOnly: boolean }>();
+      const fiber = yield* Stream.fromQueue(input).pipe(
+        Stream.tap(() => Deferred.succeed(pulled, undefined)),
+        batchShellApplicationEvents,
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* Queue.offer(input, { sequence: 1, transcriptOnly: true });
+      yield* Deferred.await(pulled);
+      yield* TestClock.adjust("100 millis");
+      yield* Queue.offer(input, { sequence: 2, transcriptOnly: true });
+      yield* TestClock.adjust("149 millis");
+      expect(fiber.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("1 milli");
+      expect(yield* Fiber.join(fiber)).toEqual([
+        [
+          { sequence: 1, transcriptOnly: true },
+          { sequence: 2, transcriptOnly: true },
+        ],
+      ]);
+    }),
+  );
+
+  it.effect("bounds retained batches and drains finite replay without dropping events", () =>
+    Effect.gen(function* () {
+      const events = Array.from({ length: 1025 }, (_, sequence) => ({
+        sequence,
+        transcriptOnly: true,
+      }));
+      const batches = yield* Stream.fromIterable(events).pipe(
+        batchShellApplicationEvents,
+        Stream.runCollect,
+      );
+      expect(batches.map((batch) => batch.length)).toEqual([512, 512, 1]);
+      expect(batches.flat()).toEqual(events);
+    }),
+  );
+
+  it("keeps input, failures, item completion and thread membership changes urgent", () => {
+    for (const event of [
+      { type: "message.updated", payload: { role: "user", streaming: false } },
+      { type: "message.updated", payload: { role: "assistant", streaming: false } },
+      { type: "turn-item.updated", payload: { type: "reasoning", status: "completed" } },
+      { type: "turn-item.updated", payload: { type: "error", status: "failed" } },
+      { type: "runtime-request.updated", payload: {} },
+      { type: "thread.archived", payload: {} },
+      { type: "thread.unarchived", payload: {} },
+      { type: "run.updated", payload: { status: "interrupted" } },
+    ])
+      expect(isTranscriptOnlyShellEvent(event as OrchestrationV2StoredEvent["event"])).toBe(false);
+    for (const event of [
+      { type: "message.updated", payload: { role: "assistant", streaming: true } },
+      { type: "turn-item.updated", payload: { type: "reasoning", status: "running" } },
+      { type: "node.updated", payload: { kind: "assistant_message", status: "running" } },
+    ])
+      expect(isTranscriptOnlyShellEvent(event as OrchestrationV2StoredEvent["event"])).toBe(true);
   });
 });
 

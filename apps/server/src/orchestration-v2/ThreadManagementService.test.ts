@@ -7,6 +7,7 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2StoredEvent,
   type OrchestrationV2ThreadProjection,
+  type OrchestrationV2ThreadShell,
   ProjectId,
   ProviderInstanceId,
   RunId,
@@ -24,6 +25,89 @@ import * as TestClock from "effect/testing/TestClock";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
+
+it.effect(
+  "shares concurrent client reads for one committed event but refreshes for newer events",
+  () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread:shared-shell");
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let reads = 0;
+      const layer = ThreadManagementService.layer.pipe(
+        Layer.provide(
+          Layer.mock(Orchestrator.OrchestratorV2)({
+            getThreadShell: () =>
+              Effect.gen(function* () {
+                reads++;
+                yield* Deferred.succeed(entered, undefined);
+                yield* Deferred.await(release);
+                return { id: threadId, title: `read-${reads}` } as OrchestrationV2ThreadShell;
+              }),
+          }),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* ThreadManagementService.ThreadManagementService;
+        const clients = yield* Effect.all(
+          [
+            service.getThreadShellForEvent({ threadId, sequence: 1 }),
+            service.getThreadShellForEvent({ threadId, sequence: 1 }),
+          ],
+          { concurrency: 2 },
+        ).pipe(Effect.forkScoped);
+        yield* Deferred.await(entered);
+        yield* Deferred.succeed(release, undefined);
+        const [web, mobile] = yield* Fiber.join(clients);
+        expect(reads).toBe(1);
+        expect(web).toBe(mobile);
+        const newer = yield* service.getThreadShellForEvent({ threadId, sequence: 2 });
+        expect(newer?.title).toBe("read-2");
+        yield* service.getThreadShell(threadId);
+        expect(reads).toBe(3);
+        yield* TestClock.adjust("1 second");
+        yield* service.getThreadShellForEvent({ threadId, sequence: 2 });
+        expect(reads).toBe(4);
+      }).pipe(Effect.provide(layer));
+    }),
+);
+
+it.effect("retries failed shell reads and does not confuse deletion with another thread", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("thread:shell-retry");
+    let reads = 0;
+    const failure = new Orchestrator.OrchestratorProjectionError({
+      threadId,
+      cause: new Error("read failed"),
+    });
+    const layer = ThreadManagementService.layer.pipe(
+      Layer.provide(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadShell: (id) =>
+            Effect.suspend(() => {
+              reads++;
+              return reads === 1
+                ? Effect.fail(failure)
+                : Effect.succeed(id === threadId ? null : ({ id } as OrchestrationV2ThreadShell));
+            }),
+        }),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ThreadManagementService.ThreadManagementService;
+      expect(
+        yield* service.getThreadShellForEvent({ threadId, sequence: 1 }).pipe(Effect.flip),
+      ).toBe(failure);
+      expect(yield* service.getThreadShellForEvent({ threadId, sequence: 1 })).toBeNull();
+      expect(yield* service.getThreadShellForEvent({ threadId, sequence: 1 })).toBeNull();
+      const other = ThreadId.make("thread:other-shell");
+      expect((yield* service.getThreadShellForEvent({ threadId: other, sequence: 1 }))?.id).toBe(
+        other,
+      );
+      expect(reads).toBe(3);
+    }).pipe(Effect.provide(layer));
+  }),
+);
 
 it("stamps authoritative provenance on commands that create threads or messages", () => {
   const command: OrchestrationV2Command = {

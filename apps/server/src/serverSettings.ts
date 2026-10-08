@@ -28,6 +28,7 @@ import {
   resolveProviderInstanceEnabled,
   ResponseStreamingMode,
   ServerSettings,
+  PerformanceSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
@@ -68,6 +69,7 @@ export { resolveSourceControlWriterModelSelection } from "@t3tools/shared/server
 const encodeServerSettings = Schema.encodeEffect(ServerSettings);
 const encodeServerSettingsJson = Schema.encodeUnknownEffect(fromJsonStringPretty(ServerSettings));
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
+const decodePerformanceSettings = Schema.decodeUnknownEffect(PerformanceSettings);
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -1219,6 +1221,11 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const current = yield* getSettingsFromCache;
         const updated = yield* update(current);
+        yield* decodePerformanceSettings(updated.performance).pipe(
+          Effect.mapError(
+            (cause) => new ServerSettingsError({ settingsPath, operation: "normalize", cause }),
+          ),
+        );
         const persisted = yield* persistProviderEnvironmentSecrets(current, updated);
         const next = yield* normalizeServerSettings(persisted.settings);
         const materialized = yield* Effect.uninterruptibleMask(() =>

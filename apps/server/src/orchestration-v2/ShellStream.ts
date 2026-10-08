@@ -7,14 +7,19 @@ import type {
   OrchestrationV2ThreadShellSnapshot,
   OrchestrationV2ShellStreamItem,
   OrchestrationV2StoredEvent,
+  PerformanceSettings,
 } from "@t3tools/contracts";
 import {
+  DEFAULT_PERFORMANCE_SETTINGS,
   OrchestrationProjectShell as ProjectShellSchema,
   OrchestrationV2ThreadShell as ThreadShellSchema,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Schedule from "effect/Schedule";
+import * as Sink from "effect/Sink";
+import * as Duration from "effect/Duration";
 import * as Stream from "effect/Stream";
 
 /** Build the regular navigation shell without duplicating the archive dataset. */
@@ -40,6 +45,7 @@ export type ShellApplicationEvent =
   | {
       readonly sequence: number;
       readonly event: Pick<OrchestrationV2StoredEvent["event"], "threadId">;
+      readonly transcriptOnly?: boolean;
     };
 
 /** Shell updates refetch an aggregate; drop transcript bodies before retaining an event. */
@@ -51,8 +57,67 @@ export function toShellApplicationEvent(stored: ApplicationStoredEvent): ShellAp
         type: stored.type,
         sequence: stored.sequence,
       }
-    : { sequence: stored.sequence, event: { threadId: stored.event.threadId } };
+    : {
+        sequence: stored.sequence,
+        event: { threadId: stored.event.threadId },
+        transcriptOnly: isTranscriptOnlyShellEvent(stored.event),
+      };
 }
+
+export function isTranscriptOnlyShellEvent(event: OrchestrationV2StoredEvent["event"]): boolean {
+  return (
+    (event.type === "message.updated" &&
+      event.payload.role === "assistant" &&
+      event.payload.streaming) ||
+    (event.type === "turn-item.updated" &&
+      (event.payload.type === "assistant_message" || event.payload.type === "reasoning") &&
+      event.payload.status === "running") ||
+    (event.type === "node.updated" &&
+      (event.payload.kind === "assistant_message" || event.payload.kind === "reasoning") &&
+      event.payload.status === "running")
+  );
+}
+
+/** Batch text progress, but flush every pending thread before a state change advances the cursor. */
+export const batchShellApplicationEvents = <
+  A extends { readonly sequence: number; readonly transcriptOnly?: boolean },
+  E,
+  R,
+>(
+  stream: Stream.Stream<A, E, R>,
+  settings: Effect.Effect<PerformanceSettings> = Effect.succeed(DEFAULT_PERFORMANCE_SETTINGS),
+) =>
+  stream.pipe(
+    Stream.aggregateWithin(
+      Sink.take<A>(512),
+      Schedule.spaced(0).pipe(
+        Schedule.modifyDelay(() =>
+          settings.pipe(Effect.map((value) => Duration.millis(value.shellStateBatchMs))),
+        ),
+      ),
+    ),
+    Stream.aggregateWithin(
+      Sink.fold<Array<A>, ReadonlyArray<A>>(
+        () => [],
+        (events) => events.length < 512 && events.every((event) => event.transcriptOnly === true),
+        (events, batch) =>
+          Effect.sync(() => {
+            events.push(...batch);
+            return events;
+          }),
+      ),
+      Schedule.spaced(0).pipe(
+        Schedule.modifyDelay(() =>
+          settings.pipe(
+            Effect.map((value) =>
+              Duration.millis(value.shellTextBatchMs - value.shellStateBatchMs),
+            ),
+          ),
+        ),
+      ),
+    ),
+    Stream.filter((events) => events.length > 0),
+  );
 
 /** Keep only the newest shell-relevant event per project/thread aggregate. */
 export function coalesceShellApplicationEvents<A extends ShellApplicationEvent>(

@@ -21,6 +21,7 @@ import * as Schema from "effect/Schema";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import { rpcInitialItems } from "./rpcInitialItems.ts";
+import { runtimePerformanceSettings } from "./performanceSettings.ts";
 import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
 import { subscribeCodexAuthCallback } from "./provider/CodexAuthCallback.ts";
 import {
@@ -129,6 +130,8 @@ import * as SecretRequests from "./secrets/SecretRequests.ts";
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
+  batchShellApplicationEvents,
+  isTranscriptOnlyShellEvent,
   coalesceShellApplicationEvents,
   coalesceStoredThreadEvents,
   composeShellStreamWithEnrichment,
@@ -949,6 +952,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     const projects = yield* ProjectStore.ProjectStoreV2;
     const projectService = yield* ProjectService.ProjectService;
     const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
+    const performanceSettings = yield* runtimePerformanceSettings;
 
     const enrichmentChanges = yield* projectEnrichment.subscribeChanges;
     const loadProjectMetadataSnapshot = Effect.fn("ws.orchestrationV2.loadProjectMetadataSnapshot")(
@@ -1022,7 +1026,10 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
             if ("aggregateKind" in stored) {
               return yield* projectItem(stored);
             }
-            const shell = yield* threadManagement.getThreadShell(stored.event.threadId);
+            const shell = yield* threadManagement.getThreadShellForEvent({
+              threadId: stored.event.threadId,
+              sequence: stored.sequence,
+            });
             return shellStreamItemFromThreadShell({ stored, shell });
           }),
         { concurrency: 8 },
@@ -1031,8 +1038,8 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
 
     const toShellStream = <E, R>(stream: Stream.Stream<ShellApplicationEvent, E, R>) =>
       stream.pipe(
-        Stream.groupedWithin(512, Duration.millis(50)),
-        Stream.mapEffect((events) => projectShellItems(Array.from(events))),
+        (stream) => batchShellApplicationEvents(stream, performanceSettings),
+        Stream.mapEffect(projectShellItems),
         Stream.flatMap(Stream.fromIterable),
         skipUnchangedThreadShells,
       );
@@ -1285,6 +1292,7 @@ const layerWsRpc = (
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const performanceSettings = yield* runtimePerformanceSettings;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
@@ -1777,13 +1785,20 @@ const layerWsRpc = (
         const live = threadManagement
           .streamStoredEventsFrom({ afterSequence: snapshot.snapshotSequence })
           .pipe(
-            Stream.groupedWithin(512, Duration.millis(50)),
+            Stream.map((stored) => ({
+              ...stored,
+              transcriptOnly: isTranscriptOnlyShellEvent(stored.event),
+            })),
+            (stream) => batchShellApplicationEvents(stream, performanceSettings),
             Stream.mapEffect((events) =>
               Effect.forEach(
                 coalesceStoredThreadEvents(Array.from(events)),
                 (stored) =>
                   threadManagement
-                    .getThreadShell(stored.event.threadId)
+                    .getThreadShellForEvent({
+                      threadId: stored.event.threadId,
+                      sequence: stored.sequence,
+                    })
                     .pipe(
                       Effect.map((shell) =>
                         archivedShellStreamItemFromThreadShell({ stored, shell }),

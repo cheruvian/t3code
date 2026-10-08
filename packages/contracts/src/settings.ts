@@ -1124,6 +1124,44 @@ export const BackgroundActivitySettings = Schema.Struct({
 }).pipe(Schema.withDecodingDefault(Effect.succeed({})));
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
+const ShellStateBatchMs = Schema.Int.check(Schema.isBetween({ minimum: 5, maximum: 100 }));
+const ShellTextBatchMs = Schema.Int.check(Schema.isBetween({ minimum: 5, maximum: 1000 }));
+const CodexTextFlushMs = Schema.Int.check(Schema.isBetween({ minimum: 20, maximum: 500 }));
+const EventLoopReportIntervalMs = Schema.Int.check(
+  Schema.isBetween({ minimum: 5000, maximum: 300000 }),
+);
+const DEFAULT_SHELL_STATE_BATCH_MS = 50;
+const DEFAULT_SHELL_TEXT_BATCH_MS = 250;
+
+export const PerformanceSettings = Schema.Struct({
+  shellStateBatchMs: ShellStateBatchMs.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SHELL_STATE_BATCH_MS)),
+  ),
+  shellTextBatchMs: ShellTextBatchMs.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SHELL_TEXT_BATCH_MS)),
+  ),
+  codexTextFlushMs: CodexTextFlushMs.pipe(Schema.withDecodingDefault(Effect.succeed(100))),
+  eventLoopReportIntervalMs: EventLoopReportIntervalMs.pipe(
+    Schema.withDecodingDefault(Effect.succeed(30000)),
+  ),
+}).check(
+  Schema.makeFilter(
+    (value) =>
+      // Sparse settings persistence omits default fields during encoding.
+      (value.shellTextBatchMs ?? DEFAULT_SHELL_TEXT_BATCH_MS) >=
+        (value.shellStateBatchMs ?? DEFAULT_SHELL_STATE_BATCH_MS) ||
+      "Text batching must be at least the state batching interval.",
+  ),
+);
+export type PerformanceSettings = typeof PerformanceSettings.Type;
+export const DEFAULT_PERFORMANCE_SETTINGS = Schema.decodeSync(PerformanceSettings)({});
+const PerformanceSettingsPatch = Schema.Struct({
+  shellStateBatchMs: Schema.optionalKey(ShellStateBatchMs),
+  shellTextBatchMs: Schema.optionalKey(ShellTextBatchMs),
+  codexTextFlushMs: Schema.optionalKey(CodexTextFlushMs),
+  eventLoopReportIntervalMs: Schema.optionalKey(EventLoopReportIntervalMs),
+});
+
 /**
  * How assistant text reaches clients while a turn runs.
  * - `turn`: hold the whole message until the turn finishes or pauses.
@@ -1351,6 +1389,9 @@ export const ServerSettings = Schema.Struct({
   ),
   sidebarAutoSettleOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   backgroundActivity: BackgroundActivitySettings,
+  performance: PerformanceSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PERFORMANCE_SETTINGS)),
+  ),
   // Legacy flat fields retained for old settings files and old clients. New
   // consumers should resolve `backgroundActivity` instead.
   automaticGitFetchInterval: Schema.DurationFromMillis.pipe(
@@ -1730,6 +1771,7 @@ export const ServerSettingsPatch = Schema.Struct({
   automaticGitFetchInterval: Schema.optionalKey(Schema.DurationFromMillis),
   providerHealthRefreshInterval: Schema.optionalKey(Schema.DurationFromMillis),
   backgroundActivityProfile: Schema.optionalKey(BackgroundActivityProfile),
+  performance: Schema.optionalKey(PerformanceSettingsPatch),
   environmentIcon: Schema.optionalKey(Schema.NullOr(EnvironmentMachineKind)),
   defaultThreadEnvMode: Schema.optionalKey(Schema.NullOr(ThreadEnvMode)),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),

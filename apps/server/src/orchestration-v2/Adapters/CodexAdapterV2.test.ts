@@ -202,6 +202,38 @@ describe("CodexAdapterV2 context usage", () => {
 });
 
 describe("CodexAdapterV2 assistant message streaming", () => {
+  it.effect(
+    "reads changed flush timing for new windows and completes buffered text immediately",
+    () =>
+      Effect.gen(function* () {
+        const interval = yield* Ref.make(100);
+        const updates = yield* Ref.make<ReadonlyArray<ProviderTextDeltaUpdate>>([]);
+        const coalescer = yield* makeProviderTextDeltaCoalescer({
+          flushIntervalMs: Ref.get(interval),
+          emit: (update) => Ref.update(updates, (current) => [...current, update]),
+        });
+        yield* coalescer.append({ turnId: "turn", itemId: "item", delta: "one" });
+        yield* TestClock.adjust("20 millis");
+        yield* Ref.set(interval, 300);
+        yield* TestClock.adjust("80 millis");
+        assert.deepEqual(
+          (yield* Ref.get(updates)).map((update) => update.text),
+          ["one"],
+        );
+        yield* coalescer.append({ turnId: "turn", itemId: "item", delta: " two" });
+        yield* TestClock.adjust("299 millis");
+        assert.equal((yield* Ref.get(updates)).length, 1);
+        yield* coalescer.flushTurn("turn");
+        assert.deepEqual((yield* Ref.get(updates)).at(-1), {
+          turnId: "turn",
+          itemId: "item",
+          text: "one two",
+          completed: true,
+        });
+        yield* TestClock.adjust("1 milli");
+        assert.equal((yield* Ref.get(updates)).length, 2);
+      }),
+  );
   it.effect("makes accumulated assistant text visible after the bounded flush interval", () =>
     Effect.gen(function* () {
       const updates = yield* Ref.make<
@@ -213,13 +245,15 @@ describe("CodexAdapterV2 assistant message streaming", () => {
         }>
       >([]);
       const coalescer = yield* makeProviderTextDeltaCoalescer({
-        flushIntervalMs: 50,
+        flushIntervalMs: 100,
         emit: (update) => Ref.update(updates, (current) => [...current, update]),
       });
 
       yield* coalescer.append({ turnId: "turn-1", itemId: "message-1", delta: "partial" });
       assert.deepEqual(yield* Ref.get(updates), []);
       yield* Effect.yieldNow;
+      yield* TestClock.adjust("50 millis");
+      assert.deepEqual(yield* Ref.get(updates), []);
       yield* TestClock.adjust("50 millis");
       yield* Effect.yieldNow;
 
@@ -238,7 +272,7 @@ describe("CodexAdapterV2 assistant message streaming", () => {
     Effect.gen(function* () {
       const updates = yield* Ref.make<ReadonlyArray<ProviderTextDeltaUpdate>>([]);
       const coalescer = yield* makeProviderTextDeltaCoalescer({
-        flushIntervalMs: 50,
+        flushIntervalMs: 100,
         emit: (update) => Ref.update(updates, (current) => [...current, update]),
       });
 
@@ -246,7 +280,7 @@ describe("CodexAdapterV2 assistant message streaming", () => {
       yield* coalescer.append({ turnId: "turn-1", itemId: "message-1", delta: " two" });
       yield* coalescer.append({ turnId: "turn-1", itemId: "message-1", delta: " three" });
       yield* Effect.yieldNow;
-      yield* TestClock.adjust("50 millis");
+      yield* TestClock.adjust("100 millis");
       yield* Effect.yieldNow;
 
       assert.deepEqual(yield* Ref.get(updates), [
@@ -264,7 +298,7 @@ describe("CodexAdapterV2 assistant message streaming", () => {
     Effect.gen(function* () {
       const updates = yield* Ref.make<ReadonlyArray<ProviderTextDeltaUpdate>>([]);
       const coalescer = yield* makeProviderTextDeltaCoalescer({
-        flushIntervalMs: 50,
+        flushIntervalMs: 100,
         emit: (update) => Ref.update(updates, (current) => [...current, update]),
       });
 
@@ -282,7 +316,7 @@ describe("CodexAdapterV2 assistant message streaming", () => {
         { turnId: "turn-1", itemId: "message-2", text: "turn final", completed: true },
       ]);
       yield* Effect.yieldNow;
-      yield* TestClock.adjust("50 millis");
+      yield* TestClock.adjust("100 millis");
       yield* Effect.yieldNow;
       assert.equal((yield* Ref.get(updates)).length, 2);
     }),
@@ -293,7 +327,7 @@ describe("CodexAdapterV2 assistant message streaming", () => {
       const updates = yield* Ref.make<ReadonlyArray<ProviderTextDeltaUpdate>>([]);
       const failNext = yield* Ref.make(true);
       const coalescer = yield* makeProviderTextDeltaCoalescer({
-        flushIntervalMs: 50,
+        flushIntervalMs: 100,
         emit: (update) =>
           Ref.getAndSet(failNext, false).pipe(
             Effect.flatMap((shouldFail) =>
@@ -332,13 +366,13 @@ describe("CodexAdapterV2 assistant message streaming", () => {
     Effect.gen(function* () {
       const updates = yield* Ref.make<ReadonlyArray<ProviderTextDeltaUpdate>>([]);
       const coalescer = yield* makeProviderTextDeltaCoalescer({
-        flushIntervalMs: 50,
+        flushIntervalMs: 100,
         emit: (update) => Ref.update(updates, (current) => [...current, update]),
       });
 
       yield* coalescer.append({ turnId: "turn-1", itemId: "message-1", delta: "" });
       yield* Effect.yieldNow;
-      yield* TestClock.adjust("50 millis");
+      yield* TestClock.adjust("100 millis");
       yield* Effect.yieldNow;
       const completedText = yield* coalescer.complete({
         turnId: "turn-1",
@@ -374,7 +408,7 @@ describe("CodexAdapterV2 assistant message streaming", () => {
     Effect.gen(function* () {
       const updates = yield* Ref.make<ReadonlyArray<ProviderTextDeltaUpdate>>([]);
       const coalescer = yield* makeProviderTextDeltaCoalescer({
-        flushIntervalMs: 50,
+        flushIntervalMs: 100,
         emit: (update) => Ref.update(updates, (current) => [...current, update]),
       });
 
@@ -3749,7 +3783,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const transcript = finalAnswerTranscript("codex-streamed-message-once", [
-          { id: "answer", text: "CODEX_RECOVERY_OK", streamed: true, completionDelayMs: 100 },
+          { id: "answer", text: "CODEX_RECOVERY_OK", streamed: true, completionDelayMs: 200 },
         ]);
         const harness = yield* makeCodexReplayHarness(transcript);
         const now = yield* DateTime.now;
@@ -3764,7 +3798,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           }),
         );
         yield* Effect.yieldNow;
-        yield* TestClock.adjust("50 millis");
+        yield* TestClock.adjust("100 millis");
         yield* awaitUntil(
           () => assistantTurnItems(harness.events).length === 1,
           "streamed turn item",
@@ -3775,7 +3809,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
         assert.deepEqual(assistantMessages(harness.events), []);
 
-        yield* TestClock.adjust("50 millis");
+        yield* TestClock.adjust("100 millis");
         yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
         assert.deepEqual(
           assistantMessages(harness.events).map(({ message }) => ({
@@ -3886,7 +3920,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             {
               type: "emit_inbound",
               label: "item/completed/answer-overlap-original",
-              afterMs: 100,
+              afterMs: 200,
               frame: {
                 method: "item/completed",
                 params: {
@@ -3936,12 +3970,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           }),
         );
         yield* Effect.yieldNow;
-        yield* TestClock.adjust("50 millis");
+        yield* TestClock.adjust("100 millis");
         yield* Effect.yieldNow;
 
         assert.equal(new Set(assistantTurnItems(harness.events).map((item) => item.id)).size, 1);
 
-        yield* TestClock.adjust("50 millis");
+        yield* TestClock.adjust("100 millis");
         yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
         assert.equal(
           new Set(assistantMessages(harness.events).map((event) => event.message.id)).size,

@@ -49,6 +49,49 @@ describe("ServerSettings response streaming", () => {
   });
 });
 
+describe("performance settings", () => {
+  it("defaults existing settings and preserves partial tuning on the wire", () => {
+    expect(decodeServerSettings({}).performance).toEqual({
+      shellStateBatchMs: 50,
+      shellTextBatchMs: 250,
+      codexTextFlushMs: 100,
+      eventLoopReportIntervalMs: 30000,
+    });
+    expect(
+      encodeServerSettings(decodeServerSettings({ performance: { codexTextFlushMs: 200 } }))
+        .performance,
+    ).toEqual({
+      shellStateBatchMs: 50,
+      shellTextBatchMs: 250,
+      codexTextFlushMs: 200,
+      eventLoopReportIntervalMs: 30000,
+    });
+    expect(decodeServerSettingsPatch({ performance: { shellTextBatchMs: 500 } })).toEqual({
+      performance: { shellTextBatchMs: 500 },
+    });
+  });
+
+  it.each([
+    { shellStateBatchMs: 0 },
+    { shellStateBatchMs: 101 },
+    { shellStateBatchMs: 10.5 },
+    { shellTextBatchMs: 1001 },
+    { codexTextFlushMs: 19 },
+    { codexTextFlushMs: 501 },
+    { eventLoopReportIntervalMs: 4999 },
+    { eventLoopReportIntervalMs: 300001 },
+  ])("rejects invalid timer values %j in reads and patches", (performance) => {
+    expect(() => decodeServerSettings({ performance })).toThrow();
+    expect(() => decodeServerSettingsPatch({ performance })).toThrow();
+  });
+
+  it("rejects a text window shorter than the state window", () => {
+    expect(() =>
+      decodeServerSettings({ performance: { shellStateBatchMs: 80, shellTextBatchMs: 60 } }),
+    ).toThrow();
+  });
+});
+
 describe("storage cleanup settings", () => {
   it("keeps cleanup disabled for existing installations", () => {
     expect(decodeServerSettings({}).worktreeCleanup).toBeNull();

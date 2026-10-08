@@ -120,6 +120,32 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  it.effect("persists partial performance patches and rejects invalid merged windows", () =>
+    Effect.gen(function* () {
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const fs = yield* FileSystem.FileSystem;
+      const config = yield* ServerConfig.ServerConfig;
+      yield* service.updateSettings({
+        performance: { codexTextFlushMs: 200, shellStateBatchMs: 80 },
+      });
+      yield* service.updateSettings({ performance: { eventLoopReportIntervalMs: 5000 } });
+      const before = yield* fs.readFileString(config.settingsPath);
+      const persisted = yield* decodeServerSettingsJson(before);
+      assert.deepStrictEqual(persisted.performance, {
+        shellStateBatchMs: 80,
+        shellTextBatchMs: 250,
+        codexTextFlushMs: 200,
+        eventLoopReportIntervalMs: 5000,
+      });
+      const rejected = yield* service
+        .updateSettings({ performance: { shellTextBatchMs: 60 } })
+        .pipe(Effect.exit);
+      assert.strictEqual(rejected._tag, "Failure");
+      assert.strictEqual(yield* fs.readFileString(config.settingsPath), before);
+      assert.deepStrictEqual((yield* service.getSettings).performance, persisted.performance);
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   it.effect("replaces global actions and strips the empty default from settings.json", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;

@@ -187,10 +187,6 @@ export const HTTP_ROUTER_CONFIG = {
 // those finalizers get a chance to run.
 const HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS = 0;
 const layerResourceAttribution = ResourceAttribution.layer;
-const layerApplicationObservability = EventLoopMonitor.layer.pipe(
-  Layer.provideMerge(Observability.layer),
-  Layer.provideMerge(layerResourceAttribution),
-);
 
 const layerPtyAdapter = NodePtyAdapter.layer;
 
@@ -201,6 +197,11 @@ const layerServerSettings = ServerSettings.layer.pipe(
 
 const layerNativeTelemetry = NativeTelemetryClient.layer.pipe(
   Layer.provide(ResourceMonitorBinary.layer),
+);
+const layerApplicationObservability = EventLoopMonitor.layer.pipe(
+  Layer.provide(layerServerSettings),
+  Layer.provideMerge(Observability.layer),
+  Layer.provideMerge(layerResourceAttribution),
 );
 const layerDesktopTelemetryReceiver = DesktopTelemetryReceiver.layer.pipe(
   Layer.provideMerge(layerServerSettings),

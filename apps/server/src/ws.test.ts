@@ -3,6 +3,9 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION,
   type ServerConfig,
   type ServerConfigStreamEvent,
+  type ApplicationStoredEvent,
+  type OrchestrationV2ThreadShell,
+  ThreadId,
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -14,6 +17,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
+import * as PubSub from "effect/PubSub";
+import * as SqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/process";
@@ -24,7 +29,100 @@ import {
   resolveAvailableEditorsForConfig,
   shouldUseBoundedThreadSnapshot,
   withLateEditorConfig,
+  subscribeOrchestrationV2Shell,
 } from "./ws.ts";
+import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
+import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
+import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
+import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
+import * as ProjectService from "./project/ProjectService.ts";
+import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
+import * as ServerSettings from "./serverSettings.ts";
+
+it.effect(
+  "shares live shell projections between clients and delivers newer state without delay",
+  () =>
+    Effect.gen(function* () {
+      const events = yield* PubSub.unbounded<ApplicationStoredEvent>();
+      const enrichment = yield* PubSub.unbounded<never>();
+      const attached = yield* Deferred.make<void>();
+      let subscribers = 0;
+      let reads = 0;
+      let title = "first";
+      const threadId = ThreadId.make("thread:shared-ws-shell");
+      const dependencies = Layer.mergeAll(
+        ServerSettings.layerTest(),
+        SqliteClient.layer({ filename: ":memory:" }),
+        Layer.mock(ProjectStore.ProjectStoreV2)({ listShells: () => Effect.succeed([]) }),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({
+          subscribeChanges: PubSub.subscribe(enrichment),
+        }),
+        Layer.mock(OrchestrationEventStore.OrchestrationEventStore)({
+          latestApplicationSequence: Effect.succeed(0),
+          streamProjectedApplicationEvents: (input) =>
+            Stream.unwrap(
+              Effect.gen(function* () {
+                const subscription = yield* PubSub.subscribe(events);
+                if (++subscribers === 2) yield* Deferred.succeed(attached, undefined);
+                return Stream.fromSubscription(subscription).pipe(Stream.map(input.project));
+              }),
+            ),
+        }),
+        ThreadManagementService.layer.pipe(
+          Layer.provide(
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              getShellSnapshot: () =>
+                Effect.succeed({
+                  schemaVersion: 1,
+                  snapshotSequence: 0,
+                  threads: [],
+                  archivedThreads: [],
+                }),
+              getThreadShell: () =>
+                Effect.sync(() => {
+                  reads++;
+                  return { id: threadId, title, archivedAt: null } as OrchestrationV2ThreadShell;
+                }),
+            }),
+          ),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const outputs = [yield* Queue.unbounded<string>(), yield* Queue.unbounded<string>()];
+        for (const output of outputs) {
+          yield* Effect.gen(function* () {
+            const stream = yield* subscribeOrchestrationV2Shell({});
+            yield* Stream.runForEach(stream, (item) =>
+              item.kind === "thread.updated"
+                ? Queue.offer(output, item.thread.title).pipe(Effect.asVoid)
+                : Effect.void,
+            );
+          }).pipe(Effect.forkScoped);
+        }
+        yield* Deferred.await(attached);
+        const event = (sequence: number, type: string, payload: object) =>
+          ({
+            sequence,
+            event: { threadId, type, payload },
+          }) as ApplicationStoredEvent;
+        yield* PubSub.publishAll(events, [
+          event(1, "node.updated", { kind: "reasoning", status: "running" }),
+          event(2, "turn-item.updated", { type: "reasoning", status: "running" }),
+          event(3, "message.updated", { role: "assistant", streaming: true }),
+          event(4, "run.updated", { status: "completed" }),
+        ]);
+        yield* TestClock.adjust("50 millis");
+        for (const output of outputs) assert.strictEqual(yield* Queue.take(output), "first");
+        assert.strictEqual(reads, 1);
+        title = "newer";
+        yield* PubSub.publish(events, event(5, "thread.metadata-updated", {}));
+        yield* TestClock.adjust("50 millis");
+        for (const output of outputs) assert.strictEqual(yield* Queue.take(output), "newer");
+        assert.strictEqual(reads, 2);
+      }).pipe(Effect.provide(dependencies));
+    }),
+);
 
 it("accepts only the current orchestration protocol before websocket RPC setup", () => {
   assert.isTrue(

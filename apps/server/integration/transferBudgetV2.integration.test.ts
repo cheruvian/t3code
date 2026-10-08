@@ -41,6 +41,7 @@ import * as EventStore from "../src/orchestration-v2/EventStore.ts";
 import * as EventSink from "../src/orchestration-v2/EventSink.ts";
 import * as ProjectionStore from "../src/orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../src/orchestration-v2/ThreadManagementService.ts";
+import * as ServerSettings from "../src/serverSettings.ts";
 import * as ProjectStore from "../src/orchestration-v2/ProjectStore.ts";
 import * as ProjectService from "../src/project/ProjectService.ts";
 import * as ProjectEnrichmentService from "../src/project/ProjectEnrichmentService.ts";
@@ -87,6 +88,8 @@ const layerManagement = Layer.unwrap(
       getThreadSnapshotWindow: (id, options) =>
         projections.getThreadSnapshotWindow(id, options).pipe(Effect.orDie),
       getThreadShell: (id) => projections.getThreadShell(id).pipe(Effect.orDie),
+      getThreadShellForEvent: ({ threadId }) =>
+        projections.getThreadShell(threadId).pipe(Effect.orDie),
       getShellSnapshot: (options) => projections.getShellSnapshot(options).pipe(Effect.orDie),
       streamStoredEventsFrom: (input) =>
         sink.stream({ ...input, bounded: true }).pipe(Stream.orDie),
@@ -109,6 +112,7 @@ const layerEnrichment = Layer.unwrap(
 );
 // The transfer history has no project events, so shell streams never read a project shell.
 const layerServices = layerManagement.pipe(
+  Layer.provideMerge(ServerSettings.layerTest()),
   Layer.provideMerge(ProjectStore.layer),
   Layer.provideMerge(Layer.mock(ProjectService.ProjectService)({})),
   Layer.provideMerge(layerEnrichment),

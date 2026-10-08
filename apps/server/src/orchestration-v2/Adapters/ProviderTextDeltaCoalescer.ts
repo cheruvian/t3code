@@ -39,13 +39,17 @@ function providerTextBufferKey(turnId: string, itemId: string): string {
 
 export const makeProviderTextDeltaCoalescer = Effect.fn("makeProviderTextDeltaCoalescer")(
   function* (input: {
-    readonly flushIntervalMs: number;
+    readonly flushIntervalMs: number | Effect.Effect<number>;
     readonly emit: (update: ProviderTextDeltaUpdate) => Effect.Effect<void>;
   }): Effect.fn.Return<ProviderTextDeltaCoalescer, never, Scope.Scope> {
     const buffered = yield* Ref.make(new Map<string, BufferedProviderText>());
     const flushScheduled = yield* Ref.make(false);
     const flushLock = yield* Semaphore.make(1);
     const coalescerScope = yield* Effect.scope;
+    const interval =
+      typeof input.flushIntervalMs === "number"
+        ? Effect.succeed(input.flushIntervalMs)
+        : input.flushIntervalMs;
 
     const drain = (options: {
       readonly predicate: (message: BufferedProviderText) => boolean;
@@ -120,7 +124,8 @@ export const makeProviderTextDeltaCoalescer = Effect.fn("makeProviderTextDeltaCo
                   }),
                 );
                 if (shouldSchedule) {
-                  yield* Effect.sleep(Duration.millis(Math.max(1, input.flushIntervalMs))).pipe(
+                  yield* interval.pipe(
+                    Effect.flatMap((ms) => Effect.sleep(Duration.millis(Math.max(1, ms)))),
                     Effect.andThen(flushDirty),
                     Effect.interruptible,
                     Effect.forkIn(coalescerScope),

@@ -4,19 +4,20 @@ import * as NodePerfHooks from "node:perf_hooks";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
+import * as Duration from "effect/Duration";
+import { DEFAULT_PERFORMANCE_SETTINGS } from "@t3tools/contracts";
+import { runtimePerformanceSettings } from "../performanceSettings.ts";
 
-// Node's delay histogram wakes a native timer every RESOLUTION_MS and records the
-// gap between wakeups, so an idle loop reads about RESOLUTION_MS and a stall of S
-// reads between S and S + RESOLUTION_MS. We subtract the resolution, so a delay can
-// undercount a stall by up to RESOLUTION_MS. With these values every stall over 3 s
-// is caught, at 1 wakeup per second that never enters JS.
-const RESOLUTION_MS = 1000;
+// The timer stays native; subtract its interval to report excess event-loop delay.
+const RESOLUTION_MS = 20;
 const STALL_THRESHOLD_MS = 2000;
-const SAMPLE_INTERVAL = "30 seconds";
 
 /** One sample interval as Node reports it. Delay in ns, active time in ms, CPU in µs. */
 export interface EventLoopReadings {
   readonly delayMaxNs: number;
+  readonly delayP95Ns: number;
+  readonly delayP99Ns: number;
+  readonly delayMeanNs: number;
   readonly activeMs: number;
   readonly utilization: number;
   readonly usage: Pick<
@@ -52,6 +53,9 @@ const makeNodeSampler = Effect.gen(function* () {
     const loop = NodePerfHooks.performance.eventLoopUtilization(nextElu, elu);
     const readings: EventLoopReadings = {
       delayMaxNs: histogram.max,
+      delayP95Ns: histogram.percentile(95),
+      delayP99Ns: histogram.percentile(99),
+      delayMeanNs: histogram.mean,
       activeMs: loop.active,
       utilization: loop.utilization,
       usage: {
@@ -83,20 +87,41 @@ export const stallMs = ({ delayMaxNs, activeMs }: EventLoopReadings) => {
   return delayMs;
 };
 
+const excessDelayMs = (ns: number) =>
+  Number.isFinite(ns) ? Math.max(0, Math.round((ns / 1e6 - RESOLUTION_MS) * 100) / 100) : 0;
+
 /**
- * Samples event loop health every 30 s and records a `server.eventLoop.stall` span
+ * Samples event loop health at the configured interval and records a `server.eventLoop.stall` span
  * with a warning when the loop stalled for more than 2 s, so stalls land in
  * the local trace file and Settings > Diagnostics without OTLP. Takes the sampler
  * so tests can inject readings.
  */
 export const layerWith = (
   makeSampler: Effect.Effect<Effect.Effect<EventLoopReadings>, never, Scope.Scope>,
+  reportInterval: Effect.Effect<number> = Effect.succeed(
+    DEFAULT_PERFORMANCE_SETTINGS.eventLoopReportIntervalMs,
+  ),
 ) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const sample = yield* makeSampler;
       const tick = Effect.gen(function* () {
         const readings = yield* sample;
+        const idleGapDetected = readings.activeMs < excessDelayMs(readings.delayMaxNs);
+        yield* Effect.void.pipe(
+          Effect.withSpan("server.eventLoop.health", {
+            root: true,
+            level: "Info",
+            attributes: {
+              delayMaxMs: idleGapDetected ? 0 : excessDelayMs(readings.delayMaxNs),
+              delayP95Ms: idleGapDetected ? 0 : excessDelayMs(readings.delayP95Ns),
+              delayP99Ms: idleGapDetected ? 0 : excessDelayMs(readings.delayP99Ns),
+              delayMeanMs: idleGapDetected ? 0 : excessDelayMs(readings.delayMeanNs),
+              idleGapDetected,
+              utilization: Math.round(readings.utilization * 1000) / 1000,
+            },
+          }),
+        );
         const delayMaxMs = stallMs(readings);
         if (delayMaxMs === undefined) return;
         const { utilization, usage, rssBytes } = readings;
@@ -119,7 +144,7 @@ export const layerWith = (
           }),
         );
       });
-      const wait = Effect.sleep(SAMPLE_INTERVAL);
+      const wait = reportInterval.pipe(Effect.flatMap((ms) => Effect.sleep(Duration.millis(ms))));
       // The layer builds before the rest of the server, so the first sample covers
       // startup work such as migrations and projection bootstrap. That can block the
       // loop for seconds on a large database, so skip it rather than warn at every
@@ -132,4 +157,11 @@ export const layerWith = (
     }),
   );
 
-export const layer = layerWith(makeNodeSampler);
+export const layer = Layer.unwrap(
+  Effect.map(runtimePerformanceSettings, (settings) =>
+    layerWith(
+      makeNodeSampler,
+      settings.pipe(Effect.map((value) => value.eventLoopReportIntervalMs)),
+    ),
+  ),
+);

@@ -1,5 +1,7 @@
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { runtimeInstructionSettings } from "./RuntimeInstructionSettings.ts";
+import { runtimePerformanceSettings } from "../../performanceSettings.ts";
+import { DEFAULT_PERFORMANCE_SETTINGS } from "@t3tools/contracts";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "../ContextHandoffBudget.ts";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
@@ -222,7 +224,6 @@ export function codexProviderTurnTokenUsage(
   };
 }
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
-const CODEX_ASSISTANT_DELTA_FLUSH_INTERVAL_MS = 50;
 const CodexBackgroundTerminalTerminateResponse = Schema.Struct({
   terminated: Schema.Boolean,
 });
@@ -1596,6 +1597,7 @@ export const createCodexAdapterV2 = (
     const idAllocator = yield* IdAllocatorV2;
     const serverConfig = yield* ServerConfig;
     const globalCustomInstructions = yield* runtimeInstructionSettings;
+    const performanceSettings = yield* runtimePerformanceSettings;
     const homeLayout = yield* resolveCodexHomeLayout(config);
 
     yield* materializeCodexShadowHome(homeLayout).pipe(
@@ -1627,6 +1629,9 @@ export const createCodexAdapterV2 = (
       idAllocator,
       serverConfig,
       globalCustomInstructions,
+      textDeltaFlushIntervalMs: performanceSettings.pipe(
+        Effect.map((value) => value.codexTextFlushMs),
+      ),
       continuationRequests,
       ...hooks,
     });
@@ -1659,6 +1664,7 @@ const layer: Layer.Layer<
     const idAllocator = yield* IdAllocatorV2;
     const serverConfig = yield* ServerConfig;
     const globalCustomInstructions = yield* runtimeInstructionSettings;
+    const performanceSettings = yield* runtimePerformanceSettings;
 
     return makeCodexAdapterV2({
       instanceId: CODEX_DEFAULT_INSTANCE_ID,
@@ -1670,12 +1676,16 @@ const layer: Layer.Layer<
       idAllocator,
       serverConfig,
       globalCustomInstructions,
+      textDeltaFlushIntervalMs: performanceSettings.pipe(
+        Effect.map((value) => value.codexTextFlushMs),
+      ),
       continuationRequests,
     });
   }),
 );
 
 export interface CodexAdapterV2Options {
+  readonly textDeltaFlushIntervalMs?: Effect.Effect<number>;
   readonly globalCustomInstructions?: Effect.Effect<string>;
   readonly instanceId: ProviderInstanceId;
   readonly settings: CodexSettings;
@@ -3212,7 +3222,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           { turnId: string; nativeItemId: string; stream: "summary" | "content"; index: number }
         >();
         const reasoningDeltas = yield* makeProviderTextDeltaCoalescer({
-          flushIntervalMs: CODEX_ASSISTANT_DELTA_FLUSH_INTERVAL_MS,
+          flushIntervalMs:
+            adapterOptions.textDeltaFlushIntervalMs ??
+            DEFAULT_PERFORMANCE_SETTINGS.codexTextFlushMs,
           emit: (update) =>
             Effect.gen(function* () {
               const part = reasoningParts.get(update.itemId);
@@ -3297,7 +3309,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         });
 
         const agentMessageDeltas = yield* makeProviderTextDeltaCoalescer({
-          flushIntervalMs: CODEX_ASSISTANT_DELTA_FLUSH_INTERVAL_MS,
+          flushIntervalMs:
+            adapterOptions.textDeltaFlushIntervalMs ??
+            DEFAULT_PERFORMANCE_SETTINGS.codexTextFlushMs,
           emit: (update) =>
             Effect.gen(function* () {
               const context = yield* awaitActiveTurn(update.turnId);
