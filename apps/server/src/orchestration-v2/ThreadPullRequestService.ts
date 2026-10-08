@@ -28,6 +28,8 @@ import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 class ThreadPullRequestServiceV2 extends Context.Service<
   ThreadPullRequestServiceV2,
@@ -105,7 +107,10 @@ export const make = Effect.gen(function* () {
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const settings = yield* ServerSettings.ServerSettingsService;
   const pendingBackfill = new Map<ThreadId, number>();
+  let needsBackfill = true;
 
   const finishBackfill = (threads: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "id">>) => {
     for (const thread of threads) pendingBackfill.delete(thread.id);
@@ -119,29 +124,25 @@ export const make = Effect.gen(function* () {
     }
   };
 
-  /**
-   * A sweep for one thread reads only that thread's shell, not every thread's.
-   * Finished runs and checkpoints queue one of these each. A sweep over all
-   * threads reads only active, unsettled ones, since discovery skips the rest;
-   * backfill looks up settled threads, so its passes read every active thread.
-   */
+  /** Discovery reads current thread metadata, without counting or loading its history. */
   const readThreadSnapshot = ({ threadId, backfill }: RefreshRequest) =>
-    threadId === null
-      ? orchestrator.getShellSnapshot({
-          location: "active",
-          unsettledOnly: !(backfill || pendingBackfill.size > 0),
-        })
-      : Effect.gen(function* () {
-          // Read the sequence first. The thread is then at least this new, so a
-          // sync guarded by the sequence is rejected rather than missing a change.
-          const snapshotSequence = yield* orchestrator.getThreadEventSequence(threadId);
-          const thread = yield* orchestrator.getThreadShell(threadId);
-          return { snapshotSequence, threads: thread === null ? [] : [thread] };
-        });
+    projections.getPullRequestDiscoverySnapshot({
+      ...(threadId === null ? {} : { threadId }),
+      unsettledOnly: threadId === null && !(backfill || pendingBackfill.size > 0),
+    });
 
   const synchronize = Effect.fn("ThreadPullRequestServiceV2.synchronize")(function* (
     request: RefreshRequest,
   ) {
+    if (!(yield* settings.getSettings).autoDiscoverThreadPullRequests) {
+      needsBackfill = true;
+      pendingBackfill.clear();
+      return;
+    }
+    if (request.threadId === null && needsBackfill) {
+      request = { ...request, backfill: true };
+      needsBackfill = false;
+    }
     const [threadSnapshot, projectShells] = yield* Effect.all([
       readThreadSnapshot(request),
       projectStore.listShells(),
@@ -202,7 +203,7 @@ export const make = Effect.gen(function* () {
               ? null
               : yield* git.branchPullRequest(
                   { cwd, branch: first.branch },
-                  { refresh: request.refresh },
+                  { refresh: request.refresh, background: true },
                 );
           if (detected !== null && !pullRequestMatchesProject(detected, resolvedProject)) {
             return finishBackfill(group);
@@ -347,12 +348,17 @@ export const make = Effect.gen(function* () {
         ),
       // Wide enough that a sweep's GitHub branch lookups reach GitHubCli together and share one
       // GraphQL document, instead of one `gh pr list` per branch.
-      { concurrency: 32, discard: true },
+      { concurrency: 4, discard: true },
     );
   });
 
-  const worker = yield* makeDrainableWorker((request: RefreshRequest) =>
-    synchronize(request).pipe(
+  const pendingRefreshes = new Map<ThreadId | null, RefreshRequest>();
+  const worker = yield* makeDrainableWorker((threadId: ThreadId | null) =>
+    Effect.suspend(() => {
+      const request = pendingRefreshes.get(threadId)!;
+      pendingRefreshes.delete(threadId);
+      return synchronize(request);
+    }).pipe(
       Effect.catchCauseIf(
         (cause) => !Cause.hasInterruptsOnly(cause),
         (cause) =>
@@ -363,15 +369,26 @@ export const make = Effect.gen(function* () {
     ),
   );
 
+  const enqueueRefresh = (request: RefreshRequest) =>
+    Effect.gen(function* () {
+      const pending = pendingRefreshes.get(request.threadId);
+      pendingRefreshes.set(request.threadId, {
+        ...request,
+        refresh: request.refresh || pending?.refresh === true,
+        backfill: request.backfill || pending?.backfill === true,
+      });
+      if (pending === undefined) yield* worker.enqueue(request.threadId);
+    });
+
   const processEvent = (event: OrchestrationV2DomainEvent) => {
     switch (event.type) {
       case "thread.created":
       case "thread.unarchived":
       case "thread.metadata-updated":
-        return worker.enqueue({ threadId: event.threadId, refresh: false });
+        return enqueueRefresh({ threadId: event.threadId, refresh: false });
       case "thread.unsettled":
       case "checkpoint.captured":
-        return worker.enqueue({ threadId: event.threadId, refresh: true });
+        return enqueueRefresh({ threadId: event.threadId, refresh: true });
       case "run.updated":
         if (
           event.payload.status === "completed" ||
@@ -379,7 +396,7 @@ export const make = Effect.gen(function* () {
           event.payload.status === "cancelled" ||
           event.payload.status === "interrupted"
         ) {
-          return worker.enqueue({ threadId: event.threadId, refresh: true });
+          return enqueueRefresh({ threadId: event.threadId, refresh: true });
         }
         break;
     }
@@ -392,10 +409,10 @@ export const make = Effect.gen(function* () {
     yield* forkParked(Stream.runForEach(orchestrator.streamDomainEvents, processEvent));
     yield* forkParked(
       Effect.gen(function* () {
-        yield* worker.enqueue({ threadId: null, refresh: false, backfill: true });
+        yield* enqueueRefresh({ threadId: null, refresh: false, backfill: true });
         yield* worker.drain;
         yield* Effect.gen(function* () {
-          yield* worker.enqueue({ threadId: null, refresh: false });
+          yield* enqueueRefresh({ threadId: null, refresh: false });
           yield* worker.drain;
         }).pipe(Effect.repeat(Schedule.spaced("1 minute")), Effect.delay("1 minute"));
       }).pipe(Effect.asVoid),

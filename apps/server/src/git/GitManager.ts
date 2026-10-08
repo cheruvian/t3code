@@ -127,7 +127,7 @@ export class GitManager extends Context.Service<
     /** Resolve the PR for a saved branch without changing the current checkout. */
     readonly branchPullRequest: (
       input: { readonly cwd: string; readonly branch: string },
-      options?: { readonly refresh?: boolean },
+      options?: { readonly refresh?: boolean; readonly background?: boolean },
     ) => Effect.Effect<GitBranchPullRequest | null, GitManagerServiceError>;
     readonly invalidateLocalStatus: (cwd: string) => Effect.Effect<void, never>;
     readonly invalidateRemoteStatus: (cwd: string) => Effect.Effect<void, never>;
@@ -2190,7 +2190,7 @@ export const make = Effect.gen(function* () {
     });
     return mergeGitStatusParts(local, remote);
   });
-  const branchPullRequest: GitManager["Service"]["branchPullRequest"] = Effect.fn(
+  const lookupBranchPullRequest: GitManager["Service"]["branchPullRequest"] = Effect.fn(
     "branchPullRequest",
   )(function* ({ cwd, branch }, options) {
     const cacheCwd = yield* normalizeStatusCacheKey(cwd);
@@ -2344,6 +2344,39 @@ export const make = Effect.gen(function* () {
       repositoryKey: pullRequestRepositoryKey(latest.url),
     };
   });
+  // Background discovery caches the entire lookup, including Git metadata.
+  // Authoritative checks still probe the repository before applying a result.
+  const branchDiscoveryCache = yield* Cache.makeWith(
+    (key: string) => {
+      const [cwd = "", branch = ""] = key.split("\u0000");
+      return lookupBranchPullRequest({ cwd, branch });
+    },
+    {
+      capacity: PR_LOOKUP_CACHE_CAPACITY,
+      timeToLive: (exit) =>
+        Exit.isFailure(exit)
+          ? Duration.zero
+          : exit.value?.state === "open"
+            ? PR_LOOKUP_CACHE_TTL
+            : PR_LOOKUP_NO_OPEN_PR_CACHE_TTL,
+    },
+  );
+  const branchPullRequest: GitManager["Service"]["branchPullRequest"] = Effect.fn(
+    "branchPullRequest.discovery",
+  )(function* (input, options) {
+    const cwd = yield* normalizeStatusCacheKey(input.cwd);
+    const key = [cwd, input.branch, String(prLookupEpoch(cwd))].join("\u0000");
+    if (options?.refresh) {
+      yield* Cache.invalidate(branchDiscoveryCache, key);
+      const result = yield* lookupBranchPullRequest({ ...input, cwd }, options);
+      yield* Cache.set(branchDiscoveryCache, key, result);
+      return result;
+    }
+    return options?.background
+      ? yield* Cache.get(branchDiscoveryCache, key)
+      : yield* lookupBranchPullRequest({ ...input, cwd }, options);
+  });
+
   const invalidateLocalStatus: GitManager["Service"]["invalidateLocalStatus"] = Effect.fn(
     "invalidateLocalStatus",
   )(function* (cwd) {

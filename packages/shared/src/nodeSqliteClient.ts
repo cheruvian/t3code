@@ -24,6 +24,7 @@ import * as Client from "effect/sql/SqlClient";
 import type { Connection } from "effect/sql/SqlConnection";
 import { SqlError, classifySqliteError } from "effect/sql/SqlError";
 import * as Statement from "effect/sql/Statement";
+import * as NodeSqliteWorker from "./nodeSqliteWorker.ts";
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name";
 
@@ -260,7 +261,19 @@ const make = Effect.fn("makeWithDatabase")(function* (
   });
 
   const semaphore = yield* Semaphore.make(1);
-  const connection = yield* makeConnection;
+  // In-memory databases remain connection-local; file-backed operations run in
+  // a worker so reads, checkpoints and busy waits cannot stop the server loop.
+  const inMemory =
+    options.filename === "" ||
+    options.filename === ":memory:" ||
+    options.filename.startsWith("file::memory:") ||
+    /[?&]mode=memory(?:&|$)/.test(options.filename);
+  const connection: Connection = inMemory
+    ? yield* makeConnection
+    : {
+        ...(yield* NodeSqliteWorker.makeConnection(options)),
+        executeStream: () => Stream.die(new UnsupportedNodeSqliteOperationError()),
+      };
 
   const acquirer = semaphore.withPermits(1)(Effect.succeed(connection));
   const transactionAcquirer = Effect.uninterruptibleMask((restore) => {

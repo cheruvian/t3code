@@ -161,6 +161,36 @@ export type ProjectionThreadPullRequests = Pick<
   "id" | "projectId" | "lineage" | "settledOverride" | "settledAt" | "pullRequests"
 >;
 
+/** Current thread state used by branch PR discovery, without history summaries. */
+export type ProjectionPullRequestDiscoveryCandidate = Pick<
+  OrchestrationV2AppThread,
+  | "id"
+  | "projectId"
+  | "branch"
+  | "worktreePath"
+  | "archivedAt"
+  | "settledOverride"
+  | "settledAt"
+  | "linkedPullRequest"
+  | "branchPullRequest"
+  | "pullRequests"
+>;
+
+const pullRequestDiscoveryCandidate = (
+  thread: OrchestrationV2AppThread,
+): ProjectionPullRequestDiscoveryCandidate => ({
+  id: thread.id,
+  projectId: thread.projectId,
+  branch: thread.branch,
+  worktreePath: thread.worktreePath,
+  archivedAt: thread.archivedAt,
+  settledOverride: thread.settledOverride,
+  settledAt: thread.settledAt,
+  linkedPullRequest: thread.linkedPullRequest,
+  branchPullRequest: thread.branchPullRequest,
+  pullRequests: thread.pullRequests,
+});
+
 /**
  * Thread activity needed by settlement, without transcript or fork history.
  * Settlement always loads `latestUserAuthoredMessageAt`, so it is required here.
@@ -345,6 +375,16 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadShell: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadShell | null, ProjectionStoreV2Error>;
+  readonly getPullRequestDiscoverySnapshot: (options: {
+    readonly threadId?: ThreadId;
+    readonly unsettledOnly?: boolean;
+  }) => Effect.Effect<
+    {
+      readonly snapshotSequence: number;
+      readonly threads: ReadonlyArray<ProjectionPullRequestDiscoveryCandidate>;
+    },
+    ProjectionStoreV2Error
+  >;
   readonly getWorkspaceMoveFence: (input: {
     readonly worktreePath: string;
     readonly threadId: ThreadId;
@@ -3406,8 +3446,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               ORDER BY session.updated_at DESC, session.provider_session_id DESC
               LIMIT 1
             ) AS last_error
-          FROM orchestration_v2_projection_threads t
-          INNER JOIN orchestration_v2_projection_runs r ON r.run_id = (
+          FROM orchestration_v2_projection_turn_items item
+            INDEXED BY orchestration_v2_usage_limit_errors_idx
+          CROSS JOIN orchestration_v2_projection_threads t ON t.thread_id = item.thread_id
+          CROSS JOIN orchestration_v2_projection_runs r ON r.run_id = item.run_id AND r.status = 'failed'
+          WHERE item.type = 'error' AND item.status = 'failed'
+            AND r.run_id = (
             SELECT latest.run_id FROM orchestration_v2_projection_runs latest
             WHERE latest.thread_id = t.thread_id
               AND latest.status <> 'queued'
@@ -3419,8 +3463,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             ORDER BY latest.completed_at IS NULL DESC, latest.completed_at DESC,
               latest.ordinal DESC, latest.run_id DESC
             LIMIT 1
-          ) AND r.status = 'failed'
-          INNER JOIN orchestration_v2_projection_turn_items item ON item.turn_item_id = (
+          )
+            AND item.turn_item_id = (
             SELECT error.turn_item_id FROM orchestration_v2_projection_turn_items error
             WHERE error.thread_id = t.thread_id AND error.run_id = r.run_id
               AND error.type = 'error' AND error.status = 'failed'
@@ -3428,7 +3472,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             ORDER BY error.updated_at DESC, error.ordinal DESC, error.turn_item_id DESC
             LIMIT 1
           )
-          WHERE t.deleted_at IS NULL
+            AND t.deleted_at IS NULL
             AND json_extract(t.payload_json, '$.archivedAt') IS NULL
             AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
             AND json_extract(item.payload_json, '$.failure.class') = 'usage_limit'
@@ -5370,6 +5414,32 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
 
+    const getPullRequestDiscoverySnapshot: ProjectionStoreV2Shape["getPullRequestDiscoverySnapshot"] =
+      (options) =>
+        sql
+          .withTransaction(
+            Effect.gen(function* () {
+              const sequence = yield* sql<{ snapshot_sequence: number | null }>`
+          SELECT MAX(sequence) AS snapshot_sequence FROM orchestration_events
+          WHERE application_event_version = 2 AND aggregate_kind = 'thread'
+        `;
+              const rows = yield* sql<PayloadRow>`
+          SELECT payload_json FROM orchestration_v2_projection_threads
+          WHERE deleted_at IS NULL AND json_extract(payload_json, '$.archivedAt') IS NULL
+            ${options.threadId === undefined ? sql`` : sql`AND thread_id = ${options.threadId}`}
+            ${options.unsettledOnly ? sql`AND json_extract(payload_json, '$.settledAt') IS NULL AND json_extract(payload_json, '$.settledOverride') IS NOT 'settled'` : sql``}
+          ORDER BY updated_at ASC, thread_id ASC
+        `;
+              const threads = yield* Effect.forEach(rows, (row) =>
+                decodeThreadPayload(row.payload_json).pipe(
+                  Effect.map(pullRequestDiscoveryCandidate),
+                ),
+              );
+              return { snapshotSequence: sequence[0]?.snapshot_sequence ?? 0, threads };
+            }),
+          )
+          .pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
+
     const getThreadsWithPullRequests: ProjectionStoreV2Shape["getThreadsWithPullRequests"] = (
       threadId,
     ) =>
@@ -5714,6 +5784,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getWorkspaceMoveFence,
       getSettlementCandidates,
       getThreadsWithPullRequests,
+      getPullRequestDiscoverySnapshot,
       getThreadProjection,
       getTurnStartContext,
       getTurnStartHistory,
@@ -5861,6 +5932,29 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 DateTime.toEpochMillis(left.updatedAt) - DateTime.toEpochMillis(right.updatedAt) ||
                 left.id.localeCompare(right.id),
             );
+        }),
+      getPullRequestDiscoverySnapshot: (options) =>
+        Effect.gen(function* () {
+          const state = yield* Ref.get(replayState);
+          return {
+            snapshotSequence: yield* Ref.get(sequence),
+            threads: [...state.projections.values()]
+              .map(({ thread }) => thread)
+              .filter(
+                (thread) =>
+                  thread.deletedAt === null &&
+                  thread.archivedAt === null &&
+                  (options.threadId === undefined || thread.id === options.threadId) &&
+                  (!options.unsettledOnly ||
+                    (thread.settledAt === null && thread.settledOverride !== "settled")),
+              )
+              .toSorted(
+                (left, right) =>
+                  DateTime.toEpochMillis(left.updatedAt) -
+                    DateTime.toEpochMillis(right.updatedAt) || left.id.localeCompare(right.id),
+              )
+              .map(pullRequestDiscoveryCandidate),
+          };
         }),
       getThreadsWithPullRequests: (threadId) =>
         Ref.get(replayState).pipe(

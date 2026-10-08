@@ -28,6 +28,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Statement from "effect/sql/Statement";
 import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -331,6 +332,90 @@ it.effect("memory recovery selection includes unfinished items from missing runs
 );
 
 it.layer(layerTest)("ProjectionStoreV2", (it) => {
+  it.effect("usage-limit recovery does not scan all threads or sort their latest runs", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const queries: Array<readonly [string, ReadonlyArray<unknown>]> = [];
+      const record: Statement.Transformer = (statement) =>
+        Effect.sync(() => {
+          queries.push(statement.compile());
+          return statement;
+        });
+      yield* store
+        .getLimitRecoveryCandidates({ now: yield* DateTime.now, autoResume: true, snooze: false })
+        .pipe(Effect.provideService(Statement.CurrentTransformer, record));
+      const query = queries.find(([text]) => text.includes("AS failure_payload_json"));
+      assert.isDefined(query);
+      const plan = yield* sql.unsafe<{ detail: string }>(
+        `EXPLAIN QUERY PLAN ${query![0]}`,
+        query![1],
+      );
+      assert.isTrue(plan.some((row) => row.detail.includes("usage_limit_errors_idx")));
+      assert.isFalse(plan.some((row) => row.detail.startsWith("SCAN t ")));
+      assert.isTrue(
+        plan.some((row) =>
+          row.detail.includes(
+            "SEARCH latest USING INDEX orchestration_v2_runs_latest_executed_idx",
+          ),
+        ),
+      );
+      const latestPlan = yield* sql<{ detail: string }>`EXPLAIN QUERY PLAN
+        SELECT run_id FROM orchestration_v2_projection_runs
+        WHERE thread_id = 'thread:test' AND status <> 'queued'
+          AND NOT (status = 'cancelled' AND json_extract(payload_json, '$.startedAt') IS NULL)
+        ORDER BY completed_at IS NULL DESC, completed_at DESC, ordinal DESC, run_id DESC LIMIT 1`;
+      assert.isFalse(latestPlan.some((row) => row.detail.includes("TEMP B-TREE")));
+    }),
+  );
+
+  it.effect("PR discovery reads current metadata independently of run history", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const active = yield* addRolledBackRecoveryCandidate("discovery-active");
+      const settled = yield* addRolledBackRecoveryCandidate("discovery-settled");
+      const archived = yield* addRolledBackRecoveryCandidate("discovery-archived");
+      const deleted = yield* addRolledBackRecoveryCandidate("discovery-deleted");
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_set(payload_json, '$.branch', 'feature/discovery', '$.worktreePath', '/worktree')
+        WHERE thread_id = ${active}`;
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_set(payload_json, '$.settledOverride', 'settled')
+        WHERE thread_id = ${settled}`;
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_set(payload_json, '$.archivedAt', '2026-09-01T00:00:00.000Z')
+        WHERE thread_id = ${archived}`;
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET deleted_at = '2026-09-01T00:00:00.000Z' WHERE thread_id = ${deleted}`;
+      // A historical record incompatible with the current run schema must not
+      // prevent discovering a PR from the thread's current metadata.
+      yield* sql`UPDATE orchestration_v2_projection_runs SET payload_json = '{"historical":true}'`;
+      const snapshot = yield* store.getPullRequestDiscoverySnapshot({});
+      assert.sameMembers(
+        snapshot.threads.map((thread) => thread.id),
+        [active, settled],
+      );
+      const unsettled = yield* store.getPullRequestDiscoverySnapshot({ unsettledOnly: true });
+      assert.deepEqual(
+        unsettled.threads.map((thread) => thread.id),
+        [active],
+      );
+      assert.equal(unsettled.threads[0]?.branch, "feature/discovery");
+      assert.equal(unsettled.threads[0]?.worktreePath, "/worktree");
+      assert.deepEqual(
+        (yield* store.getPullRequestDiscoverySnapshot({ threadId: settled })).threads.map(
+          (thread) => thread.id,
+        ),
+        [settled],
+      );
+      assert.deepEqual(
+        (yield* store.getPullRequestDiscoverySnapshot({ threadId: archived })).threads,
+        [],
+      );
+    }),
+  );
+
   it.effect(
     "keeps restart-cancelled work through a stale run.updated",
     () => restartCancelledWorkSurvivesStaleRunUpdate,

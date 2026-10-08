@@ -684,6 +684,7 @@ function makeManager(input?: {
   serverSettings?: Parameters<typeof ServerSettings.layerTest>[0];
   setupScriptRunner?: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"];
   gitConfigReads?: string[];
+  gitCommands?: string[];
   /** Seeds the V2 stores the per-project settings lookup reads. */
   seed?: Effect.Effect<
     void,
@@ -698,31 +699,36 @@ function makeManager(input?: {
   });
 
   const layerServerSettings = ServerSettings.ServerSettingsService.layerTest(input?.serverSettings);
-
-  const layerVcsDriver = input?.gitConfigReads
-    ? Layer.effect(
-        GitVcsDriver.GitVcsDriver,
-        GitVcsDriver.make.pipe(
-          Effect.map((service) =>
-            GitVcsDriver.GitVcsDriver.of({
-              ...service,
-              readConfigValue: (cwd, key) =>
-                Effect.sync(() => input.gitConfigReads?.push(key)).pipe(
-                  Effect.andThen(service.readConfigValue(cwd, key)),
-                ),
-            }),
+  const layerVcsDriver =
+    input?.gitConfigReads || input?.gitCommands
+      ? Layer.effect(
+          GitVcsDriver.GitVcsDriver,
+          GitVcsDriver.make.pipe(
+            Effect.map((service) =>
+              GitVcsDriver.GitVcsDriver.of({
+                ...service,
+                execute: (command) =>
+                  Effect.sync(() => input.gitCommands?.push(command.operation)).pipe(
+                    Effect.andThen(service.execute(command)),
+                  ),
+                readConfigValue: (cwd, key) =>
+                  Effect.sync(() => {
+                    input.gitConfigReads?.push(key);
+                    input.gitCommands?.push(`config:${key}`);
+                  }).pipe(Effect.andThen(service.readConfigValue(cwd, key))),
+              }),
+            ),
           ),
-        ),
-      ).pipe(
-        Layer.provideMerge(VcsProcess.layer),
-        Layer.provideMerge(NodeServices.layer),
-        Layer.provideMerge(layerServerConfig),
-      )
-    : GitVcsDriver.layer.pipe(
-        Layer.provideMerge(VcsProcess.layer),
-        Layer.provideMerge(NodeServices.layer),
-        Layer.provideMerge(layerServerConfig),
-      );
+        ).pipe(
+          Layer.provideMerge(VcsProcess.layer),
+          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(layerServerConfig),
+        )
+      : GitVcsDriver.layer.pipe(
+          Layer.provideMerge(VcsProcess.layer),
+          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(layerServerConfig),
+        );
   const layerSourceControlRegistry = Layer.effect(
     SourceControlProviderRegistry.SourceControlProviderRegistry,
     (input?.sourceControlProvider === undefined
@@ -1664,6 +1670,55 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
 
       expect(second).toBeNull();
       expect(ghCalls.filter((call) => call.startsWith("pr list "))).toHaveLength(2);
+    }),
+  );
+
+  it.effect("background PR discovery skips Git probes until expiry, refresh, or invalidation", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/background-pr"]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/background-pr"]);
+      const gitCommands: string[] = [];
+      const { manager } = yield* makeManager({
+        gitCommands,
+        ghScenario: {
+          prListSequence: [
+            encodeCliJson([
+              {
+                number: 220,
+                title: "Background discovery",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/220",
+                baseRefName: "main",
+                headRefName: "feature/background-pr",
+                state: "OPEN",
+                updatedAt: "2026-04-07T15:00:00Z",
+              },
+            ]),
+          ],
+        },
+      });
+      const input = { cwd: repoDir, branch: "feature/background-pr" };
+      const first = yield* manager.branchPullRequest(input, { background: true });
+      expect(first?.number).toBe(220);
+      const coldCommands = gitCommands.length;
+      expect(coldCommands).toBeGreaterThan(0);
+      expect(yield* manager.branchPullRequest(input, { background: true })).toEqual(first);
+      expect(gitCommands).toHaveLength(coldCommands);
+      yield* TestClock.adjust("1 minute");
+      yield* manager.branchPullRequest(input, { background: true });
+      expect(gitCommands.length).toBeGreaterThan(coldCommands);
+      const expiredCommands = gitCommands.length;
+      yield* manager.branchPullRequest(input, { background: true, refresh: true });
+      expect(gitCommands.length).toBeGreaterThan(expiredCommands);
+      const refreshedCommands = gitCommands.length;
+      yield* manager.branchPullRequest(input, { background: true });
+      expect(gitCommands).toHaveLength(refreshedCommands);
+      yield* manager.invalidateStatus(repoDir);
+      yield* manager.branchPullRequest(input, { background: true });
+      expect(gitCommands.length).toBeGreaterThan(refreshedCommands);
     }),
   );
 

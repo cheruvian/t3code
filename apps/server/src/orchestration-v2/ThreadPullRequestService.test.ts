@@ -1,4 +1,5 @@
 import {
+  DEFAULT_SERVER_SETTINGS,
   EventId,
   ProjectId,
   ProviderInstanceId,
@@ -26,6 +27,8 @@ import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolv
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ServerActivation from "../serverActivation.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ThreadPullRequestService from "./ThreadPullRequestService.ts";
 
 describe("ThreadPullRequestServiceV2 project guard", () => {
@@ -169,7 +172,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
     };
   };
 
-  it.effect("an event for one thread reads that thread's shell, not every thread's", () =>
+  it.effect("an event reads only the target thread's discovery metadata", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const thread = threadShell("updated-thread");
@@ -183,20 +186,24 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         const layerDependencies = Layer.mergeAll(
           Layer.mock(Orchestrator.OrchestratorV2)({
             streamDomainEvents: Stream.fromPubSub(events),
-            getShellSnapshot: (options) =>
-              Queue.offer(reads, options ?? {}).pipe(
+          }),
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getPullRequestDiscoverySnapshot: (options) =>
+              Queue.offer(
+                reads,
+                options.threadId ?? { unsettledOnly: options.unsettledOnly ?? false },
+              ).pipe(
                 Effect.as({
-                  schemaVersion: 2,
                   snapshotSequence: 1,
-                  threads: [thread, other],
-                  archivedThreads: [],
+                  threads:
+                    options.threadId === undefined
+                      ? [thread, other]
+                      : [thread, other].filter((candidate) => candidate.id === options.threadId),
                 }),
               ),
-            getThreadEventSequence: () => Effect.succeed(1),
-            getThreadShell: (threadId) =>
-              Queue.offer(reads, threadId).pipe(
-                Effect.as([thread, other].find((candidate) => candidate.id === threadId) ?? null),
-              ),
+          }),
+          Layer.mock(ServerSettings.ServerSettingsService)({
+            getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
           }),
           Layer.mock(ProjectStore.ProjectStoreV2)({
             listShells: () => Effect.succeed([]),
@@ -220,7 +227,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           yield* service.start();
           yield* Deferred.succeed(activation, undefined);
           // Startup backfill reads every active thread.
-          expect(yield* Queue.take(reads)).toEqual({ location: "active", unsettledOnly: false });
+          expect(yield* Queue.take(reads)).toEqual({ unsettledOnly: false });
           yield* service.drain;
           yield* PubSub.publish(events, {
             type: "thread.metadata-updated",
@@ -276,16 +283,15 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         const layerDependencies = Layer.mergeAll(
           Layer.mock(Orchestrator.OrchestratorV2)({
             streamDomainEvents: Stream.never,
-            getShellSnapshot: (options) =>
-              Queue.offer(reads, options ?? {}).pipe(
-                Effect.as({
-                  schemaVersion: 2,
-                  snapshotSequence: 1,
-                  // The fake honors unsettledOnly like the store does.
-                  threads: options?.unsettledOnly ? [] : [settled],
-                  archivedThreads: [],
-                }),
+          }),
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getPullRequestDiscoverySnapshot: (options) =>
+              Queue.offer(reads, options).pipe(
+                Effect.as({ snapshotSequence: 1, threads: options.unsettledOnly ? [] : [settled] }),
               ),
+          }),
+          Layer.mock(ServerSettings.ServerSettingsService)({
+            getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
           }),
           Layer.mock(ProjectStore.ProjectStoreV2)({
             listShells: () => Effect.succeed([]),
@@ -309,13 +315,206 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           yield* service.start();
           yield* Deferred.succeed(activation, undefined);
           // Backfill finds the settled branch thread and must read it again.
-          expect(yield* Queue.take(reads)).toEqual({ location: "active", unsettledOnly: false });
+          expect(yield* Queue.take(reads)).toEqual({ unsettledOnly: false });
           yield* service.drain;
           // Its project is gone, so backfill finishes it on the first pass.
           yield* TestClock.adjust("1 minute");
-          expect(yield* Queue.take(reads)).toEqual({ location: "active", unsettledOnly: true });
+          expect(yield* Queue.take(reads)).toEqual({ unsettledOnly: true });
           yield* service.drain;
         }).pipe(Effect.provide(layerDependencies));
+      }),
+    ),
+  );
+
+  it.effect("coalesces queued events for one thread and preserves forced refresh", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const thread = { ...threadShell("coalesced"), branch: "feature/coalesced" };
+        const activation = yield* Deferred.make<void>();
+        const releaseStartup = yield* Deferred.make<void>();
+        const releaseEvents = yield* Deferred.make<void>();
+        const consumed = yield* Deferred.make<void>();
+        const reads = yield* Queue.unbounded<void>();
+        const lookups: boolean[] = [];
+        let readCount = 0;
+        const event = {
+          type: "thread.unsettled",
+          id: EventId.make("event:coalesced"),
+          threadId: thread.id,
+          occurredAt: NOW,
+          payload: {
+            id: thread.id,
+            projectId: thread.projectId,
+            title: thread.title,
+            providerInstanceId: thread.providerInstanceId,
+            modelSelection: thread.modelSelection,
+            runtimeMode: thread.runtimeMode,
+            interactionMode: thread.interactionMode,
+            branch: thread.branch,
+            worktreePath: null,
+            activeProviderThreadId: null,
+            lineage: thread.lineage,
+            forkedFrom: null,
+            createdBy: "user",
+            creationSource: "web",
+            createdAt: NOW,
+            updatedAt: NOW,
+            archivedAt: null,
+            settledOverride: null,
+            settledAt: null,
+            lastVisitedAt: null,
+            deletedAt: null,
+          },
+        } satisfies OrchestrationV2DomainEvent;
+        const identity = {
+          canonicalKey: "github.com/owner/repo",
+          provider: "github" as const,
+          displayName: "owner/repo",
+          owner: "owner",
+          name: "repo",
+          locator: {
+            source: "git-remote" as const,
+            remoteName: "origin",
+            remoteUrl: "git@github.com:owner/repo.git",
+          },
+        };
+        const project: OrchestrationProjectShell = {
+          id: thread.projectId,
+          title: "Project",
+          workspaceRoot: "/workspace",
+          defaultModelSelection: null,
+          scripts: [],
+          repositoryIdentity: identity,
+          createdAt: "2026-09-01T00:00:00Z",
+          updatedAt: "2026-09-01T00:00:00Z",
+        };
+        const dependencies = Layer.mergeAll(
+          Layer.mock(Orchestrator.OrchestratorV2)({
+            streamDomainEvents: Stream.fromEffect(Deferred.await(releaseEvents)).pipe(
+              Stream.flatMap(() =>
+                Stream.fromIterable([
+                  event,
+                  { ...event, type: "thread.metadata-updated" as const },
+                  { ...event, type: "thread.metadata-updated" as const },
+                ]),
+              ),
+              Stream.ensuring(Deferred.succeed(consumed, undefined)),
+            ),
+          }),
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getPullRequestDiscoverySnapshot: () =>
+              Effect.gen(function* () {
+                readCount++;
+                yield* Queue.offer(reads, undefined);
+                if (readCount === 1) yield* Deferred.await(releaseStartup);
+                return { snapshotSequence: 1, threads: [thread] };
+              }),
+          }),
+          Layer.mock(ServerSettings.ServerSettingsService)({
+            getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+          }),
+          Layer.mock(ProjectStore.ProjectStoreV2)({ listShells: () => Effect.succeed([project]) }),
+          Layer.mock(GitManager.GitManager)({
+            branchPullRequest: (_input, options) =>
+              Effect.sync(() => {
+                lookups.push(options?.refresh ?? false);
+                return null;
+              }),
+          }),
+          Layer.mock(PullRequestService.PullRequestService)({}),
+          Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+            resolve: () => Effect.succeed(identity),
+          }),
+          Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
+          Layer.succeed(
+            Crypto.Crypto,
+            Crypto.make({
+              randomBytes: (size) => new Uint8Array(size).fill(1),
+              digest: (_algorithm, data) => Effect.succeed(data),
+            }),
+          ),
+          FileSystem.layerNoop({}),
+        );
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadPullRequestService.make;
+          yield* service.start();
+          yield* Deferred.succeed(activation, undefined);
+          yield* Queue.take(reads);
+          yield* Deferred.succeed(releaseEvents, undefined);
+          yield* Deferred.await(consumed);
+          yield* Deferred.succeed(releaseStartup, undefined);
+          yield* service.drain;
+          expect(readCount).toBe(2);
+          expect(lookups).toEqual([false, true]);
+        }).pipe(Effect.provide(dependencies));
+      }),
+    ),
+  );
+
+  it.effect("disabling discovery stops reads and re-enabling backfills settled threads", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let enabled = false;
+        const activation = yield* Deferred.make<void>();
+        const checked = yield* Queue.unbounded<boolean>();
+        const reads: boolean[] = [];
+        const dependencies = Layer.mergeAll(
+          Layer.mock(Orchestrator.OrchestratorV2)({ streamDomainEvents: Stream.never }),
+          Layer.mock(ServerSettings.ServerSettingsService)({
+            getSettings: Effect.suspend(() =>
+              Queue.offer(checked, enabled).pipe(
+                Effect.as({ ...DEFAULT_SERVER_SETTINGS, autoDiscoverThreadPullRequests: enabled }),
+              ),
+            ),
+          }),
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getPullRequestDiscoverySnapshot: (options) =>
+              Effect.sync(() => {
+                reads.push(options.unsettledOnly ?? false);
+                return { snapshotSequence: 1, threads: [] };
+              }),
+          }),
+          Layer.mock(ProjectStore.ProjectStoreV2)({ listShells: () => Effect.succeed([]) }),
+          Layer.mock(GitManager.GitManager)({}),
+          Layer.mock(PullRequestService.PullRequestService)({}),
+          Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
+          Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
+          Layer.succeed(
+            Crypto.Crypto,
+            Crypto.make({
+              randomBytes: (size) => new Uint8Array(size).fill(1),
+              digest: (_algorithm, data) => Effect.succeed(data),
+            }),
+          ),
+          FileSystem.layerNoop({}),
+        );
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadPullRequestService.make;
+          yield* service.start();
+          yield* Deferred.succeed(activation, undefined);
+          expect(yield* Queue.take(checked)).toBe(false);
+          yield* service.drain;
+          expect(reads).toEqual([]);
+          enabled = true;
+          yield* TestClock.adjust("1 minute");
+          expect(yield* Queue.take(checked)).toBe(true);
+          yield* service.drain;
+          expect(reads).toEqual([false]);
+          yield* TestClock.adjust("1 minute");
+          expect(yield* Queue.take(checked)).toBe(true);
+          yield* service.drain;
+          expect(reads).toEqual([false, true]);
+          enabled = false;
+          yield* TestClock.adjust("1 minute");
+          expect(yield* Queue.take(checked)).toBe(false);
+          yield* service.drain;
+          expect(reads).toEqual([false, true]);
+          enabled = true;
+          yield* TestClock.adjust("1 minute");
+          expect(yield* Queue.take(checked)).toBe(true);
+          yield* service.drain;
+          expect(reads).toEqual([false, true, false]);
+        }).pipe(Effect.provide(dependencies));
       }),
     ),
   );

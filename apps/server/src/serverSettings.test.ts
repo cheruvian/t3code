@@ -100,6 +100,26 @@ const recordProviderUsage = (provider: string, instanceId: string | null = provi
   });
 
 it.layer(NodeServices.layer)("server settings", (it) => {
+  it.effect("persists disabling automatic thread PR discovery", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      assert.isTrue((yield* settings.getSettings).autoDiscoverThreadPullRequests);
+      yield* settings.updateSettings({ autoDiscoverThreadPullRequests: false });
+      assert.isFalse((yield* settings.getSettings).autoDiscoverThreadPullRequests);
+      const persisted = yield* decodeServerSettingsJson(
+        yield* fs.readFileString(config.settingsPath),
+      );
+      assert.isFalse(persisted.autoDiscoverThreadPullRequests);
+      yield* settings.updateSettings({ autoDiscoverThreadPullRequests: true });
+      const restored = yield* decodeServerSettingsJson(
+        yield* fs.readFileString(config.settingsPath),
+      );
+      assert.isTrue(restored.autoDiscoverThreadPullRequests);
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   it.effect("replaces global actions and strips the empty default from settings.json", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;

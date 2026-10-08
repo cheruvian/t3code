@@ -184,6 +184,14 @@ Use **Link pull request** in the command palette or **Linked pull requests** pan
 pull request link in the conversation. Creating a pull request from Git actions links it automatically.
 Agents can link their pull requests with the `link_pull_request` tool.
 
+T3 also discovers pull requests for saved thread branches, including pull requests opened outside
+the app. To disable this background discovery for an environment, save
+`{"autoDiscoverThreadPullRequests": false}` in a JSON file and apply it with
+`t3 settings patch --file <path-to-file>`. Use `--base-dir <t3-home>` when targeting a nondefault
+environment. Set the value to `true` to resume discovery. Manually linking pull requests and watching
+them continue to work while automatic discovery is disabled.
+You can also add this setting to `<t3-home>/userdata/settings.json`; the server reloads external edits.
+
 Use **Link this PR** in a branch-detected badge's tooltip to keep it with the thread. From a review
 on the Pull Requests page, **Link to thread** lets you search for an active thread. The review header
 also lists the threads that link to it, including archived threads, so you can return to their context.

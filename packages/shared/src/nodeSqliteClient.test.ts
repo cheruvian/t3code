@@ -6,6 +6,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Fiber from "effect/Fiber";
+import * as Deferred from "effect/Deferred";
 
 import * as SqliteClient from "./nodeSqliteClient.ts";
 
@@ -98,6 +100,35 @@ const makeTempDatabase = Effect.gen(function* () {
   return { filename, other };
 });
 
+it.effect("keeps the event loop responsive while a file-backed query executes", () =>
+  Effect.gen(function* () {
+    const { filename } = yield* makeTempDatabase;
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const completed: string[] = [];
+      const query = yield* sql`
+        WITH RECURSIVE numbers(value) AS (
+          SELECT 1 UNION ALL SELECT value + 1 FROM numbers WHERE value < 1000000
+        ) SELECT SUM(value) AS total FROM numbers
+      `.pipe(
+        Effect.tap(() => Effect.sync(() => completed.push("query"))),
+        Effect.forkChild,
+      );
+      yield* Effect.callback<void>((resume) => {
+        setImmediate(() =>
+          resume(
+            Effect.sync(() => {
+              completed.push("heartbeat");
+            }),
+          ),
+        );
+      });
+      assert.deepEqual(completed, ["heartbeat"]);
+      assert.deepEqual(yield* Fiber.join(query), [{ total: 500000500000 }]);
+    }).pipe(Effect.provide(SqliteClient.layer({ filename })));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 it.effect("keeps another connection from committing between a transaction's read and write", () =>
   Effect.gen(function* () {
     const { filename, other } = yield* makeTempDatabase;
@@ -121,6 +152,68 @@ it.effect("keeps another connection from committing between a transaction's read
       );
       yield* Effect.sync(() => other.exec("UPDATE counters SET value = value + 1 WHERE id = 1"));
       assert.deepEqual(yield* sql`SELECT value FROM counters WHERE id = 1`.values, [[11]]);
+    }).pipe(Effect.provide(SqliteClient.layer({ filename })));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "rolls back nested transactions and preserves blobs and safe integers across the worker",
+  () =>
+    Effect.gen(function* () {
+      const { filename } = yield* makeTempDatabase;
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql`UPDATE counters SET value = 10 WHERE id = 1`;
+            yield* sql
+              .withTransaction(
+                Effect.gen(function* () {
+                  yield* sql`UPDATE counters SET value = 99 WHERE id = 1`;
+                  return yield* Effect.fail("undo nested write");
+                }),
+              )
+              .pipe(Effect.flip);
+            assert.deepEqual(yield* sql`SELECT value FROM counters`.valuesUnprepared, [[10]]);
+          }),
+        );
+        assert.deepEqual(yield* sql`SELECT value FROM counters`.values, [[10]]);
+        const blob = new Uint8Array([0, 1, 127, 255]);
+        assert.deepEqual(yield* sql`SELECT ${blob} AS bytes`.unprepared, [{ bytes: blob }]);
+        assert.deepEqual(
+          yield* sql`SELECT 9007199254740993 AS value`.pipe(
+            Effect.provideService(SqlClient.SafeIntegers, true),
+          ),
+          [{ value: 9007199254740993n }],
+        );
+        yield* sql`CREATE TABLE unique_values(value TEXT UNIQUE)`;
+        yield* sql`INSERT INTO unique_values VALUES ('taken')`;
+        const duplicate = yield* sql`INSERT INTO unique_values VALUES ('taken')`.pipe(Effect.flip);
+        assert.equal(duplicate.reason._tag, "UniqueViolation");
+      }).pipe(Effect.provide(SqliteClient.layer({ filename })));
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("rolls back a cancelled worker transaction before the connection is reused", () =>
+  Effect.gen(function* () {
+    const { filename } = yield* makeTempDatabase;
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const written = yield* Deferred.make<void>();
+      const transaction = yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* sql`UPDATE counters SET value = 99 WHERE id = 1`;
+            yield* Deferred.succeed(written, undefined);
+            return yield* Effect.never;
+          }),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(written);
+      yield* Fiber.interrupt(transaction);
+      assert.deepEqual(yield* sql`SELECT value FROM counters`.values, [[0]]);
+      yield* sql.withTransaction(sql`UPDATE counters SET value = 10 WHERE id = 1`);
+      assert.deepEqual(yield* sql`SELECT value FROM counters`.values, [[10]]);
     }).pipe(Effect.provide(SqliteClient.layer({ filename })));
   }).pipe(Effect.provide(NodeServices.layer)),
 );
