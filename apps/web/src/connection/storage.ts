@@ -249,9 +249,22 @@ function writeDatabaseValueOnConnection(
   key: IDBValidKey,
   value: unknown,
 ) {
+  let putDurationMs = 0;
   return Effect.callback<void, ConnectionTransientError>((resume) => {
     try {
-      const transaction = database.transaction(storeName, "readwrite");
+      // Snapshots can be rebuilt from the server; credentials and the catalog
+      // keep the browser's normal durability policy.
+      const disposable = storeName === SHELL_STORE_NAME || storeName === THREAD_STORE_NAME;
+      let transaction: IDBTransaction;
+      try {
+        transaction = disposable
+          ? database.transaction(storeName, "readwrite", { durability: "relaxed" })
+          : database.transaction(storeName, "readwrite");
+      } catch (cause) {
+        // Older WebViews may reject the options argument.
+        if (!disposable || !(cause instanceof TypeError)) throw cause;
+        transaction = database.transaction(storeName, "readwrite");
+      }
       // Every failed write fires "abort". A failed commit, such as
       // QuotaExceededError, fires only "abort" and no "error".
       transaction.addEventListener("abort", () => {
@@ -262,11 +275,21 @@ function writeDatabaseValueOnConnection(
       transaction.addEventListener("complete", () => {
         resume(Effect.void);
       });
+      const started = performance.now();
       transaction.objectStore(storeName).put(value, key);
+      putDurationMs = performance.now() - started;
     } catch (cause) {
       resume(Effect.fail(catalogError("write", cause)));
     }
-  }).pipe(Effect.withSpan("web.connectionStorage.writeDatabaseValue"));
+  }).pipe(
+    Effect.tap(() => Effect.annotateCurrentSpan({ "storage.putMs": putDurationMs })),
+    Effect.withSpan("web.connectionStorage.writeDatabaseValue", {
+      attributes: {
+        "storage.store": storeName,
+        "storage.valueChars": typeof value === "string" ? value.length : 0,
+      },
+    }),
+  );
 }
 
 function removeDatabaseValueOnConnection(
@@ -746,7 +769,14 @@ export const layer = Layer.effectContext(
             schemaVersion: ORCHESTRATION_CACHE_SCHEMA_VERSION,
             environmentId,
             snapshot,
-          }).pipe(Effect.mapError((cause) => persistenceError("save-shell", cause)));
+          }).pipe(
+            Effect.withSpan("web.connectionStorage.encodeShellSnapshot", {
+              attributes: {
+                "cache.threadCount": snapshot.threads.length + snapshot.archivedThreads.length,
+              },
+            }),
+            Effect.mapError((cause) => persistenceError("save-shell", cause)),
+          );
           yield* writeDatabaseValue(database, SHELL_STORE_NAME, environmentId, encoded);
         }).pipe(
           Effect.mapError((cause) =>
@@ -824,7 +854,12 @@ export const layer = Layer.effectContext(
             environmentId,
             threadId: snapshot.projection.thread.id,
             snapshot,
-          }).pipe(Effect.mapError((cause) => persistenceError("save-thread", cause)));
+          }).pipe(
+            Effect.withSpan("web.connectionStorage.encodeThreadSnapshot", {
+              attributes: { "cache.turnItemCount": snapshot.projection.turnItems.length },
+            }),
+            Effect.mapError((cause) => persistenceError("save-thread", cause)),
+          );
           yield* writeDatabaseValue(
             database,
             THREAD_STORE_NAME,

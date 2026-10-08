@@ -4053,6 +4053,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     status,
     statusDetails,
     statusDetailsLocal,
+    readBranchChangeTotals: (cwd, branch) =>
+      Effect.gen(function* () {
+        const repositoryPaths = yield* resolveRepositoryPaths(cwd);
+        return yield* readBranchChangeTotals(repositoryPaths?.worktreeRoot ?? cwd, branch);
+      }),
     statusDetailsRemote,
     prepareCommitContext,
     commit: (cwd, subject, body, options) =>

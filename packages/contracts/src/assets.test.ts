@@ -1,7 +1,13 @@
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { AttachmentCreateUploadUrlInput } from "./assets.ts";
+import {
+  AssetCreateUrlsInput,
+  AssetCreateUrlsResult,
+  AssetWorkspaceAssetNotFoundError,
+  AttachmentCreateUploadUrlInput,
+} from "./assets.ts";
 import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
@@ -56,5 +62,28 @@ describe("AttachmentCreateUploadUrlInput", () => {
         sizeBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES + 1,
       }),
     ).toBe(false);
+  });
+});
+
+describe("asset URL batches", () => {
+  it("bounds batches and validates every resource", () => {
+    const isBatch = Schema.is(AssetCreateUrlsInput);
+    const resource = { _tag: "attachment", attachmentId: "file" } as const;
+    expect(isBatch({ resources: [] })).toBe(false);
+    expect(isBatch({ resources: Array.from({ length: 64 }, () => ({ ...resource })) })).toBe(true);
+    expect(isBatch({ resources: Array.from({ length: 65 }, () => ({ ...resource })) })).toBe(false);
+    expect(isBatch({ resources: [resource, { _tag: "unknown" }] })).toBe(false);
+  });
+  it("round-trips ordered successes and typed per-file errors", () => {
+    const schema = Schema.fromJsonString(Schema.toCodecJson(AssetCreateUrlsResult));
+    const results = [
+      Result.succeed({ relativeUrl: "/api/assets/one", expiresAt: 100 }),
+      Result.fail(
+        new AssetWorkspaceAssetNotFoundError({
+          resource: { _tag: "attachment", attachmentId: "missing" },
+        }),
+      ),
+    ];
+    expect(Schema.decodeSync(schema)(Schema.encodeSync(schema)(results))).toEqual(results);
   });
 });

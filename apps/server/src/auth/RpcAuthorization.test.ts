@@ -1,3 +1,5 @@
+import * as Result from "effect/Result";
+import { AssetResource } from "@t3tools/contracts";
 import {
   AuthEnvironmentMaintainScope,
   AuthDiagnosticsReadScope,
@@ -360,45 +362,57 @@ it.effect("requires task permission before attaching a prepared worktree to a th
   }).pipe(Effect.scoped),
 );
 
-it.effect("separates host file URLs from readable attachment URLs", () =>
-  Effect.gen(function* () {
-    const group = WsRpcGroup.omit(
-      ...[...WsRpcGroup.requests.keys()].filter(
-        (
-          tag,
-        ): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof WS_METHODS.assetsCreateUrl> =>
-          tag !== WS_METHODS.assetsCreateUrl,
-      ),
-    );
-    let handled = 0;
-    const client = yield* RpcTest.makeClient(group).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          group.toLayerHandler(WS_METHODS.assetsCreateUrl, () =>
-            Effect.sync(() => {
-              handled++;
-              return { relativeUrl: "/api/assets/file", expiresAt: 1 };
-            }),
-          ),
-          RpcAuthorization.layer([AuthOrchestrationReadScope]),
+it.effect.each([false, true])(
+  "separates host file URLs from readable attachment URLs (batch: %s)",
+  (batch) =>
+    Effect.gen(function* () {
+      const group = WsRpcGroup.omit(
+        ...[...WsRpcGroup.requests.keys()].filter(
+          (
+            tag,
+          ): tag is Exclude<
+            keyof typeof RPC_REQUIRED_SCOPES,
+            typeof WS_METHODS.assetsCreateUrl | typeof WS_METHODS.assetsCreateUrls
+          > => tag !== WS_METHODS.assetsCreateUrl && tag !== WS_METHODS.assetsCreateUrls,
         ),
-      ),
-    );
-    yield* client[WS_METHODS.assetsCreateUrl]({
-      resource: { _tag: "attachment", attachmentId: "image" },
-    });
-    for (const resource of [
-      { _tag: "workspace-file", threadId: ThreadId.make("thread"), path: "file.txt" },
-      { _tag: "media-file", threadId: ThreadId.make("thread"), path: "/repo/image.png" },
-      { _tag: "draft-workspace-file", cwd: "/repo", path: "file.txt" },
-    ] as const) {
-      expect(
-        yield* client[WS_METHODS.assetsCreateUrl]({ resource }).pipe(Effect.flip),
-      ).toMatchObject({
-        requiredScope: AuthOrchestrationReadScope,
-        requiredPermission: AuthFilesystemReadScope,
+      );
+      let handled = 0;
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(WS_METHODS.assetsCreateUrl, () =>
+              Effect.sync(() => {
+                handled++;
+                return { relativeUrl: "/api/assets/file", expiresAt: 1 };
+              }),
+            ),
+            group.toLayerHandler(WS_METHODS.assetsCreateUrls, (input) =>
+              Effect.sync(() => {
+                handled++;
+                return input.resources.map(() =>
+                  Result.succeed({ relativeUrl: "/api/assets/file", expiresAt: 1 }),
+                );
+              }),
+            ),
+            RpcAuthorization.layer([AuthOrchestrationReadScope]),
+          ),
+        ),
+      );
+      const create = Effect.fnUntraced(function* (resource: typeof AssetResource.Type) {
+        if (batch) yield* client[WS_METHODS.assetsCreateUrls]({ resources: [resource] });
+        else yield* client[WS_METHODS.assetsCreateUrl]({ resource });
       });
-    }
-    expect(handled).toBe(1);
-  }).pipe(Effect.scoped),
+      yield* create({ _tag: "attachment", attachmentId: "image" });
+      for (const resource of [
+        { _tag: "workspace-file", threadId: ThreadId.make("thread"), path: "file.txt" },
+        { _tag: "media-file", threadId: ThreadId.make("thread"), path: "/repo/image.png" },
+        { _tag: "draft-workspace-file", cwd: "/repo", path: "file.txt" },
+      ] as const) {
+        expect(yield* create(resource).pipe(Effect.flip)).toMatchObject({
+          requiredScope: AuthOrchestrationReadScope,
+          requiredPermission: AuthFilesystemReadScope,
+        });
+      }
+      expect(handled).toBe(1);
+    }).pipe(Effect.scoped),
 );

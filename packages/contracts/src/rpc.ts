@@ -93,6 +93,8 @@ import {
 } from "./agentSessions.ts";
 import {
   AssetAccessError,
+  AssetCreateUrlsInput,
+  AssetCreateUrlsResult,
   AssetCreateUrlInput,
   AssetCreateUrlResult,
   AttachmentCreateUploadUrlInput,
@@ -383,6 +385,7 @@ export const WS_METHODS = {
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
   assetsCreateUrl: "assets.createUrl",
+  assetsCreateUrls: "assets.createUrls",
   assetsPersistChatAttachments: "assets.persistChatAttachments",
   attachmentsCreateUploadUrl: "attachments.createUploadUrl",
   attachmentsDelete: "attachments.delete",
@@ -1251,6 +1254,12 @@ const WsAssetsCreateUrlRpc = Rpc.make(WS_METHODS.assetsCreateUrl, {
   error: Schema.Union([AssetAccessError, EnvironmentAuthorizationError]),
 });
 
+const WsAssetsCreateUrlsRpc = Rpc.make(WS_METHODS.assetsCreateUrls, {
+  payload: AssetCreateUrlsInput,
+  success: AssetCreateUrlsResult,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsAssetsPersistChatAttachmentsRpc = Rpc.make(WS_METHODS.assetsPersistChatAttachments, {
   payload: PersistChatAttachmentsInput,
   success: PersistChatAttachmentsResult,
@@ -1946,6 +1955,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
   WsAssetsCreateUrlRpc,
+  WsAssetsCreateUrlsRpc,
   WsAssetsPersistChatAttachmentsRpc,
   WsAttachmentsCreateUploadUrlRpc,
   WsAttachmentsDeleteRpc,

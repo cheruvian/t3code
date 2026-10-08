@@ -1,21 +1,35 @@
 // @effect-diagnostics nodeBuiltinImport:off - tests inject swaps at the native open boundary.
+import * as NodeHttp from "node:http";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import {
   AssetAccessError,
+  WsRpcGroup,
+  WS_METHODS,
+  AuthFilesystemReadScope,
+  AuthOrchestrationReadScope,
+  ProjectId,
   AssetPreviewTypeValidationError,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
 import { PROJECT_FAVICON_FALLBACK_MARKER } from "@t3tools/shared/projectFavicon";
 import { describe, expect, it } from "@effect/vitest";
+import * as Context from "effect/Context";
+import { HttpRouter, HttpServer } from "effect/http";
+import { RpcServer, RpcSerialization } from "effect/rpc";
+import { openMeasuredWsClient } from "../../integration/NetworkTransferMeasurement.integration.ts";
+import * as RpcAuthorization from "../auth/RpcAuthorization.ts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
@@ -24,6 +38,11 @@ import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse, HttpServerResponse } from "effect/http";
 import { vi } from "vite-plus/test";
 
+import * as AssetUrlService from "./AssetUrlService.ts";
+import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
@@ -126,6 +145,105 @@ const layerTest = Layer.mergeAll(
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 describe("AssetAccess", () => {
+  it.effect(
+    "batches asset URLs with one workspace lookup and independent missing-file errors",
+    () => {
+      let threadReads = 0;
+      let projectReads = 0;
+      return Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-asset-batch-" });
+        yield* fs.writeFileString(path.join(root, "one.png"), "image");
+        yield* fs.writeFileString(path.join(root, "two.png"), "image");
+        const threadId = ThreadId.make("batch-thread");
+        const projectId = ProjectId.make("batch-project");
+        const service = yield* AssetUrlService.make.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.mock(ProjectStore.ProjectStoreV2)({}),
+              Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({}),
+              Layer.mock(ThreadManagement.ThreadManagementService)({
+                getThreadRecords: () =>
+                  Effect.sync(() => {
+                    threadReads++;
+                    return {
+                      thread: { projectId, worktreePath: root },
+                    } as unknown as Effect.Success<
+                      ReturnType<
+                        ThreadManagement.ThreadManagementService["Service"]["getThreadRecords"]
+                      >
+                    >;
+                  }),
+              }),
+              Layer.mock(ProjectService.ProjectService)({
+                getById: () =>
+                  Effect.sync(() => {
+                    projectReads++;
+                    return Option.some({
+                      workspaceRoot: root,
+                    }) as unknown as Effect.Success<
+                      ReturnType<ProjectService.ProjectService["Service"]["getById"]>
+                    >;
+                  }),
+              }),
+            ),
+          ),
+        );
+        const resources = ["one.png", "missing.png", "two.png"].map((file) => ({
+          _tag: "media-file" as const,
+          threadId,
+          path: file,
+        }));
+        const group = WsRpcGroup.omit(
+          ...[...WsRpcGroup.requests.keys()].filter(
+            (
+              tag,
+            ): tag is Exclude<
+              keyof typeof RpcAuthorization.RPC_REQUIRED_SCOPES,
+              typeof WS_METHODS.assetsCreateUrl | typeof WS_METHODS.assetsCreateUrls
+            > => tag !== WS_METHODS.assetsCreateUrl && tag !== WS_METHODS.assetsCreateUrls,
+          ),
+        );
+        const handlers = group.toLayer({
+          [WS_METHODS.assetsCreateUrl]: service.createUrl,
+          [WS_METHODS.assetsCreateUrls]: service.createUrls,
+        });
+        const server = yield* Layer.build(
+          HttpRouter.serve(
+            RpcServer.layerHttp({ group, path: "/ws", protocol: "websocket" }).pipe(
+              Layer.provide(handlers),
+              Layer.provide(RpcSerialization.layerJson),
+              Layer.provide(
+                RpcAuthorization.layer([AuthFilesystemReadScope, AuthOrchestrationReadScope]),
+              ),
+            ),
+            { disableListenLog: true },
+          ).pipe(
+            Layer.provideMerge(NodeHttpServer.layer(NodeHttp.createServer, { port: 0 })),
+            Layer.provide(NodeHttpPlatform.layer),
+          ),
+        );
+        const address = Context.get(server, HttpServer.HttpServer).address;
+        if (!("port" in address)) return yield* Effect.die("Expected TCP server");
+        const connection = yield* openMeasuredWsClient({
+          url: `ws://127.0.0.1:${address.port}/ws`,
+          cookie: "",
+        });
+        const results = yield* connection.client[WS_METHODS.assetsCreateUrls]({ resources });
+        expect(results.map((result) => result._tag)).toEqual(["Success", "Failure", "Success"]);
+        expect(Result.isFailure(results[1]!) && results[1]!.failure).toMatchObject({
+          _tag: "AssetWorkspaceAssetNotFoundError",
+        });
+        expect(threadReads).toBe(1);
+        expect(projectReads).toBe(1);
+        yield* connection.client[WS_METHODS.assetsCreateUrls]({ resources });
+        expect(threadReads).toBe(2);
+        expect(projectReads).toBe(2);
+      }).pipe(Effect.provide(layerTest));
+    },
+  );
+
   it.effect("loads private media immediately after login with the GitHub credential", () => {
     let lookups = 0;
     const authorizations: Array<string | undefined> = [];

@@ -1130,6 +1130,7 @@ const CodexTextFlushMs = Schema.Int.check(Schema.isBetween({ minimum: 20, maximu
 const EventLoopReportIntervalMs = Schema.Int.check(
   Schema.isBetween({ minimum: 5000, maximum: 300000 }),
 );
+const GitBranchChangesCacheMs = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 60000 }));
 const DEFAULT_SHELL_STATE_BATCH_MS = 50;
 const DEFAULT_SHELL_TEXT_BATCH_MS = 250;
 
@@ -1139,6 +1140,9 @@ export const PerformanceSettings = Schema.Struct({
   ),
   shellTextBatchMs: ShellTextBatchMs.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SHELL_TEXT_BATCH_MS)),
+  ),
+  gitBranchChangesCacheMs: GitBranchChangesCacheMs.pipe(
+    Schema.withDecodingDefault(Effect.succeed(10000)),
   ),
   codexTextFlushMs: CodexTextFlushMs.pipe(Schema.withDecodingDefault(Effect.succeed(100))),
   eventLoopReportIntervalMs: EventLoopReportIntervalMs.pipe(
@@ -1158,6 +1162,7 @@ export const DEFAULT_PERFORMANCE_SETTINGS = Schema.decodeSync(PerformanceSetting
 const PerformanceSettingsPatch = Schema.Struct({
   shellStateBatchMs: Schema.optionalKey(ShellStateBatchMs),
   shellTextBatchMs: Schema.optionalKey(ShellTextBatchMs),
+  gitBranchChangesCacheMs: Schema.optionalKey(GitBranchChangesCacheMs),
   codexTextFlushMs: Schema.optionalKey(CodexTextFlushMs),
   eventLoopReportIntervalMs: Schema.optionalKey(EventLoopReportIntervalMs),
 });

@@ -15,6 +15,7 @@ import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import {
+  DEFAULT_PERFORMANCE_SETTINGS,
   GitActionProgressEvent,
   GitActionProgressPhase,
   GitCommandError,
@@ -708,6 +709,12 @@ function toPullRequestHeadRemoteInfo(pr: {
   };
 }
 
+const BranchChangesCacheKey = Schema.fromJsonString(
+  Schema.Tuple([Schema.String, Schema.NullOr(Schema.String), Schema.Int, Schema.Int]),
+);
+const encodeBranchChangesCacheKey = Schema.encodeSync(BranchChangesCacheKey);
+const decodeBranchChangesCacheKey = Schema.decodeSync(BranchChangesCacheKey);
+
 export const make = Effect.gen(function* () {
   const gitCore = yield* GitVcsDriver.GitVcsDriver;
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
@@ -1045,15 +1052,39 @@ export const make = Effect.gen(function* () {
     behindCount: 0,
     aheadOfDefaultCount: 0,
   };
+  const prLookupEpochByCwd = new Map<string, number>();
+  const prLookupEpoch = (cwd: string) => prLookupEpochByCwd.get(cwd) ?? 0;
+  const branchChangesCache = yield* Cache.makeWith(
+    (key: string) => {
+      const [cwd, branch] = decodeBranchChangesCacheKey(key);
+      return gitCore.readBranchChangeTotals(cwd, branch);
+    },
+    {
+      capacity: STATUS_RESULT_CACHE_CAPACITY,
+      timeToLive: (exit, key) =>
+        Exit.isFailure(exit) ? Duration.zero : Duration.millis(decodeBranchChangesCacheKey(key)[2]),
+    },
+  );
   const readLocalStatus = Effect.fn("readLocalStatus")(function* (cwd: string) {
     const details = yield* gitCore
-      .statusDetailsLocal(cwd, { includeDivergence: false, includeBranchChanges: true })
+      .statusDetailsLocal(cwd, { includeDivergence: false })
       .pipe(
         Effect.catchIf(isNotGitRepositoryError, () => Effect.succeed(nonRepositoryStatusDetails)),
       );
     const hostingProvider = details.isRepo
       ? yield* resolveHostingProvider(cwd, details.branch)
       : null;
+
+    const cacheMs = yield* serverSettingsService.getSettings.pipe(
+      Effect.map((settings) => settings.performance.gitBranchChangesCacheMs),
+      Effect.orElseSucceed(() => DEFAULT_PERFORMANCE_SETTINGS.gitBranchChangesCacheMs),
+    );
+    const branchChanges = details.isRepo
+      ? yield* Cache.get(
+          branchChangesCache,
+          encodeBranchChangesCacheKey([cwd, details.branch, cacheMs, prLookupEpoch(cwd)]),
+        ).pipe(Effect.orElseSucceed(() => undefined))
+      : undefined;
 
     return {
       isRepo: details.isRepo,
@@ -1063,7 +1094,7 @@ export const make = Effect.gen(function* () {
       refName: details.branch,
       hasWorkingTreeChanges: details.hasWorkingTreeChanges,
       workingTree: details.workingTree,
-      ...(details.branchChanges ? { branchChanges: details.branchChanges } : {}),
+      ...(branchChanges ? { branchChanges } : {}),
     } satisfies VcsStatusLocalResult;
   });
   const localStatusResultCache = yield* Cache.makeWith(readLocalStatus, {
@@ -1079,8 +1110,6 @@ export const make = Effect.gen(function* () {
   // status poll while the PR association is re-fetched at most once per
   // PR_LOOKUP_CACHE_TTL per branch. Git actions and user-driven refreshes bump
   // the epoch (invalidateStatus) to bypass the cache immediately.
-  const prLookupEpochByCwd = new Map<string, number>();
-  const prLookupEpoch = (cwd: string) => prLookupEpochByCwd.get(cwd) ?? 0;
   const bumpPrLookupEpoch = (cwd: string) =>
     normalizeStatusCacheKey(cwd).pipe(
       Effect.map((cacheKey) => {
@@ -2392,7 +2421,7 @@ export const make = Effect.gen(function* () {
       yield* invalidateLocalStatusResultCache(cwd);
       yield* invalidateRemoteStatusResultCache(cwd);
       // Full invalidation is the explicit-freshness path (git actions, user
-      // refresh); it also bypasses the slow PR-lookup cache. The periodic
+      // refresh); it also bypasses branch totals and the slow PR-lookup cache. The periodic
       // status poll only invalidates local/remote and keeps the PR cache warm.
       yield* bumpPrLookupEpoch(cwd);
     },

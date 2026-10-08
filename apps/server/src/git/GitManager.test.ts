@@ -683,6 +683,7 @@ function makeManager(input?: {
   textGeneration?: Partial<FakeGitTextGeneration>;
   serverSettings?: Parameters<typeof ServerSettings.layerTest>[0];
   setupScriptRunner?: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"];
+  branchChangeReads?: string[];
   gitConfigReads?: string[];
   gitCommands?: string[];
   /** Seeds the V2 stores the per-project settings lookup reads. */
@@ -700,13 +701,17 @@ function makeManager(input?: {
 
   const layerServerSettings = ServerSettings.ServerSettingsService.layerTest(input?.serverSettings);
   const layerVcsDriver =
-    input?.gitConfigReads || input?.gitCommands
+    input?.gitConfigReads || input?.gitCommands || input?.branchChangeReads
       ? Layer.effect(
           GitVcsDriver.GitVcsDriver,
           GitVcsDriver.make.pipe(
             Effect.map((service) =>
               GitVcsDriver.GitVcsDriver.of({
                 ...service,
+                readBranchChangeTotals: (cwd, branch) =>
+                  Effect.sync(() => input.branchChangeReads?.push(cwd)).pipe(
+                    Effect.andThen(service.readBranchChangeTotals(cwd, branch)),
+                  ),
                 execute: (command) =>
                   Effect.sync(() => input.gitCommands?.push(command.operation)).pipe(
                     Effect.andThen(service.execute(command)),
@@ -1167,6 +1172,74 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         aheadOfDefaultCount: 0,
         pr: null,
       });
+    }),
+  );
+
+  it.effect(
+    "caches branch totals separately while local edits stay fresh, and explicit refresh bypasses the cache",
+    () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir("t3code-git-branch-cache-");
+        yield* initRepo(cwd);
+        const reads: string[] = [];
+        const { manager } = yield* makeManager({ branchChangeReads: reads });
+        const first = yield* manager.localStatus({ cwd });
+        yield* Effect.promise(() =>
+          NodeFS.promises.writeFile(NodePath.join(cwd, "new.txt"), "one\ntwo\n"),
+        );
+        yield* manager.invalidateLocalStatus(cwd);
+        const updated = yield* manager.localStatus({ cwd });
+        expect(updated.workingTree.files.some((file) => file.path === "new.txt")).toBe(true);
+        expect(updated.branchChanges).toEqual(first.branchChanges);
+        expect(reads).toHaveLength(1);
+        yield* manager.invalidateStatus(cwd);
+        const refreshed = yield* manager.localStatus({ cwd });
+        expect(refreshed.branchChanges!.insertions).toBe(first.branchChanges!.insertions + 2);
+        expect(reads).toHaveLength(2);
+        yield* Effect.promise(() =>
+          NodeFS.promises.writeFile(NodePath.join(cwd, "new.txt"), "one\ntwo\nthree\n"),
+        );
+        yield* TestClock.adjust("10 seconds");
+        yield* manager.invalidateLocalStatus(cwd);
+        expect((yield* manager.localStatus({ cwd })).branchChanges!.insertions).toBe(
+          first.branchChanges!.insertions + 3,
+        );
+        expect(reads).toHaveLength(3);
+      }),
+  );
+
+  it.effect(
+    "counts untracked files across the worktree when status is requested from a nested directory",
+    () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir("t3code-git-branch-cache-nested-");
+        yield* initRepo(cwd);
+        const nested = NodePath.join(cwd, "nested");
+        yield* makeDirectory(nested);
+        yield* Effect.promise(() =>
+          NodeFS.promises.writeFile(NodePath.join(cwd, "new.txt"), "one\ntwo\n"),
+        );
+        const { manager } = yield* makeManager();
+        expect((yield* manager.localStatus({ cwd: nested })).branchChanges!.insertions).toBe(2);
+      }),
+  );
+
+  it.effect("can disable branch total caching through performance settings", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTempDir("t3code-git-branch-cache-disabled-");
+      yield* initRepo(cwd);
+      const reads: string[] = [];
+      const { manager } = yield* makeManager({
+        branchChangeReads: reads,
+        serverSettings: {
+          ...DEFAULT_SERVER_SETTINGS,
+          performance: { ...DEFAULT_SERVER_SETTINGS.performance, gitBranchChangesCacheMs: 0 },
+        },
+      });
+      yield* manager.localStatus({ cwd });
+      yield* manager.invalidateLocalStatus(cwd);
+      yield* manager.localStatus({ cwd });
+      expect(reads).toHaveLength(2);
     }),
   );
 

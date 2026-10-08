@@ -134,6 +134,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.deepStrictEqual(persisted.performance, {
         shellStateBatchMs: 80,
         shellTextBatchMs: 250,
+        gitBranchChangesCacheMs: 10000,
         codexTextFlushMs: 200,
         eventLoopReportIntervalMs: 5000,
       });

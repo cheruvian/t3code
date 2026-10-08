@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
   type AssetCreateUrlResult,
+  type AssetResource,
+  type ServerConfig,
   AssetWorkspaceAssetNotFoundError,
   AssetWorkspaceAssetInspectionError,
   AssetWorkspaceContextNotFoundError,
@@ -11,6 +13,7 @@ import {
   ThreadId,
   WS_METHODS,
 } from "@t3tools/contracts";
+import * as Result from "effect/Result";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
@@ -176,6 +179,139 @@ describe("createAssetEnvironmentAtoms", () => {
         expect((yield* result).relativeUrl).toBe("https://local.test/api/assets/local/media");
         expect(calls).toEqual([remoteId, remoteId, localId]);
       }
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([
+    { batch: true, count: 40, environments: 1, expectedBatches: 1 },
+    { batch: true, count: 130, environments: 1, expectedBatches: 3 },
+    { batch: true, count: 40, environments: 2, expectedBatches: 2 },
+    { batch: false, count: 40, environments: 1, expectedBatches: 0 },
+    { batch: true, count: 40, environments: 1, expectedBatches: 2, mixedPermissions: true },
+  ])("batches collections with bounded requests and independent errors: %j", (scenario) =>
+    Effect.gen(function* () {
+      const mixedPermissions = "mixedPermissions" in scenario && scenario.mixedPermissions;
+      const calls: Array<{ environmentId: EnvironmentId; count: number }> = [];
+      const singles: string[] = [];
+      const supervisors = new Map<
+        EnvironmentId,
+        EnvironmentSupervisor.EnvironmentSupervisor["Service"]
+      >();
+      const resolve = (resource: AssetResource) =>
+        resource._tag === "attachment" && resource.attachmentId === "5"
+          ? Result.fail(new AssetWorkspaceAssetNotFoundError({ resource }))
+          : Result.succeed({
+              relativeUrl: `/api/assets/${resource._tag === "attachment" ? resource.attachmentId : "file"}`,
+              expiresAt: 999999,
+            });
+      for (let i = 0; i < scenario.environments; i++) {
+        const environmentId = EnvironmentId.make(`environment-${i}`);
+        const client = {
+          [WS_METHODS.assetsCreateUrls]: ({ resources }: { resources: readonly AssetResource[] }) =>
+            Effect.sync(() => {
+              calls.push({ environmentId, count: resources.length });
+              return resources.map(resolve);
+            }).pipe(
+              Effect.flatMap((results) =>
+                mixedPermissions && resources.some((resource) => resource._tag === "media-file")
+                  ? Effect.fail(
+                      new EnvironmentAuthorizationError({
+                        message: "denied",
+                        requiredScope: "orchestration:read",
+                      }),
+                    )
+                  : Effect.succeed(results),
+              ),
+            ),
+          [WS_METHODS.assetsCreateUrl]: ({ resource }: { resource: AssetResource }) => {
+            singles.push(environmentId);
+            return Effect.fromResult(resolve(resource));
+          },
+        } as unknown as WsRpcProtocolClient;
+        supervisors.set(
+          environmentId,
+          EnvironmentSupervisor.EnvironmentSupervisor.of({
+            target: new PrimaryConnectionTarget({
+              environmentId,
+              label: environmentId,
+              httpBaseUrl: `https://${environmentId}.test`,
+              wsBaseUrl: `wss://${environmentId}.test`,
+            }),
+            state: yield* SubscriptionRef.make<SupervisorConnectionState>({
+              ...AVAILABLE_CONNECTION_STATE,
+              phase: "connected",
+            }),
+            session: yield* SubscriptionRef.make(
+              Option.some({
+                client,
+                initialConfig: Effect.succeed({
+                  environment: { capabilities: { assetUrlBatches: scenario.batch } },
+                } as ServerConfig),
+              } as unknown as RpcSession),
+            ),
+            prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+            connect: Effect.void,
+            disconnect: Effect.void,
+            retryNow: Effect.void,
+          }),
+        );
+      }
+      const environments = EnvironmentRegistry.EnvironmentRegistry.of({
+        run: (id, effect) =>
+          Effect.provideService(
+            effect,
+            EnvironmentSupervisor.EnvironmentSupervisor,
+            supervisors.get(id)!,
+          ),
+        followStream: (id, stream) =>
+          Stream.provideService(
+            stream,
+            EnvironmentSupervisor.EnvironmentSupervisor,
+            supervisors.get(id)!,
+          ),
+      } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+      const registry = AtomRegistry.make();
+      yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
+      const assets = createAssetEnvironmentAtoms(
+        Atom.runtime(Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environments)),
+      );
+      const results = yield* Effect.forEach(
+        Array.from({ length: scenario.count }, (_, i) => i),
+        (i) => {
+          const query = assets.createUrl({
+            environmentId: EnvironmentId.make(`environment-${i % scenario.environments}`),
+            input: {
+              resource:
+                mixedPermissions && i % 2 === 1
+                  ? {
+                      _tag: "media-file",
+                      threadId: ThreadId.make("thread"),
+                      path: `/file-${i}.png`,
+                    }
+                  : { _tag: "attachment", attachmentId: String(i) },
+            },
+          });
+          return AtomRegistry.getResult(registry, query, { suspendOnWaiting: true }).pipe(
+            Effect.result,
+          );
+        },
+        { concurrency: "unbounded" },
+      );
+      expect(results[5]).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          _tag: mixedPermissions
+            ? "EnvironmentAuthorizationError"
+            : "AssetWorkspaceAssetNotFoundError",
+        },
+      });
+      expect(results[6]).toMatchObject({
+        _tag: "Success",
+        success: { relativeUrl: "/api/assets/6" },
+      });
+      expect(calls).toHaveLength(scenario.expectedBatches);
+      expect(calls.every((call) => call.count <= 64)).toBe(true);
+      expect(singles).toHaveLength(scenario.batch ? 0 : scenario.count);
     }).pipe(Effect.scoped),
   );
 

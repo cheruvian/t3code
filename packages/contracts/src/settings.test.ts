@@ -54,6 +54,7 @@ describe("performance settings", () => {
     expect(decodeServerSettings({}).performance).toEqual({
       shellStateBatchMs: 50,
       shellTextBatchMs: 250,
+      gitBranchChangesCacheMs: 10000,
       codexTextFlushMs: 100,
       eventLoopReportIntervalMs: 30000,
     });
@@ -63,6 +64,7 @@ describe("performance settings", () => {
     ).toEqual({
       shellStateBatchMs: 50,
       shellTextBatchMs: 250,
+      gitBranchChangesCacheMs: 10000,
       codexTextFlushMs: 200,
       eventLoopReportIntervalMs: 30000,
     });
@@ -76,6 +78,9 @@ describe("performance settings", () => {
     { shellStateBatchMs: 101 },
     { shellStateBatchMs: 10.5 },
     { shellTextBatchMs: 1001 },
+    { gitBranchChangesCacheMs: -1 },
+    { gitBranchChangesCacheMs: 60001 },
+    { gitBranchChangesCacheMs: 1.5 },
     { codexTextFlushMs: 19 },
     { codexTextFlushMs: 501 },
     { eventLoopReportIntervalMs: 4999 },

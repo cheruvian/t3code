@@ -332,3 +332,17 @@ export const AssetAccessError = Schema.Union([
   AssetSigningKeyLoadError,
 ]);
 export type AssetAccessError = typeof AssetAccessError.Type;
+
+/** Bounded batches preserve input order and report missing files independently. */
+export const ASSET_URL_BATCH_MAX_SIZE = 64;
+export const AssetCreateUrlsInput = Schema.Struct({
+  resources: Schema.Array(AssetResource).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(ASSET_URL_BATCH_MAX_SIZE),
+  ),
+});
+export type AssetCreateUrlsInput = typeof AssetCreateUrlsInput.Type;
+export const AssetCreateUrlsResult = Schema.Array(
+  Schema.Result(AssetCreateUrlResult, AssetAccessError),
+);
+export type AssetCreateUrlsResult = typeof AssetCreateUrlsResult.Type;
