@@ -7572,13 +7572,19 @@ export default function ChatView(props: ChatViewProps) {
   const isStoppingBackgroundWork =
     stoppingBackgroundWorkKey === `${environmentId}:${activeThreadId}`;
   const handleStopBackgroundWork = useCallback(async () => {
+    // The compatibility projection can omit shells outside its recent history window.
+    const runId = latestUnheldRun(serverProjection?.runs ?? [])?.id;
     if (!activeThread || !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope))
       return;
+    if (runId === undefined) return;
     const requestKey = `${environmentId}:${activeThread.id}`;
     setStoppingBackgroundWorkKey(requestKey);
     const result = await interruptThreadTurn({
       environmentId,
-      input: { threadId: activeThread.id },
+      input: {
+        threadId: activeThread.id,
+        runId,
+      },
     });
     // Acceptance does not confirm termination. Allow retry while the provider
     // finishes stopping the tasks or reports a failure.
@@ -7592,7 +7598,7 @@ export default function ChatView(props: ChatViewProps) {
         );
       }
     }
-  }, [activeThread, environmentId, interruptThreadTurn, setThreadError]);
+  }, [activeThread, environmentId, interruptThreadTurn, serverProjection, setThreadError]);
   const onOpenRelatedThread = useCallback(
     (threadId: ThreadId) => {
       void navigate({
