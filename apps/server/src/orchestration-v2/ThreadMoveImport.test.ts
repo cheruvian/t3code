@@ -390,7 +390,11 @@ async function fixture(options?: {
       Layer.mock(Repositories.RepositoryIdentityResolver)({
         resolve: () =>
           Effect.succeed({
-            canonicalKey: "example.com/org/repo",
+            canonicalKey:
+              environmentId === "source" ? "example.com/upstream/repo" : "example.com/org/repo",
+            ...(environmentId === "source"
+              ? { origin: { canonicalKey: "example.com/org/repo" } }
+              : {}),
             rootPath: repositoryRoot,
             locator: {
               source: "git-remote",

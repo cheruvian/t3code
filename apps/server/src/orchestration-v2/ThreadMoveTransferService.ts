@@ -592,7 +592,7 @@ export const layer = Layer.effect(
           threadId: input.threadId,
           sourceEnvironmentId: yield* environment.getEnvironmentId,
           destinationEnvironmentId: input.destinationEnvironmentId,
-          repositoryCanonicalKey: repository.canonicalKey,
+          repositoryCanonicalKey: repository.origin?.canonicalKey ?? repository.canonicalKey,
           providerDriver: providerThread.driver,
           nativeThreadId: native.nativeThreadId,
           worktreeRelativePath: NodePath.basename(cwd),
@@ -653,7 +653,10 @@ export const layer = Layer.effect(
           const repository = yield* repositories.resolve(project.value.workspaceRoot, {
             refresh: true,
           });
-          if (repository?.canonicalKey !== input.manifest.repositoryCanonicalKey)
+          if (
+            (repository?.origin?.canonicalKey ?? repository?.canonicalKey) !==
+            input.manifest.repositoryCanonicalKey
+          )
             return yield* failure("Choose the same repository on the destination.");
           const selected = (yield* providers.getProviders).find(
             (p) => p.instanceId === input.instanceId,
@@ -1009,7 +1012,10 @@ export const layer = Layer.effect(
           state.manifest.threadId,
           Effect.gen(function* () {
             const repo = yield* repositories.resolve(project.workspaceRoot, { refresh: true });
-            if (repo?.canonicalKey !== state.manifest.repositoryCanonicalKey)
+            if (
+              (repo?.origin?.canonicalKey ?? repo?.canonicalKey) !==
+              state.manifest.repositoryCanonicalKey
+            )
               return yield* failure("Destination repository identity changed.");
             const selected = (yield* providers.getProviders).find(
               (provider) => provider.instanceId === instanceId,

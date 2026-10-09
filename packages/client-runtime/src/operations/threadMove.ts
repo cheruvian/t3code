@@ -259,15 +259,17 @@ export function threadMoveDestinations(input: {
     (provider) => provider.instanceId === input.thread.providerInstanceId,
   )?.driver;
   if (driver !== "codex" && driver !== "claudeAgent") return [];
-  const repository = input.projects.find(
+  const repositoryIdentity = input.projects.find(
     (project) =>
       project.environmentId === input.thread.environmentId && project.id === input.thread.projectId,
-  )?.repositoryIdentity?.canonicalKey;
+  )?.repositoryIdentity;
+  const repository = repositoryIdentity?.origin?.canonicalKey ?? repositoryIdentity?.canonicalKey;
   if (!repository) return [];
   return input.projects.flatMap((project) => {
     if (
       project.environmentId === input.thread.environmentId ||
-      project.repositoryIdentity?.canonicalKey !== repository ||
+      (project.repositoryIdentity?.origin?.canonicalKey ??
+        project.repositoryIdentity?.canonicalKey) !== repository ||
       (input.thread.environmentMove &&
         input.thread.environmentMove.destinationEnvironmentId !== project.environmentId)
     )

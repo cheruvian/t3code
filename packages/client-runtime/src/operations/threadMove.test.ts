@@ -416,6 +416,36 @@ describe("thread transfer discovery", () => {
     },
   );
 
+  it.each([false, true])(
+    "matches the same origin across primary identities (reverse: %s)",
+    (reverse) => {
+      const state = discovery(true, true, true);
+      const locator = {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: "https://github.com/example/fork",
+      };
+      const fork = { canonicalKey: "github.com/example/fork", locator };
+      const upstream = { canonicalKey: "github.com/example/upstream", locator, origin: fork };
+      state.projects = state.projects.map((project, index) => ({
+        ...project,
+        repositoryIdentity: (index === 0) !== reverse ? fork : upstream,
+      }));
+      expect(threadMoveDestinations(state).map((entry) => entry.environmentId)).toEqual([
+        destination,
+      ]);
+      state.projects = state.projects.map((project, index) =>
+        index === 1
+          ? {
+              ...project,
+              repositoryIdentity: { canonicalKey: "github.com/example/other-fork", locator },
+            }
+          : project,
+      );
+      expect(threadMoveDestinations(state)).toEqual([]);
+    },
+  );
+
   it("does not offer transfer for a thread without a dedicated worktree", () => {
     const state = discovery(true, true, true);
     state.thread = { ...state.thread, worktreePath: null };
