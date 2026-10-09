@@ -1,7 +1,7 @@
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
+import { assert, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
   type ApplicationStoredEvent,
@@ -50,6 +50,11 @@ import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.t
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import * as McpToolAccess from "../mcp/McpToolAccess.ts";
+import * as EnvironmentHandlers from "../mcp/toolkits/environment/handlers.ts";
+import { EnvironmentToolkit } from "../mcp/toolkits/environment/tools.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
@@ -274,13 +279,12 @@ const layerTest = Layer.mergeAll(
   ProjectStore.layer,
   ProjectionStore.layer,
   EffectOutbox.layer,
-  ThreadCommandExecutor.layer,
 ).pipe(
   Layer.provide(McpSessionRegistryTestkit.layer),
   Layer.provide(SqlitePersistence.layerMemory),
   Layer.provide(layerCheckpointStoreTest),
   Layer.provide(layerServerConfig),
-  Layer.provide(ServerSettings.layerTest()),
+  Layer.provideMerge(ServerSettings.layerTest()),
   Layer.provide(layerTestProviderInstanceRegistry),
   Layer.provide(layerGitWorkflowTest),
   Layer.provide(layerProjectServiceTest),
@@ -299,11 +303,60 @@ const layerLegacyImportTest = RuntimeLayer.layer.pipe(
   Layer.provide(layerPlatformTest),
 );
 
+const preferencesEnvironmentId = EnvironmentId.make("runtime-layer-preferences");
+const layerEnvironmentMcpTest = McpToolAccess.HandlersLayer.layer(EnvironmentHandlers.layer).pipe(
+  Layer.provideMerge(layerTest),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      Layer.succeed(McpInvocationContext.McpInvocationContext, {
+        environmentId: preferencesEnvironmentId,
+        requestNamespace: "runtime-layer-preferences",
+        thread: undefined,
+        client: { sessionId: "preferences-client", label: "Test", access: "full-access" },
+        capabilities: new Set(["orchestration" as const]),
+        issuedAt: 0,
+      }),
+      Layer.mock(ServerEnvironment.ServerEnvironment)({
+        getDescriptor: Effect.succeed({
+          environmentId: preferencesEnvironmentId,
+          label: "Test",
+          platform: { os: "linux", arch: "x64" },
+          serverVersion: "0.0.0",
+          capabilities: { repositoryIdentity: false },
+        }),
+      }),
+    ),
+  ),
+);
+
+it.layer(layerEnvironmentMcpTest)("environment MCP runtime wiring", (it) => {
+  it.effect("updates and reads saved prompts using the orchestration runtime services", () =>
+    Effect.gen(function* () {
+      const toolkit = yield* EnvironmentToolkit;
+      const savedPrompts = [
+        {
+          id: "commit-changes",
+          name: "Commit changes",
+          text: "Commit changes.",
+          behavior: "insert" as const,
+        },
+      ];
+      const updated = yield* toolkit
+        .handle("t3_environment_preferences_update", { savedPrompts })
+        .pipe(Stream.unwrap, Stream.runCollect);
+      expect(updated.at(-1)?.result).toMatchObject({ savedPrompts });
+      const read = yield* toolkit
+        .handle("t3_environment_read", {})
+        .pipe(Stream.unwrap, Stream.runCollect);
+      expect(read.at(-1)?.result).toMatchObject({ preferences: { savedPrompts } });
+    }),
+  );
+});
+
 const layerProjectDeletionTest = Layer.mergeAll(
   RuntimeLayer.layer.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
   RuntimeLayer.layerProjectService,
   RuntimeLayer.layerEventSink,
-  ThreadCommandExecutor.layer,
 ).pipe(
   Layer.provide(
     Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({
