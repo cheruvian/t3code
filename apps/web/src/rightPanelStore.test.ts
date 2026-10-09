@@ -541,6 +541,38 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("toggles tasks independently of workspace details and other threads", () => {
+    const store = useRightPanelStore.getState();
+    store.toggleThreadTasksPanel(refA);
+    store.setThreadPanelOpen(refA, "inline", false);
+    store.setThreadPanelOpen(refA, "inline", true);
+    const visibility = useRightPanelStore.getState().threadPanelVisibilityByThreadKey;
+    expect(selectThreadPanelVisibility(visibility, refA)).toEqual({
+      inlineOpen: true,
+      popoverOpen: false,
+      tasksOpen: false,
+    });
+    expect(selectThreadPanelVisibility(visibility, refB).tasksOpen).not.toBe(false);
+    const otherEnvironment = scopeThreadRef("env-2" as EnvironmentId, refA.threadId);
+    expect(selectThreadPanelVisibility(visibility, otherEnvironment).tasksOpen).not.toBe(false);
+
+    store.toggleThreadTasksPanel(refA);
+    expect(useRightPanelStore.getState().threadPanelVisibilityByThreadKey).toEqual({});
+  });
+
+  it("persists hidden tasks while keeping the workspace panel visible", () => {
+    useRightPanelStore.getState().toggleThreadTasksPanel(refA);
+    const persisted = useRightPanelStore.persist.getOptions().partialize!(
+      useRightPanelStore.getState(),
+    );
+    expect(migratePersistedRightPanelState(persisted)).toEqual({
+      byThreadKey: {},
+      threadPanelVisibilityByThreadKey: {
+        "env-1:thread-A": { inlineOpen: true, popoverOpen: false, tasksOpen: false },
+      },
+    });
+  });
+
   it("tracks inline and popover visibility independently", () => {
     const store = useRightPanelStore.getState();
 

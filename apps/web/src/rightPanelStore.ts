@@ -117,6 +117,7 @@ export interface ThreadRightPanelState {
 export interface ThreadPanelVisibility {
   inlineOpen: boolean;
   popoverOpen: boolean;
+  tasksOpen?: boolean;
 }
 
 interface RightPanelStoreState {
@@ -188,6 +189,7 @@ interface RightPanelStoreState {
     open: boolean,
   ) => void;
   toggleThreadPanel: (ref: ScopedThreadRef, presentation: ThreadPanelPresentation) => void;
+  toggleThreadTasksPanel: (ref: ScopedThreadRef) => void;
   removeThread: (ref: ScopedThreadRef) => void;
 }
 
@@ -329,7 +331,7 @@ const updateThreadPanelVisibilityMap = (
 ): Record<string, ThreadPanelVisibility> => {
   const current = byThreadKey[threadKey] ?? DEFAULT_THREAD_PANEL_VISIBILITY;
   const next = updater(current);
-  if (next.inlineOpen && !next.popoverOpen) {
+  if (next.inlineOpen && !next.popoverOpen && next.tasksOpen !== false) {
     if (!(threadKey in byThreadKey)) return byThreadKey;
     const { [threadKey]: _removed, ...rest } = byThreadKey;
     return rest;
@@ -577,8 +579,18 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
             persistedState.threadPanelVisibilityByThreadKey as Record<string, unknown>,
           ).flatMap(([threadKey, value]) => {
             if (!value || typeof value !== "object" || !("inlineOpen" in value)) return [];
-            return value.inlineOpen === false
-              ? [[threadKey, { inlineOpen: false, popoverOpen: false }]]
+            const tasksOpen = !("tasksOpen" in value) || value.tasksOpen !== false;
+            return value.inlineOpen === false || !tasksOpen
+              ? [
+                  [
+                    threadKey,
+                    {
+                      inlineOpen: value.inlineOpen !== false,
+                      popoverOpen: false,
+                      ...(!tasksOpen ? { tasksOpen: false } : {}),
+                    },
+                  ],
+                ]
               : [];
           }),
         )
@@ -988,6 +1000,14 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
                 : { ...visibility, popoverOpen: !visibility.popoverOpen },
           ),
         })),
+      toggleThreadTasksPanel: (ref) =>
+        set((state) => ({
+          threadPanelVisibilityByThreadKey: updateThreadPanelVisibilityMap(
+            state.threadPanelVisibilityByThreadKey,
+            scopedThreadKey(ref),
+            (visibility) => ({ ...visibility, tasksOpen: visibility.tasksOpen === false }),
+          ),
+        })),
       removeThread: (ref) =>
         set((state) => {
           const threadKey = scopedThreadKey(ref);
@@ -1029,7 +1049,18 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         threadPanelVisibilityByThreadKey: Object.fromEntries(
           Object.entries(state.threadPanelVisibilityByThreadKey).flatMap(
             ([threadKey, visibility]) =>
-              visibility.inlineOpen ? [] : [[threadKey, { inlineOpen: false, popoverOpen: false }]],
+              visibility.inlineOpen && visibility.tasksOpen !== false
+                ? []
+                : [
+                    [
+                      threadKey,
+                      {
+                        inlineOpen: visibility.inlineOpen,
+                        popoverOpen: false,
+                        ...(visibility.tasksOpen === false ? { tasksOpen: false } : {}),
+                      },
+                    ],
+                  ],
           ),
         ),
       }),

@@ -23,6 +23,44 @@ const expectClear = (result: ReturnType<typeof resolve>) => {
 };
 
 describe("chat canvas layout", () => {
+  it("moves chat right to clear the workspace card on the left", () => {
+    const detailsCard = { left: 12, right: 292, bottom: 340 };
+    const result = resolveChatCanvasLayout({
+      container: { width: 1100, height: 900 },
+      detailsCard,
+      preview: null,
+    });
+    expect(result.chat.left).toBe(324);
+    expect(result.chat.width).toBe(756);
+    expect(result.chat.insetStart).toBe(304);
+    expect(result.chat.insetEnd).toBe(0);
+    expect(result.chat.left).toBeGreaterThanOrEqual(detailsCard.right + 32);
+  });
+
+  it("keeps the left workspace card clear while a preview uses the right gutter", () => {
+    const result = resolveChatCanvasLayout({
+      container: { width: 1600, height: 900 },
+      detailsCard: { left: 12, right: 292, bottom: 340 },
+      preview,
+      composerHeight: 180,
+    });
+    expect(result.chat.left).toBeGreaterThanOrEqual(324);
+    expect(result.chat.width).toBeGreaterThanOrEqual(640);
+    expectClear(result);
+  });
+
+  it("positions the workspace card on the left only when readable chat fits beside it", () => {
+    const placement = (width: number) =>
+      resolveThreadDetailsCardLayout({
+        container: { width, height: 900 },
+        lane: { padding: 20, minChatWidth: 640 },
+        frame: null,
+        side: "left",
+      });
+    expect(placement(1100)).toEqual({ x: 12, y: 12, width: 280, height: 876 });
+    expect(placement(900)).toBeNull();
+  });
+
   it("lifts a growing preview above the composer without snapping at the chat boundary", () => {
     let previous: ReturnType<typeof resolve> | undefined;
     for (let width = 480; width <= 1100; width++) {

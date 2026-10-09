@@ -203,10 +203,8 @@ import {
   derivePhase,
   deriveTimelineEntriesFromVisibleTurnItemsWithState,
   deriveTurnPlans,
-  mergeTurnPlanEntries,
   selectHandoffImageResources,
   type TimelineEntriesProjection,
-  deriveActivePlanState,
   deriveActiveWorkStartedAt,
   deriveCanInterruptRunningThread,
   findLatestProposedPlan,
@@ -265,6 +263,7 @@ import {
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
   selectThreadPanelOpen,
+  selectThreadPanelVisibility,
   selectThreadRightPanelState,
   type RightPanelSurface,
   useRightPanelStore,
@@ -474,6 +473,7 @@ import {
 } from "./chat/PanelLayoutControls";
 import { expandedImageKey, type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./chat/ThreadDetailsPanel";
+import { ThreadTasksPanel } from "./chat/ThreadTasksPanel";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
   type EnvironmentOption,
@@ -2422,6 +2422,11 @@ export default function ChatView(props: ChatViewProps) {
       threadPanelPresentation,
     ),
   );
+  const tasksPanelOpen = useRightPanelStore(
+    (state) =>
+      selectThreadPanelVisibility(state.threadPanelVisibilityByThreadKey, activeThreadRef)
+        .tasksOpen !== false,
+  );
 
   useEffect(() => {
     if (!activeThreadRef || !previewSessionsReady) return;
@@ -2471,31 +2476,6 @@ export default function ChatView(props: ChatViewProps) {
     });
   }, [activeTerminalDrawerPresence.present, activeThreadKey, existingOpenTerminalThreadKeys]);
   const latestRunSettled = isLatestRunSettled(activeLatestRun, activeRuntime);
-  const activePlan = useMemo(
-    () => deriveActivePlanState(serverProjection, activeActivityRun?.runId),
-    [activeActivityRun?.runId, serverProjection],
-  );
-  // Tasks progress for the running turn's own plan only — deriveActivePlanState
-  // falls back to older runs' plans, which must not label fresh work.
-  const activeComposerTasksProgress = useMemo(() => {
-    if (
-      isLatestRunSettled(activeActivityRun, activeRuntime) ||
-      !activePlan ||
-      activePlan.runId !== (activeActivityRun?.runId ?? null)
-    ) {
-      return null;
-    }
-    const totalSteps = activePlan.steps.length;
-    if (totalSteps === 0) return null;
-    const completedSteps = activePlan.steps.filter((step) => step.status === "completed").length;
-    const step =
-      activePlan.steps.find((candidate) => candidate.status === "inProgress")?.step ??
-      activePlan.steps.find((candidate) => candidate.status === "pending")?.step ??
-      activePlan.steps.at(-1)!.step;
-    return { step, completedSteps, totalSteps };
-  }, [activeActivityRun, activePlan, activeRuntime]);
-  const activeComposerTaskSteps =
-    activeComposerTasksProgress && activePlan ? activePlan.steps : null;
   const activeProjectRef = useMemo(
     () =>
       activeThread ? scopeProjectRef(activeThread.environmentId, activeThread.projectId) : null,
@@ -4012,10 +3992,9 @@ export default function ChatView(props: ChatViewProps) {
       previous?.threadKey === activeThreadKey ? previous.projection : null,
     );
     timelineProjectionRef.current = { threadKey: activeThreadKey, projection };
-    return mergeTurnPlanEntries(projection.entries, turnPlans);
+    return projection.entries;
   }, [
     activeThreadKey,
-    turnPlans,
     anchoredTimelineMessages,
     optimisticUserMessages,
     serverVisibleTurnItems,
@@ -6260,6 +6239,10 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().toggleThreadPanel(activeThreadRef, threadPanelPresentation);
   }, [activeThreadRef, threadPanelPresentation]);
+  const toggleTasksPanel = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().toggleThreadTasksPanel(activeThreadRef);
+  }, [activeThreadRef]);
   const toggleRightPanelMaximized = useCallback(() => {
     if (!canMaximizeRightPanel) return;
     setMaximizedRightPanelThreadKey((threadKey) =>
@@ -11508,6 +11491,8 @@ export default function ChatView(props: ChatViewProps) {
     terminalOpen: terminalUiState.terminalOpen,
     terminalShortcutLabel: shortcutLabelForCommand(keybindings, "terminal.toggle"),
     threadPanelOpen,
+    tasksPanelOpen,
+    onToggleTasksPanel: toggleTasksPanel,
     threadPanelPresentation,
     threadPanelPopoverHandle,
     threadPanelShortcutLabel: shortcutLabelForCommand(keybindings, "threadPanel.toggle"),
@@ -11522,6 +11507,7 @@ export default function ChatView(props: ChatViewProps) {
     <PanelLayoutControls
       {...panelToggleControlProps}
       showThreadPanelControl={!inlineRightPanelOwnsTitleBar}
+      showTasksPanelControl={!inlineRightPanelOwnsTitleBar && turnPlans.length > 0}
     />
   );
   const threadPanelHeaderControl = (
@@ -11532,6 +11518,7 @@ export default function ChatView(props: ChatViewProps) {
       <PanelLayoutControls
         {...panelToggleControlProps}
         showTerminalControl={false}
+        showTasksPanelControl={turnPlans.length > 0}
         showRightPanelControl={false}
       />
     </div>
@@ -11731,6 +11718,17 @@ export default function ChatView(props: ChatViewProps) {
                 }}
               />
             </div>
+            {!paintOnlyDisplayedTimeline && tasksPanelOpen ? (
+              <ThreadTasksPanel
+                key={activeThreadKey}
+                plans={turnPlans}
+                activeRunId={
+                  isLatestRunSettled(activeActivityRun, activeRuntime)
+                    ? null
+                    : (activeActivityRun?.runId ?? null)
+                }
+              />
+            ) : null}
             {/* Messages Wrapper */}
             <div className="relative flex min-h-0 flex-1 flex-col bg-background">
               {/* Messages — LegendList handles virtualization and scrolling internally */}
@@ -12062,8 +12060,8 @@ export default function ChatView(props: ChatViewProps) {
                               }
                               activeThreadModelSelection={activeThread?.modelSelection}
                               activeContextWindow={activeContextWindow}
-                              activeTasksProgress={activeComposerTasksProgress}
-                              activeTaskSteps={activeComposerTaskSteps}
+                              activeTasksProgress={null}
+                              activeTaskSteps={null}
                               compactThreadUnavailable={compactThreadUnavailable}
                               compactDisabled={compactDisabled}
                               compactDisabledReason={compactDisabledReason}

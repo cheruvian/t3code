@@ -1,4 +1,4 @@
-import { PanelBottomIcon, PanelRightIcon, SquareMenuIcon } from "lucide-react";
+import { ListTodoIcon, PanelBottomIcon, PanelRightIcon, SquareMenuIcon } from "lucide-react";
 import { Maximize2, Minimize2 } from "lucide";
 import { MorphIcon } from "~/components/MorphIcon";
 import { memo, type ReactElement } from "react";
@@ -10,6 +10,9 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export interface PanelLayoutControlsProps {
   showThreadPanelControl?: boolean;
+  showTasksPanelControl?: boolean;
+  tasksPanelOpen?: boolean;
+  onToggleTasksPanel?: () => void;
   showTerminalControl?: boolean;
   showMessageWidthControl?: boolean;
   showRightPanelControl?: boolean;
@@ -36,6 +39,9 @@ export interface PanelLayoutControlsProps {
 
 export const PanelLayoutControls = memo(function PanelLayoutControls({
   showThreadPanelControl = true,
+  showTasksPanelControl = true,
+  tasksPanelOpen = false,
+  onToggleTasksPanel,
   showTerminalControl = true,
   showMessageWidthControl = true,
   showRightPanelControl = true,
@@ -94,6 +100,25 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
             )
           : threadPanelTooltip(threadPanelToggle)
         : null}
+      {showTasksPanelControl && onToggleTasksPanel ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Toggle
+                className="shrink-0 [-webkit-app-region:no-drag]"
+                pressed={tasksPanelOpen}
+                onPressedChange={onToggleTasksPanel}
+                aria-label="Toggle tasks panel"
+                variant="ghost"
+                size="sm"
+              >
+                <ListTodoIcon className="size-4" />
+              </Toggle>
+            }
+          />
+          <TooltipPopup side="bottom">Toggle tasks</TooltipPopup>
+        </Tooltip>
+      ) : null}
       {showTerminalControl ? (
         <Tooltip>
           <TooltipTrigger render={<span className="flex shrink-0" />}>
