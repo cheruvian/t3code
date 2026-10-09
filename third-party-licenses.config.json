@@ -631,6 +631,24 @@
         "licenseId": "MIT",
         "copyrights": ["Copyright (c) 2019-present Fabio Spampinato, Andrew Maney"]
       }
+    },
+    {
+      "name": "@react-native/normalize-colors",
+      "version": "0.74.89",
+      "sourceUrl": "https://github.com/facebook/react-native/tree/v0.74.7/packages/normalize-colors",
+      "generatedNotice": {
+        "licenseId": "MIT",
+        "copyrights": ["Copyright (c) Meta Platforms, Inc. and affiliates."]
+      }
+    },
+    {
+      "name": "tr46",
+      "version": "0.0.3",
+      "sourceUrl": "https://github.com/jsdom/tr46",
+      "generatedNotice": {
+        "licenseId": "MIT",
+        "copyrights": ["Copyright (c) Sebastian Mayr"]
+      }
     }
   ]
 }

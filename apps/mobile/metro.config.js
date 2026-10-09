@@ -7,6 +7,8 @@ const extraThemes = require("./generated-uniwind-theme-names.json");
 
 /** @type {import("expo/metro-config").MetroConfig} */
 const config = getDefaultConfig(__dirname);
+// SQLite's browser worker loads its database engine as a WebAssembly asset.
+config.resolver.assetExts = [...config.resolver.assetExts, "wasm"];
 const workspaceRoot = path.resolve(__dirname, "../..");
 const generatedLicenseModuleRoot = path.join(__dirname, ".generated", "third-party-licenses");
 const licenseGeneratorSource = path.join(
@@ -158,6 +160,58 @@ module.exports = Promise.all([
   generateMobileThirdPartyLicenses(),
   prepareStreamScripts(),
   prepareMermaid(),
-]).then(() =>
-  withUniwindConfig(config, { cssEntryFile: "./global.css", extraThemes, polyfills: { rem: 14 } }),
-);
+]).then(() => {
+  const styledConfig = withUniwindConfig(config, {
+    cssEntryFile: "./global.css",
+    extraThemes,
+    polyfills: { rem: 14 },
+  });
+  const resolveStyled = styledConfig.resolver.resolveRequest;
+  styledConfig.resolver.resolveRequest = (context, moduleName, platform) => {
+    if (platform === "web" && moduleName === "expo-secure-store") {
+      return {
+        type: "sourceFile",
+        filePath: path.join(__dirname, "src/native/SecureStore.web.ts"),
+      };
+    }
+    if (
+      platform === "web" &&
+      context.originModulePath.includes(`${path.sep}react-native-screens${path.sep}`) &&
+      moduleName.endsWith("/NativeScreensModule")
+    ) {
+      return {
+        type: "sourceFile",
+        filePath: path.join(__dirname, "src/native/NativeScreensModule.web.ts"),
+      };
+    }
+    if (platform === "web" && moduleName === "@t3tools/mobile-markdown-text/primitive") {
+      return {
+        type: "sourceFile",
+        filePath: path.join(__dirname, "src/native/MarkdownTextPrimitive.web.tsx"),
+      };
+    }
+    if (
+      platform === "web" &&
+      (moduleName === "react-native-nitro-markdown" ||
+        moduleName === "react-native-nitro-markdown/headless")
+    ) {
+      return { type: "sourceFile", filePath: path.join(__dirname, "src/native/Markdown.web.tsx") };
+    }
+    // RNW's own barrel must resolve raw primitives. Wrapping those exports with
+    // Uniwind creates a cycle when a wrapper imports the RNW barrel in turn.
+    // Preserve Uniwind's stylesheet hook so Tailwind retains cascade priority.
+    if (
+      platform === "web" &&
+      context.originModulePath.includes(`${path.sep}react-native-web${path.sep}`) &&
+      !moduleName.includes("createOrderedCSSStyleSheet")
+    ) {
+      return (config.resolver.resolveRequest ?? context.resolveRequest)(
+        context,
+        moduleName,
+        platform,
+      );
+    }
+    return resolveStyled(context, moduleName, platform);
+  };
+  return styledConfig;
+});

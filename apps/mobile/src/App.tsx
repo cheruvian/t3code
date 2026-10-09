@@ -3,7 +3,7 @@ import { PermissionUpdateNotice } from "./components/PermissionUpdateNotice";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
-import { StatusBar } from "react-native";
+import { Platform, StatusBar } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -41,7 +41,7 @@ void SplashScreen.preventAutoHideAsync().catch(() => {
 const appLinking = {
   prefixes: [Linking.createURL("/"), "t3code://", "t3code-dev://", "t3code-preview://"],
   // Keep the compact thread list available beneath a directly opened thread.
-  config: { initialRouteName: "Home" },
+  config: { initialRouteName: "Home", ...(Platform.OS === "web" ? { path: "native" } : {}) },
   filter: shouldHandleAppLink,
 };
 

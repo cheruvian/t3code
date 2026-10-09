@@ -227,7 +227,10 @@ const sharingPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
 const config: ExpoConfig = {
   name: variant.appName,
   slug: "t3-code",
-  platforms: ["ios", "android"],
+  platforms: ["ios", "android", "web"],
+  ...(process.env.T3CODE_NATIVE_WEB_EXPERIMENT === "1"
+    ? { experiments: { baseUrl: "/native" } }
+    : {}),
   scheme: variant.scheme,
   version: "2.0.0",
   runtimeVersion: {

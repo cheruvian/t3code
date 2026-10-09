@@ -17,6 +17,7 @@ import {
 import { loadRepoEnv } from "../../scripts/lib/public-config";
 import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses";
 import { tailwindPlugins } from "./vite/tailwind";
+import { nativeWebEndpoint } from "./vite/native-web-endpoint";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
@@ -160,6 +161,7 @@ export default defineConfig(() => {
   return {
     assetsInclude: ["**/*.wasm"],
     plugins: [
+      nativeWebEndpoint(),
       devCompressionPlugin(),
       thirdPartyLicensesPlugin({
         bundleName: "web",
