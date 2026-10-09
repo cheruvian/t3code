@@ -87,6 +87,52 @@ describe("composer dictation ownership", () => {
     expect(voice.busy).toBe(false);
   });
 
+  it("finishes and commits the final transcript before submitting once", async () => {
+    const submit = vi.fn(() => {
+      expect(input.commit).toHaveBeenCalledExactlyOnceWith("Existing draft.", "Final words.");
+    });
+    await act(() => voice.start());
+    await act(() => {
+      voice.stopAndSubmit(submit);
+      voice.stopAndSubmit(submit);
+    });
+    expect(Recognition.latest.stop).toHaveBeenCalledOnce();
+    expect(submit).not.toHaveBeenCalled();
+    await act(() => voice.stopAndSubmit(submit));
+    expect(Recognition.latest.stop).toHaveBeenCalledOnce();
+    await act(() => Recognition.latest.finish("Final words."));
+    expect(submit).toHaveBeenCalledOnce();
+  });
+
+  it("does not submit when dictation is cancelled or fails", async () => {
+    const submit = vi.fn();
+    await act(() => voice.start());
+    const cancelled = Recognition.latest;
+    await act(() => voice.stopAndSubmit(submit));
+    await act(() => voice.cancel());
+    await act(() => cancelled.finish("Discarded"));
+    await act(() => voice.start());
+    await act(() => voice.stopAndSubmit(submit));
+    await act(() => Recognition.latest.onerror?.({ error: "not-allowed" }));
+    expect(input.commit).not.toHaveBeenCalled();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("does not submit an empty transcript or a rejected draft", async () => {
+    const submit = vi.fn();
+    await act(() => voice.start());
+    await act(() => voice.stopAndSubmit(submit));
+    await act(() => Recognition.latest.finish(""));
+    expect(submit).not.toHaveBeenCalled();
+    input = { ...input, commit: vi.fn(() => false) };
+    await act(() => root.update(<Probe />));
+    await act(() => voice.start());
+    await act(() => voice.stopAndSubmit(submit));
+    await act(() => Recognition.latest.finish("Rejected"));
+    expect(submit).not.toHaveBeenCalled();
+    expect(voice.error).toContain("draft changed");
+  });
+
   it.each(["owner", "prompt", "enabled"] as const)(
     "cancels when %s changes and discards late results",
     async (field) => {

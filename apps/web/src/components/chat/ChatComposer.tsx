@@ -3025,15 +3025,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
   const showResumeAction =
     canResume && !composerDraftHasUserContent(composerDraft) && !isEditingQueuedMessage;
-  const collapsedComposerPrimaryActionDisabled =
-    phase === "running" ||
-    isSendBusy ||
-    isSendDisabled ||
-    (isConnecting && !(allowOfflineQueue && environmentUnavailable !== null)) ||
-    noProviderAvailable ||
-    projectSelectionRequired ||
-    (environmentUnavailable !== null && !allowOfflineQueue) ||
-    (!composerSendState.hasSendableContent && !showResumeAction);
   const collapsedComposerPrimaryActionLabel = props.isResourceActionRunning
     ? "Queue message"
     : showResumeAction
@@ -3063,6 +3054,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     environmentUnavailable === null &&
     !noProviderAvailable &&
     !projectSelectionRequired;
+  const [pendingDictationSend, setPendingDictationSend] = useState<{
+    owner: string;
+    prompt: string;
+    dispatchMode: ComposerDispatchMode | undefined;
+    submissionIntent: ComposerSubmissionIntent | undefined;
+  } | null>(null);
   const voiceInput = useBrowserDictation({
     owner: composerTargetKey(composerDraftTarget),
     prompt,
@@ -3079,6 +3076,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return true;
     },
   });
+  const collapsedComposerPrimaryActionDisabled =
+    phase === "running" ||
+    isSendBusy ||
+    isSendDisabled ||
+    (isConnecting && !(allowOfflineQueue && environmentUnavailable !== null)) ||
+    noProviderAvailable ||
+    projectSelectionRequired ||
+    (environmentUnavailable !== null && !allowOfflineQueue) ||
+    (!composerSendState.hasSendableContent && !voiceInput.busy && !showResumeAction);
   const dictationButton =
     isMobileViewport && !activePendingProgress && !isComposerApprovalState ? (
       <BrowserDictationButton voice={voiceInput} disabled={!voiceInputEnabled} />
@@ -4254,12 +4260,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       submissionIntent?: ComposerSubmissionIntent,
     ) => {
       if (
-        voiceInput.busy ||
         noProviderAvailable ||
         isSendDisabled ||
         !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
       ) {
         event?.preventDefault();
+        return;
+      }
+      if (voiceInput.busy) {
+        event?.preventDefault();
+        voiceInput.stopAndSubmit(() => {
+          setPendingDictationSend({
+            owner: composerTargetKey(composerDraftTarget),
+            prompt: promptRef.current,
+            dispatchMode,
+            submissionIntent,
+          });
+        });
         return;
       }
       // A send while a pasted image is still compressing would strand that
@@ -4317,7 +4334,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
     },
     [
-      voiceInput.busy,
+      voiceInput,
+      composerDraftTarget,
       activeThreadId,
       activePendingProgress,
       attachmentTargetKey,
@@ -4332,6 +4350,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       shouldBlurMobileComposerOnSubmit,
     ],
   );
+  useEffect(() => {
+    if (!pendingDictationSend) return;
+    setPendingDictationSend(null);
+    if (
+      pendingDictationSend.owner === composerTargetKey(composerDraftTarget) &&
+      pendingDictationSend.prompt === promptRef.current
+    ) {
+      submitComposer(
+        undefined,
+        pendingDictationSend.dispatchMode,
+        pendingDictationSend.submissionIntent,
+      );
+    }
+  }, [pendingDictationSend, composerDraftTarget, promptRef, submitComposer]);
+
   useEffect(() => {
     if (pendingSavedPromptSend === null) return;
     setPendingSavedPromptSend(null);
@@ -7040,18 +7073,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   type="button"
                   data-chat-composer-transition-actions="true"
                   className="flex size-8 shrink-0 items-center justify-center rounded-full bg-message-action text-message-action-foreground hover:bg-message-action-hover disabled:opacity-30"
-                  disabled={collapsedComposerPrimaryActionDisabled || voiceInput.busy}
-                  aria-label={collapsedComposerPrimaryActionLabel}
+                  disabled={
+                    collapsedComposerPrimaryActionDisabled || voiceInput.phase === "finishing"
+                  }
+                  aria-label={
+                    voiceInput.busy ? "Send message" : collapsedComposerPrimaryActionLabel
+                  }
                   onPointerDown={(event) => event.preventDefault()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    if (showResumeAction) onResume();
+                    if (showResumeAction && !voiceInput.busy) onResume();
                     // Compacting first is only sent from the labeled button, so expand to show it.
-                    else if (props.resumeCompactionTokens !== null) expandMobileComposer();
+                    else if (props.resumeCompactionTokens !== null && !voiceInput.busy)
+                      expandMobileComposer();
                     else submitComposer();
                   }}
                 >
-                  {showResumeAction ? (
+                  {showResumeAction && !voiceInput.busy ? (
                     <PlayIcon className="size-4 fill-current" aria-hidden="true" />
                   ) : (
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -7749,10 +7787,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     showPlanFollowUpPrompt={
                       pendingUserInputs.length === 0 && showPlanFollowUpPrompt
                     }
-                    promptHasText={prompt.trim().length > 0}
+                    promptHasText={prompt.trim().length > 0 || voiceInput.busy}
                     isSendBusy={isSendBusy}
                     sendDisabledReason={
-                      voiceInput.busy ? "Finish dictation before sending" : sendDisabledReason
+                      voiceInput.phase === "finishing" ? "Finishing dictation…" : sendDisabledReason
                     }
                     isConnecting={
                       isConnecting && !(allowOfflineQueue && environmentUnavailable !== null)
@@ -7763,8 +7801,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       projectSelectionRequired
                     }
                     isPreparingWorktree={isPreparingWorktree}
-                    hasSendableContent={composerSendState.hasSendableContent}
-                    canResume={showResumeAction}
+                    hasSendableContent={composerSendState.hasSendableContent || voiceInput.busy}
+                    canResume={showResumeAction && !voiceInput.busy}
                     preserveComposerFocusOnPointerDown={isMobileViewport || isComposerResting}
                     isEditingQueuedMessage={isEditingQueuedMessage}
                     onSubmitMessage={handleSubmitMessage}

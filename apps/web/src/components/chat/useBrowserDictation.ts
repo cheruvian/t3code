@@ -20,8 +20,10 @@ export function useBrowserDictation(input: {
     latest.current = input;
   });
   const session = useRef<BrowserDictation | null>(null);
+  const afterCommit = useRef<(() => void) | null>(null);
 
   const cancel = () => {
+    afterCommit.current = null;
     session.current?.cancel();
     session.current = null;
   };
@@ -29,6 +31,7 @@ export function useBrowserDictation(input: {
   useEffect(() => {
     const onVisibilityChange = () => {
       if (document.hidden) {
+        afterCommit.current = null;
         session.current?.cancel();
         session.current = null;
       }
@@ -36,6 +39,7 @@ export function useBrowserDictation(input: {
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      afterCommit.current = null;
       session.current?.cancel();
       session.current = null;
     };
@@ -50,6 +54,11 @@ export function useBrowserDictation(input: {
     supported: getBrowserRecognition() !== null,
     dismissError: () => setError(null),
     stop: () => session.current?.stop(),
+    stopAndSubmit: (submit: () => void) => {
+      if (!session.current || afterCommit.current || phase === "finishing") return;
+      afterCommit.current = submit;
+      session.current.stop();
+    },
     start: () => {
       const Recognition = getBrowserRecognition();
       if (!input.enabled) return;
@@ -66,7 +75,10 @@ export function useBrowserDictation(input: {
       const controller = new BrowserDictation({
         phase: setPhase,
         preview: setPreview,
-        error: setError,
+        error: (message) => {
+          afterCommit.current = null;
+          setError(message);
+        },
         commit: (text) => {
           if (
             latest.current.owner !== captured.owner ||
@@ -74,7 +86,12 @@ export function useBrowserDictation(input: {
             latest.current.prompt !== captured.prompt ||
             !latest.current.commit(captured.prompt, text)
           ) {
+            afterCommit.current = null;
             setError("The draft changed. Dictation was not inserted.");
+          } else {
+            const submit = afterCommit.current;
+            afterCommit.current = null;
+            submit?.();
           }
         },
       });
