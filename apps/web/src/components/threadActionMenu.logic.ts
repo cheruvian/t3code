@@ -153,10 +153,14 @@ export function buildThreadActionMenuItems(
             icon: "arrow-right",
             disabled:
               !!state.moveUnavailableLabel || state.isRunning || state.isMovingEnvironment === true,
-            children: (state.moveDestinations ?? []).map((destination) => ({
-              id: `move-environment:${destination.environmentId}` as const,
-              label: destination.label,
-            })),
+            ...(state.moveDestinations?.length
+              ? {
+                  children: state.moveDestinations.map((destination) => ({
+                    id: `move-environment:${destination.environmentId}` as const,
+                    label: destination.label,
+                  })),
+                }
+              : {}),
           },
         ]
       : []),

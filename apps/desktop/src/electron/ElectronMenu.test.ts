@@ -44,6 +44,28 @@ describe("ElectronMenu", () => {
     setApplicationMenuMock.mockReset();
   });
 
+  it.effect("keeps transfer discovery feedback in the native thread menu", () =>
+    Effect.gen(function* () {
+      buildFromTemplateMock.mockImplementation(() => ({
+        popup: (options: Electron.PopupOptions) => options.callback?.(),
+      }));
+      const electronMenu = yield* ElectronMenu.ElectronMenu;
+      for (const moveUnavailableLabel of ["Checking destinations…", "No eligible destinations"]) {
+        yield* electronMenu.showContextMenu({
+          window: makeWindow(),
+          position: Option.none(),
+          items: [{ id: "move-environment", label: moveUnavailableLabel, disabled: true }],
+        });
+        const template = buildFromTemplateMock.mock
+          .lastCall?.[0] as Electron.MenuItemConstructorOptions[];
+        const transfer = template.find((item) => item.label === moveUnavailableLabel);
+        assert.isDefined(transfer);
+        assert.isFalse(transfer?.enabled);
+        assert.isUndefined(transfer?.submenu);
+      }
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("returns none without building a menu when there are no valid items", () =>
     Effect.gen(function* () {
       const electronMenu = yield* ElectronMenu.ElectronMenu;

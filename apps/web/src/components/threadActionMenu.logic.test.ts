@@ -256,5 +256,6 @@ it.each(["Checking destinations…", "No eligible destinations"])(
     const transfer = items.find((item) => item.id === "move-environment");
     expect(transfer?.label).toBe(moveUnavailableLabel);
     expect(transfer?.disabled).toBe(true);
+    expect(transfer).not.toHaveProperty("children");
   },
 );
