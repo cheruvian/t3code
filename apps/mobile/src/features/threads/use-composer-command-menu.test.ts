@@ -5,7 +5,7 @@ import {
   ProviderInstanceId,
   type ServerProvider,
 } from "@t3tools/contracts";
-import { act, createElement } from "react";
+import { act, createElement, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 const refreshProviders = vi.hoisted(() => vi.fn());
@@ -353,3 +353,107 @@ it.each(["insert", "send"] as const)(
     expect(result.interactionMode).toBeNull();
   },
 );
+
+describe("quick command picker draft behavior", () => {
+  let root: Root;
+  let menu: ReturnType<typeof useComposerCommandMenu>;
+  let draft = "";
+  const provider = {
+    instanceId: ProviderInstanceId.make("claude"),
+    driver: ProviderDriverKind.make("claude"),
+    enabled: true,
+    installed: true,
+    version: "1",
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    models: [],
+    slashCommands: [{ name: "compact" }],
+    skills: [
+      { name: "knowledge-ingest", path: "/skills/knowledge-ingest/SKILL.md", enabled: true },
+    ],
+  } satisfies ServerProvider;
+  function Probe({ owner = "draft:one" }: { owner?: string }) {
+    const [text, setText] = useState("Notes");
+    const current = useComposerCommandMenu({
+      draftMessage: text,
+      ownerKey: owner,
+      environmentId: EnvironmentId.make("quick-picker"),
+      projectCwd: null,
+      selectedProviderStatus: provider,
+      hasThread: true,
+      hasCompactableConversation: true,
+      enabled: false,
+      onChangeDraftMessage: setText,
+      savedPrompts: [{ id: "commit", name: "Commit", text: "Commit changes.", behavior: "send" }],
+    });
+    useEffect(() => {
+      draft = text;
+      menu = current;
+    }, [text, current]);
+    return null;
+  }
+  beforeEach(async () => {
+    const document = { nodeType: 9, addEventListener() {}, removeEventListener() {} };
+    const container = {
+      nodeType: 1,
+      tagName: "DIV",
+      namespaceURI: "http://www.w3.org/1999/xhtml",
+      ownerDocument: document,
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    vi.stubGlobal("document", document);
+    vi.stubGlobal("window", { document, HTMLIFrameElement: EventTarget });
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    root = createRoot(container as unknown as HTMLElement);
+    await act(async () => root.render(createElement(Probe)));
+  });
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+  });
+  it("opens and dismisses without adding slash text or changing the draft", async () => {
+    await act(async () => menu.openQuickPicker());
+    expect(menu.quickPickerOpen).toBe(true);
+    expect(menu.items.some((item) => item.type === "saved-prompt")).toBe(true);
+    expect(draft).toBe("Notes");
+    await act(async () => menu.closeQuickPicker());
+    expect(menu.quickPickerOpen).toBe(false);
+    expect(draft).toBe("Notes");
+  });
+  it("lets Insert override a saved prompt configured to send immediately", async () => {
+    await act(async () => menu.openQuickPicker());
+    const item = menu.items.find((item) => item.type === "saved-prompt")!;
+    await act(async () => menu.onSelect(item, "insert"));
+    expect(draft).toBe("Notes Commit changes.");
+    expect(menu.pendingCommandSend).toBeNull();
+    expect(menu.quickPickerOpen).toBe(false);
+  });
+  it("sends a skill through the normal draft submission path", async () => {
+    await act(async () => menu.openQuickPicker());
+    const item = menu.items.find((item) => item.type === "skill")!;
+    expect(item).toBeDefined();
+    await act(async () => menu.onSelect(item, "send"));
+    expect(draft).toBe("Notes $knowledge-ingest ");
+    expect(menu.pendingCommandSend).toBe(draft);
+  });
+  it("inserts provider commands at the start while preserving the draft", async () => {
+    await act(async () => menu.openQuickPicker());
+    const item = menu.items.find((item) => item.type === "provider-slash-command")!;
+    await act(async () => menu.onSelect(item, "insert"));
+    expect(draft).toBe("/compact Notes");
+  });
+  it("closes and clears pending sends when changing draft owners", async () => {
+    await act(async () => menu.openQuickPicker());
+    await act(async () =>
+      menu.onSelect(
+        menu.items.find((item) => item.type === "saved-prompt")!,
+        "send",
+      ),
+    );
+    await act(async () => root.render(createElement(Probe, { owner: "draft:two" })));
+    expect(menu.quickPickerOpen).toBe(false);
+    expect(menu.pendingCommandSend).toBeNull();
+  });
+});

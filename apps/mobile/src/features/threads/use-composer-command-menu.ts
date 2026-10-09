@@ -139,6 +139,7 @@ export function resolveComposerCommandSelection(input: {
   readonly trigger: Pick<ComposerTrigger, "rangeStart" | "rangeEnd">;
   readonly item: ComposerCommandItem;
   readonly allowInteractionMode: boolean;
+  readonly separateInsertion?: boolean;
 }): {
   readonly text: string;
   readonly cursor: number;
@@ -167,6 +168,12 @@ export function resolveComposerCommandSelection(input: {
     replacement = `/${item.command} `;
   } else if (item.type === "provider-slash-command") {
     replacement = `/${item.command.name} `;
+  }
+  if (input.separateInsertion && replacement) {
+    const before = draftMessage.slice(0, trigger.rangeStart);
+    const after = draftMessage.slice(trigger.rangeEnd);
+    if (before && !/\s$/.test(before)) replacement = ` ${replacement}`;
+    if (after && !/^\s/.test(after) && !/\s$/.test(replacement)) replacement += " ";
   }
   return {
     ...replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, replacement),
@@ -216,9 +223,15 @@ export function useComposerCommandMenu({
   /** Picking /usage-limits is the action itself; the draft keeps nothing of it. */
   readonly onUsageLimits?: () => void;
 }) {
-  const [pendingSavedPromptSend, setPendingSavedPromptSend] = useState<string | null>(null);
+  const menuOwnerKey = `${environmentId ?? ""}:${ownerKey ?? ""}`;
+  const [quickPickerOwner, setQuickPickerOwner] = useState<string | null>(null);
+  const quickPickerOpen = quickPickerOwner === menuOwnerKey;
+  const openQuickPicker = useCallback(() => setQuickPickerOwner(menuOwnerKey), [menuOwnerKey]);
+  const closeQuickPicker = useCallback(() => setQuickPickerOwner(null), []);
+  const [pendingSend, setPendingSend] = useState<{ owner: string; text: string } | null>(null);
+  const pendingCommandSend = pendingSend?.owner === menuOwnerKey ? pendingSend.text : null;
   const [selection, setSelection] = useState(() => composerSelectionAtEnd(draftMessage));
-  const previousOwnerKeyRef = useRef(ownerKey);
+  const previousOwnerKeyRef = useRef(menuOwnerKey);
   const onSelectionChange = useCallback((nextSelection: ComposerEditorSelection) => {
     setSelection(nextSelection);
   }, []);
@@ -244,10 +257,12 @@ export function useComposerCommandMenu({
     });
   }, [draftMessage, ownerKey]);
   useEffect(() => {
-    if (previousOwnerKeyRef.current === ownerKey) return;
-    previousOwnerKeyRef.current = ownerKey;
+    if (previousOwnerKeyRef.current === menuOwnerKey) return;
+    previousOwnerKeyRef.current = menuOwnerKey;
+    setQuickPickerOwner(null);
+    setPendingSend(null);
     setSelection(composerSelectionAtEnd(draftMessage));
-  }, [draftMessage, ownerKey]);
+  }, [draftMessage, menuOwnerKey]);
 
   const skills = useMemo(
     () =>
@@ -351,11 +366,14 @@ export function useComposerCommandMenu({
   ]);
 
   const trigger = useMemo(() => {
+    if (quickPickerOpen) {
+      return { kind: "slash-command" as const, query: "", rangeStart: 0, rangeEnd: 0 };
+    }
     if (!enabled || selection.start !== selection.end) {
       return null;
     }
     return detectComposerTrigger(draftMessage, selection.end);
-  }, [draftMessage, enabled, selection]);
+  }, [draftMessage, enabled, selection, quickPickerOpen]);
   const pathSearch = useComposerPathSearch({
     environmentId,
     cwd: trigger?.kind === "path" ? projectCwd : null,
@@ -550,8 +568,14 @@ export function useComposerCommandMenu({
   ]);
 
   const onSelect = useCallback(
-    (item: ComposerCommandItem) => {
+    (item: ComposerCommandItem, behavior?: "insert" | "send") => {
       if (!trigger) return;
+      if (quickPickerOpen && !items.some((candidate) => candidate.id === item.id)) return;
+      const insertionTrigger = quickPickerOpen
+        ? item.type === "provider-slash-command"
+          ? { rangeStart: 0, rangeEnd: 0 }
+          : { rangeStart: selection.start, rangeEnd: selection.end }
+        : trigger;
       if (item.type === "thread") {
         if (!ownerKey || trigger.kind !== "path") return;
         const shell = threadShells.find(
@@ -626,16 +650,23 @@ export function useComposerCommandMenu({
         item.command.name === USAGE_LIMITS_COMMAND.name &&
         onUsageLimits
       ) {
-        const cleared = replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, "");
+        const cleared = replaceTextRange(
+          draftMessage,
+          insertionTrigger.rangeStart,
+          insertionTrigger.rangeEnd,
+          "",
+        );
         setSelection({ start: cleared.cursor, end: cleared.cursor });
         onChangeDraftMessage(cleared.text);
         onUsageLimits();
+        setQuickPickerOwner(null);
         return;
       }
 
       const result = resolveComposerCommandSelection({
         draftMessage,
-        trigger,
+        trigger: insertionTrigger,
+        separateInsertion: quickPickerOpen,
         item,
         allowInteractionMode:
           onUpdateInteractionMode !== undefined &&
@@ -643,9 +674,13 @@ export function useComposerCommandMenu({
       });
       setSelection({ start: result.cursor, end: result.cursor });
       onChangeDraftMessage(result.text);
-      if (item.type === "saved-prompt" && item.prompt.behavior === "send") {
-        setPendingSavedPromptSend(result.text);
+      if (
+        (behavior ?? (item.type === "saved-prompt" ? item.prompt.behavior : "insert")) === "send" &&
+        result.interactionMode === null
+      ) {
+        setPendingSend({ owner: menuOwnerKey, text: result.text });
       }
+      setQuickPickerOwner(null);
       if (result.interactionMode !== null) {
         onUpdateInteractionMode?.(result.interactionMode);
       }
@@ -660,12 +695,18 @@ export function useComposerCommandMenu({
       selectedProviderStatus?.showInteractionModeToggle,
       threadShells,
       trigger,
+      quickPickerOpen,
+      menuOwnerKey,
+      selection,
     ],
   );
 
   return {
-    pendingSavedPromptSend,
-    clearPendingSavedPromptSend: () => setPendingSavedPromptSend(null),
+    quickPickerOpen,
+    openQuickPicker,
+    closeQuickPicker,
+    pendingCommandSend,
+    clearPendingCommandSend: () => setPendingSend(null),
     selection,
     onSelectionChange,
     trigger,

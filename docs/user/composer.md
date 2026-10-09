@@ -23,6 +23,11 @@ open **Settings → General → Saved prompts**. On mobile, open
 text, then choose whether selecting it inserts the text for editing or sends it
 immediately. You can edit or delete saved prompts in the same settings.
 
+On mobile, tap **/** beside the composer to browse saved prompts, commands, and
+skills. Tap letters to narrow the list, then choose **Insert** to edit or **Send**
+to submit with your current draft and attachments. Swipe down on the letter row
+to close the picker without changing your draft.
+
 Type `/` in a composer and select a `/prompt:` entry. T3 Code expands it into
 ordinary prompt text, so saved prompts work with every provider. Immediate sends
 include the rest of your draft and its attachments and follow your normal
