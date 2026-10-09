@@ -35,7 +35,7 @@ const resolveShikiDependencyRoot = (packageName) => {
   return currentDir;
 };
 
-config.watchFolders = [...new Set([...(config.watchFolders ?? []), workspaceRoot])];
+// Keep Expo's watch folders; an ancestor root blocks lazy shared-store lookup.
 config.resolver = {
   ...config.resolver,
   blockList: [
