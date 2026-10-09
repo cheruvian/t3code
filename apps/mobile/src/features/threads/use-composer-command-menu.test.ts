@@ -322,3 +322,34 @@ describe("workspace command discovery retry", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+it.each(["insert", "send"] as const)(
+  "expands a %s saved prompt without losing surrounding draft text",
+  (behavior) => {
+    const text = "Also /prompt:commit-changes and keep these notes.";
+    const start = text.indexOf("/");
+    const end = text.indexOf(" and");
+    const result = resolveComposerCommandSelection({
+      draftMessage: text,
+      trigger: {
+        rangeStart: start,
+        rangeEnd: end,
+      },
+      item: {
+        id: "saved-prompt:commit",
+        type: "saved-prompt",
+        prompt: {
+          id: "commit",
+          name: "Commit changes",
+          text: "Commit all local changes.",
+          behavior,
+        },
+        label: "/prompt:commit-changes",
+        description: "Commit all local changes.",
+      },
+      allowInteractionMode: false,
+    });
+    expect(result.text).toBe("Also Commit all local changes. and keep these notes.");
+    expect(result.cursor).toBe(start + "Commit all local changes.".length);
+    expect(result.interactionMode).toBeNull();
+  },
+);

@@ -221,3 +221,23 @@ describe("searchSlashCommandItems", () => {
     ]);
   });
 });
+
+it("finds saved prompts by name and keeps them available within a draft", () => {
+  const prompt = {
+    id: "commit",
+    name: "Commit changes",
+    text: "Use a Conventional Commit message.",
+    behavior: "insert" as const,
+  };
+  const item = {
+    id: "saved-prompt:commit",
+    type: "saved-prompt" as const,
+    prompt,
+    label: "/prompt:commit-changes",
+    description: prompt.text,
+  };
+  expect(searchSlashCommandItems([item], "commit")).toEqual([item]);
+  expect(searchSlashCommandItems([item], "prompt:commit")).toEqual([item]);
+  expect(searchSlashCommandItems([item], "conventional")).toEqual([item]);
+  expect(slashCommandItemsForPromptPosition([item], false)).toEqual([item]);
+});

@@ -487,6 +487,7 @@ export function NewTaskDraftScreen(props: {
     [flow.attachments],
   );
   const composerMenu = useComposerCommandMenu({
+    savedPrompts: selectedEnvironmentServerConfig?.settings.savedPrompts,
     draftMessage: flow.prompt,
     ownerKey: flow.draftKey,
     environmentId: selectedProject?.environmentId ?? null,
@@ -1369,6 +1370,27 @@ export function NewTaskDraftScreen(props: {
     scheduleUnusedComposerAttachmentCleanup(draftSnapshot.attachments);
   }
 
+  const canStart =
+    !isImportingContext &&
+    !cloneBlocksStart &&
+    taskPermissionReason === null &&
+    attachmentBlockReason === null &&
+    !modelUnavailable &&
+    Boolean(flow.selectedProject) &&
+    Boolean(flow.selectedModel) &&
+    flow.prompt.trim().length > 0 &&
+    isIncomingShareReady &&
+    !isImportingShare &&
+    !flow.submitting &&
+    pendingPastedTextAttachmentCount === 0 &&
+    !voiceInput.blocksSubmission &&
+    !(flow.workspaceMode === "worktree" && !flow.selectedBranchName);
+  useEffect(() => {
+    if (composerMenu.pendingSavedPromptSend === null) return;
+    composerMenu.clearPendingSavedPromptSend();
+    if (flow.prompt === composerMenu.pendingSavedPromptSend && canStart) void handleStart();
+  }, [composerMenu, flow.prompt, canStart, handleStart]);
+
   if (!selectedProject) {
     return (
       <View className="flex-1 bg-sheet" collapsable={false}>
@@ -1389,21 +1411,6 @@ export function NewTaskDraftScreen(props: {
   }
 
   const isAndroid = Platform.OS === "android";
-  const canStart =
-    !isImportingContext &&
-    !cloneBlocksStart &&
-    taskPermissionReason === null &&
-    attachmentBlockReason === null &&
-    !modelUnavailable &&
-    Boolean(flow.selectedProject) &&
-    Boolean(flow.selectedModel) &&
-    flow.prompt.trim().length > 0 &&
-    isIncomingShareReady &&
-    !isImportingShare &&
-    !flow.submitting &&
-    pendingPastedTextAttachmentCount === 0 &&
-    !voiceInput.blocksSubmission &&
-    !(flow.workspaceMode === "worktree" && !flow.selectedBranchName);
   const openDraftDocument = (attachment: ComposerDocumentAttachment) => {
     // A draft attachment lives only in the draft. Without its key the screen would fall through
     // to a remote lookup for bytes the server has never seen.

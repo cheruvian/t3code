@@ -1,3 +1,4 @@
+import { savedPromptItems } from "@t3tools/shared/savedPrompts";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtimeModeConfig";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
@@ -2731,7 +2732,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         (item) => item.command.name !== "compact" || compactSlashCommandAvailable,
       );
       const slashCommandItems = slashCommandItemsForPromptPosition(
-        [...builtInSlashCommandItems, ...visibleProviderSlashCommandItems, ...skillItems],
+        [
+          ...builtInSlashCommandItems,
+          ...visibleProviderSlashCommandItems,
+          ...skillItems,
+          ...savedPromptItems(settings.savedPrompts),
+        ],
         composerTrigger.rangeStart === 0,
       );
       return searchSlashCommandItems(slashCommandItems, query);
@@ -2818,6 +2824,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedProviderSlashCommands,
     selectedProviderStatus,
     settings.showSkillsInSlashMenu,
+    settings.savedPrompts,
     workspaceEntries.entries,
   ]);
 
@@ -3982,6 +3989,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   }, [readComposerSnapshot, resolveComposerTrigger]);
 
   const { onUsageLimitsCommand } = props;
+  const [pendingSavedPromptSend, setPendingSavedPromptSend] = useState<string | null>(null);
   const onSelectComposerItem = useCallback(
     (item: ComposerCommandItem) => {
       if (composerSelectLockRef.current) return;
@@ -4006,6 +4014,30 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         );
         if (applied) {
           setComposerHighlightedItemId(null);
+        }
+        return;
+      }
+      if (item.type === "saved-prompt") {
+        const applied = applyPromptReplacement(
+          trigger.rangeStart,
+          trigger.rangeEnd,
+          item.prompt.text,
+          {
+            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+          },
+        );
+        if (applied) {
+          setComposerHighlightedItemId(null);
+          if (item.prompt.behavior === "send") {
+            setPendingSavedPromptSend(
+              replaceTextRange(
+                snapshot.value,
+                trigger.rangeStart,
+                trigger.rangeEnd,
+                item.prompt.text,
+              ).text,
+            );
+          }
         }
         return;
       }
@@ -4300,6 +4332,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       shouldBlurMobileComposerOnSubmit,
     ],
   );
+  useEffect(() => {
+    if (pendingSavedPromptSend === null) return;
+    setPendingSavedPromptSend(null);
+    if (promptRef.current === pendingSavedPromptSend && !activePendingProgress) submitComposer();
+  }, [pendingSavedPromptSend, promptRef, submitComposer, activePendingProgress]);
+
   const handleSubmitMessage = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       event.preventDefault();

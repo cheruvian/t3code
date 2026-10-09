@@ -9,7 +9,7 @@ import { scoreProviderSkill } from "../../providerSkillSearch";
 
 type SlashSearchItem = Extract<
   ComposerCommandItem,
-  { type: "slash-command" | "provider-slash-command" | "skill" }
+  { type: "slash-command" | "provider-slash-command" | "skill" | "saved-prompt" }
 >;
 
 /**
@@ -42,7 +42,11 @@ function scoreSlashCommandItem(item: SlashSearchItem, query: string): number | n
   }
 
   const primaryValue =
-    item.type === "slash-command" ? item.command.toLowerCase() : item.command.name.toLowerCase();
+    item.type === "saved-prompt"
+      ? item.label.toLowerCase().replace(/^\//, "")
+      : item.type === "slash-command"
+        ? item.command.toLowerCase()
+        : item.command.name.toLowerCase();
   const description = item.description.toLowerCase();
 
   const scores = [
@@ -100,11 +104,13 @@ export function searchSlashCommandItems(
         item,
         score,
         tieBreaker:
-          item.type === "slash-command"
-            ? `0\u0000${item.command}`
-            : item.type === "provider-slash-command"
-              ? `1\u0000${item.command.name}\u0000${item.provider}`
-              : `2\u0000${item.skill.name}\u0000${item.provider}`,
+          item.type === "saved-prompt"
+            ? `3\u0000${item.prompt.name}\u0000${item.prompt.id}`
+            : item.type === "slash-command"
+              ? `0\u0000${item.command}`
+              : item.type === "provider-slash-command"
+                ? `1\u0000${item.command.name}\u0000${item.provider}`
+                : `2\u0000${item.skill.name}\u0000${item.provider}`,
       },
       Number.POSITIVE_INFINITY,
     );

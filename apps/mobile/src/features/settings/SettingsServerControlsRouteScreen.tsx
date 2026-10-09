@@ -1,3 +1,4 @@
+import { SavedPromptsSettings } from "./components/SavedPromptsSettings";
 import { useNavigation } from "@react-navigation/native";
 import { SettingsRow } from "./components/SettingsRow";
 import { AuthSettingsWriteScope } from "@t3tools/contracts";
@@ -393,6 +394,18 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
 
               {props.page === "agent-behavior" ? (
                 <>
+                  {!projectSelected ? (
+                    <SavedPromptsSettings
+                      prompts={reference.settings.savedPrompts}
+                      mixed={displayTargets.some(
+                        (entry) =>
+                          JSON.stringify(entry.settings.savedPrompts) !==
+                          JSON.stringify(reference.settings.savedPrompts),
+                      )}
+                      disabled={!canWriteSettings || pendingWrites > 0}
+                      onChange={(savedPrompts) => write({ savedPrompts })}
+                    />
+                  ) : null}
                   <SettingsSection
                     title="Response streaming"
                     trailing={

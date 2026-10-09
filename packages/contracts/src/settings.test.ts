@@ -1205,3 +1205,28 @@ describe("ServerSettings.removeAgentCreditsOnMerge", () => {
     ).toBe(true);
   });
 });
+
+describe("saved prompts", () => {
+  it("keeps existing environments empty and defaults prompts to insert", () => {
+    expect(decodeServerSettings({}).savedPrompts).toEqual([]);
+    const savedPrompts = [{ id: "commit", name: "Commit", text: "Commit all local changes." }];
+    const expected = [{ ...savedPrompts[0], behavior: "insert" }];
+    expect(decodeServerSettings({ savedPrompts }).savedPrompts).toEqual(expected);
+    expect(decodeServerSettingsPatch({ savedPrompts })).toEqual({ savedPrompts: expected });
+  });
+
+  it("round-trips immediate send and rejects empty text or unknown behavior", () => {
+    const savedPrompts = [
+      { id: "review", name: "Review", text: "Review concerns.", behavior: "send" },
+    ];
+    expect(encodeServerSettings(decodeServerSettings({ savedPrompts }))).toMatchObject({
+      savedPrompts,
+    });
+    for (const prompt of [
+      { ...savedPrompts[0], text: "  " },
+      { ...savedPrompts[0], behavior: "run" },
+    ]) {
+      expect(() => decodeServerSettingsPatch({ savedPrompts: [prompt] })).toThrow();
+    }
+  });
+});

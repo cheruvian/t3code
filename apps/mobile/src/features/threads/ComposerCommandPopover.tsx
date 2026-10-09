@@ -3,6 +3,7 @@ import {
   type ProviderSkillSourceKind,
 } from "@t3tools/client-runtime/providerSkills";
 import type {
+  SavedPrompt,
   PullRequestContextMetadata,
   ScopedThreadRef,
   ServerProviderSkill,
@@ -17,6 +18,13 @@ import { AppText as Text } from "../../components/AppText";
 import { GlassSurface } from "../../components/GlassSurface";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
 export type ComposerCommandItem =
+  | {
+      id: string;
+      type: "saved-prompt";
+      prompt: SavedPrompt;
+      label: string;
+      description: string;
+    }
   | {
       readonly id: string;
       readonly type: "pull-request";
@@ -100,6 +108,8 @@ function itemIcon(item: ComposerCommandItem): AppSymbolName | null {
   switch (item.type) {
     case "pull-request":
       return { ios: "arrow.triangle.pull", android: "merge" };
+    case "saved-prompt":
+      return "text.bubble";
     case "slash-command":
     case "provider-slash-command":
       return "terminal";

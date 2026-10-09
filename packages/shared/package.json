@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./savedPrompts": {
+      "types": "./src/savedPrompts.ts",
+      "import": "./src/savedPrompts.ts"
+    },
     "./orchestrationV2ThreadError": {
       "types": "./src/orchestrationV2ThreadError.ts",
       "import": "./src/orchestrationV2ThreadError.ts"

@@ -1292,7 +1292,18 @@ export const StorageCleanupSettings = Schema.Struct({
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
+export const SavedPrompt = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  text: TrimmedNonEmptyString,
+  behavior: Schema.Literals(["insert", "send"]).pipe(
+    Schema.withDecodingDefault(Effect.succeed("insert" as const)),
+  ),
+});
+export type SavedPrompt = typeof SavedPrompt.Type;
+
 export const ServerSettings = Schema.Struct({
+  savedPrompts: Schema.Array(SavedPrompt).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   globalScripts: Schema.Array(ProjectScript).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   // Appended to the system/instruction prompt for every provider across every
   // project in this environment.
@@ -1697,6 +1708,7 @@ const OpenCodeSettingsPatch = Schema.Struct({
 });
 
 export const ServerSettingsPatch = Schema.Struct({
+  savedPrompts: Schema.optionalKey(Schema.Array(SavedPrompt)),
   worktreeCleanup: Schema.optionalKey(
     Schema.NullOr(
       Schema.Union([

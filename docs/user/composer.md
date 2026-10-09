@@ -15,6 +15,20 @@ becomes an attachment when inserting it would exceed the message limit. On a
 hardware keyboard, use `Cmd+Shift+V` on Apple devices or `Ctrl+Shift+V` elsewhere
 to keep a large paste editable in the composer instead.
 
+## Saved prompts
+
+Save reusable prompts for every project on an environment. On web and desktop,
+open **Settings → General → Saved prompts**. On mobile, open
+**Settings → Agent behavior**, with an environment selected. Add a name and prompt
+text, then choose whether selecting it inserts the text for editing or sends it
+immediately. You can edit or delete saved prompts in the same settings.
+
+Type `/` in a composer and select a `/prompt:` entry. T3 Code expands it into
+ordinary prompt text, so saved prompts work with every provider. Immediate sends
+include the rest of your draft and its attachments and follow your normal
+queue or steer preference while an agent is running. If sending is blocked,
+the expanded text stays in the composer.
+
 ## Attach files
 
 Attach up to 100 files per message. Each image can be up to 10 MiB, with at most

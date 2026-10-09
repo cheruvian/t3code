@@ -100,6 +100,38 @@ const recordProviderUsage = (provider: string, instanceId: string | null = provi
   });
 
 it.layer(NodeServices.layer)("server settings", (it) => {
+  it.effect("persists saved prompt edits and deletions across reloads", () =>
+    Effect.gen(function* () {
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const first = {
+        id: "commit",
+        name: "Commit",
+        text: "Commit changes.",
+        behavior: "insert" as const,
+      };
+      const second = {
+        id: "review",
+        name: "Review",
+        text: "Review concerns.",
+        behavior: "send" as const,
+      };
+      yield* service.updateSettings({ savedPrompts: [first, second] });
+      const edited = { ...second, text: "Review remaining concerns." };
+      yield* service.updateSettings({ savedPrompts: [edited] });
+      const reloaded = yield* decodeServerSettingsJson(
+        yield* fs.readFileString(config.settingsPath),
+      );
+      assert.deepStrictEqual(reloaded.savedPrompts, [edited]);
+      yield* service.updateSettings({ savedPrompts: [] });
+      const cleared = yield* decodeServerSettingsJson(
+        yield* fs.readFileString(config.settingsPath),
+      );
+      assert.deepStrictEqual(cleared.savedPrompts, []);
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   it.effect("persists disabling automatic thread PR discovery", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;

@@ -820,3 +820,28 @@ describe("worktreesDirectory", () => {
     expect(back.previousWorktreesDirectories).toEqual(["/b"]);
   });
 });
+
+it("replaces saved prompt lists on edit, removal, and clear", () => {
+  const first = {
+    id: "commit",
+    name: "Commit",
+    text: "Commit changes.",
+    behavior: "insert" as const,
+  };
+  const second = {
+    id: "review",
+    name: "Review",
+    text: "Review concerns.",
+    behavior: "send" as const,
+  };
+  const saved = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+    savedPrompts: [first, second],
+  });
+  const edited = { ...second, text: "Review remaining concerns." };
+  const removed = applyServerSettingsPatch(saved, { savedPrompts: [edited] });
+  expect(removed.savedPrompts).toEqual([edited]);
+  expect(applyServerSettingsPatch(removed, { savedPrompts: [] }).savedPrompts).toEqual([]);
+  expect(
+    applyServerSettingsPatch(removed, { globalCustomInstructions: "Instructions" }).savedPrompts,
+  ).toEqual([edited]);
+});

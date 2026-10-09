@@ -1,5 +1,6 @@
 import { threadMoveUndoParticipants } from "@t3tools/client-runtime/operations";
 import { undoThreadEnvironmentMove } from "../../lib/threadEnvironmentMove";
+import { SavedPromptsSettings } from "./SavedPromptsSettings";
 import { Checkbox } from "../ui/checkbox";
 import { useAtomValue } from "@effect/atom-react";
 import { SettingsGroup } from "./SettingsGroup";
@@ -2508,6 +2509,7 @@ export function GeneralSettingsPanel() {
           </SettingsRow>
         </SettingsSection>
       ) : null}
+      <SavedPromptsSettings />
       <ProjectDefaultsSettings category="general" />
       <SettingsSection id="organization" title="Organization">
         <SettingsRow

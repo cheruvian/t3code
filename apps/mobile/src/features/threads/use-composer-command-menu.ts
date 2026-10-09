@@ -1,4 +1,6 @@
+import { savedPromptItems } from "@t3tools/shared/savedPrompts";
 import type {
+  SavedPrompt,
   EnvironmentId,
   ProjectId,
   ProviderInteractionMode,
@@ -8,6 +10,7 @@ import type {
 import { matchComposerThreadItems } from "@t3tools/client-runtime/composerThreadItems";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 
+const EMPTY_SAVED_PROMPTS: readonly SavedPrompt[] = [];
 const EMPTY_THREAD_SHELLS: ReadonlyArray<EnvironmentThreadShell> = [];
 import {
   COMPOSER_CONTEXT_MAX_RECORDS,
@@ -154,7 +157,9 @@ export function resolveComposerCommandSelection(input: {
   }
 
   let replacement = "";
-  if (item.type === "path") {
+  if (item.type === "saved-prompt") {
+    replacement = item.prompt.text;
+  } else if (item.type === "path") {
     replacement = `${serializeComposerFileLink(item.path)} `;
   } else if (item.type === "skill") {
     replacement = `$${item.skill.name} `;
@@ -183,6 +188,7 @@ export function useComposerCommandMenu({
   hasThread,
   hasCompactableConversation,
   offersUsageLimits = false,
+  savedPrompts = EMPTY_SAVED_PROMPTS,
   enabled = true,
   onChangeDraftMessage,
   onUpdateInteractionMode,
@@ -203,12 +209,14 @@ export function useComposerCommandMenu({
   readonly hasCompactableConversation: boolean;
   /** Whether T3 itself offers /usage-limits for the selected provider. */
   readonly offersUsageLimits?: boolean;
+  readonly savedPrompts?: readonly SavedPrompt[];
   readonly enabled?: boolean;
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
   /** Picking /usage-limits is the action itself; the draft keeps nothing of it. */
   readonly onUsageLimits?: () => void;
 }) {
+  const [pendingSavedPromptSend, setPendingSavedPromptSend] = useState<string | null>(null);
   const [selection, setSelection] = useState(() => composerSelectionAtEnd(draftMessage));
   const previousOwnerKeyRef = useRef(ownerKey);
   const onSelectionChange = useCallback((nextSelection: ComposerEditorSelection) => {
@@ -412,7 +420,7 @@ export function useComposerCommandMenu({
           description: skill.shortDescription ?? skill.description ?? "",
         }));
 
-      return [...commandItems, ...skillItems];
+      return [...commandItems, ...skillItems, ...savedPromptItems(savedPrompts, q)];
     }
 
     if (trigger.kind === "skill") {
@@ -538,6 +546,7 @@ export function useComposerCommandMenu({
     skills,
     trigger,
     offersUsageLimits,
+    savedPrompts,
   ]);
 
   const onSelect = useCallback(
@@ -634,6 +643,9 @@ export function useComposerCommandMenu({
       });
       setSelection({ start: result.cursor, end: result.cursor });
       onChangeDraftMessage(result.text);
+      if (item.type === "saved-prompt" && item.prompt.behavior === "send") {
+        setPendingSavedPromptSend(result.text);
+      }
       if (result.interactionMode !== null) {
         onUpdateInteractionMode?.(result.interactionMode);
       }
@@ -652,6 +664,8 @@ export function useComposerCommandMenu({
   );
 
   return {
+    pendingSavedPromptSend,
+    clearPendingSavedPromptSend: () => setPendingSavedPromptSend(null),
     selection,
     onSelectionChange,
     trigger,

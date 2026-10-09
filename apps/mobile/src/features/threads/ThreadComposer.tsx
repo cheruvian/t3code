@@ -486,6 +486,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   }, [currentModelSelection.instanceId, onShowUsageLimits, props.serverConfig]);
 
   const composerMenu = useComposerCommandMenu({
+    savedPrompts: props.serverConfig?.settings.savedPrompts,
     draftMessage: props.draftMessage,
     ownerKey: composerOwnerKey,
     environmentId: props.environmentId,
@@ -643,6 +644,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       voiceInput.blocksSubmission,
     ],
   );
+
+  useEffect(() => {
+    if (composerMenu.pendingSavedPromptSend === null) return;
+    composerMenu.clearPendingSavedPromptSend();
+    if (props.draftMessage === composerMenu.pendingSavedPromptSend && canSend) void handleSend();
+  }, [composerMenu, props.draftMessage, canSend, handleSend]);
 
   // ── Model menu ───────────────────────────────────────────
   // A session that hands the conversation to another provider lets the picker

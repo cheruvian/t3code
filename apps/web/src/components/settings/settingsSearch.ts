@@ -774,6 +774,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     scope: "environment-defaults",
   },
   {
+    id: "saved-prompts",
+    title: "Saved prompts",
+    to: "/settings/general",
+    searchTerms: ["templates reusable snippets commit push review composer global prompt"],
+    environmentOnly: true,
+    scope: "environment-defaults",
+  },
+  {
     id: "worktree-branch-naming",
     title: "Worktree branch naming",
     to: "/settings/source-control",

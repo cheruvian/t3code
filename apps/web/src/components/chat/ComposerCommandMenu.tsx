@@ -4,6 +4,7 @@ import {
   type ProviderSkillSourceKind,
 } from "@t3tools/client-runtime/providerSkills";
 import {
+  type SavedPrompt,
   type ProjectEntry,
   type ProviderDriverKind,
   type PullRequestContextMetadata,
@@ -31,6 +32,13 @@ import { ComposerBanner } from "./ComposerBanner";
 import { resolvePullRequestState } from "../pullRequest/pullRequestPresentation";
 
 export type ComposerCommandItem =
+  | {
+      id: string;
+      type: "saved-prompt";
+      prompt: SavedPrompt;
+      label: string;
+      description: string;
+    }
   | {
       id: string;
       type: "path";

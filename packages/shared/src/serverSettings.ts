@@ -273,6 +273,7 @@ export function applyServerSettingsPatch(
   const selectionPatch = patch.textGenerationModelSelection;
   const {
     globalScripts,
+    savedPrompts,
     automaticGitFetchInterval,
     providerHealthRefreshInterval,
     backgroundActivityProfile,
@@ -330,6 +331,7 @@ export function applyServerSettingsPatch(
   const nextWithReplacementsBase = {
     ...next,
     ...(globalScripts !== undefined ? { globalScripts } : {}),
+    ...(savedPrompts !== undefined ? { savedPrompts } : {}),
     ...(worktreeCleanupPatch === undefined
       ? {}
       : {
