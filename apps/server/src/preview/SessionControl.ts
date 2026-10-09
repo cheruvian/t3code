@@ -20,6 +20,7 @@ export class SessionControl {
   private owner: string | null = null;
   private epoch = 0;
   private closed = false;
+  private inFlight = 0;
 
   constructor(agentId: string | null, onGenerationChange: () => void = () => {}) {
     this.agentId = agentId;
@@ -34,8 +35,13 @@ export class SessionControl {
     return this.epoch;
   }
 
+  get idle() {
+    return this.inFlight === 0;
+  }
+
   private enqueue<A>(run: () => Promise<A>): Promise<A> {
-    const result = this.tail.then(run);
+    this.inFlight++;
+    const result = this.tail.then(run).finally(() => this.inFlight--);
     this.tail = result.then(
       () => this.pending,
       () => this.pending,
@@ -45,10 +51,13 @@ export class SessionControl {
 
   /** An action can respond before its navigation commits, while later actions still wait. */
   track(work: Promise<unknown>) {
-    const settled = work.then(
-      () => undefined,
-      () => undefined,
-    );
+    this.inFlight++;
+    const settled = work
+      .then(
+        () => undefined,
+        () => undefined,
+      )
+      .finally(() => this.inFlight--);
     this.pending = Promise.all([this.pending, settled]).then(() => undefined);
   }
 

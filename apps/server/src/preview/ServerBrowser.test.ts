@@ -9,6 +9,8 @@ import {
   ThreadId,
   type PreviewAutomationSnapshot,
   type PreviewAutomationStatus,
+  type OrchestrationV2ThreadShell,
+  type OrchestrationV2DomainEvent,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -17,12 +19,15 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 import type { BrowserContext, Page } from "playwright-core";
 import { beforeEach, expect, vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
@@ -183,9 +188,32 @@ const asSession = (providerSessionId: string) => ({
   ...scope,
   thread: { ...testThread, providerSessionId },
 });
+const settledThreads = new Set<string>();
+const runningThreads = new Set<string>();
+let domainEvents: PubSub.PubSub<OrchestrationV2DomainEvent>;
 const dependencies = Layer.mergeAll(
   Broker.layer,
   Manager.layer,
+  Layer.unwrap(
+    Effect.gen(function* () {
+      domainEvents = yield* PubSub.unbounded<OrchestrationV2DomainEvent>();
+      return Layer.mock(Orchestrator.OrchestratorV2)({
+        streamDomainEvents: Stream.fromPubSub(domainEvents),
+      });
+    }),
+  ),
+  Layer.mock(ProjectionStore.ProjectionStoreV2)({
+    getThreadShell: (threadId) =>
+      Effect.sync(
+        () =>
+          // Only the persisted settlement and activity fields are read by this service.
+          ({
+            id: threadId,
+            settledOverride: settledThreads.has(threadId) ? "settled" : null,
+            activityRunStatus: runningThreads.has(threadId) ? ("running" as const) : null,
+          }) as OrchestrationV2ThreadShell,
+      ),
+  }),
   Layer.succeed(ServerEnvironment.ServerEnvironment, {
     getEnvironmentId: Effect.succeed(scope.environmentId),
     getDescriptor: Effect.die("unused descriptor"),
@@ -259,7 +287,192 @@ beforeEach(() => {
   desktopRendersNext = false;
   releasedDesktopTabs.length = 0;
   desktopConnections.length = 0;
+  settledThreads.clear();
+  runningThreads.clear();
 });
+
+it.live(
+  "settlement releases an unwatched renderer and reopening restores its URL and context",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { browser, broker, tabId } = yield* ready;
+        yield* broker.invoke({
+          scope,
+          tabId,
+          operation: "navigate",
+          input: { url: "http://localhost:5173/settled", readiness: "commit" },
+        });
+        const context = contexts[0]!;
+        const manager = yield* Manager.PreviewManager;
+        const before = yield* manager.list({ threadId: testThread.threadId });
+        const closed = Promise.withResolvers<void>();
+        context.page.once("close", () => closed.resolve());
+        settledThreads.add(testThread.threadId);
+        yield* PubSub.publish(domainEvents, {
+          type: "thread.settled",
+          threadId: testThread.threadId,
+        } as OrchestrationV2DomainEvent);
+        yield* Effect.promise(() => closed.promise);
+        expect(context.page.isClosed()).toBe(true);
+        expect(context.close).not.toHaveBeenCalled();
+        expect((yield* manager.list({ threadId: testThread.threadId })).sessions).toEqual(
+          before.sessions,
+        );
+        yield* browser.attachViewer(viewerInput(tabId, false));
+        expect(contexts.at(-1)!.page.goto).toHaveBeenCalledWith(
+          "http://localhost:5173/settled",
+          expect.anything(),
+        );
+        expect(contexts.at(-1)!.page.isClosed()).toBe(false);
+      }),
+    ).pipe(Effect.provide(layer)),
+);
+
+it.live("settlement keeps a watched tab until its last viewer leaves", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, tabId } = yield* ready;
+      const page = contexts[0]!.page;
+      settledThreads.add(testThread.threadId);
+      const closed = Promise.withResolvers<void>();
+      page.once("close", () => closed.resolve());
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* browser.attachViewer(viewerInput(tabId, false));
+          yield* browser.releaseSettledThread(testThread.threadId);
+          expect(page.isClosed()).toBe(false);
+        }),
+      );
+      yield* Effect.promise(() => closed.promise);
+      expect(page.isClosed()).toBe(true);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("settlement cleanup preserves re-engaged and running threads", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser } = yield* ready;
+      const page = contexts[0]!.page;
+      yield* browser.releaseSettledThread(testThread.threadId);
+      expect(page.isClosed()).toBe(false);
+      settledThreads.add(testThread.threadId);
+      runningThreads.add(testThread.threadId);
+      yield* browser.releaseSettledThread(testThread.threadId);
+      expect(page.isClosed()).toBe(false);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("an agent reuses its suspended tab without creating a duplicate session", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, broker, tabId } = yield* ready;
+      settledThreads.add(testThread.threadId);
+      yield* browser.releaseSettledThread(testThread.threadId);
+      const opened = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "open",
+        input: { show: false },
+      });
+      expect(opened.tabId).toBe(tabId);
+      expect(opened.available).toBe(true);
+      const manager = yield* Manager.PreviewManager;
+      expect((yield* manager.list({ threadId: testThread.threadId })).sessions).toHaveLength(1);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("permanently closing a suspended tab releases its retained storage context", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, tabId } = yield* ready;
+      const context = contexts[0]!;
+      settledThreads.add(testThread.threadId);
+      yield* browser.releaseSettledThread(testThread.threadId);
+      expect(context.close).not.toHaveBeenCalled();
+      const closed = Promise.withResolvers<void>();
+      const close = context.close.getMockImplementation()!;
+      context.close.mockImplementationOnce(async () => {
+        await close();
+        closed.resolve();
+      });
+      const manager = yield* Manager.PreviewManager;
+      yield* manager.close({ threadId: testThread.threadId, tabId });
+      yield* Effect.promise(() => closed.promise);
+      expect(context.close).toHaveBeenCalledOnce();
+      expect((yield* manager.list({ threadId: testThread.threadId })).sessions).toHaveLength(0);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("settlement releases user-opened server tabs but preserves desktop-owned tabs", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser } = yield* ready;
+      const manager = yield* Manager.PreviewManager;
+      const human = yield* manager.open({
+        threadId: testThread.threadId,
+        runtime: "server",
+        url: "http://localhost:5173/human",
+      });
+      yield* Effect.scoped(browser.attachViewer(viewerInput(human.tabId, false)));
+      const humanPage = contexts.at(-1)!.page;
+      desktopRendersNext = true;
+      const desktop = yield* manager.open({ threadId: testThread.threadId, runtime: "server" });
+      yield* Effect.scoped(browser.attachViewer(viewerInput(desktop.tabId, false)));
+      const desktopPage = desktopConnections.at(-1)!.context.page;
+      settledThreads.add(testThread.threadId);
+      yield* browser.releaseSettledThread(testThread.threadId);
+      expect(humanPage.isClosed()).toBe(true);
+      expect(desktopPage.isClosed()).toBe(false);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("settlement waits for a running navigation before releasing its renderer", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, broker, tabId } = yield* ready;
+      const page = contexts[0]!.page;
+      const started = Promise.withResolvers<void>();
+      const committed = Promise.withResolvers<void>();
+      page.goto.mockImplementationOnce(async () => {
+        started.resolve();
+        await committed.promise;
+      });
+      yield* Effect.addFinalizer(() => Effect.sync(() => committed.resolve()));
+      const navigating = yield* broker
+        .invoke({
+          scope,
+          tabId,
+          operation: "navigate",
+          input: { url: "http://localhost:5173/busy", readiness: "commit" },
+        })
+        .pipe(Effect.forkScoped);
+      yield* Effect.promise(() => started.promise);
+      settledThreads.add(testThread.threadId);
+      yield* browser.releaseSettledThread(testThread.threadId);
+      expect(page.isClosed()).toBe(false);
+      const later = (yield* Clock.currentTimeMillis) + 31 * 60 * 1000;
+      const clock = vi.spyOn(Date, "now").mockReturnValue(later);
+      yield* Effect.addFinalizer(() => Effect.sync(() => clock.mockRestore()));
+      // Opening another tab runs the idle sweep; it must retain this settled
+      // tab's session while navigation protects its renderer.
+      yield* broker.invoke({
+        scope: asSession("agent-b"),
+        operation: "open",
+        input: { reuseExistingTab: false, show: false },
+      });
+      expect(page.isClosed()).toBe(false);
+      committed.resolve();
+      yield* Fiber.join(navigating);
+      yield* browser.releaseSettledThread(testThread.threadId);
+      expect(page.isClosed()).toBe(true);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
 
 it.live("readiness none responds immediately but takeover input waits for navigation commit", () =>
   Effect.scoped(

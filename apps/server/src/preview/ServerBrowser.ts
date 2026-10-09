@@ -67,6 +67,8 @@ import * as ServerConfig from "../config.ts";
 import { resolveRootCliCommand } from "../cli/invocation.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as DesktopBrowserChannel from "./DesktopBrowserChannel.ts";
 import * as PreviewManager from "./Manager.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
@@ -236,6 +238,10 @@ export class ServerBrowser extends Context.Service<
     }) => Effect.Effect<Option.Option<{ readonly path: string; readonly fileName: string }>>;
     /** Deletes a human profile's server-side storage, closing its open tabs first. */
     readonly clearProfile: (profileId: string) => Effect.Effect<void, PreviewClearProfileError>;
+    /** Releases unwatched headless pages, retaining their sessions and storage for reopening. */
+    readonly releaseSettledThread: (
+      threadId: ThreadId,
+    ) => Effect.Effect<void, ProjectionStore.ProjectionStoreV2Error>;
   }
 >()("t3/preview/ServerBrowser") {}
 
@@ -436,6 +442,8 @@ const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const hostPlatform = yield* HostProcessPlatform;
   const manager = yield* PreviewManager.PreviewManager;
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const previewBrowser = yield* PreviewBrowser.PreviewBrowser;
@@ -453,6 +461,8 @@ const make = Effect.gen(function* () {
   const adoptedPages = new Map<string, { readonly page: Page; readonly openerTabId: string }>();
   /** Sessions the manager closed, so their tabs end for good. Pruned once dropped. */
   const closedSessions = new Set<string>();
+  /** Storage kept for suspended agent tabs; permanent closes release it too. */
+  const suspendedContexts = new Map<string, BrowserContext>();
   let hostConnectionId: string | null = null;
   let viewerResizeOrder = 0;
 
@@ -644,24 +654,63 @@ const make = Effect.gen(function* () {
 
   const dropTab = (tab: ServerTab, closeSession: boolean) => {
     const key = tabKey(tab.threadId, tab.tabId);
-    if (tabs.get(key) !== tab) return;
+    if (tabs.get(key) !== tab) return Promise.resolve();
     tabs.delete(key);
     tab.closing = true;
     // A desktop page outlives the connection unless its session closed with it.
     const end = tab.desktop && !closeSession && sessionOpen(tab) ? "reconnect" : "gone";
     for (const viewer of tab.viewers) viewer.push({ _tag: end });
-    void tab.control.close().catch(constVoid);
+    const closed = [tab.control.close()];
     // The desktop owns its page; letting go only ends this connection.
-    if (tab.desktop) void tab.desktop.close().catch(constVoid);
-    else void tab.page.close().catch(constVoid);
-    if (tab.isolatedContext) void tab.page.context().close().catch(constVoid);
-    void tab.recording?.encoder.close().catch(constVoid);
-    void NodeFSP.rm(downloadDir(tab), { recursive: true, force: true }).catch(constVoid);
+    if (tab.desktop) closed.push(tab.desktop.close());
+    else closed.push(tab.page.close());
+    if (tab.isolatedContext && (closeSession || !sessionOpen(tab)))
+      closed.push(tab.page.context().close());
+    else if (tab.isolatedContext) suspendedContexts.set(key, tab.page.context());
+    if (tab.recording) closed.push(tab.recording.encoder.close());
+    closed.push(NodeFSP.rm(downloadDir(tab), { recursive: true, force: true }));
     reportLiveTabs();
     if (closeSession) {
       runFork(manager.close({ threadId: tab.threadId, tabId: tab.tabId }).pipe(Effect.ignore));
     }
+    return Promise.allSettled(closed).then(constVoid);
   };
+
+  const settledThreads = new Set<ThreadId>();
+  const canRelease = (tab: ServerTab) =>
+    tab.desktop === null &&
+    tab.viewers.size === 0 &&
+    tab.control.idle &&
+    tab.recording === null &&
+    tab.recordingStart === null &&
+    tab.capturing === 0 &&
+    tab.fileChooser === null &&
+    tab.dialog === null;
+  const releaseSettledThread = Effect.fn("ServerBrowser.releaseSettledThread")(function* (
+    threadId: ThreadId,
+  ) {
+    const thread = yield* projections.getThreadShell(threadId);
+    if (!thread || thread.settledOverride !== "settled" || thread.activityRunStatus !== null) {
+      settledThreads.delete(threadId);
+      return;
+    }
+    settledThreads.add(threadId);
+    // No I/O between checking the thread and selecting idle pages. A viewer or
+    // new action that arrived during the projection read keeps its page.
+    yield* Effect.promise(() =>
+      Promise.all(
+        [...tabs.values()]
+          .filter((tab) => tab.threadId === threadId && canRelease(tab))
+          .map((tab) => dropTab(tab, false)),
+      ).then(constVoid),
+    );
+  });
+  const releaseAfterSettlement = (threadId: ThreadId) =>
+    releaseSettledThread(threadId).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("settled thread preview cleanup failed", { threadId, cause }),
+      ),
+    );
 
   /**
    * With a desktop app attached, every tab of this server renders there, so a
@@ -835,9 +884,10 @@ const make = Effect.gen(function* () {
     page.on("close", () => dropTab(tab, true));
     page.on("crash", () => dropTab(tab, true));
     tabs.set(key, tab);
+    suspendedContexts.delete(key);
     reportLiveTabs();
     // A popup is already loading its own URL, and the desktop loads its tab's.
-    if (!adopted && !desktop && snapshot.navStatus._tag === "Loading") {
+    if (!adopted && !desktop && "url" in snapshot.navStatus) {
       tab.initialNavigation = page
         .goto(snapshot.navStatus.url, { waitUntil: "commit", timeout: NAVIGATION_TIMEOUT_MS })
         .then(constVoid);
@@ -1037,6 +1087,7 @@ const make = Effect.gen(function* () {
     if (pending) return pending;
     const existing = tabs.get(key);
     if (existing) return Promise.resolve(existing);
+    if (snapshot.automationOwner !== undefined) assertTabCapacity(snapshot.automationOwner);
     const opening = createTab(snapshot)
       .catch((cause: unknown) => {
         runFork(
@@ -1087,7 +1138,12 @@ const make = Effect.gen(function* () {
   const closeIdleAgentTabs = () => {
     const cutoff = Date.now() - AGENT_TAB_IDLE_MS;
     for (const tab of tabs.values()) {
-      if (tab.control.agentId !== null && tab.viewers.size === 0 && tab.usedAt < cutoff)
+      if (
+        tab.control.agentId !== null &&
+        !settledThreads.has(tab.threadId) &&
+        tab.viewers.size === 0 &&
+        tab.usedAt < cutoff
+      )
         dropTab(tab, true);
     }
   };
@@ -1476,23 +1532,23 @@ const make = Effect.gen(function* () {
         const open = input as PreviewAutomationOpenInput;
         const url = open.url === undefined ? undefined : normalizePreviewUrl(open.url);
         const reuse = open.reuseExistingTab ?? true;
-        if (
-          reuse &&
-          !request.tabIdExplicit &&
-          [...tabs.values()].filter(
-            (tab) =>
-              tab.threadId === request.threadId && tab.control.agentId === request.agentSessionId,
-          ).length > 1
-        )
+        const ownedSessions = reuse
+          ? (await Effect.runPromise(manager.list({ threadId: request.threadId }))).sessions.filter(
+              (session) =>
+                session.runtime === "server" && session.automationOwner === request.agentSessionId,
+            )
+          : [];
+        if (reuse && !request.tabIdExplicit && ownedSessions.length > 1)
           throw new BrowserControlInterrupted(
             "Multiple tabs are open. Pass tabId or reuseExistingTab=false.",
             "tabRequired",
           );
-        // A tab still launching exists only as a session, so resolve it like a viewer would.
+        // Opening and suspended tabs exist as sessions; both reopen like a viewer would.
+        const existingTabId = request.tabId ?? ownedSessions.at(-1)?.tabId;
         const existing =
-          reuse && request.tabId !== undefined
+          reuse && existingTabId !== undefined
             ? await Effect.runPromise(
-                findTab(request.threadId, request.tabId).pipe(
+                findTab(request.threadId, existingTabId).pipe(
                   Effect.catchTags({
                     ServerBrowserTabNotFoundError: () => Effect.succeed(undefined),
                   }),
@@ -1528,11 +1584,10 @@ const make = Effect.gen(function* () {
               "A browser dialog is pending. Read preview_status and use preview_dialog first.",
               "dialogPending",
             );
+          // A recreated page must reach its saved URL before an agent resumes.
+          await tab.initialNavigation;
           if (existing) {
             if (url) await navigate(tab, url, "load", navigationTimeout);
-          } else {
-            // Await the original navigation failure even though background creation keeps the tab.
-            await tab.initialNavigation;
           }
           const reveal = open.open ?? open.show;
           if (reveal !== false) {
@@ -1740,6 +1795,17 @@ const make = Effect.gen(function* () {
       const key = tabKey(event.threadId, event.tabId);
       const tab = tabs.get(key);
       if (event.type === "closed" && !tab && pendingTabs.has(key)) closedPendingTabs.add(key);
+      if (event.type === "closed" && !tab) {
+        const context = suspendedContexts.get(key);
+        suspendedContexts.delete(key);
+        // Popups can share their opener's context; another tab keeps its storage.
+        if (
+          context &&
+          ![...tabs.values()].some((live) => live.page.context() === context) &&
+          ![...suspendedContexts.values()].includes(context)
+        )
+          await context.close().catch(constVoid);
+      }
       if (!tab) return;
       if (event.type === "closed") {
         closedSessions.add(key);
@@ -2003,6 +2069,7 @@ const make = Effect.gen(function* () {
             tab.viewers.delete(viewer);
             broadcastControl(tab);
             reportLiveTabs();
+            if (settledThreads.has(tab.threadId)) runFork(releaseAfterSettlement(tab.threadId));
           }),
       );
       if (input.canOperate && tab.control.agentId === null && tab.control.controller === null) {
@@ -2147,6 +2214,25 @@ const make = Effect.gen(function* () {
     Effect.repeat(Schedule.spaced(IDLE_SWEEP_INTERVAL)),
     Effect.forkScoped,
   );
+  yield* orchestrator.streamDomainEvents.pipe(
+    Stream.filter((event) => event.type === "thread.settled" || event.type === "thread.unsettled"),
+    Stream.runForEach((event) =>
+      event.type === "thread.settled"
+        ? releaseAfterSettlement(event.threadId)
+        : Effect.sync(() => settledThreads.delete(event.threadId)),
+    ),
+    Effect.forkScoped,
+  );
+  // Retry tabs protected by an action, recording, or an opening page at settlement.
+  yield* Effect.suspend(() =>
+    Effect.forEach(
+      [...settledThreads].filter((threadId) =>
+        [...tabs.values()].some((tab) => tab.threadId === threadId && canRelease(tab)),
+      ),
+      releaseAfterSettlement,
+      { discard: true },
+    ),
+  ).pipe(Effect.repeat(Schedule.spaced(IDLE_SWEEP_INTERVAL)), Effect.forkScoped);
   const environmentId = yield* environment.getEnvironmentId;
   const hostSession = broker
     .connect(
@@ -2197,6 +2283,7 @@ const make = Effect.gen(function* () {
     clearProfile,
     openDownload,
     answerFileChooser,
+    releaseSettledThread,
   });
 });
 
