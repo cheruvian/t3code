@@ -518,6 +518,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
+  readonly moveEnvironmentUnavailableLabel?: string;
   readonly moveEnvironmentDestinations?: ReadonlyArray<{
     readonly environmentId: string;
     readonly label: string;
@@ -770,18 +771,22 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const titleMenuItems = useMemo<MenuAction[]>(
     () => [
-      ...(props.moveEnvironmentDestinations?.length
+      ...(props.moveEnvironmentDestinations?.length || props.moveEnvironmentUnavailableLabel
         ? [
             {
               id: "move-environment",
               title: isMovingEnvironment
                 ? "Moving to environment…"
-                : thread.environmentMove
-                  ? "Resume environment move"
-                  : "Move to environment",
-              attributes: { disabled: isMovingEnvironment },
+                : props.moveEnvironmentUnavailableLabel
+                  ? props.moveEnvironmentUnavailableLabel
+                  : thread.environmentMove
+                    ? "Resume environment move"
+                    : "Move to environment",
+              attributes: {
+                disabled: isMovingEnvironment || !!props.moveEnvironmentUnavailableLabel,
+              },
               image: "arrow.right",
-              subactions: props.moveEnvironmentDestinations.map((destination) => ({
+              subactions: props.moveEnvironmentDestinations?.map((destination) => ({
                 id: `move-environment:${destination.environmentId}`,
                 title: destination.label,
               })),
@@ -800,6 +805,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     [
       props.titleRegenerationSupported,
       props.moveEnvironmentDestinations,
+      props.moveEnvironmentUnavailableLabel,
       isMovingEnvironment,
       thread.environmentMove,
       thread.environmentMoveOrigin,

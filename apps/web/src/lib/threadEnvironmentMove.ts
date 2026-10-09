@@ -2,6 +2,7 @@ import {
   beginThreadMoveProgress,
   threadMoveProgressDescription,
   threadMoveDestinations,
+  threadMoveUnavailableLabel,
   threadMoveUndoParticipants,
 } from "@t3tools/client-runtime/operations";
 import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -12,15 +13,23 @@ import { environmentServerConfigsAtom } from "../state/server";
 import { threadEnvironment } from "../state/threads";
 import { toastManager } from "../components/ui/toast";
 
-export function readThreadMoveDestinations(ref: ScopedThreadRef) {
+export function readThreadMoveAvailability(ref: ScopedThreadRef) {
   const thread = readThreadShell(ref);
-  return thread
-    ? threadMoveDestinations({
-        thread,
-        projects: readProjects(),
-        configs: appAtomRegistry.get(environmentServerConfigsAtom),
-      })
-    : [];
+  if (!thread) return { moveDestinations: [], moveUnavailableLabel: undefined };
+  const input = {
+    thread,
+    projects: readProjects(),
+    configs: appAtomRegistry.get(environmentServerConfigsAtom),
+  };
+  const moveDestinations = threadMoveDestinations(input);
+  return {
+    moveDestinations,
+    moveUnavailableLabel: threadMoveUnavailableLabel(input, moveDestinations),
+  };
+}
+
+export function readThreadMoveDestinations(ref: ScopedThreadRef) {
+  return readThreadMoveAvailability(ref).moveDestinations;
 }
 
 export async function moveThreadToEnvironment(

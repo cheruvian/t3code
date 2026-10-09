@@ -1,7 +1,7 @@
 import { isThreadMoveInProgress } from "@t3tools/client-runtime/operations";
 import { threadMoveUndoParticipants } from "@t3tools/client-runtime/operations";
 import {
-  readThreadMoveDestinations,
+  readThreadMoveAvailability,
   moveThreadToEnvironment,
   undoThreadEnvironmentMove,
 } from "../lib/threadEnvironmentMove";
@@ -156,7 +156,7 @@ export function useThreadActionMenu(input: {
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const snoozePresets = resolveSnoozePresets(now, timestampFormat);
         const items = buildThreadActionMenuItems({
-          moveDestinations: readThreadMoveDestinations(threadRef),
+          ...readThreadMoveAvailability(threadRef),
           isMovingEnvironment: isThreadMoveInProgress(threadRef),
           canUndoEnvironmentMove: threadMoveUndoParticipants(thread) !== null,
           canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),

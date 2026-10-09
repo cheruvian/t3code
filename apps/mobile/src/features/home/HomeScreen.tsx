@@ -1,5 +1,5 @@
 import {
-  readMobileThreadMoveDestinations,
+  readMobileThreadMoveAvailability,
   moveMobileThreadToEnvironment,
   undoMobileThreadMove,
 } from "./useThreadListActions";
@@ -817,7 +817,7 @@ export function HomeScreen(props: HomeScreenProps) {
           onSelectThread={props.onSelectThread}
           onDeleteThread={handleDeleteThread}
           onArchiveThread={props.onArchiveThread}
-          moveEnvironmentDestinations={readMobileThreadMoveDestinations(thread)}
+          {...readMobileThreadMoveAvailability(thread)}
           onMoveThreadToEnvironment={moveMobileThreadToEnvironment}
           onUndoThreadMove={(thread) => {
             void undoMobileThreadMove(thread);

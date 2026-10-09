@@ -244,3 +244,17 @@ describe("buildDraftActionMenuItems", () => {
     expect(items.at(-1)).toMatchObject({ label: "Discard draft", destructive: true });
   });
 });
+
+it.each(["Checking destinations…", "No eligible destinations"])(
+  "shows disabled transfer discovery feedback: %s",
+  (moveUnavailableLabel) => {
+    const items = buildThreadActionMenuItems({
+      ...baseState,
+      moveDestinations: [],
+      moveUnavailableLabel,
+    });
+    const transfer = items.find((item) => item.id === "move-environment");
+    expect(transfer?.label).toBe(moveUnavailableLabel);
+    expect(transfer?.disabled).toBe(true);
+  },
+);

@@ -1,6 +1,7 @@
 import type { RepositoryIdentity } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -81,13 +82,6 @@ function availableValue<A, E>(cached: Option.Option<Exit.Exit<A, E>>): A | null 
   });
 }
 
-function isSuccessfullyResolved<A, E>(cached: Option.Option<Exit.Exit<A, E>>): boolean {
-  return Option.match(cached, {
-    onNone: () => false,
-    onSome: (exit) => Exit.isSuccess(exit),
-  });
-}
-
 interface EnrichmentWorkLane {
   readonly pendingRoots: Ref.Ref<ReadonlySet<string>>;
   readonly queue: Queue.Queue<string>;
@@ -105,16 +99,25 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
   const failureTtl = options.failureTtl ?? DEFAULT_FAILURE_TTL;
   const faviconTtl = options.faviconTtl ?? DEFAULT_FAVICON_TTL;
 
-  const repositoryIdentityCache = yield* Cache.makeWith(
-    (workspaceRoot: string) => Effect.exit(repositoryIdentityResolver.resolve(workspaceRoot)),
-    {
-      capacity: cacheCapacity,
-      timeToLive: Exit.match({
-        onFailure: () => failureTtl,
-        onSuccess: (result) => (Exit.isSuccess(result) ? successTtl : failureTtl),
-      }),
+  const loadRepositoryIdentity = Effect.fn("ProjectEnrichmentService.loadRepositoryIdentity")(
+    function* (workspaceRoot: string) {
+      const result = yield* Effect.exit(repositoryIdentityResolver.resolve(workspaceRoot));
+      const now = yield* Clock.currentTimeMillis;
+      return {
+        result,
+        refreshAt:
+          now +
+          Duration.toMillis(
+            Duration.fromInputUnsafe(Exit.isSuccess(result) ? successTtl : failureTtl),
+          ),
+      };
     },
   );
+  const repositoryIdentityCache = yield* Cache.makeWith(loadRepositoryIdentity, {
+    capacity: cacheCapacity,
+    // Freshness schedules background refreshes; bounded entries stay readable during them.
+    timeToLive: () => Duration.infinity,
+  });
   const faviconCache = yield* Cache.makeWith(
     (workspaceRoot: string) => Effect.exit(faviconResolver.resolvePath(workspaceRoot)),
     {
@@ -172,8 +175,17 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
 
   const resolveRepositoryIdentity = Effect.fn("ProjectEnrichmentService.resolveRepositoryIdentity")(
     function* (workspaceRoot: string) {
-      const repositoryIdentity = yield* Cache.get(repositoryIdentityCache, workspaceRoot);
-      yield* logFailure(workspaceRoot, "repositoryIdentity", repositoryIdentity);
+      const previous = yield* Cache.getSuccess(repositoryIdentityCache, workspaceRoot);
+      const refreshed = yield* loadRepositoryIdentity(workspaceRoot);
+      const repositoryIdentity =
+        Exit.isFailure(refreshed.result) && Option.isSome(previous)
+          ? previous.value.result
+          : refreshed.result;
+      yield* Cache.set(repositoryIdentityCache, workspaceRoot, {
+        ...refreshed,
+        result: repositoryIdentity,
+      });
+      yield* logFailure(workspaceRoot, "repositoryIdentity", refreshed.result);
       const faviconPath = yield* Cache.getSuccess(faviconCache, workspaceRoot);
       const repositoryIdentityResolved = Exit.isSuccess(repositoryIdentity);
       yield* PubSub.publish(changes, {
@@ -250,22 +262,29 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
       { concurrency: "unbounded" },
     );
     return {
-      repositoryIdentity: availableValue(repositoryIdentity),
+      repositoryIdentity: Option.isSome(repositoryIdentity)
+        ? availableValue(Option.some(repositoryIdentity.value.result))
+        : null,
       faviconPath: availableValue(faviconPath),
-      repositoryIdentityResolved: isSuccessfullyResolved(repositoryIdentity),
+      repositoryIdentityResolved:
+        Option.isSome(repositoryIdentity) && Exit.isSuccess(repositoryIdentity.value.result),
     };
   });
 
   const request: ProjectEnrichmentService["Service"]["request"] = Effect.fn(
     "ProjectEnrichmentService.request",
   )(function* (workspaceRoot) {
-    const [hasRepositoryIdentity, hasFaviconPath] = yield* Effect.all(
-      [Cache.has(repositoryIdentityCache, workspaceRoot), Cache.has(faviconCache, workspaceRoot)],
+    const [repositoryIdentity, hasFaviconPath] = yield* Effect.all(
+      [
+        Cache.getSuccess(repositoryIdentityCache, workspaceRoot),
+        Cache.has(faviconCache, workspaceRoot),
+      ],
       { concurrency: "unbounded" },
     );
+    const now = yield* Clock.currentTimeMillis;
     yield* Effect.all(
       [
-        hasRepositoryIdentity
+        Option.isSome(repositoryIdentity) && repositoryIdentity.value.refreshAt > now
           ? Effect.void
           : requestLane(repositoryIdentityLane, workspaceRoot, "repositoryIdentity"),
         hasFaviconPath ? Effect.void : requestLane(faviconLane, workspaceRoot, "faviconPath"),

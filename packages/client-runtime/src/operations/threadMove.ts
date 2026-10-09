@@ -287,6 +287,43 @@ export function threadMoveDestinations(input: {
   });
 }
 
+/** Explain empty destination lists without treating pending discovery as a missing repository. */
+export function threadMoveUnavailableLabel(
+  input: Parameters<typeof threadMoveDestinations>[0],
+  destinations: ReturnType<typeof threadMoveDestinations>,
+) {
+  if (destinations.length > 0) return undefined;
+  const source = input.configs.get(input.thread.environmentId);
+  const driver = source?.providers.find(
+    (provider) => provider.instanceId === input.thread.providerInstanceId,
+  )?.driver;
+  if (
+    !input.thread.worktreePath ||
+    source?.environment.capabilities.threadEnvironmentMove !== true ||
+    input.thread.environmentMove?.status === "moved" ||
+    (driver !== "codex" && driver !== "claudeAgent")
+  )
+    return undefined;
+  const project = input.projects.find(
+    (candidate) =>
+      candidate.environmentId === input.thread.environmentId &&
+      candidate.id === input.thread.projectId,
+  );
+  const pendingDestination = input.projects.some(
+    (candidate) =>
+      candidate.environmentId !== input.thread.environmentId &&
+      candidate.repositoryIdentityResolved === false &&
+      (!input.thread.environmentMove ||
+        input.thread.environmentMove.destinationEnvironmentId === candidate.environmentId) &&
+      compatibleThreadMoveProvider(input.configs.get(candidate.environmentId), driver) !==
+        undefined,
+  );
+  return project?.repositoryIdentityResolved === false ||
+    (project?.repositoryIdentity != null && pendingDestination)
+    ? "Checking destinations…"
+    : "No eligible destinations";
+}
+
 export const moveThread = Effect.fn("clientRuntime.moveThread")(function* (input: MoveThreadInput) {
   const source = yield* Supervisor.EnvironmentSupervisor;
   const registry = yield* Registry.EnvironmentRegistry;

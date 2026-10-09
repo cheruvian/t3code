@@ -12,6 +12,8 @@ import {
 } from "@t3tools/contracts";
 import {
   compatibleThreadMoveProvider,
+  threadMoveDestinations,
+  threadMoveUnavailableLabel,
   runThreadMoveUndoSaga,
   runThreadMoveSaga,
   type ThreadMovePorts,
@@ -351,4 +353,73 @@ it("negotiates the destination base while retaining the full-export fallback for
     },
   });
   expect(exported[0]).toMatchObject({ action: "export", destinationHeadCommit: base });
+});
+
+describe("thread transfer discovery", () => {
+  const source = EnvironmentId.make("source");
+  const destination = EnvironmentId.make("destination");
+  const provider = {
+    instanceId: "codex",
+    driver: "codex",
+    enabled: true,
+    installed: true,
+    auth: { status: "authenticated" },
+  };
+  const config = (label: string) =>
+    ({
+      environment: { label, capabilities: { threadEnvironmentMove: true } },
+      providers: [provider],
+    }) as unknown as ServerConfig;
+  const thread = {
+    environmentId: source,
+    projectId: "source-project",
+    providerInstanceId: "codex",
+    worktreePath: "/worktree",
+  } as unknown as Parameters<typeof threadMoveDestinations>[0]["thread"];
+  const repositoryIdentity = { canonicalKey: "github.com/example/repo" };
+  const discovery = (sourceResolved: boolean, destinationResolved: boolean, matching: boolean) => ({
+    thread,
+    configs: new Map([
+      [source, config("Source")],
+      [destination, config("Destination")],
+    ]),
+    projects: [
+      {
+        id: "source-project",
+        environmentId: source,
+        repositoryIdentityResolved: sourceResolved,
+        repositoryIdentity: sourceResolved ? repositoryIdentity : null,
+      },
+      {
+        id: "destination-project",
+        environmentId: destination,
+        repositoryIdentityResolved: destinationResolved,
+        repositoryIdentity: destinationResolved && matching ? repositoryIdentity : null,
+      },
+    ] as unknown as Parameters<typeof threadMoveDestinations>[0]["projects"],
+  });
+
+  it.each([
+    [false, false, false, "Checking destinations…"],
+    [true, false, false, "Checking destinations…"],
+    [true, true, false, "No eligible destinations"],
+    [true, true, true, undefined],
+  ] as const)(
+    "distinguishes discovery from no matching repository (%s, %s, %s)",
+    (sourceResolved, destinationResolved, matching, expected) => {
+      const state = discovery(sourceResolved, destinationResolved, matching);
+      const destinations = threadMoveDestinations(state);
+      expect(threadMoveUnavailableLabel(state, destinations)).toBe(expected);
+      expect(destinations.map((entry) => entry.environmentId)).toEqual(
+        matching ? [destination] : [],
+      );
+    },
+  );
+
+  it("does not offer transfer for a thread without a dedicated worktree", () => {
+    const state = discovery(true, true, true);
+    state.thread = { ...state.thread, worktreePath: null };
+    expect(threadMoveDestinations(state)).toEqual([]);
+    expect(threadMoveUnavailableLabel(state, [])).toBeUndefined();
+  });
 });

@@ -1,7 +1,7 @@
 import { isThreadMoveInProgress } from "@t3tools/client-runtime/operations";
 import { threadMoveUndoParticipants } from "@t3tools/client-runtime/operations";
 import {
-  readThreadMoveDestinations,
+  readThreadMoveAvailability,
   moveThreadToEnvironment,
   undoThreadEnvironmentMove,
 } from "../lib/threadEnvironmentMove";
@@ -4776,7 +4776,7 @@ export default function Sidebar() {
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             buildThreadActionMenuItems({
-              moveDestinations: readThreadMoveDestinations(threadRef),
+              ...readThreadMoveAvailability(threadRef),
               isMovingEnvironment: isThreadMoveInProgress(threadRef),
               canUndoEnvironmentMove: threadMoveUndoParticipants(thread) !== null,
               canOperate: readEnvironmentScope(

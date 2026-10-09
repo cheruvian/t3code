@@ -73,6 +73,7 @@ export function buildDraftActionMenuItems(options: {
 }
 
 export interface ThreadActionMenuState {
+  readonly moveUnavailableLabel?: string | undefined;
   readonly canUndoEnvironmentMove?: boolean;
   readonly isMovingEnvironment?: boolean;
   readonly moveDestinations?: ReadonlyArray<{
@@ -142,14 +143,17 @@ export function buildThreadActionMenuItems(
           },
         ]
       : []),
-    ...(state.moveDestinations?.length
+    ...(state.moveDestinations?.length || state.moveUnavailableLabel
       ? [
           {
             id: "move-environment" as const,
-            label: state.isMovingEnvironment ? "Moving to environment…" : "Move to environment",
+            label: state.isMovingEnvironment
+              ? "Moving to environment…"
+              : (state.moveUnavailableLabel ?? "Move to environment"),
             icon: "arrow-right",
-            disabled: state.isRunning || state.isMovingEnvironment === true,
-            children: state.moveDestinations.map((destination) => ({
+            disabled:
+              !!state.moveUnavailableLabel || state.isRunning || state.isMovingEnvironment === true,
+            children: (state.moveDestinations ?? []).map((destination) => ({
               id: `move-environment:${destination.environmentId}` as const,
               label: destination.label,
             })),

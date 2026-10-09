@@ -43,7 +43,12 @@ import { buildHomeListFilterMenu } from "../home/home-list-filter-menu";
 import { buildHomeProjectScopes } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
-import { useThreadListActions } from "../home/useThreadListActions";
+import {
+  useThreadListActions,
+  readMobileThreadMoveAvailability,
+  moveMobileThreadToEnvironment,
+  undoMobileThreadMove,
+} from "../home/useThreadListActions";
 import {
   getConnectionAwareBrandHeaderOptions,
   WorkspaceConnectionTitle,
@@ -724,6 +729,11 @@ function ThreadNavigationSidebarPane(
               onSelectThread={handleSelectThread}
               onDeleteThread={confirmDeleteThread}
               onArchiveThread={archiveThread}
+              {...readMobileThreadMoveAvailability(thread)}
+              onMoveThreadToEnvironment={moveMobileThreadToEnvironment}
+              onUndoThreadMove={(thread) => {
+                void undoMobileThreadMove(thread);
+              }}
               onRenameThread={renameThread}
               onRegenerateThreadTitle={regenerateThreadTitle}
               titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}

@@ -313,7 +313,7 @@ describe("applyShellStreamEvent", () => {
         ...v2ShellSnapshot,
         snapshotSequence: 4,
         projects: [
-          { ...v2Project, repositoryIdentity: null },
+          { ...v2Project, repositoryIdentity: null, repositoryIdentityResolved: true },
           { ...otherProject, repositoryIdentity: null },
         ],
       },
@@ -323,6 +323,7 @@ describe("applyShellStreamEvent", () => {
     expect(next.snapshotSequence).toBe(5);
     expect(next.projects).toHaveLength(2);
     expect(next.projects[0]?.repositoryIdentity).toBeNull();
+    expect(next.projects[0]?.repositoryIdentityResolved).toBe(true);
     expect(next.projects[1]?.repositoryIdentity).toEqual(otherIdentity);
   });
 

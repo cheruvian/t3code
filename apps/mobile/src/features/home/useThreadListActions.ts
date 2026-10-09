@@ -1,6 +1,7 @@
 import {
   beginThreadMoveProgress,
   threadMoveDestinations,
+  threadMoveUnavailableLabel,
   threadMoveUndoParticipants,
 } from "@t3tools/client-runtime/operations";
 import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -43,19 +44,24 @@ import { getThreadListV2OrderedSection } from "../threads/threadListV2";
 import { threadCanArchive } from "./threadArchive";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
 
-export function readMobileThreadMoveDestinations(thread: EnvironmentThreadShell) {
-  return threadMoveDestinations({
+export function readMobileThreadMoveAvailability(thread: EnvironmentThreadShell) {
+  const input = {
     thread,
     projects: appAtomRegistry.get(environmentProjects.projectsAtom),
     configs: appAtomRegistry.get(environmentServerConfigsAtom),
-  });
+  };
+  const moveEnvironmentDestinations = threadMoveDestinations(input);
+  return {
+    moveEnvironmentDestinations,
+    moveEnvironmentUnavailableLabel: threadMoveUnavailableLabel(input, moveEnvironmentDestinations),
+  };
 }
 
 export async function moveMobileThreadToEnvironment(
   thread: EnvironmentThreadShell,
   environmentId: EnvironmentId,
 ) {
-  const destination = readMobileThreadMoveDestinations(thread).find(
+  const destination = readMobileThreadMoveAvailability(thread).moveEnvironmentDestinations.find(
     (candidate) => candidate.environmentId === environmentId,
   );
   if (!destination) return;

@@ -486,3 +486,88 @@ it.effect(
       }).pipe(Effect.provide(layer(layerMetadata)));
     }),
 );
+
+it.effect(
+  "keeps identity readable during an expired refresh and clears it after confirmed removal",
+  () =>
+    Effect.gen(function* () {
+      const refreshStarted = yield* Deferred.make<void>();
+      const releaseRefresh = yield* Deferred.make<void>();
+      const calls = yield* Ref.make(0);
+      const metadata = Layer.merge(
+        Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+          resolve: (root) =>
+            Effect.gen(function* () {
+              if ((yield* Ref.updateAndGet(calls, (count) => count + 1)) === 1)
+                return identity(root);
+              yield* Deferred.succeed(refreshStarted, undefined);
+              yield* Deferred.await(releaseRefresh);
+              return null;
+            }),
+        }),
+        Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
+          resolvePath: () => Effect.succeed(null),
+        }),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* ProjectEnrichment.ProjectEnrichmentService;
+        const changes = yield* service.subscribeChanges;
+        yield* service.request("/repo");
+        yield* PubSub.take(changes);
+        yield* TestClock.adjust("1 minute");
+        const stale = yield* service.getAvailable("/repo");
+        assert.deepEqual(stale.repositoryIdentity, identity("/repo"));
+        assert.isTrue(stale.repositoryIdentityResolved);
+        yield* Deferred.await(refreshStarted);
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const pending = yield* service.getAvailable("/repo");
+          assert.deepEqual(pending.repositoryIdentity, identity("/repo"));
+          assert.isTrue(pending.repositoryIdentityResolved);
+        }
+        assert.equal(yield* Ref.get(calls), 2);
+        yield* Deferred.succeed(releaseRefresh, undefined);
+        const removed = yield* PubSub.take(changes);
+        assert.isNull(removed.enrichment.repositoryIdentity);
+        assert.isTrue(removed.repositoryIdentityResolved);
+        assert.isNull((yield* service.peek("/repo")).repositoryIdentity);
+      }).pipe(Effect.provide(layer(metadata)));
+    }),
+);
+
+it.effect(
+  "retains resolved identity after a failed refresh and retries after the failure TTL",
+  () =>
+    Effect.gen(function* () {
+      const calls = yield* Ref.make(0);
+      const metadata = Layer.merge(
+        Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+          resolve: (root) =>
+            Effect.gen(function* () {
+              const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
+              if (call === 2) return yield* Effect.die("refresh failed");
+              return identity(root, call);
+            }),
+        }),
+        Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
+          resolvePath: () => Effect.succeed(null),
+        }),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* ProjectEnrichment.ProjectEnrichmentService;
+        const changes = yield* service.subscribeChanges;
+        yield* service.request("/repo");
+        yield* PubSub.take(changes);
+        yield* TestClock.adjust("1 minute");
+        yield* service.request("/repo");
+        const failed = yield* PubSub.take(changes);
+        assert.deepEqual(failed.enrichment.repositoryIdentity, identity("/repo"));
+        assert.isTrue(failed.repositoryIdentityResolved);
+        yield* service.request("/repo");
+        assert.equal(yield* Ref.get(calls), 2);
+        yield* TestClock.adjust("5 seconds");
+        yield* service.request("/repo");
+        const retried = yield* PubSub.take(changes);
+        assert.deepEqual(retried.enrichment.repositoryIdentity, identity("/repo", 3));
+      }).pipe(Effect.provide(layer(metadata)));
+    }),
+);
