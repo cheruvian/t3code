@@ -32,6 +32,7 @@
   "peerDependencies": {
     "@t3tools/client-runtime": "*",
     "@t3tools/shared": "*",
+    "@types/react": "~19.3.0",
     "expo": "*",
     "expo-asset": "*",
     "expo-clipboard": "*",

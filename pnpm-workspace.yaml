@@ -1,6 +1,5 @@
-# Keep transitive declaration files near the workspace type packages.
-# The global virtual store cannot resolve optional React typings from consumers.
-enableGlobalVirtualStore: false
+# Share dependency graphs across worktrees while keeping compiler copies local.
+enableGlobalVirtualStore: true
 
 packages:
   - apps/*
@@ -250,7 +249,148 @@ overrides:
   yaml: "catalog:"
 
 packageExtensions:
+  # Declaration imports need React types visible from the shared package directory.
+  "@effect/atom-react@4.0.1":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "@legendapp/list@3.3.5":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "@pierre/trees@1.0.0-beta.6":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "lucide-react@0.564.0":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "@expo/ui@58.0.11":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "@pierre/diffs@1.5.2":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "@react-native-menu/menu@2.0.0":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "@react-navigation/elements@2.9.26":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "@react-navigation/native@7.3.4":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  # Its StaticScreenFactory declaration imports core directly.
+  "@react-navigation/native-stack@7.17.6":
+    dependencies:
+      "@react-navigation/core": "7.21.13"
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "@tabler/icons-react-native@3.44.0":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo@58.0.2":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-asset@58.0.10":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-audio@58.0.4":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-blur@58.0.3":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-camera@58.0.7":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-clipboard@58.0.3":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-glass-effect@58.0.3":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-image@58.0.10":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-keep-awake@58.0.3":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-linking@58.0.10":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-network@58.0.3":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-notifications@58.0.11":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-paste-input@0.1.15":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-sharing@58.0.13":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-sqlite@58.0.8":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-symbols@58.0.3":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-updates@58.0.13":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-video@58.0.6":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-widgets@58.0.11":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "react-native-gesture-handler@3.2.1":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "react-native-image-viewing@0.2.2":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "react-native-keyboard-controller@1.22.6":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "react-native-nitro-markdown@0.5.8":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "react-native-reanimated@4.7.0":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "react-native-safe-area-context@5.9.1":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "react-native-screens@5.0.0-t3.7":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "react-native-svg@15.15.5":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "react-native-webview@14.0.1":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "uniwind@1.12.1":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "expo-modules-core@58.0.11":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "@react-navigation/core@7.21.13":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "standard-navigation@0.0.7":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "@clerk/react@6.16.1":
+    peerDependencies:
+      "@types/react": "19.3.0"
+  "@clerk/shared@4.33.0":
+    peerDependencies:
+      "@types/react": "19.3.0"
   "@clerk/expo@*":
+    peerDependencies:
+      "@types/react": "19.3.0"
     dependencies:
       "@expo/config-plugins": 58.0.4
   # Our patch makes @effect/vitest import vite-plus/test. A catalog: spec here
