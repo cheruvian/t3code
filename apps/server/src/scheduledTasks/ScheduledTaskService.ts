@@ -33,6 +33,7 @@ import * as Metric from "effect/Metric";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as ScheduledTaskStore from "./ScheduledTaskStore.ts";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -410,8 +411,27 @@ export const layer = Layer.effect(
     // Sliding(1) coalesces the dirty-signal: every notification triggers a
     // full list() re-emit anyway, so a slow subscriber only ever needs the
     // latest signal — an unbounded backlog would just grow memory.
-    const changesPubSub = yield* PubSub.sliding<void>(1);
+    const taskStore = yield* ScheduledTaskStore.ScheduledTaskStore;
+    const changesPubSub = taskStore.changes;
     const notifyChanged = PubSub.publish(changesPubSub, undefined).pipe(Effect.asVoid);
+    const deletedTasks = yield* PubSub.subscribe(taskStore.deletions);
+    yield* Stream.fromSubscription(deletedTasks).pipe(
+      Stream.runForEach((ids) =>
+        Effect.all([
+          Ref.update(webhookRateWindows, (windows) => {
+            const next = new Map(windows);
+            for (const id of ids) next.delete(id);
+            return next;
+          }),
+          Ref.update(webhookPermits, (permits) => {
+            const next = new Map(permits);
+            for (const id of ids) next.delete(id);
+            return next;
+          }),
+        ]),
+      ),
+      Effect.forkScoped,
+    );
 
     const selectAllRows = () => sql<ScheduledTaskRow>`
       SELECT
@@ -614,19 +634,6 @@ export const layer = Layer.effect(
             : taskError("Schedule task not found.", { taskId: task.id }),
         ),
       );
-
-    const deleteRow = (id: ScheduledTaskId) =>
-      sql
-        .withTransaction(
-          sql`DELETE FROM scheduled_task_webhook_deliveries WHERE task_id = ${id}`.pipe(
-            Effect.andThen(sql`DELETE FROM scheduled_tasks WHERE task_id = ${id}`),
-          ),
-        )
-        .pipe(
-          Effect.mapError((cause) =>
-            taskError("Could not delete schedule task.", { taskId: id, cause }),
-          ),
-        );
 
     // Run-state transitions use targeted UPDATEs (never the full-row upsert) so
     // a completing run cannot resurrect a deleted task or clobber concurrent
@@ -1137,24 +1144,7 @@ export const layer = Layer.effect(
       });
 
     const deleteTask: ScheduledTaskService["Service"]["delete"] = (input) =>
-      deleteRow(input.id).pipe(
-        Effect.andThen(
-          Effect.all([
-            Ref.update(webhookRateWindows, (windows) => {
-              const next = new Map(windows);
-              next.delete(input.id);
-              return next;
-            }),
-            Ref.update(webhookPermits, (permits) => {
-              const next = new Map(permits);
-              next.delete(input.id);
-              return next;
-            }),
-          ]),
-        ),
-        Effect.andThen(notifyChanged),
-        Effect.as({ id: input.id }),
-      );
+      taskStore.delete(input.id).pipe(Effect.as({ id: input.id }));
 
     const runNow: ScheduledTaskService["Service"]["runNow"] = (input: ScheduledTaskRunNowInput) =>
       Effect.gen(function* () {
@@ -1672,4 +1662,4 @@ export const layer = Layer.effect(
       triggerWebhook,
     });
   }),
-);
+).pipe(Layer.provide(ScheduledTaskStore.layer));

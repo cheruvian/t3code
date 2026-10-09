@@ -939,6 +939,12 @@ describe("V2 environment commands", () => {
         reason: "user",
       }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
 
+      yield* settleThread({
+        commandId: CommandId.make("settle-keep-automations"),
+        threadId: ThreadId.make("thread-1"),
+        removeAutomations: false,
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
       expect(dispatched).toEqual([
         {
           type: "thread.settle",
@@ -950,6 +956,12 @@ describe("V2 environment commands", () => {
           commandId: "unsettle-command",
           threadId: "thread-1",
           reason: "user",
+        },
+        {
+          type: "thread.settle",
+          commandId: "settle-keep-automations",
+          threadId: "thread-1",
+          removeAutomations: false,
         },
       ]);
     }).pipe(Effect.provide(layerTestCrypto)),

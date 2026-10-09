@@ -2,22 +2,23 @@ import type { VcsStatusLocalResult } from "@t3tools/contracts";
 
 export type SettleWorktreeChoice = "keep" | "delete" | null;
 export type SettleWorktreeDecision =
-  | { choice: "keep" }
-  | { choice: "delete"; status: VcsStatusLocalResult }
+  | { choice: "keep"; removeAutomations: boolean }
+  | { choice: "delete"; status: VcsStatusLocalResult; removeAutomations: boolean }
   | null;
 
 export interface SettleWorktreePrompt {
-  path: string;
+  path: string | null;
   canDelete: boolean;
-  loadStatus: () => Promise<VcsStatusLocalResult>;
+  loadStatus?: () => Promise<VcsStatusLocalResult>;
   initialStatus?: VcsStatusLocalResult;
 }
 
 export interface SettleWorktreeDialogState {
-  path: string;
+  path: string | null;
   canDelete: boolean;
   phase: "loading" | "ready" | "error";
   status: VcsStatusLocalResult | null;
+  removeAutomations: boolean;
 }
 
 interface PendingPrompt {
@@ -47,6 +48,7 @@ async function load(pending: PendingPrompt) {
   pending.state = { ...pending.state, phase: "loading", status: null };
   publish();
   try {
+    if (!pending.prompt.loadStatus) return;
     const status = await pending.prompt.loadStatus();
     if (active !== pending || version !== pending.loadVersion) return;
     pending.state = { ...pending.state, phase: "ready", status };
@@ -98,8 +100,9 @@ export function requestSettleWorktreeDialog(prompt: SettleWorktreePrompt) {
       state: {
         path: prompt.path,
         canDelete: prompt.canDelete,
-        phase: prompt.initialStatus ? "ready" : "loading",
+        phase: prompt.initialStatus || !prompt.path ? "ready" : "loading",
         status: prompt.initialStatus ?? null,
+        removeAutomations: true,
       },
       resolve,
       loadVersion: 0,
@@ -113,6 +116,12 @@ export function retrySettleWorktreeDialog() {
   if (active?.state.phase === "error") void load(active);
 }
 
+export function setSettleDialogRemoveAutomations(removeAutomations: boolean) {
+  if (!active) return;
+  active.state = { ...active.state, removeAutomations };
+  publish();
+}
+
 export function respondToSettleWorktreeDialog(choice: SettleWorktreeChoice) {
   if (!active) return;
   if (choice === null) {
@@ -120,10 +129,10 @@ export function respondToSettleWorktreeDialog(choice: SettleWorktreeChoice) {
     return;
   }
   if (choice === "keep") {
-    finish({ choice: "keep" });
+    finish({ choice: "keep", removeAutomations: active.state.removeAutomations });
     return;
   }
   const { status, phase, canDelete } = active.state;
   if (phase !== "ready" || !status || !canDelete) return;
-  finish({ choice: "delete", status });
+  finish({ choice: "delete", status, removeAutomations: active.state.removeAutomations });
 }

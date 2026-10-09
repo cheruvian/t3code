@@ -4,7 +4,12 @@ export type ConfirmDialogRequest = {
   readonly cancelText?: string;
   readonly confirmText: string;
   readonly destructive?: boolean;
-  readonly onConfirm: () => void;
+  readonly options?: ReadonlyArray<{
+    readonly id: string;
+    readonly label: string;
+    readonly defaultChecked: boolean;
+  }>;
+  readonly onConfirm: (options: Readonly<Record<string, boolean>>) => void;
   readonly onCancel?: () => void;
 };
 

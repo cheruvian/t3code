@@ -6,6 +6,7 @@ import {
   requestSettleWorktreeDialog,
   respondToSettleWorktreeDialog,
   retrySettleWorktreeDialog,
+  setSettleDialogRemoveAutomations,
 } from "./settleWorktreeDialog";
 
 const dirtyStatus = {
@@ -38,6 +39,23 @@ afterEach(() => {
 });
 
 describe("settle worktree dialog", () => {
+  it("removes automations by default without a worktree and resets an opt-out for the next thread", async () => {
+    unregister = registerSettleWorktreeDialog();
+    const first = requestSettleWorktreeDialog({ path: null, canDelete: false });
+    expect(readSettleWorktreeDialog()?.phase).toBe("ready");
+    respondToSettleWorktreeDialog("keep");
+    expect(await first).toEqual({ choice: "keep", removeAutomations: true });
+
+    const second = requestSettleWorktreeDialog({ path: null, canDelete: false });
+    setSettleDialogRemoveAutomations(false);
+    respondToSettleWorktreeDialog("keep");
+    expect(await second).toEqual({ choice: "keep", removeAutomations: false });
+
+    const third = requestSettleWorktreeDialog({ path: null, canDelete: false });
+    expect(readSettleWorktreeDialog()?.removeAutomations).toBe(true);
+    respondToSettleWorktreeDialog(null);
+    expect(await third).toBeNull();
+  });
   it("opens before the detail request completes and accepts deletion only after review", async () => {
     unregister = registerSettleWorktreeDialog();
     const status = deferred<VcsStatusLocalResult>();
@@ -55,7 +73,11 @@ describe("settle worktree dialog", () => {
     await status.promise;
     await vi.waitFor(() => expect(readSettleWorktreeDialog()?.phase).toBe("ready"));
     respondToSettleWorktreeDialog("delete");
-    expect(await choice).toEqual({ choice: "delete", status: dirtyStatus });
+    expect(await choice).toEqual({
+      choice: "delete",
+      status: dirtyStatus,
+      removeAutomations: true,
+    });
   });
 
   it("shows a recoverable error and ignores a late result after cancellation", async () => {
@@ -92,7 +114,7 @@ describe("settle worktree dialog", () => {
     });
 
     respondToSettleWorktreeDialog("keep");
-    expect(await choice).toEqual({ choice: "keep" });
+    expect(await choice).toEqual({ choice: "keep", removeAutomations: true });
     expect(readSettleWorktreeDialog()).toBeNull();
 
     status.reject(new Error("Git status failed"));
@@ -115,7 +137,11 @@ describe("settle worktree dialog", () => {
     await vi.waitFor(() => expect(readSettleWorktreeDialog()?.phase).toBe("ready"));
     expect(readSettleWorktreeDialog()?.status).toEqual(cleanStatus);
     respondToSettleWorktreeDialog("delete");
-    expect(await choice).toEqual({ choice: "delete", status: cleanStatus });
+    expect(await choice).toEqual({
+      choice: "delete",
+      status: cleanStatus,
+      removeAutomations: true,
+    });
   });
 
   it("keeps a shared clean worktree when deletion is unavailable", async () => {
@@ -129,6 +155,6 @@ describe("settle worktree dialog", () => {
     respondToSettleWorktreeDialog("delete");
     expect(readSettleWorktreeDialog()).not.toBeNull();
     respondToSettleWorktreeDialog("keep");
-    expect(await choice).toEqual({ choice: "keep" });
+    expect(await choice).toEqual({ choice: "keep", removeAutomations: true });
   });
 });

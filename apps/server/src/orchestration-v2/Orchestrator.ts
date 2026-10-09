@@ -11029,6 +11029,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         acceptedAt,
         events: plan.events,
         effects: plan.effects,
+        ...((command.type === "thread.settle" && command.removeAutomations !== false) ||
+        command.type === "thread.auto-settle"
+          ? { removeBoundAutomations: true }
+          : {}),
+        ...("scheduledTaskId" in command && command.scheduledTaskId !== undefined
+          ? { requiredScheduledTaskId: command.scheduledTaskId }
+          : {}),
         ...(plan.cancelUnsettledEffects === undefined
           ? {}
           : { cancelUnsettledEffects: plan.cancelUnsettledEffects }),

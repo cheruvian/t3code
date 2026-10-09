@@ -127,6 +127,11 @@ sending an answer or restarting the agent. Settling also closes the thread's
 terminals that wait at an idle prompt, and keeps their output. A terminal that
 runs a command, such as a dev server, stays open.
 
+Settling removes automations bound to the conversation by default, including paused
+automations. To keep them active, turn off **Remove bound automations** in the
+confirmation dialog. Reopening does not restore removed automations. Automations
+that create new conversations are kept.
+
 To reclaim disk space from settled work, turn on **Run in the thread's worktree when the
 thread settles** for one of the project's actions, or set `"runOnSettle": true` on a
 `t3.json` script, for example `cargo clean`. It runs each time a thread in its own

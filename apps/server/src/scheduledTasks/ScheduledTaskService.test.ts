@@ -3,7 +3,7 @@ import * as NodeUtil from "node:util";
 
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
-import { ScheduledTaskError } from "@t3tools/contracts";
+import { ScheduledTaskError, ThreadId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -12,6 +12,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as Deferred from "effect/Deferred";
 import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -20,6 +21,7 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
+import * as ScheduledTaskStore from "./ScheduledTaskStore.ts";
 
 const isScheduledTaskError = Schema.is(ScheduledTaskError);
 
@@ -57,6 +59,78 @@ const insertRow = (
     last_run_error: null,
     run_count: 0,
   })}`;
+
+it.effect("removes enabled and paused automations only for the settled thread", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const taskStore = yield* ScheduledTaskStore.ScheduledTaskStore;
+    const now = "2026-09-09T12:00:00.000Z";
+    for (const [id, threadId, enabled] of [
+      ["bound-enabled", "settled-thread", 1],
+      ["bound-paused", "settled-thread", 0],
+      ["other-thread", "other-thread", 1],
+      ["independent", null, 1],
+    ] as const) {
+      yield* insertRow(sql, { id, enabled, next: null, status: "never" }, now);
+      yield* sql`UPDATE scheduled_tasks SET thread_id = ${threadId} WHERE task_id = ${id}`;
+    }
+    yield* taskStore.deleteForThread(ThreadId.make("settled-thread"));
+    yield* taskStore.deleteForThread(ThreadId.make("settled-thread"));
+    assert.deepEqual(
+      (yield* sql<{ task_id: string }>`SELECT task_id FROM scheduled_tasks ORDER BY task_id`).map(
+        (row) => row.task_id,
+      ),
+      ["independent", "other-thread"],
+    );
+  }).pipe(
+    Effect.provide(
+      ScheduledTaskStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
+    ),
+  ),
+);
+
+it.effect("updates live automation lists after settlement deletes through the shared store", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const tasks = yield* ScheduledTaskService.ScheduledTaskService;
+    const taskStore = yield* ScheduledTaskStore.ScheduledTaskStore;
+    yield* insertRow(
+      sql,
+      { id: "bound", next: null, enabled: 1, status: "never" },
+      "2026-09-09T12:00:00.000Z",
+    );
+    yield* sql`UPDATE scheduled_tasks SET thread_id = 'settled-thread' WHERE task_id = 'bound'`;
+    const initial = yield* Deferred.make<void>();
+    const removed = yield* Deferred.make<void>();
+    yield* tasks.subscribeList().pipe(
+      Stream.runForEach(({ tasks }) =>
+        Deferred.succeed(tasks.length === 1 ? initial : removed, undefined),
+      ),
+      Effect.forkScoped,
+    );
+    yield* Deferred.await(initial);
+    const ids = yield* taskStore.deleteForThread(ThreadId.make("settled-thread"));
+    yield* taskStore.publishDeleted(ids);
+    yield* Deferred.await(removed);
+    assert.deepEqual((yield* tasks.list()).tasks, []);
+  }).pipe(
+    Effect.provide(
+      ScheduledTaskService.layer.pipe(
+        Layer.provideMerge(ScheduledTaskStore.layer),
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+            Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+            Layer.mock(SecretRequests.SecretRequests)({}),
+            NodeCrypto.layer,
+            Scheduler.layer,
+          ),
+        ),
+        Layer.provideMerge(SqlitePersistence.layerMemory),
+      ),
+    ),
+  ),
+);
 
 it.effect("loads only due tasks and skips corrupt due rows without decoding settled tasks", () =>
   Effect.gen(function* () {

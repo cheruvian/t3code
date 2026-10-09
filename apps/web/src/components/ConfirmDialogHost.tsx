@@ -18,12 +18,14 @@ import {
 } from "./ui/alert-dialog";
 import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
+import { Checkbox } from "./ui/checkbox";
 import {
   readSettleWorktreeDialog,
   registerSettleWorktreeDialog,
   respondToSettleWorktreeDialog,
   retrySettleWorktreeDialog,
   subscribeSettleWorktreeDialog,
+  setSettleDialogRemoveAutomations,
 } from "../settleWorktreeDialog";
 
 const SETTLE_WORKTREE_VISIBLE_FILES = 100;
@@ -119,12 +121,12 @@ export function ConfirmDialogHost() {
           <AlertDialogHeader>
             <AlertDialogTitle>Settle this conversation?</AlertDialogTitle>
             <AlertDialogDescription>
-              Choose whether to keep or delete this worktree when settling. Deleting removes the
-              entire folder, including untracked and ignored files such as .env. The conversation
-              and Git branch are kept.
+              {settlePrompt?.path
+                ? "Choose whether to keep or delete this worktree when settling. Deleting removes the entire folder, including untracked and ignored files such as .env. The conversation and Git branch are kept."
+                : "The conversation is kept and can be reopened."}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {settlePrompt && (
+          {settlePrompt?.path && (
             <div className="min-w-0 space-y-2 px-6 text-sm">
               <div className="break-all font-mono text-xs">{settlePrompt.path}</div>
               {settlePrompt.phase === "loading" && (
@@ -180,9 +182,24 @@ export function ConfirmDialogHost() {
               )}
             </div>
           )}
+          {settlePrompt && (
+            <div className="space-y-2 px-6 text-sm">
+              <label className="flex items-center gap-2">
+                <Checkbox
+                  checked={settlePrompt.removeAutomations}
+                  onCheckedChange={setSettleDialogRemoveAutomations}
+                />
+                Remove bound automations
+              </label>
+              <p className="text-muted-foreground">
+                Removed automations stop running and are not restored when reopened. Uncheck to keep
+                them active. Automations that create new conversations are kept.
+              </p>
+            </div>
+          )}
           <AlertDialogFooter className="flex-col sm:flex-col">
             <Button className="w-full" onClick={() => respondToSettleWorktreeDialog("keep")}>
-              Settle and keep worktree
+              {settlePrompt?.path ? "Settle and keep worktree" : "Settle conversation"}
             </Button>
             {settlePrompt?.canDelete && (
               <Button

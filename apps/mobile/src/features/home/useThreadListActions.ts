@@ -196,32 +196,40 @@ function checkThreadOperationPermission(thread: EnvironmentThreadShell, title: s
   return false;
 }
 
-function confirmSettleWorktree(status: VcsStatusLocalResult | null, canDelete: boolean) {
-  return new Promise<"keep" | "delete" | null>((resolve) => {
-    const changes = status
-      ? `${status.workingTree.files.length} changed files · +${status.workingTree.insertions} −${status.workingTree.deletions} lines.\n${status.workingTree.files
-          .slice(0, 5)
-          .map((file) => file.path)
-          .join("\n")}`
-      : "Could not load the worktree changes. You can settle and keep the worktree.";
-    Alert.alert(
-      "Settle this conversation?",
-      `${changes}\n\nDeleting removes the entire worktree, including untracked and ignored files such as .env. The conversation and Git branch are kept.${canDelete ? "" : "\nThis worktree is shared or still in use, so it can only be kept."}`,
-      [
-        { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
-        { text: "Settle and keep", onPress: () => resolve("keep") },
+function confirmSettlement(
+  hasWorktree: boolean,
+  status: VcsStatusLocalResult | null,
+  canDelete: boolean,
+) {
+  return new Promise<{ deleteWorktree: boolean; removeAutomations: boolean } | null>((resolve) => {
+    const changes = !hasWorktree
+      ? "The conversation is kept and can be reopened."
+      : status
+        ? `${status.workingTree.files.length} changed files · +${status.workingTree.insertions} −${status.workingTree.deletions} lines.\n${status.workingTree.files
+            .slice(0, 5)
+            .map((file) => file.path)
+            .join("\n")}`
+        : "Could not load the worktree changes. You can settle and keep the worktree.";
+    const worktreeWarning = hasWorktree
+      ? `\n\nDeleting removes the entire worktree, including untracked and ignored files such as .env. The conversation and Git branch are kept.${canDelete ? "" : "\nThis worktree is shared or still in use, so it can only be kept."}`
+      : "";
+    showConfirmDialog({
+      title: "Settle this conversation?",
+      message: `${changes}${worktreeWarning}\n\nRemoved automations stop running and are not restored when reopened. Turn this off to keep them active. Automations that create new conversations are kept.`,
+      confirmText: "Settle",
+      options: [
+        { id: "removeAutomations", label: "Remove bound automations", defaultChecked: true },
         ...(canDelete && status
-          ? [
-              {
-                text: "Settle and delete",
-                style: "destructive" as const,
-                onPress: () => resolve("delete"),
-              },
-            ]
+          ? [{ id: "deleteWorktree", label: "Delete worktree", defaultChecked: false }]
           : []),
       ],
-      { cancelable: true, onDismiss: () => resolve(null) },
-    );
+      onConfirm: (options) =>
+        resolve({
+          removeAutomations: options.removeAutomations !== false,
+          deleteWorktree: options.deleteWorktree === true,
+        }),
+      onCancel: () => resolve(null),
+    });
   });
 }
 
@@ -275,6 +283,7 @@ function useThreadActionExecutor(
           return false;
         }
         let deleteWorktreePreview: VcsStatusLocalResult | null = null;
+        let removeAutomations = true;
         if (action === "settle" && thread.worktreePath) {
           const shells = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
           const owners = shells.filter(
@@ -288,9 +297,14 @@ function useThreadActionExecutor(
             input: { cwd: thread.worktreePath },
           });
           const preview = status._tag === "Success" ? status.value : null;
-          const choice = await confirmSettleWorktree(preview, canDelete);
-          if (choice === null) return false;
-          if (choice === "delete") deleteWorktreePreview = preview;
+          const decision = await confirmSettlement(true, preview, canDelete);
+          if (decision === null) return false;
+          removeAutomations = decision.removeAutomations;
+          if (decision.deleteWorktree) deleteWorktreePreview = preview;
+        } else if (action === "settle") {
+          const decision = await confirmSettlement(false, null, false);
+          if (decision === null) return false;
+          removeAutomations = decision.removeAutomations;
         }
         const result = await withThreadDismissal(
           key,
@@ -302,18 +316,21 @@ function useThreadActionExecutor(
                   environmentId: thread.environmentId,
                   input: { threadId: thread.id, reason: "user" },
                 })
-              : await (
-                  action === "settle"
-                    ? settleMutation
-                    : action === "archive"
+              : action === "settle"
+                ? await settleMutation({
+                    environmentId: thread.environmentId,
+                    input: { threadId: thread.id, removeAutomations },
+                  })
+                : await (
+                    action === "archive"
                       ? archiveMutation
                       : action === "unarchive"
                         ? unarchiveMutation
                         : deleteMutation
-                )({
-                  environmentId: thread.environmentId,
-                  input: { threadId: thread.id },
-                }),
+                  )({
+                    environmentId: thread.environmentId,
+                    input: { threadId: thread.id },
+                  }),
           (result) => result._tag === "Success",
         );
         if (result._tag === "Failure") {

@@ -1,9 +1,12 @@
 import {
   AlertDialog,
+  Checkbox,
+  Column,
   Host,
   OutlinedTextField,
   Text,
   TextButton,
+  Row,
   useNativeState,
 } from "@expo/ui/jetpack-compose";
 
@@ -68,9 +71,24 @@ export function MaterialConfirmDialog(props: MaterialConfirmDialogProps) {
               </OutlinedTextField.Label>
             </OutlinedTextField>
           </AlertDialog.Text>
-        ) : props.request.message ? (
+        ) : props.request.message || props.request.options?.length ? (
           <AlertDialog.Text>
-            <Text style={bodyTypography}>{props.request.message}</Text>
+            <Column>
+              {props.request.message && <Text style={bodyTypography}>{props.request.message}</Text>}
+              {props.request.options?.map((option) => (
+                <Row key={option.id} verticalAlignment="center">
+                  <Checkbox
+                    value={props.options?.[option.id] ?? option.defaultChecked}
+                    onCheckedChange={(checked) => props.onOptionChange?.(option.id, checked)}
+                    colors={{
+                      checkedColor: colors["--color-primary-text"],
+                      checkmarkColor: colors["--color-card-alt"],
+                    }}
+                  />
+                  <Text style={bodyTypography}>{option.label}</Text>
+                </Row>
+              ))}
+            </Column>
           </AlertDialog.Text>
         ) : null}
         <AlertDialog.DismissButton>

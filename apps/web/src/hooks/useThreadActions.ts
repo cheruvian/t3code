@@ -791,6 +791,7 @@ export function useThreadActions() {
       const resolved = resolveThreadTarget(target);
       let deleteWorktreePath: string | null = null;
       let deleteWorktreePreview: VcsStatusLocalResult | null = null;
+      let removeAutomations = true;
       if (resolved?.thread.worktreePath) {
         const worktreePath = resolved.thread.worktreePath;
         const project = readProject({
@@ -819,10 +820,15 @@ export function useThreadActions() {
           },
         });
         if (decision === null) return AsyncResult.failure(Cause.interrupt());
+        removeAutomations = decision.removeAutomations;
         if (decision.choice === "delete" && canDelete) {
           deleteWorktreePath = worktreePath;
           deleteWorktreePreview = decision.status;
         }
+      } else {
+        const decision = await requestSettleWorktreeDialog({ path: null, canDelete: false });
+        if (decision === null) return AsyncResult.failure(Cause.interrupt());
+        removeAutomations = decision.removeAutomations;
       }
       const wokeAt = resolved
         ? threadWokeAt(resolved.thread, { now: new Date().toISOString() })
@@ -839,7 +845,7 @@ export function useThreadActions() {
       const action = ThreadUndo.begin("settle", scopedThreadKey(target));
       const result = await settleThreadMutation({
         environmentId: target.environmentId,
-        input: { threadId: target.threadId },
+        input: { threadId: target.threadId, removeAutomations },
       });
       if (result._tag !== "Success") {
         action.finish();

@@ -15,6 +15,7 @@ import {
   RunId,
   RuntimeRequestId,
   ThreadId,
+  ScheduledTaskId,
   TurnItemId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -47,6 +48,97 @@ const layerTest = Layer.mergeAll(
     ProviderAdapterRegistry.layerFromAdapters([adapter]),
     { databaseLayer: layerDatabase, runEffectWorker: false },
   ),
+);
+
+it.effect.each([undefined, true, false, "automatic"] as const)(
+  "settlement removes bound automations unless opted out (%s)",
+  (removeAutomations) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread:automation-settlement");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("create-automation-settlement"),
+        threadId,
+        projectId: ProjectId.make("project:automation-settlement"),
+        title: "Automations",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      for (const [id, boundThreadId] of [
+        ["bound", threadId],
+        ["independent", null],
+      ] as const) {
+        yield* sql`INSERT INTO scheduled_tasks
+          (task_id, title, prompt, enabled, schedule_json, project_id, thread_id,
+           workspace_strategy_json, model_selection_json, runtime_mode, interaction_mode,
+           created_by, creation_source, created_at, updated_at, last_run_status, run_count)
+          VALUES (${id}, 'Task', 'Run', 1, '{"type":"interval","everyMs":60000}',
+            'project:automation-settlement', ${boundThreadId}, '{"type":"root"}',
+            '{"instanceId":"codex","model":"gpt-5"}', 'full-access', 'default',
+            'user', 'web', '2026-09-09T12:00:00.000Z', '2026-09-09T12:00:00.000Z', 'never', 0)`;
+      }
+      if (removeAutomations === "automatic") {
+        yield* orchestrator.dispatch({
+          type: "thread.auto-settle",
+          commandId: CommandId.make("settle-automations"),
+          threadId,
+          snapshotAt: yield* DateTime.now,
+        });
+      } else {
+        yield* orchestrator.dispatch({
+          type: "thread.settle",
+          commandId: CommandId.make("settle-automations"),
+          threadId,
+          ...(removeAutomations === undefined ? {} : { removeAutomations }),
+        });
+      }
+      const remaining = yield* sql<{
+        task_id: string;
+      }>`SELECT task_id FROM scheduled_tasks ORDER BY task_id`;
+      assert.deepEqual(
+        remaining.map((row) => row.task_id),
+        removeAutomations === false ? ["bound", "independent"] : ["independent"],
+      );
+      if (removeAutomations !== false) {
+        const lateDelivery = yield* Effect.exit(
+          orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("late-automation-prompt"),
+            threadId,
+            scheduledTaskId: ScheduledTaskId.make("bound"),
+            messageId: MessageId.make("late-automation-message"),
+            text: "Run the removed automation",
+            attachments: [],
+            dispatchMode: { type: "queue_after_active" },
+            createdBy: "user",
+            creationSource: "web",
+          }),
+        );
+        assert.equal(lateDelivery._tag, "Failure");
+        const projections = yield* ProjectionStore.ProjectionStoreV2;
+        const settled = yield* projections.getThreadProjection(threadId);
+        assert.equal(settled.thread.settledOverride, "settled");
+        assert.equal(settled.messages.length, 0);
+        assert.equal(settled.runs.length, 0);
+      }
+      yield* orchestrator.dispatch({
+        type: "thread.unsettle",
+        commandId: CommandId.make("unsettle-automations"),
+        threadId,
+        reason: "user",
+      });
+      const reopened = yield* sql<{
+        task_id: string;
+      }>`SELECT task_id FROM scheduled_tasks ORDER BY task_id`;
+      assert.deepEqual(reopened, remaining);
+    }).pipe(Effect.provide(layerTest)),
 );
 
 it.effect(

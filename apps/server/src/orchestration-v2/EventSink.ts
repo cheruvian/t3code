@@ -10,6 +10,8 @@ import {
   NodeId,
   type ProjectId,
   ThreadId,
+  ScheduledTaskId,
+  ScheduledTaskError,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -32,6 +34,7 @@ import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
+import * as ScheduledTaskStore from "../scheduledTasks/ScheduledTaskStore.ts";
 
 /**
  * ERRORS
@@ -126,6 +129,8 @@ export interface EventSinkV2Shape {
     readonly acceptedAt: DateTime.Utc;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
+    readonly removeBoundAutomations?: boolean;
+    readonly requiredScheduledTaskId?: ScheduledTaskId;
     readonly cancelUnsettledEffects?: {
       readonly effectTypes: ReadonlyArray<EffectOutbox.OrchestrationEffectRequestV2["type"]>;
       readonly reason: string;
@@ -211,6 +216,7 @@ const layerBase: Layer.Layer<
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
     const projectStore = yield* ProjectStore.ProjectStoreV2;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
+    const scheduledTasks = yield* ScheduledTaskStore.ScheduledTaskStore;
     const liveEvents = yield* PubSub.unbounded<OrchestrationV2StoredEvent>();
     const liveEventsByType = new Map<
       OrchestrationV2DomainEvent["type"],
@@ -540,7 +546,24 @@ const layerBase: Layer.Layer<
           });
           if (!reserved) {
             const existing = yield* existingCommandResult(input.commandId);
-            return { ...existing, committed: false as const, cancelledEffectIds: [] };
+            return {
+              ...existing,
+              committed: false as const,
+              cancelledEffectIds: [],
+              deletedTaskIds: [],
+            };
+          }
+
+          // A scheduler delivery can outlive deletion after its initial read.
+          // Validate in the commit transaction so it cannot reopen settled work.
+          if (
+            input.requiredScheduledTaskId !== undefined &&
+            !(yield* scheduledTasks.exists(input.requiredScheduledTaskId))
+          ) {
+            return yield* new ScheduledTaskError({
+              taskId: input.requiredScheduledTaskId,
+              message: "Schedule task was removed before its prompt could run.",
+            });
           }
 
           const normalized = yield* normalizeEvents(input.events);
@@ -555,6 +578,9 @@ const layerBase: Layer.Layer<
             );
           }
           yield* applyStoredEvents(storedEvents);
+          const deletedTaskIds = input.removeBoundAutomations
+            ? yield* scheduledTasks.deleteForThread(input.threadId)
+            : [];
           yield* effectOutbox.enqueue(input.effects);
           const receipt: CommandReceiptStore.CommandReceiptV2 = {
             commandId: input.commandId,
@@ -573,11 +599,20 @@ const layerBase: Layer.Layer<
                   threadId: input.threadId,
                   ...input.cancelUnsettledEffects,
                 });
-          return { receipt, storedEvents, committed: true as const, cancelledEffectIds };
+          return {
+            receipt,
+            storedEvents,
+            committed: true as const,
+            cancelledEffectIds,
+            deletedTaskIds,
+          };
         }),
         (result) =>
           Effect.gen(function* () {
             yield* effectOutbox.signalCancellations(result.cancelledEffectIds);
+            if (result.deletedTaskIds.length > 0) {
+              yield* scheduledTasks.publishDeleted(result.deletedTaskIds);
+            }
             if (result.committed && input.effects.length > 0) {
               yield* effectOutbox.notifyAvailable(input.effects.length);
             }
@@ -874,7 +909,7 @@ const layerBase: Layer.Layer<
         ),
     } satisfies EventSinkV2Shape);
   }),
-);
+).pipe(Layer.provide(ScheduledTaskStore.layer));
 
 /**
  * Event sink layer for application compositions that already own the
