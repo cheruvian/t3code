@@ -204,7 +204,7 @@ import {
   BrowserPreviewUnavailableError,
   BrowserSettingsReadError,
 } from "../browser/openFileInPreview";
-import { resolveLinkTarget } from "../browser/browserLinkTarget";
+import { isStandaloneWebApp, resolveLinkTarget } from "../browser/browserLinkTarget";
 import { PullRequestLinkPreview } from "./pullRequest/PullRequestLinkPreview";
 import { MermaidDiagram } from "./chat/MermaidDiagram";
 
@@ -3246,7 +3246,8 @@ const CHAT_MARKDOWN_COMPONENTS = {
             ) {
               return;
             }
-            // Anything else follows the "Open links in" setting. The system browser
+            // Other links follow "Open links in"; Home Screen apps use the in-app
+            // browser to keep the conversation reachable. The system browser
             // keeps the `_blank` the shell already handles; the in-app browser needs
             // the click intercepted here. A modifier click is the way out of the
             // in-app default, so it is left to the shell too.
@@ -3270,7 +3271,11 @@ const CHAT_MARKDOWN_COMPONENTS = {
                 { operation: "open-link-in-preview", target: href },
                 result.cause,
               );
-              if (squashAtomCommandFailure(result) instanceof BrowserSettingsReadError) return;
+              if (
+                isStandaloneWebApp() ||
+                squashAtomCommandFailure(result) instanceof BrowserSettingsReadError
+              )
+                return;
               void readLocalApi()?.shell.openExternal(href);
             });
           }}

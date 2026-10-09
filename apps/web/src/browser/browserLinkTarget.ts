@@ -24,17 +24,26 @@ export interface ResolveLinkTargetInput {
 
 /**
  * The target a click resolves to. "app" only comes back when the preference
- * asks for it, the runtime can honour it, the URL is one the in-app browser
- * can load, and the click carried no modifier — the modifier is the one-gesture
+ * asks for it or the client is a Home Screen app, the runtime can honour it,
+ * the URL is one the in-app browser can load, and the click carried no modifier — the modifier is the one-gesture
  * way out when the default is in-app, mirroring how change-request links
  * already treat it.
  */
 export function resolveLinkTarget(input: ResolveLinkTargetInput): BrowserLinkTarget {
   if (input.event.metaKey || input.event.ctrlKey) return "system";
-  if (input.preference !== "app") return "system";
+  if (input.preference !== "app" && !isStandaloneWebApp()) return "system";
   if (!input.canOpenInApp) return "system";
   if (!isWebUrl(input.url)) return "system";
   return "app";
+}
+
+/** Home Screen apps have no browser Back control if an external page replaces them. */
+export function isStandaloneWebApp(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    (window.matchMedia?.("(display-mode: standalone)").matches === true ||
+      (window.navigator as Navigator & { standalone?: boolean }).standalone === true)
+  );
 }
 
 /**
