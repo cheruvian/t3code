@@ -202,13 +202,13 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
           </Button>
         )}
         <MediaActions source={actionsSource}>
-          <div className="relative isolate z-10 max-h-[92vh] max-w-[var(--media-width)]">
+          <div className="relative isolate z-10 flex max-h-[92vh] max-w-[var(--media-width)] flex-col items-center">
             <Button
               type="button"
               ref={closeButtonRef}
-              size="icon-xs"
+              size="icon-xl"
               variant="media-close"
-              className="absolute right-0 -top-10 z-20"
+              className="z-20 mb-2 self-end sm:absolute sm:right-0 sm:-top-14 sm:mb-0"
               onClick={onClose}
               aria-label={`Close ${mediaLabel} preview`}
             >

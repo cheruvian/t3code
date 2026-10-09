@@ -1,3 +1,4 @@
+import { ComposerQuickCommandPicker } from "./ComposerQuickCommandPicker";
 import { savedPromptItems } from "@t3tools/shared/savedPrompts";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtimeModeConfig";
@@ -2651,6 +2652,80 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         }),
   );
 
+  const [quickCommandOwner, setQuickCommandOwner] = useState<string | null>(null);
+  const quickCommandOpen = quickCommandOwner === composerTargetKey(composerDraftTarget);
+
+  const quickCommandItems = useMemo(() => {
+    const builtInSlashCommandItems = [
+      {
+        id: "slash:model",
+        type: "slash-command",
+        command: "model",
+        label: "/model",
+        description: "Switch response model for this thread",
+      },
+      ...(planModeUiEnabled
+        ? ([
+            {
+              id: "slash:plan",
+              type: "slash-command",
+              command: "plan",
+              label: "/plan",
+              description: "Switch this thread into plan mode",
+            },
+            {
+              id: "slash:default",
+              type: "slash-command",
+              command: "default",
+              label: "/default",
+              description: "Switch this thread back to normal build mode",
+            },
+          ] as const)
+        : []),
+    ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
+    const slashMenuSkills = getProviderSkillsForSlashMenu(
+      selectedProviderSkills,
+      settings.showSkillsInSlashMenu,
+    );
+    const providerSlashCommandItems = getProviderSlashCommandsForSlashMenu(
+      selectedProviderSlashCommands,
+      slashMenuSkills,
+    ).map((command) => ({
+      id: `provider-slash-command:${selectedProvider}:${command.name}`,
+      type: "provider-slash-command" as const,
+      provider: selectedProvider,
+      command,
+      label: `/${command.name}`,
+      description: command.description ?? command.input?.hint ?? "Run provider command",
+    }));
+    const skillItems = slashMenuSkills.map((skill) => ({
+      id: `skill:${selectedProvider}:${skill.name}`,
+      type: "skill" as const,
+      provider: selectedProvider,
+      skill,
+      label: `/skill:${skill.name}`,
+      description:
+        skill.shortDescription ?? skill.description ?? (skill.scope ? `${skill.scope} skill` : ""),
+    }));
+    const visibleProviderSlashCommandItems = providerSlashCommandItems.filter(
+      (item) => item.command.name !== "compact" || compactSlashCommandAvailable,
+    );
+    return [
+      ...builtInSlashCommandItems,
+      ...visibleProviderSlashCommandItems,
+      ...skillItems,
+      ...savedPromptItems(settings.savedPrompts),
+    ];
+  }, [
+    planModeUiEnabled,
+    selectedProviderSkills,
+    selectedProviderSlashCommands,
+    selectedProvider,
+    settings.showSkillsInSlashMenu,
+    settings.savedPrompts,
+    compactSlashCommandAvailable,
+  ]);
+
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "path") {
@@ -2674,73 +2749,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ];
     }
     if (composerTrigger.kind === "slash-command") {
-      const builtInSlashCommandItems = [
-        {
-          id: "slash:model",
-          type: "slash-command",
-          command: "model",
-          label: "/model",
-          description: "Switch response model for this thread",
-        },
-        ...(planModeUiEnabled
-          ? ([
-              {
-                id: "slash:plan",
-                type: "slash-command",
-                command: "plan",
-                label: "/plan",
-                description: "Switch this thread into plan mode",
-              },
-              {
-                id: "slash:default",
-                type: "slash-command",
-                command: "default",
-                label: "/default",
-                description: "Switch this thread back to normal build mode",
-              },
-            ] as const)
-          : []),
-      ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
-      const slashMenuSkills = getProviderSkillsForSlashMenu(
-        selectedProviderSkills,
-        settings.showSkillsInSlashMenu,
-      );
-      const providerSlashCommandItems = getProviderSlashCommandsForSlashMenu(
-        selectedProviderSlashCommands,
-        slashMenuSkills,
-      ).map((command) => ({
-        id: `provider-slash-command:${selectedProvider}:${command.name}`,
-        type: "provider-slash-command" as const,
-        provider: selectedProvider,
-        command,
-        label: `/${command.name}`,
-        description: command.description ?? command.input?.hint ?? "Run provider command",
-      }));
-      const query = composerTrigger.query.trim().toLowerCase();
-      const skillItems = slashMenuSkills.map((skill) => ({
-        id: `skill:${selectedProvider}:${skill.name}`,
-        type: "skill" as const,
-        provider: selectedProvider,
-        skill,
-        label: `/skill:${skill.name}`,
-        description:
-          skill.shortDescription ??
-          skill.description ??
-          (skill.scope ? `${skill.scope} skill` : ""),
-      }));
-      const visibleProviderSlashCommandItems = providerSlashCommandItems.filter(
-        (item) => item.command.name !== "compact" || compactSlashCommandAvailable,
-      );
       const slashCommandItems = slashCommandItemsForPromptPosition(
-        [
-          ...builtInSlashCommandItems,
-          ...visibleProviderSlashCommandItems,
-          ...skillItems,
-          ...savedPromptItems(settings.savedPrompts),
-        ],
+        quickCommandItems,
         composerTrigger.rangeStart === 0,
       );
-      return searchSlashCommandItems(slashCommandItems, query);
+      return searchSlashCommandItems(slashCommandItems, composerTrigger.query.trim().toLowerCase());
     }
     if (composerTrigger.kind === "skill") {
       return searchProviderSkills(selectedProviderSkills, composerTrigger.query).map((skill) => ({
@@ -2809,22 +2822,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return [];
   }, [
     activeThreadId,
-    compactSlashCommandAvailable,
+    quickCommandItems,
     composerTrigger,
     environmentId,
     environmentThreadShells,
     exactPullRequestLookup.data,
-    planModeUiEnabled,
     pullRequestLookup.data,
     pullRequestProjectId,
     pullRequestRepository,
     pullRequestTriggerNumber,
     selectedProvider,
     selectedProviderSkills,
-    selectedProviderSlashCommands,
     selectedProviderStatus,
-    settings.showSkillsInSlashMenu,
-    settings.savedPrompts,
     workspaceEntries.entries,
   ]);
 
@@ -3087,7 +3096,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     (!composerSendState.hasSendableContent && !voiceInput.busy && !showResumeAction);
   const dictationButton =
     isMobileViewport && !activePendingProgress && !isComposerApprovalState ? (
-      <BrowserDictationButton voice={voiceInput} disabled={!voiceInputEnabled} />
+      <>
+        <button
+          type="button"
+          className="flex size-11 shrink-0 items-center justify-center rounded-full border border-border text-lg text-muted-foreground hover:bg-accent disabled:opacity-40"
+          aria-label="Open slash commands"
+          disabled={!voiceInputEnabled || voiceInput.busy}
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => {
+            if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+            setQuickCommandOwner(composerTargetKey(composerDraftTarget));
+          }}
+        >
+          /
+        </button>
+        <BrowserDictationButton voice={voiceInput} disabled={!voiceInputEnabled} />
+      </>
     ) : null;
 
   const addComposerImage = useCallback(
@@ -6687,6 +6711,50 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   // Render
   // ------------------------------------------------------------------
+  const selectQuickCommand = (item: ComposerCommandItem, behavior: "insert" | "send") => {
+    if (!voiceInputEnabled || voiceInput.busy) return;
+    setQuickCommandOwner(null);
+    if (item.type === "slash-command") {
+      if (item.command === "model") {
+        expandMobileComposer();
+        setIsComposerModelPickerOpen(true);
+      } else if (planModeUiEnabled) {
+        void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
+      }
+      return;
+    }
+    if (
+      item.type === "provider-slash-command" &&
+      item.command.name === USAGE_LIMITS_COMMAND.name &&
+      onUsageLimitsCommand
+    ) {
+      onUsageLimitsCommand();
+      return;
+    }
+    const text =
+      item.type === "saved-prompt"
+        ? item.prompt.text
+        : item.type === "skill"
+          ? `$${item.skill.name}`
+          : item.type === "provider-slash-command"
+            ? `/${item.command.name}`
+            : null;
+    if (text === null) return;
+    const draft = promptRef.current;
+    const next = `${text.trimEnd()}${draft ? ` ${draft}` : " "}`;
+    promptRef.current = next;
+    setPrompt(next);
+    setComposerCursor(collapseExpandedComposerCursor(next, next.length));
+    resetComposerTrigger(null);
+    if (behavior === "send") setPendingSavedPromptSend(next);
+    else {
+      expandMobileComposer();
+      window.requestAnimationFrame(() =>
+        composerEditorRef.current?.focusAt(collapseExpandedComposerCursor(next, next.length)),
+      );
+    }
+  };
+
   return (
     <form
       ref={composerFormRef}
@@ -7845,6 +7913,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           </div>
         </ComposerSurface.Main>
       </div>
+      {isMobileViewport &&
+        quickCommandOpen &&
+        !activePendingProgress &&
+        !isComposerApprovalState && (
+          <ComposerQuickCommandPicker
+            key={quickCommandOwner}
+            items={quickCommandItems}
+            disabled={!voiceInputEnabled || voiceInput.busy}
+            canSend={voiceInputEnabled && !isSendDisabled && canOperateThread && !voiceInput.busy}
+            onSelect={selectQuickCommand}
+            onDismiss={() => setQuickCommandOwner(null)}
+            onTextbox={() => {
+              setQuickCommandOwner(null);
+              expandMobileComposer();
+              window.requestAnimationFrame(() => composerEditorRef.current?.focus());
+            }}
+          />
+        )}
     </form>
   );
 });

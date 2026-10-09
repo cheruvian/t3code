@@ -10,7 +10,7 @@ export function BrowserDictationButton({
   disabled: boolean;
 }) {
   const buttonClass =
-    "flex size-10 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground hover:bg-accent disabled:opacity-40";
+    "flex size-11 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground hover:bg-accent disabled:opacity-40";
   return (
     <div className="flex items-center gap-1" data-composer-dictation-controls>
       {voice.busy ? (

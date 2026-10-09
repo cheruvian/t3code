@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./quickCommandNavigation": {
+      "types": "./src/quickCommandNavigation.ts",
+      "import": "./src/quickCommandNavigation.ts"
+    },
     "./savedPrompts": {
       "types": "./src/savedPrompts.ts",
       "import": "./src/savedPrompts.ts"
