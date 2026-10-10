@@ -32,6 +32,8 @@ export interface PersistedUiState {
   threadChangedFilesExpansionVersion?: number;
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
   pullRequestMergeMethod?: string;
+  fullWidthThreadMessages?: boolean;
+  wrapTableCells?: boolean;
 }
 
 export interface UiProjectState {
@@ -57,8 +59,18 @@ export interface UiPullRequestState {
   pullRequestMergeMethod: PullRequestMergeMethod;
 }
 
+export interface UiThreadPresentationState {
+  fullWidthThreadMessages: boolean;
+  wrapTableCells: boolean;
+}
+
 export interface UiState
-  extends UiProjectState, UiThreadState, UiEndpointState, UiPullRequestState {}
+  extends
+    UiProjectState,
+    UiThreadState,
+    UiEndpointState,
+    UiPullRequestState,
+    UiThreadPresentationState {}
 
 const initialState: UiState = {
   projectExpandedById: {},
@@ -69,6 +81,8 @@ const initialState: UiState = {
   threadChangedFilesExpandedById: {},
   defaultAdvertisedEndpointKey: null,
   pullRequestMergeMethod: "merge",
+  fullWidthThreadMessages: false,
+  wrapTableCells: true,
 };
 
 const LEGACY_PROJECT_CWD_PREFERENCE_PREFIX = "legacy-project-cwd:";
@@ -174,6 +188,8 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
     pullRequestMergeMethod: isPullRequestMergeMethod(parsed.pullRequestMergeMethod)
       ? parsed.pullRequestMergeMethod
       : initialState.pullRequestMergeMethod,
+    fullWidthThreadMessages: parsed.fullWidthThreadMessages === true,
+    wrapTableCells: parsed.wrapTableCells !== false,
   };
 }
 
@@ -249,6 +265,8 @@ export function persistState(state: UiState): void {
         threadChangedFilesExpansionVersion: THREAD_CHANGED_FILES_EXPANSION_VERSION,
         threadChangedFilesExpandedById: state.threadChangedFilesExpandedById,
         pullRequestMergeMethod: state.pullRequestMergeMethod,
+        fullWidthThreadMessages: state.fullWidthThreadMessages,
+        wrapTableCells: state.wrapTableCells,
       } satisfies PersistedUiState),
     );
     if (!legacyKeysCleanedUp) {
@@ -486,6 +504,8 @@ interface UiStateStore extends UiState {
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
   setSidebarProjectScopeKey: (projectKey: string | null) => void;
   setPullRequestMergeMethod: (method: PullRequestMergeMethod) => void;
+  setFullWidthThreadMessages: (enabled: boolean) => void;
+  setWrapTableCells: (enabled: boolean) => void;
   setProjectExpanded: (projectIds: string | readonly string[], expanded: boolean) => void;
   reorderProjects: (
     currentProjectOrder: readonly string[],
@@ -509,6 +529,8 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
   setSidebarProjectScopeKey: (projectKey) =>
     set((state) => setSidebarProjectScopeKey(state, projectKey)),
   setPullRequestMergeMethod: (method) => set((state) => setPullRequestMergeMethod(state, method)),
+  setFullWidthThreadMessages: (enabled) => set({ fullWidthThreadMessages: enabled }),
+  setWrapTableCells: (enabled) => set({ wrapTableCells: enabled }),
   setProjectExpanded: (projectIds, expanded) =>
     set((state) => setProjectExpanded(state, projectIds, expanded)),
   reorderProjects: (currentProjectOrder, draggedProjectIds, targetProjectIds) =>

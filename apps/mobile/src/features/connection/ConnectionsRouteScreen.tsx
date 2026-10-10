@@ -9,6 +9,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 import { LocalEnvironmentList } from "./LocalEnvironmentList";
+import { ConnectionTimingSettings } from "./ConnectionTimingSettings";
 import { GitHubRoutingSettings } from "./GitHubRoutingSettings";
 
 export function ConnectionsRouteScreen() {
@@ -68,6 +69,7 @@ export function ConnectionsRouteScreen() {
           onSetEnabled={onSetEnvironmentEnabled}
           onUpdate={onUpdateEnvironment}
         />
+        <ConnectionTimingSettings />
         <GitHubRoutingSettings />
       </ScrollView>
     </View>

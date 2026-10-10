@@ -77,6 +77,8 @@ export interface MarkdownFileContextMenu {
 
 export interface SelectableMarkdownTextProps {
   readonly markdown: string;
+  /** Render-only host file metadata; undefined keeps non-thread rendering unchanged. */
+  readonly fileResolutions?: import("@t3tools/client-runtime/markdown-file-resolution").MarkdownFileResolutions;
   /** Opaque context payload supplied by the host for native selection copy. */
   readonly contextClipboardFragment?: string;
   readonly textStyle: NativeMarkdownTextStyle;

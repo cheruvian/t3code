@@ -4,25 +4,10 @@ import { Platform, Modal, Pressable, TextInput, View } from "react-native";
 import { cn } from "../lib/cn";
 import { AppText } from "./AppText";
 import { MaterialConfirmDialog } from "./MaterialConfirmDialog";
+import { ThemedSwitch } from "./ThemedSwitch";
+import type { ConfirmDialogRequest, TextInputDialogRequest } from "./ConfirmDialog.types";
 
-export type ConfirmDialogRequest = {
-  readonly title: string;
-  readonly message?: string;
-  readonly cancelText?: string;
-  readonly confirmText: string;
-  readonly destructive?: boolean;
-  readonly onConfirm: () => void;
-  readonly onCancel?: () => void;
-};
-
-export type TextInputDialogRequest = {
-  readonly title: string;
-  readonly initialValue: string;
-  readonly cancelText?: string;
-  readonly confirmText: string;
-  readonly onConfirm: (value: string) => void;
-  readonly onCancel?: () => void;
-};
+export type { ConfirmDialogRequest, TextInputDialogRequest } from "./ConfirmDialog.types";
 
 type DialogRequest =
   | { readonly kind: "confirm"; readonly request: ConfirmDialogRequest }
@@ -53,9 +38,17 @@ export function showTextInputDialog(request: TextInputDialogRequest): void {
 export function ConfirmDialogHost() {
   const [presented, setPresented] = useState<DialogRequest | null>(null);
   const [inputValue, setInputValue] = useState("");
+  const [options, setOptions] = useState<Record<string, boolean>>({});
   useEffect(() => {
     presentRequest = (request) => {
       setInputValue(request.kind === "text-input" ? request.request.initialValue : "");
+      setOptions(
+        Object.fromEntries(
+          request.kind === "confirm"
+            ? (request.request.options ?? []).map((option) => [option.id, option.defaultChecked])
+            : [],
+        ),
+      );
       setPresented(request);
     };
     return () => {
@@ -71,13 +64,13 @@ export function ConfirmDialogHost() {
   const handleConfirm = useCallback(
     (nativeInputValue?: string) => {
       if (presented?.kind === "confirm") {
-        presented.request.onConfirm();
+        presented.request.onConfirm(options);
       } else if (presented?.kind === "text-input") {
         presented.request.onConfirm(nativeInputValue ?? inputValue);
       }
       setPresented(null);
     },
-    [inputValue, presented],
+    [inputValue, options, presented],
   );
 
   const confirmDisabled = presented?.kind === "text-input" && inputValue.trim().length === 0;
@@ -91,6 +84,8 @@ export function ConfirmDialogHost() {
           presented.kind === "text-input" ? presented.request.initialValue : undefined
         }
         onInputChange={setInputValue}
+        options={options}
+        onOptionChange={(id, checked) => setOptions((current) => ({ ...current, [id]: checked }))}
         confirmDisabled={confirmDisabled}
         onCancel={handleCancel}
         onConfirm={handleConfirm}
@@ -115,6 +110,19 @@ export function ConfirmDialogHost() {
                 {presented.request.message}
               </AppText>
             ) : null}
+            {presented.kind === "confirm" &&
+              presented.request.options?.map((option) => (
+                <View key={option.id} className="mt-3 flex-row items-center justify-between gap-3">
+                  <AppText className="flex-1 text-sm">{option.label}</AppText>
+                  <ThemedSwitch
+                    accessibilityLabel={option.label}
+                    value={options[option.id] ?? option.defaultChecked}
+                    onValueChange={(checked) =>
+                      setOptions((current) => ({ ...current, [option.id]: checked }))
+                    }
+                  />
+                </View>
+              ))}
             {presented.kind === "text-input" ? (
               <TextInput
                 accessibilityLabel={presented.request.title}

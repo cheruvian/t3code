@@ -7,6 +7,8 @@ const extraThemes = require("./generated-uniwind-theme-names.json");
 
 /** @type {import("expo/metro-config").MetroConfig} */
 const config = getDefaultConfig(__dirname);
+// SQLite's browser worker loads its database engine as a WebAssembly asset.
+config.resolver.assetExts = [...config.resolver.assetExts, "wasm"];
 const workspaceRoot = path.resolve(__dirname, "../..");
 const generatedLicenseModuleRoot = path.join(__dirname, ".generated", "third-party-licenses");
 const licenseGeneratorSource = path.join(
@@ -18,6 +20,8 @@ const licenseGeneratorSource = path.join(
 const escapedWorkspaceRoot = workspaceRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const mobileShikiRoot = path.dirname(require.resolve("shiki/package.json", { paths: [__dirname] }));
 const generatedDeviceStreamRoot = path.join(__dirname, ".generated", "device-stream");
+const generatedMermaidRoot = path.join(__dirname, ".generated", "mermaid");
+const generatedPreviewStreamRoot = path.join(__dirname, ".generated", "preview-stream");
 const resolveShikiDependencyRoot = (packageName) => {
   const entryPath = require.resolve(packageName, { paths: [mobileShikiRoot] });
   let currentDir = path.dirname(entryPath);
@@ -33,7 +37,7 @@ const resolveShikiDependencyRoot = (packageName) => {
   return currentDir;
 };
 
-config.watchFolders = [...new Set([...(config.watchFolders ?? []), workspaceRoot])];
+// Keep Expo's watch folders; an ancestor root blocks lazy shared-store lookup.
 config.resolver = {
   ...config.resolver,
   blockList: [
@@ -48,6 +52,8 @@ config.resolver = {
     ...config.resolver?.extraNodeModules,
     "@t3tools/mobile-third-party-licenses": generatedLicenseModuleRoot,
     "@t3tools/mobile-device-stream": generatedDeviceStreamRoot,
+    "@t3tools/mobile-mermaid": generatedMermaidRoot,
+    "@t3tools/mobile-preview-stream": generatedPreviewStreamRoot,
     shiki: mobileShikiRoot,
     "@shikijs/core": resolveShikiDependencyRoot("@shikijs/core"),
     "@shikijs/engine-javascript": resolveShikiDependencyRoot("@shikijs/engine-javascript"),
@@ -95,35 +101,117 @@ async function generateMobileThirdPartyLicenses() {
   ]);
 }
 
-async function prepareDeviceStream() {
-  const { generateDeviceStreamScript } = await import(
+async function prepareStreamScripts() {
+  const { generateDeviceStreamScript, generatePreviewStreamScript } = await import(
     pathToFileURL(path.join(__dirname, "scripts", "generate-device-stream.mts")).href
   );
-  await generateDeviceStreamScript();
+  const generateAll = () =>
+    Promise.all([generateDeviceStreamScript(), generatePreviewStreamScript()]);
+  await generateAll();
   if (process.env.NODE_ENV !== "production") {
     let rebuild = Promise.resolve();
-    for (const [directory, files] of [
-      [path.join(__dirname, "src/features/devices"), ["device-stream.browser.ts"]],
+    for (const [directory, files, generate] of [
       [
-        path.join(workspaceRoot, "packages/client-runtime/src/device"),
-        ["stream.ts", "hubAccess.ts"],
+        "apps/mobile/src/features/devices",
+        ["device-stream.browser.ts"],
+        generateDeviceStreamScript,
+      ],
+      [
+        "apps/mobile/src/features/browser",
+        ["preview-stream.browser.ts"],
+        generatePreviewStreamScript,
+      ],
+      // The preview transport also imports `hubAccess.ts`.
+      ["packages/client-runtime/src/device", ["stream.ts", "hubAccess.ts"], generateAll],
+      [
+        "packages/client-runtime/src/preview",
+        ["serverBrowserStream.ts"],
+        generatePreviewStreamScript,
       ],
     ]) {
-      // The generated module participates in Metro's normal Fast Refresh.
-      fs.watch(directory, { persistent: false }, (_event, filename) => {
+      // The generated modules participate in Metro's normal Fast Refresh.
+      fs.watch(path.join(workspaceRoot, directory), { persistent: false }, (_event, filename) => {
         if (filename && !files.includes(String(filename))) return;
-        rebuild = rebuild.then(generateDeviceStreamScript).catch((error) => {
-          console.error("Could not rebuild the device stream:", error);
-        });
+        rebuild = rebuild
+          .then(generate)
+          .then(() => undefined)
+          .catch((error) => {
+            console.error("Could not rebuild a WebView stream script:", error);
+          });
       });
     }
   }
 }
 
-module.exports = Promise.all([generateMobileThirdPartyLicenses(), prepareDeviceStream()]).then(() =>
-  withUniwindConfig(config, {
+async function prepareMermaid() {
+  const script = await fs.promises.readFile(require.resolve("mermaid/dist/mermaid.min.js"), "utf8");
+  await fs.promises.mkdir(generatedMermaidRoot, { recursive: true });
+  await writeFileIfChanged(
+    path.join(generatedMermaidRoot, "index.js"),
+    `module.exports = ${JSON.stringify(script)};\n`,
+  );
+  await writeFileIfChanged(
+    path.join(generatedMermaidRoot, "package.json"),
+    '{"main":"index.js"}\n',
+  );
+}
+
+module.exports = Promise.all([
+  generateMobileThirdPartyLicenses(),
+  prepareStreamScripts(),
+  prepareMermaid(),
+]).then(() => {
+  const styledConfig = withUniwindConfig(config, {
     cssEntryFile: "./global.css",
     extraThemes,
     polyfills: { rem: 14 },
-  }),
-);
+  });
+  const resolveStyled = styledConfig.resolver.resolveRequest;
+  styledConfig.resolver.resolveRequest = (context, moduleName, platform) => {
+    if (platform === "web" && moduleName === "expo-secure-store") {
+      return {
+        type: "sourceFile",
+        filePath: path.join(__dirname, "src/native/SecureStore.web.ts"),
+      };
+    }
+    if (
+      platform === "web" &&
+      context.originModulePath.includes(`${path.sep}react-native-screens${path.sep}`) &&
+      moduleName.endsWith("/NativeScreensModule")
+    ) {
+      return {
+        type: "sourceFile",
+        filePath: path.join(__dirname, "src/native/NativeScreensModule.web.ts"),
+      };
+    }
+    if (platform === "web" && moduleName === "@t3tools/mobile-markdown-text/primitive") {
+      return {
+        type: "sourceFile",
+        filePath: path.join(__dirname, "src/native/MarkdownTextPrimitive.web.tsx"),
+      };
+    }
+    if (
+      platform === "web" &&
+      (moduleName === "react-native-nitro-markdown" ||
+        moduleName === "react-native-nitro-markdown/headless")
+    ) {
+      return { type: "sourceFile", filePath: path.join(__dirname, "src/native/Markdown.web.tsx") };
+    }
+    // RNW's own barrel must resolve raw primitives. Wrapping those exports with
+    // Uniwind creates a cycle when a wrapper imports the RNW barrel in turn.
+    // Preserve Uniwind's stylesheet hook so Tailwind retains cascade priority.
+    if (
+      platform === "web" &&
+      context.originModulePath.includes(`${path.sep}react-native-web${path.sep}`) &&
+      !moduleName.includes("createOrderedCSSStyleSheet")
+    ) {
+      return (config.resolver.resolveRequest ?? context.resolveRequest)(
+        context,
+        moduleName,
+        platform,
+      );
+    }
+    return resolveStyled(context, moduleName, platform);
+  };
+  return styledConfig;
+});

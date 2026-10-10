@@ -1,7 +1,17 @@
+import {
+  beginThreadMoveProgress,
+  threadMoveDestinations,
+  threadMoveUnavailableLabel,
+  threadMoveUndoParticipants,
+} from "@t3tools/client-runtime/operations";
+import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import type { EnvironmentId, VcsStatusLocalResult } from "@t3tools/contracts";
+import { environmentProjects } from "../../state/projects";
 import { allowUnpinnedReorderAtom } from "../../state/preferences";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
@@ -14,7 +24,10 @@ import { refreshArchivedThreadsForEnvironment } from "../archive/useArchivedThre
 import { pinOrderKeyBetween } from "@t3tools/client-runtime/state/thread-sort";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentServerConfigsAtom } from "../../state/server";
+import { readEnvironmentScope } from "../../state/session";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
+import { vcsEnvironment } from "../../state/vcs";
+import { terminalEnvironment } from "../../state/terminal";
 import { queuedThreadKeysAtom } from "../../state/use-thread-outbox";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
@@ -28,7 +41,82 @@ import {
   threadDropLifecycle,
 } from "../threads/threadOrder";
 import { getThreadListV2OrderedSection } from "../threads/threadListV2";
+import { threadCanArchive } from "./threadArchive";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
+
+export function readMobileThreadMoveAvailability(thread: EnvironmentThreadShell) {
+  const input = {
+    thread,
+    projects: appAtomRegistry.get(environmentProjects.projectsAtom),
+    configs: appAtomRegistry.get(environmentServerConfigsAtom),
+  };
+  const moveEnvironmentDestinations = threadMoveDestinations(input);
+  return {
+    moveEnvironmentDestinations,
+    moveEnvironmentUnavailableLabel: threadMoveUnavailableLabel(input, moveEnvironmentDestinations),
+  };
+}
+
+export async function moveMobileThreadToEnvironment(
+  thread: EnvironmentThreadShell,
+  environmentId: EnvironmentId,
+) {
+  const destination = readMobileThreadMoveAvailability(thread).moveEnvironmentDestinations.find(
+    (candidate) => candidate.environmentId === environmentId,
+  );
+  if (!destination) return;
+  const progress = beginThreadMoveProgress(
+    { environmentId: thread.environmentId, threadId: thread.id },
+    destination.label,
+  );
+  if (!progress) return;
+  try {
+    const result = await runAtomCommand(
+      appAtomRegistry,
+      threadEnvironment.move,
+      {
+        environmentId: thread.environmentId,
+        input: {
+          threadId: thread.id,
+          destinationEnvironmentId: environmentId,
+          projectId: destination.projectId,
+          instanceId: destination.instanceId,
+          onProgress: progress.update,
+          ...(thread.environmentMove?.moveId ? { moveId: thread.environmentMove.moveId } : {}),
+        },
+      },
+      { reportFailure: false },
+    );
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      Alert.alert(
+        "Thread move needs attention",
+        `${error instanceof Error ? error.message : String(error)} Open the move action again to retry or reconcile it.`,
+      );
+    } else Alert.alert("Thread moved", `Continue this thread on ${destination.label}.`);
+  } finally {
+    progress.finish();
+  }
+}
+
+export async function undoMobileThreadMove(thread: EnvironmentThreadShell) {
+  const input = threadMoveUndoParticipants(thread);
+  if (!input) return false;
+  const result = await runAtomCommand(
+    appAtomRegistry,
+    threadEnvironment.undoMove,
+    { environmentId: thread.environmentId, input },
+    { reportFailure: false },
+  );
+  if (result._tag === "Failure") {
+    const error = squashAtomCommandFailure(result);
+    Alert.alert("Could not undo move", error instanceof Error ? error.message : String(error));
+    return false;
+  }
+  refreshArchivedThreadsForEnvironment(thread.environmentId);
+  Alert.alert("Move undone", "Continue this thread in its source environment.");
+  return true;
+}
 
 /** Version skew: never send settle/unsettle to a server that predates them
     (capability defaults false on decode for older servers). */
@@ -57,6 +145,15 @@ function environmentSupportsPinReorder(environmentId: EnvironmentThreadShell["en
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadPinReorder === true
+  );
+}
+
+function environmentSupportsAutoSettleOptOut(
+  environmentId: EnvironmentThreadShell["environmentId"],
+) {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadAutoSettleOptOut === true
   );
 }
 
@@ -99,6 +196,49 @@ function actionFailureTitle(action: ThreadListAction): string {
   return "Could not delete thread";
 }
 
+function checkThreadOperationPermission(thread: EnvironmentThreadShell, title: string): boolean {
+  if (readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope)) return true;
+  Alert.alert(title, "This connection cannot change threads.");
+  return false;
+}
+
+function confirmSettlement(
+  hasWorktree: boolean,
+  status: VcsStatusLocalResult | null,
+  canDelete: boolean,
+) {
+  return new Promise<{ deleteWorktree: boolean; removeAutomations: boolean } | null>((resolve) => {
+    const changes = !hasWorktree
+      ? "The conversation is kept and can be reopened."
+      : status
+        ? `${status.workingTree.files.length} changed files · +${status.workingTree.insertions} −${status.workingTree.deletions} lines.\n${status.workingTree.files
+            .slice(0, 5)
+            .map((file) => file.path)
+            .join("\n")}`
+        : "Could not load the worktree changes. You can settle and keep the worktree.";
+    const worktreeWarning = hasWorktree
+      ? `\n\nDeleting removes the entire worktree, including untracked and ignored files such as .env. The conversation and Git branch are kept.${canDelete ? "" : "\nThis worktree is shared or still in use, so it can only be kept."}`
+      : "";
+    showConfirmDialog({
+      title: "Settle this conversation?",
+      message: `${changes}${worktreeWarning}\n\nRemoved automations stop running and are not restored when reopened. Turn this off to keep them active. Automations that create new conversations are kept.`,
+      confirmText: "Settle",
+      options: [
+        { id: "removeAutomations", label: "Remove bound automations", defaultChecked: true },
+        ...(canDelete && status
+          ? [{ id: "deleteWorktree", label: "Delete worktree", defaultChecked: false }]
+          : []),
+      ],
+      onConfirm: (options) =>
+        resolve({
+          removeAutomations: options.removeAutomations !== false,
+          deleteWorktree: options.deleteWorktree === true,
+        }),
+      onCancel: () => resolve(null),
+    });
+  });
+}
+
 /** Resolves to true iff the action was dispatched and succeeded. */
 function useThreadActionExecutor(
   onCompleted?: (action: ThreadListAction, thread: EnvironmentThreadShell) => void,
@@ -108,10 +248,17 @@ function useThreadActionExecutor(
   const deleteMutation = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const settleMutation = useAtomCommand(threadEnvironment.settle, { reportFailure: false });
   const unsettleMutation = useAtomCommand(threadEnvironment.unsettle, { reportFailure: false });
+  const readWorktreeStatus = useAtomCommand(vcsEnvironment.localStatus, { reportFailure: false });
+  const stopSession = useAtomCommand(threadEnvironment.stopSession, { reportFailure: false });
+  const closeTerminal = useAtomCommand(terminalEnvironment.close, { reportFailure: false });
+  const removeConfirmedWorktree = useAtomCommand(vcsEnvironment.removeConfirmedWorktree, {
+    reportFailure: false,
+  });
   const inFlightThreadKeys = useRef(new Set<string>());
 
   const executeAction = useCallback(
     async (action: ThreadListAction, thread: EnvironmentThreadShell) => {
+      if (!checkThreadOperationPermission(thread, actionFailureTitle(action))) return false;
       const key = scopedThreadKey(thread.environmentId, thread.id);
       if (inFlightThreadKeys.current.has(key)) {
         return false;
@@ -120,6 +267,8 @@ function useThreadActionExecutor(
       inFlightThreadKeys.current.add(key);
       selectionHaptic();
       try {
+        if (action === "unarchive" && threadMoveUndoParticipants(thread))
+          return await undoMobileThreadMove(thread);
         if (
           (action === "settle" || action === "unsettle") &&
           !environmentSupportsSettlement(thread.environmentId)
@@ -132,16 +281,36 @@ function useThreadActionExecutor(
         }
         // Archive keeps its original, narrower guard: never interrupt a
         // thread mid-turn.
-        if (
-          action === "archive" &&
-          thread.session?.status === "running" &&
-          thread.session.activeTurnId != null
-        ) {
+        if (action === "archive" && !threadCanArchive(thread.runtime)) {
           Alert.alert(
             actionFailureTitle(action),
             "This thread is working. Interrupt it first, then try again.",
           );
           return false;
+        }
+        let deleteWorktreePreview: VcsStatusLocalResult | null = null;
+        let removeAutomations = true;
+        if (action === "settle" && thread.worktreePath) {
+          const shells = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
+          const owners = shells.filter(
+            (entry) =>
+              entry.environmentId === thread.environmentId &&
+              entry.worktreePath === thread.worktreePath,
+          );
+          const canDelete = owners.length === 1 && threadCanArchive(thread.runtime);
+          const status = await readWorktreeStatus({
+            environmentId: thread.environmentId,
+            input: { cwd: thread.worktreePath },
+          });
+          const preview = status._tag === "Success" ? status.value : null;
+          const decision = await confirmSettlement(true, preview, canDelete);
+          if (decision === null) return false;
+          removeAutomations = decision.removeAutomations;
+          if (decision.deleteWorktree) deleteWorktreePreview = preview;
+        } else if (action === "settle") {
+          const decision = await confirmSettlement(false, null, false);
+          if (decision === null) return false;
+          removeAutomations = decision.removeAutomations;
         }
         const result = await withThreadDismissal(
           key,
@@ -153,23 +322,58 @@ function useThreadActionExecutor(
                   environmentId: thread.environmentId,
                   input: { threadId: thread.id, reason: "user" },
                 })
-              : await (
-                  action === "settle"
-                    ? settleMutation
-                    : action === "archive"
+              : action === "settle"
+                ? await settleMutation({
+                    environmentId: thread.environmentId,
+                    input: { threadId: thread.id, removeAutomations },
+                  })
+                : await (
+                    action === "archive"
                       ? archiveMutation
                       : action === "unarchive"
                         ? unarchiveMutation
                         : deleteMutation
-                )({
-                  environmentId: thread.environmentId,
-                  input: { threadId: thread.id },
-                }),
+                  )({
+                    environmentId: thread.environmentId,
+                    input: { threadId: thread.id },
+                  }),
           (result) => result._tag === "Success",
         );
         if (result._tag === "Failure") {
           Alert.alert(actionFailureTitle(action), actionFailureMessage(action, result.cause));
           return false;
+        }
+        if (deleteWorktreePreview) {
+          const target = { environmentId: thread.environmentId, input: { threadId: thread.id } };
+          const stopped = thread.runtime ? await stopSession(target) : null;
+          const closed =
+            stopped === null || stopped._tag === "Success"
+              ? await closeTerminal({
+                  ...target,
+                  input: { threadId: thread.id, deleteHistory: false },
+                })
+              : stopped;
+          const removal =
+            closed._tag === "Success"
+              ? await removeConfirmedWorktree({
+                  environmentId: thread.environmentId,
+                  input: {
+                    threadId: thread.id,
+                    expectedRefName: deleteWorktreePreview.refName,
+                    expectedFiles: deleteWorktreePreview.workingTree.files,
+                  },
+                })
+              : null;
+          if (
+            closed._tag === "Failure" ||
+            removal?._tag === "Failure" ||
+            (removal?._tag === "Success" && !removal.value.removed)
+          ) {
+            Alert.alert(
+              "Conversation settled, but worktree was kept",
+              "The worktree changed or is still in use. Review it before deleting.",
+            );
+          }
         }
         // Settled threads stay in the live shell stream; only the archive
         // lifecycle still feeds the archived-snapshot surface.
@@ -184,9 +388,13 @@ function useThreadActionExecutor(
     },
     [
       archiveMutation,
+      closeTerminal,
       deleteMutation,
       onCompleted,
+      readWorktreeStatus,
+      removeConfirmedWorktree,
       settleMutation,
+      stopSession,
       unarchiveMutation,
       unsettleMutation,
     ],
@@ -200,6 +408,7 @@ function useConfirmDeleteThread(
 ) {
   return useCallback(
     (thread: EnvironmentThreadShell) => {
+      if (!checkThreadOperationPermission(thread, actionFailureTitle("delete"))) return;
       const title = "Delete thread?";
       const message = `“${thread.title}” will be permanently deleted, including its terminal history.`;
       if (process.env.EXPO_OS === "ios") {
@@ -238,6 +447,11 @@ export function useThreadListActions(): {
   readonly unsettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly pinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly unpinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  /** Sets per-thread automatic settlement on or off. */
+  readonly setThreadAutoSettle: (
+    thread: EnvironmentThreadShell,
+    enabled: boolean,
+  ) => Promise<boolean>;
   readonly moveThread: (
     thread: EnvironmentThreadShell,
     direction: ThreadMoveDestination,
@@ -250,6 +464,9 @@ export function useThreadListActions(): {
   const unsnoozeMutation = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
   const pinMutation = useAtomCommand(threadEnvironment.pin, { reportFailure: false });
   const unpinMutation = useAtomCommand(threadEnvironment.unpin, { reportFailure: false });
+  const setAutoSettleMutation = useAtomCommand(threadEnvironment.setAutoSettle, {
+    reportFailure: false,
+  });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -268,6 +485,7 @@ export function useThreadListActions(): {
   );
   const snoozeThread = useCallback(
     async (thread: EnvironmentThreadShell, snoozedUntil: string) => {
+      if (!checkThreadOperationPermission(thread, "Could not snooze thread")) return false;
       const key = scopedThreadKey(thread.environmentId, thread.id);
       if (snoozeInFlightThreadKeys.current.has(key)) {
         return false;
@@ -323,6 +541,7 @@ export function useThreadListActions(): {
   );
   const unsnoozeThread = useCallback(
     async (thread: EnvironmentThreadShell) => {
+      if (!checkThreadOperationPermission(thread, "Could not wake thread")) return false;
       const key = scopedThreadKey(thread.environmentId, thread.id);
       if (snoozeInFlightThreadKeys.current.has(key)) {
         return false;
@@ -370,6 +589,7 @@ export function useThreadListActions(): {
   );
   const pinThread = useCallback(
     async (thread: EnvironmentThreadShell) => {
+      if (!checkThreadOperationPermission(thread, "Could not pin thread")) return false;
       if (!environmentSupportsPinning(thread.environmentId)) {
         Alert.alert(
           "Could not pin thread",
@@ -410,6 +630,7 @@ export function useThreadListActions(): {
   );
   const unpinThread = useCallback(
     async (thread: EnvironmentThreadShell) => {
+      if (!checkThreadOperationPermission(thread, "Could not unpin thread")) return false;
       if (!environmentSupportsPinning(thread.environmentId)) {
         Alert.alert(
           "Could not unpin thread",
@@ -436,8 +657,37 @@ export function useThreadListActions(): {
     },
     [unpinMutation],
   );
+  const setThreadAutoSettle = useCallback(
+    async (thread: EnvironmentThreadShell, enabled: boolean) => {
+      if (!environmentSupportsAutoSettleOptOut(thread.environmentId)) {
+        Alert.alert(
+          "Could not update auto-settle",
+          "This environment's server does not support turning auto-settle off per thread yet. Update the server to use it.",
+        );
+        return false;
+      }
+      selectionHaptic();
+      const result = await setAutoSettleMutation({
+        environmentId: thread.environmentId,
+        input: { threadId: thread.id, enabled },
+      });
+      if (result._tag === "Failure") {
+        const error = Cause.squash(result.cause);
+        Alert.alert(
+          "Could not update auto-settle",
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "The auto-settle setting could not be changed.",
+        );
+        return false;
+      }
+      return true;
+    },
+    [setAutoSettleMutation],
+  );
   const regenerateThreadTitle = useCallback(
     async (thread: EnvironmentThreadShell) => {
+      if (!checkThreadOperationPermission(thread, "Could not regenerate title")) return false;
       const key = scopedThreadKey(thread.environmentId, thread.id);
       if (
         thread.titleRegeneration != null ||
@@ -531,6 +781,7 @@ export function useThreadListActions(): {
   });
   const moveThread = useCallback(
     async (thread: EnvironmentThreadShell, direction: ThreadMoveDestination) => {
+      if (!checkThreadOperationPermission(thread, "Could not move thread")) return false;
       if (getPendingThreadOrder() !== null || appAtomRegistry.get(threadDropBusyAtom)) return false;
       const shells = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
       const current = shells.find(
@@ -610,6 +861,11 @@ export function useThreadListActions(): {
       const shellByKey = new Map(
         shells.map((shell) => [scopedThreadKey(shell.environmentId, shell.id), shell]),
       );
+      for (const assignment of assignments) {
+        const target = shellByKey.get(assignment.id);
+        if (target && !checkThreadOperationPermission(target, "Could not move thread"))
+          return false;
+      }
       selectionHaptic();
       appAtomRegistry.set(threadDropBusyAtom, true);
       const pending = crossSection
@@ -656,6 +912,7 @@ export function useThreadListActions(): {
           if (pending !== null && !pending.isPending()) return false;
           const target = shellByKey.get(assignment.id);
           if (target === undefined) continue;
+          if (!checkThreadOperationPermission(target, "Could not move thread")) return false;
           const result = await reorder({
             environmentId: target.environmentId,
             input: { threadId: target.id, orderKey: assignment.orderKey },
@@ -702,6 +959,7 @@ export function useThreadListActions(): {
     unsettleThread,
     pinThread,
     unpinThread,
+    setThreadAutoSettle,
     moveThread,
     renameThread,
     regenerateThreadTitle,

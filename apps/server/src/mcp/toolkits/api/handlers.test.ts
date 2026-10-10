@@ -1,9 +1,17 @@
+import { ScheduledTaskService } from "../../../scheduledTasks/ScheduledTaskService.ts";
+import { VcsStatusBroadcaster } from "../../../vcs/VcsStatusBroadcaster.ts";
+import { ProjectSetupScriptRunner } from "../../../project/ProjectSetupScriptRunner.ts";
+import { GitWorkflowService } from "../../../git/GitWorkflowService.ts";
+import { ProjectService } from "../../../project/ProjectService.ts";
+import { OrchestratorV2 } from "../../../orchestration-v2/Orchestrator.ts";
+import { ProviderAdapterRegistryV2 } from "../../../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { NodeHttpServer } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import {
   AGENT_EXPOSED_API_NAMES,
-  CommandId,
+  AgentApiCallError,
+  AuthSessionId,
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
@@ -11,10 +19,15 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as RpcClient from "effect/rpc/RpcClient";
 import * as Schema from "effect/Schema";
-import { McpSchema, McpServer } from "effect/unstable/ai";
-import { HttpBody, HttpClient, HttpRouter } from "effect/unstable/http";
+import { vi } from "vite-plus/test";
+import { withEnvironmentRpc } from "../../../orchestration-v2/bootstrapRpcClient.ts";
+import { persistServerRuntimeState } from "../../../serverRuntimeState.ts";
+import { McpSchema, McpServer } from "effect/ai";
+import { HttpBody, HttpClient, HttpRouter } from "effect/http";
 
+import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
 import * as CheckpointDiffQuery from "../../../checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "../../../config.ts";
@@ -22,23 +35,16 @@ import * as EnvironmentAuth from "../../../auth/EnvironmentAuth.ts";
 import * as RemoteOpenTargets from "../../../environment/RemoteOpenTargets.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as Keybindings from "../../../keybindings.ts";
-import { OrchestrationEngineLive } from "../../../orchestration/Layers/OrchestrationEngine.ts";
-import { OrchestrationProjectionPipelineLive } from "../../../orchestration/Layers/ProjectionPipeline.ts";
-import { OrchestrationProjectionSnapshotQueryLive } from "../../../orchestration/Layers/ProjectionSnapshotQuery.ts";
-import * as OrchestrationEngine from "../../../orchestration/Services/OrchestrationEngine.ts";
-import * as ThreadBackgroundLiveness from "../../../orchestration/ThreadBackgroundLiveness.ts";
-import * as ThreadPlanProgress from "../../../orchestration/ThreadPlanProgress.ts";
-import { OrchestrationCommandReceiptRepositoryLive } from "../../../persistence/Layers/OrchestrationCommandReceipts.ts";
-import { OrchestrationEventStoreLive } from "../../../persistence/Layers/OrchestrationEventStore.ts";
-import { SqlitePersistenceMemory } from "../../../persistence/Layers/Sqlite.ts";
 import * as ExternalLauncher from "../../../process/externalLauncher.ts";
-import * as RepositoryIdentityResolver from "../../../project/RepositoryIdentityResolver.ts";
-import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
+import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as WorkspaceEntries from "../../../workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "../../../workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "../../../workspace/WorkspacePaths.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
+import * as SecretRequests from "../../../secrets/SecretRequests.ts";
+import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
+import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpSessionRegistry from "../../McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
@@ -47,7 +53,21 @@ import { API_BRIDGE_OPERATION_NAMES } from "./handlers.ts";
 const environmentId = EnvironmentId.make("environment-mcp-api-test");
 const helperThreadId = ThreadId.make("thread-t3-chat-helper");
 const targetProjectId = ProjectId.make("project-casino");
-const createdAt = "2026-01-01T00:00:00.000Z";
+vi.mock("../../../orchestration-v2/bootstrapRpcClient.ts", () => ({ withEnvironmentRpc: vi.fn() }));
+const revokeSession = vi.fn(() => Effect.void);
+const seedRuntime = Effect.gen(function* () {
+  const config = yield* ServerConfig.ServerConfig;
+  yield* persistServerRuntimeState({
+    path: config.serverRuntimeStatePath,
+    state: {
+      version: 1,
+      pid: process.pid,
+      port: 12345,
+      origin: "http://127.0.0.1:12345",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    },
+  });
+});
 const helperCapabilities: ReadonlySet<McpInvocationContext.McpCapability> = new Set([
   "preview",
   "environment",
@@ -58,11 +78,15 @@ const previewOnlyCapabilities: ReadonlySet<McpInvocationContext.McpCapability> =
 
 const invocationFor = (
   capabilities: ReadonlySet<McpInvocationContext.McpCapability>,
-): McpInvocationContext.McpInvocationScope => ({
+): McpInvocationContext.McpThreadInvocationScope => ({
   environmentId,
-  threadId: helperThreadId,
-  providerSessionId: "provider-session-mcp-api-test",
-  providerInstanceId: ProviderInstanceId.make("codex"),
+  requestNamespace: "provider-session-mcp-api-test",
+  client: undefined,
+  thread: {
+    threadId: helperThreadId,
+    providerSessionId: "provider-session-mcp-api-test",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
   capabilities,
   issuedAt: 1,
 });
@@ -80,22 +104,10 @@ const client = McpSchema.McpServerClient.of({
   getClient: Effect.die("unused"),
 });
 
-const orchestrationLayer = Layer.mergeAll(
-  OrchestrationEngineLive.pipe(
-    Layer.provide(OrchestrationProjectionSnapshotQueryLive),
-    Layer.provide(OrchestrationProjectionPipelineLive),
-  ),
-  OrchestrationProjectionSnapshotQueryLive,
-).pipe(
-  Layer.provide(ThreadBackgroundLiveness.layer),
-  Layer.provide(ThreadPlanProgress.layer),
-  Layer.provide(OrchestrationEventStoreLive),
-  Layer.provide(OrchestrationCommandReceiptRepositoryLive),
-  Layer.provide(RepositoryIdentityResolver.layer),
-  Layer.provide(SqlitePersistenceMemory),
-);
-
 const unusedServicesLayer = Layer.mergeAll(
+  Layer.mock(SecretRequests.SecretRequests)({}),
+  Layer.mock(PreviewBrowser.PreviewBrowser)({}),
+  McpToolAccessTestkit.liveThreadsLayer,
   Layer.succeed(
     CheckpointDiffQuery.CheckpointDiffQuery,
     CheckpointDiffQuery.CheckpointDiffQuery.of({
@@ -129,6 +141,8 @@ const unusedServicesLayer = Layer.mergeAll(
   ),
   Layer.succeed(EnvironmentAuth.EnvironmentAuth, {
     getDescriptor: () => Effect.die("unused"),
+    issueSession: () => Effect.succeed({ sessionId: AuthSessionId.make("helper-api-session") }),
+    revokeSession,
   } as unknown as EnvironmentAuth.EnvironmentAuth["Service"]),
   Layer.succeed(ProviderRegistry.ProviderRegistry, {
     getProviders: Effect.die("unused"),
@@ -141,7 +155,7 @@ const unusedServicesLayer = Layer.mergeAll(
   } as unknown as RemoteOpenTargets.RemoteOpenTargets["Service"]),
 );
 
-const serviceLayers = Layer.mergeAll(orchestrationLayer, Keybindings.layer).pipe(
+const serviceLayers = Keybindings.layer.pipe(
   Layer.provideMerge(
     Layer.mergeAll(ServerSettings.layerTest(), unusedServicesLayer, WorkspacePaths.layer),
   ),
@@ -151,7 +165,7 @@ const serviceLayers = Layer.mergeAll(orchestrationLayer, Keybindings.layer).pipe
   Layer.provideMerge(NodeServices.layer),
 );
 
-const TestLayer = McpHttpServer.ApiToolkitRegistrationLive.pipe(
+const TestLayer = McpHttpServer.layerApiToolkit.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(serviceLayers),
 );
@@ -176,32 +190,6 @@ const callApi = (
         Effect.provideService(McpSchema.McpServerClient, client),
       );
   });
-
-const seedTargetProject = Effect.gen(function* () {
-  const engine = yield* OrchestrationEngine.OrchestrationEngineService;
-  yield* engine.dispatch({
-    type: "project.create",
-    commandId: CommandId.make("cmd-target-project-create"),
-    projectId: targetProjectId,
-    title: "Casino",
-    workspaceRoot: "/tmp/t3-mcp-api-test/casino",
-    createdAt,
-  });
-  yield* engine.dispatch({
-    type: "project.meta.update",
-    commandId: CommandId.make("cmd-target-project-seed-scripts"),
-    projectId: targetProjectId,
-    scripts: [
-      {
-        id: "setup-worktree",
-        name: "Setup worktree",
-        command: "vp i",
-        icon: "configure",
-        runOnWorktreeCreate: true,
-      },
-    ],
-  });
-});
 
 it("serves exactly the agent-exposed operations from the inventory", () => {
   expect([...API_BRIDGE_OPERATION_NAMES].sort()).toEqual([...AGENT_EXPOSED_API_NAMES].sort());
@@ -239,13 +227,84 @@ it.effect("rejects typed-contract violations as invalid input", () =>
   }).pipe(Effect.provide(TestLayer)),
 );
 
-// The helper's real management flow: add a global worktree-setup action to
-// the keybindings file, then dispatch project.meta.update to drop the
-// project-level "Setup worktree" script it replaces.
-it.effect("replaces a project-level Setup worktree action with a global action", () =>
+it.effect("requires the running server for worktree launches", () =>
   Effect.gen(function* () {
-    yield* seedTargetProject;
+    const result = yield* callApi("orchestration.launchThread", {
+      commandId: "cmd-bootstrap",
+      threadId: "thread-bootstrap",
+      projectId: targetProjectId,
+      title: "Bootstrap thread",
+      modelSelection: { instanceId: "codex", model: "gpt-6-sol" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      workspaceStrategy: { type: "worktree", baseRef: "main" },
+      initialMessage: { text: "Start in a worktree", attachments: [] },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      { type: "text", text: expect.stringContaining("running T3 Code server is required") },
+    ]);
+  }).pipe(Effect.provide(TestLayer)),
+);
 
+it.effect("forwards V2 dispatch to the live server and revokes its temporary credential", () =>
+  Effect.gen(function* () {
+    yield* seedRuntime;
+    const dispatch = vi.fn(() => Effect.succeed({ sequence: 17 }));
+    const forwardRpc: typeof withEnvironmentRpc = <A, E, R>(
+      _input: Parameters<typeof withEnvironmentRpc>[0],
+      run: Parameters<typeof withEnvironmentRpc<A, E, R>>[1],
+    ) =>
+      run({ "orchestration.dispatchCommand": dispatch } as unknown as Parameters<
+        typeof run
+      >[0]).pipe(
+        Effect.provide(
+          Layer.mock(RpcClient.Protocol)({
+            supportsAck: false,
+            supportsTransferables: false,
+            codecFor: Schema.toCodecJson,
+          }),
+        ),
+        Effect.scoped,
+      );
+    vi.mocked(withEnvironmentRpc).mockImplementation(forwardRpc);
+    revokeSession.mockClear();
+    const command = { type: "thread.archive", commandId: "cmd-archive", threadId: "thread-target" };
+    const result = yield* callApi("orchestration.dispatchCommand", command);
+    expect(result.isError).toBe(false);
+    expect(result.structuredContent).toEqual({ sequence: 17 });
+    expect(dispatch).toHaveBeenCalledWith(command);
+    expect(revokeSession).toHaveBeenCalledWith("helper-api-session");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("revokes its temporary credential when the live RPC fails", () =>
+  Effect.gen(function* () {
+    yield* seedRuntime;
+    vi.mocked(withEnvironmentRpc).mockImplementation(() =>
+      Effect.fail(
+        new AgentApiCallError({
+          operation: "projects.mutate",
+          reason: "failed",
+          message: "offline",
+        }),
+      ),
+    );
+    revokeSession.mockClear();
+    const result = yield* callApi("projects.mutate", {
+      type: "project.update",
+      commandId: "cmd-project-update",
+      projectId: targetProjectId,
+      scripts: [],
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([{ type: "text", text: expect.stringContaining("offline") }]);
+    expect(revokeSession).toHaveBeenCalledWith("helper-api-session");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("updates global keybindings through the helper bridge", () =>
+  Effect.gen(function* () {
     const upsert = yield* callApi("server.upsertKeybinding", {
       key: "mod+alt+s",
       command: "script.setup-worktree.run",
@@ -256,27 +315,6 @@ it.effect("replaces a project-level Setup worktree action with a global action",
         expect.objectContaining({ command: "script.setup-worktree.run" }),
       ]),
     });
-
-    const dispatch = yield* callApi("orchestration.dispatchCommand", {
-      type: "project.meta.update",
-      commandId: "cmd-remove-setup-worktree-script",
-      projectId: targetProjectId,
-      scripts: [],
-    });
-    expect(dispatch.isError).toBe(false);
-    expect(dispatch.structuredContent).toMatchObject({ sequence: expect.any(Number) });
-
-    const shell = yield* callApi("orchestration.subscribeShell", {});
-    expect(shell.isError).toBe(false);
-    const snapshot = shell.structuredContent as {
-      readonly projects: ReadonlyArray<{
-        readonly id: string;
-        readonly scripts: ReadonlyArray<unknown>;
-      }>;
-    };
-    const target = snapshot.projects.find((project) => project.id === targetProjectId);
-    expect(target).toBeDefined();
-    expect(target?.scripts).toEqual([]);
   }).pipe(Effect.provide(TestLayer)),
 );
 
@@ -309,6 +347,14 @@ const HttpTestLayer = HttpRouter.serve(
   McpHttpServer.layer.pipe(
     Layer.provide(stubRegistryLayer),
     Layer.provide(Layer.mock(DeviceService.DeviceService)({})),
+    Layer.provide(Layer.mock(ScheduledTaskService)({})),
+    Layer.provide(Layer.mock(VcsStatusBroadcaster)({})),
+    Layer.provide(Layer.mock(ProjectSetupScriptRunner)({})),
+    Layer.provide(Layer.mock(GitWorkflowService)({})),
+    Layer.provide(Layer.mock(ProjectService)({})),
+    Layer.provide(Layer.mock(OrchestratorV2)({})),
+    Layer.provide(Layer.mock(ProviderAdapterRegistryV2)({})),
+    Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
     Layer.provide(PreviewAutomationBroker.layer),
   ),
   { disableListenLog: true, disableLogger: true },

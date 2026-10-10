@@ -20,6 +20,15 @@ describe("buildRuntimeInstructions", () => {
     ).toContain("through the Codex harness, as custom model with high reasoning effort.");
   });
 
+  it("names the model by display name and slug when they differ", () => {
+    expect(
+      buildRuntimeInstructions({ harness: "Codex", model: "gpt-5.4", modelName: "GPT-5.4" }),
+    ).toContain("through the Codex harness, as GPT-5.4 (model slug: gpt-5.4).");
+    expect(
+      buildRuntimeInstructions({ harness: "Codex", model: "my-model", modelName: "my-model" }),
+    ).toContain("through the Codex harness, as my-model.");
+  });
+
   it.each([undefined, "", "auto", "default"])("omits unresolved model %s", (model) => {
     const instructions = buildRuntimeInstructions({ harness: "Cursor", model });
     expect(instructions).toContain("through the Cursor harness.");
@@ -34,6 +43,15 @@ describe("buildRuntimeInstructions", () => {
     expect(instructions).toContain(
       "<user_custom_instructions>\nAlways write tests.\n</user_custom_instructions>",
     );
+  });
+
+  it("advertises the environment skill when its path is provided", () => {
+    const instructions = buildRuntimeInstructions({
+      harness: "Codex",
+      t3CodeProjectDir: "/t3-home/t3code",
+    });
+    expect(instructions).toContain('name="t3-cli-api"');
+    expect(instructions).toContain("/t3-home/t3code/.agents/skills/t3-cli-api/SKILL.md");
   });
 
   it.each([undefined, "", "   "])("omits the custom instructions block for %s", (value) => {

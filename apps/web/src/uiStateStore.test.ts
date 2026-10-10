@@ -21,6 +21,8 @@ import {
 
 function makeUiState(overrides: Partial<UiState> = {}): UiState {
   return {
+    fullWidthThreadMessages: false,
+    wrapTableCells: false,
     projectExpandedById: {},
     projectOrder: [],
     sidebarProjectScopeKey: null,
@@ -218,6 +220,8 @@ describe("parsePersistedState", () => {
     });
 
     expect(parsed).toEqual({
+      fullWidthThreadMessages: false,
+      wrapTableCells: true,
       projectExpandedById: {
         logical: false,
       },
@@ -346,6 +350,8 @@ describe("uiStateStore persistence", () => {
       localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
     ) as PersistedUiState;
     expect(persisted).toEqual({
+      fullWidthThreadMessages: false,
+      wrapTableCells: false,
       projectExpandedById: {
         logical: false,
       },
@@ -395,5 +401,6 @@ describe("uiStateStore persistence", () => {
       localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
     ) as PersistedUiState;
     expect(resolveProjectExpanded(persisted.projectExpandedById ?? {}, ["unknown"])).toBe(true);
+    expect(persisted).not.toHaveProperty("threadPanelOpen");
   });
 });

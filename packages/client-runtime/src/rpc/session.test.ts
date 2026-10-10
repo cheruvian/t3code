@@ -1,4 +1,9 @@
 import {
+  ConnectionTiming,
+  DEFAULT_CONNECTION_TIMING,
+  makeConnectionTiming,
+} from "../connection/timing.ts";
+import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   ProviderDriverKind,
@@ -23,7 +28,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
-import * as Socket from "effect/unstable/socket/Socket";
+import * as Socket from "effect/socket/Socket";
 
 import {
   AVAILABLE_CONNECTION_STATE,
@@ -161,7 +166,7 @@ const RpcRequest = Schema.TaggedStruct("Request", {
 });
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const isRpcRequest = Schema.is(RpcRequest);
-const isPing = Schema.is(Schema.Struct({ _tag: Schema.Literal("Ping") }));
+const isPing = Schema.is(Schema.TaggedStruct("Ping", {}));
 const encodeJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const encodeServerConfig = Schema.encodeSync(ServerConfig);
 const encodeServerConfigStreamEvent = Schema.encodeSync(ServerConfigStreamEvent);
@@ -215,12 +220,12 @@ const makeFactory = Effect.fn("TestRpcSessionFactory.make")(function* (
   options: RpcSession.RpcSessionOptions = {},
 ) {
   const sockets: TestWebSocket[] = [];
-  const constructorLayer = Layer.succeed(Socket.WebSocketConstructor, (url) => {
+  const layerConstructor = Layer.succeed(Socket.WebSocketConstructor, (url) => {
     const socket = new TestWebSocket(url);
     sockets.push(socket);
     return socket as unknown as globalThis.WebSocket;
   });
-  const layer = RpcSession.layerWithOptions(options).pipe(Layer.provide(constructorLayer));
+  const layer = RpcSession.layer(options).pipe(Layer.provide(layerConstructor));
   const factory = yield* RpcSession.RpcSessionFactory.pipe(Effect.provide(layer));
   return { factory, sockets };
 });
@@ -429,59 +434,55 @@ describe("RpcSessionFactory", () => {
     ),
   );
 
-  for (const options of [
+  it.effect.each([
     { environmentThemes: true },
     { usageLimitSources: true },
     { environmentThemes: true, usageLimitSources: true },
-  ]) {
-    it.effect(
-      `shares only a config subscription with the same opt-ins: ${JSON.stringify(options)}`,
-      () =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            const { factory, sockets } = yield* makeFactory(options);
-            const session = yield* factory.connect(PREPARED);
-            const readyFiber = yield* Effect.forkChild(session.ready);
-            const socket = yield* awaitSocket(sockets);
-            socket.open();
-            yield* completeInitialConfig(socket, ENCODED_THEME_SERVER_CONFIG, options);
-            yield* Fiber.join(readyFiber);
+  ])("shares only a config subscription with the same opt-ins: %j", (options) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { factory, sockets } = yield* makeFactory(options);
+        const session = yield* factory.connect(PREPARED);
+        const readyFiber = yield* Effect.forkChild(session.ready);
+        const socket = yield* awaitSocket(sockets);
+        socket.open();
+        yield* completeInitialConfig(socket, ENCODED_THEME_SERVER_CONFIG, options);
+        yield* Fiber.join(readyFiber);
 
-            const shared = yield* session.subscribeServerConfig(options).pipe(Stream.runHead);
-            expect(shared).toMatchObject({ _tag: "Some", value: { type: "snapshot" } });
-            expect(
-              socket.sent.map((message) => decodeJson(message)).filter(isRpcRequest),
-            ).toHaveLength(1);
+        const shared = yield* session.subscribeServerConfig(options).pipe(Stream.runHead);
+        expect(shared).toMatchObject({ _tag: "Some", value: { type: "snapshot" } });
+        expect(socket.sent.map((message) => decodeJson(message)).filter(isRpcRequest)).toHaveLength(
+          1,
+        );
 
-            const fallbackFiber = yield* session
-              .subscribeServerConfig({})
-              .pipe(Stream.runHead, Effect.forkChild);
-            const fallbackRequest = yield* awaitRequest(socket, 1);
-            expect(fallbackRequest).toMatchObject({
-              tag: WS_METHODS.subscribeServerConfig,
-              payload: {},
-            });
-            socket.serverMessage(
-              encodeJson({
-                _tag: "Chunk",
-                requestId: fallbackRequest.id,
-                values: [
-                  {
-                    version: 1,
-                    type: "snapshot",
-                    config: ENCODED_THEME_SERVER_CONFIG,
-                  },
-                ],
-              }),
-            );
-            expect(yield* Fiber.join(fallbackFiber)).toMatchObject({
-              _tag: "Some",
-              value: { type: "snapshot" },
-            });
+        const fallbackFiber = yield* session
+          .subscribeServerConfig({})
+          .pipe(Stream.runHead, Effect.forkChild);
+        const fallbackRequest = yield* awaitRequest(socket, 1);
+        expect(fallbackRequest).toMatchObject({
+          tag: WS_METHODS.subscribeServerConfig,
+          payload: {},
+        });
+        socket.serverMessage(
+          encodeJson({
+            _tag: "Chunk",
+            requestId: fallbackRequest.id,
+            values: [
+              {
+                version: 1,
+                type: "snapshot",
+                config: ENCODED_THEME_SERVER_CONFIG,
+              },
+            ],
           }),
-        ),
-    );
-  }
+        );
+        expect(yield* Fiber.join(fallbackFiber)).toMatchObject({
+          _tag: "Some",
+          value: { type: "snapshot" },
+        });
+      }),
+    ),
+  );
 
   it.effect.each([
     { usageLimitSources: true },
@@ -823,14 +824,14 @@ describe("RpcSessionFactory", () => {
             retryNow: Effect.void,
           } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
           const cache = Persistence.EnvironmentCacheStore.of({
-            loadShell: () => Effect.succeed(Option.none()),
+            loadShell: () => Effect.succeedNone,
             saveShell: () => Effect.void,
-            loadThread: () => Effect.succeed(Option.none()),
+            loadThread: () => Effect.succeedNone,
             saveThread: () => Effect.void,
             removeThread: () => Effect.void,
-            loadServerConfig: () => Effect.succeed(Option.none()),
+            loadServerConfig: () => Effect.succeedNone,
             saveServerConfig: () => Effect.void,
-            loadVcsRefs: () => Effect.succeed(Option.none()),
+            loadVcsRefs: () => Effect.succeedNone,
             saveVcsRefs: () => Effect.void,
             removeVcsRefs: () => Effect.void,
             clearVcsRefs: () => Effect.void,
@@ -1089,31 +1090,91 @@ describe("RpcSessionFactory", () => {
     }),
   );
 
-  it.effect("tolerates two missed pong windows before closing the session", () =>
+  it.effect.each([
+    { missedPongLimit: undefined, heartbeatSeconds: 0 },
+    { missedPongLimit: 5, heartbeatSeconds: 0 },
+    { missedPongLimit: 3, heartbeatSeconds: 45 },
+  ] as const)(
+    "closes with saved heartbeat $heartbeatSeconds and default limit $missedPongLimit",
+    ({ missedPongLimit, heartbeatSeconds }) =>
+      Effect.gen(function* () {
+        const { factory, sockets } = yield* makeFactory(
+          missedPongLimit === undefined ? {} : { missedPongLimit },
+        );
+        const timing = yield* makeConnectionTiming({
+          read: Effect.succeed({ ...DEFAULT_CONNECTION_TIMING, heartbeatSeconds }),
+          write: () => Effect.void,
+        });
+        const session = yield* factory
+          .connect(PREPARED)
+          .pipe(Effect.provideService(ConnectionTiming, timing));
+        const limit = heartbeatSeconds === 0 ? (missedPongLimit ?? 3) : heartbeatSeconds / 5;
+        const readyFiber = yield* Effect.forkChild(session.ready);
+        const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
+        const socket = yield* awaitSocket(sockets);
+
+        socket.open();
+        yield* completeInitialConfig(socket);
+        yield* Fiber.join(readyFiber);
+
+        yield* TestClock.adjust(limit * 5_000);
+        expect(closedFiber.pollUnsafe()).toBeUndefined();
+        expect(socket.sent.map((message) => decodeJson(message)).filter(isPing)).toEqual(
+          Array.from({ length: limit }, () => ({ _tag: "Ping" })),
+        );
+
+        yield* TestClock.adjust("5 seconds");
+        const error = yield* Fiber.join(closedFiber);
+        expect(error).toBeInstanceOf(ConnectionTransientError);
+        expect(error).toMatchObject({
+          reason: "transport",
+          detail: "Test environment stopped responding.",
+        });
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("keeps reading replies after closing a stream with a full buffer", () =>
     Effect.gen(function* () {
       const { factory, sockets } = yield* makeFactory();
       const session = yield* factory.connect(PREPARED);
       const readyFiber = yield* Effect.forkChild(session.ready);
-      const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
       const socket = yield* awaitSocket(sockets);
-
       socket.open();
       yield* completeInitialConfig(socket);
       yield* Fiber.join(readyFiber);
 
-      yield* TestClock.adjust("15 seconds");
-      expect(closedFiber.pollUnsafe()).toBeUndefined();
-      expect(socket.sent.map((message) => decodeJson(message)).filter(isPing)).toEqual([
-        { _tag: "Ping" },
-        { _tag: "Ping" },
-        { _tag: "Ping" },
-      ]);
+      // The consumer takes one event and stops pulling, so the stream buffer fills.
+      const consuming = yield* Deferred.make<void>();
+      const streamFiber = yield* session.client[WS_METHODS.subscribeServerConfig]({}).pipe(
+        Stream.runForEach(() =>
+          Deferred.succeed(consuming, undefined).pipe(Effect.andThen(Effect.never)),
+        ),
+        Effect.forkChild,
+      );
+      const streamRequest = yield* awaitRequest(socket, 1);
+      const snapshot = { version: 1, type: "snapshot", config: ENCODED_SERVER_CONFIG };
+      socket.serverMessage(
+        encodeJson({
+          _tag: "Chunk",
+          requestId: streamRequest.id,
+          values: Array.from({ length: 64 }, () => snapshot),
+        }),
+      );
+      yield* Deferred.await(consuming);
+      yield* Fiber.interrupt(streamFiber);
 
-      yield* TestClock.adjust("5 seconds");
-      const error = yield* Fiber.join(closedFiber);
-      expect(error).toBeInstanceOf(ConnectionTransientError);
-      expect(error).toMatchObject({ reason: "transport" });
-    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+      const probeFiber = yield* Effect.forkChild(session.probe);
+      const probeRequest = yield* awaitRequest(socket, 2);
+      expect(probeRequest).toMatchObject({ tag: WS_METHODS.serverProbe });
+      socket.serverMessage(
+        encodeJson({
+          _tag: "Exit",
+          requestId: probeRequest.id,
+          exit: { _tag: "Success", value: {} },
+        }),
+      );
+      yield* Fiber.join(probeFiber);
+    }).pipe(Effect.scoped),
   );
 
   it.effect("reaches ready when a newer server sends unknown config members", () =>
@@ -1191,37 +1252,38 @@ describe("RpcSessionFactory", () => {
     ),
   );
 
-  for (const relay of [false, true]) {
-    it.effect(`fails readiness when the ${relay ? "relay" : "direct"} websocket never opens`, () =>
-      Effect.gen(function* () {
-        const { factory, sockets } = yield* makeFactory();
+  it.effect.each([
+    { relay: false, label: "direct" },
+    { relay: true, label: "relay" },
+  ])("fails readiness when the $label websocket never opens", ({ relay }) =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
 
-        const error = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const session = yield* factory.connect({
-              ...PREPARED,
-              target: relay
-                ? new RelayConnectionTarget({
-                    environmentId: TARGET.environmentId,
-                    label: TARGET.label,
-                  })
-                : TARGET,
-            });
-            const readyFiber = yield* Effect.forkChild(Effect.flip(session.ready));
-            yield* awaitSocket(sockets);
+      const error = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* factory.connect({
+            ...PREPARED,
+            target: relay
+              ? new RelayConnectionTarget({
+                  environmentId: TARGET.environmentId,
+                  label: TARGET.label,
+                })
+              : TARGET,
+          });
+          const readyFiber = yield* Effect.forkChild(Effect.flip(session.ready));
+          yield* awaitSocket(sockets);
 
-            yield* TestClock.adjust("15 seconds");
-            return yield* Fiber.join(readyFiber);
-          }),
-        );
+          yield* TestClock.adjust("15 seconds");
+          return yield* Fiber.join(readyFiber);
+        }),
+      );
 
-        expect(error).toBeInstanceOf(ConnectionTransientError);
-        expect(error).toMatchObject({
-          reason: "transport",
-          message: `Test environment could not establish a WebSocket connection.${relay ? ` ${NETWORK_BLOCKING_HINT}` : ""}`,
-        });
-        expect(sockets[0]?.readyState).toBe(TestWebSocket.CLOSED);
-      }).pipe(Effect.provide(TestClock.layer())),
-    );
-  }
+      expect(error).toBeInstanceOf(ConnectionTransientError);
+      expect(error).toMatchObject({
+        reason: "transport",
+        message: `Test environment could not establish a WebSocket connection.${relay ? ` ${NETWORK_BLOCKING_HINT}` : ""}`,
+      });
+      expect(sockets[0]?.readyState).toBe(TestWebSocket.CLOSED);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
 });

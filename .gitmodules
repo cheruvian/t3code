@@ -49,11 +49,11 @@
 	update = none
 
 [submodule "alchemy-effect/distilled"]
-	path = .repos/alchemy-effect/distilled
+	path = .repos/alchemy-effect/submodules/distilled
 	url = https://github.com/alchemy-run/distilled.git
 	update = none
 
 [submodule "alchemy-effect/.vendor/floci"]
-	path = .repos/alchemy-effect/.vendor/floci
+	path = .repos/alchemy-effect/submodules/floci
 	url = https://github.com/alchemy-run/floci.git
 	update = none

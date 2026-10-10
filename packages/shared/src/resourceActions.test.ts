@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-  CommandId,
-  EventId,
-  ThreadId,
-  type OrchestrationThreadActivity,
-  type ProjectResourceLock,
-} from "@t3tools/contracts";
+import { CommandId, ThreadId, type ProjectResourceLock } from "@t3tools/contracts";
 import {
   resourceActionLogs,
   resourceActionKey,
@@ -35,20 +29,15 @@ describe("resource action presentation", () => {
       stderr: "warning",
       truncated: true,
     };
-    const activity = (status: "running" | "succeeded"): OrchestrationThreadActivity => ({
-      id: EventId.make(status),
-      tone: "info",
-      kind: "resource.action",
-      summary: status,
-      payload: { ...log, status },
-      turnId: null,
-      createdAt: "2026-09-22T00:00:00Z",
+    const activity = (status: "running" | "succeeded") => ({
+      type: "command_execution",
+      resourceActionLog: { ...log, status },
     });
     const logs = resourceActionLogs([
       activity("running"),
       activity("succeeded"),
       activity("running"),
-      { ...activity("running"), payload: null },
+      { ...activity("running"), resourceActionLog: null },
     ]);
     expect(logs).toEqual([{ ...log, status: "succeeded" }]);
     expect(formatResourceActionLog(logs[0]!)).toContain("showing the latest output");

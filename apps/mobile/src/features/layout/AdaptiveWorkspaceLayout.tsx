@@ -23,13 +23,15 @@ import {
   type ReactNode,
 } from "react";
 import { Platform, useWindowDimensions, View } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
+  runOnJS,
   useAnimatedStyle,
   useDerivedValue,
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 
 import {
   deriveFileInspectorPaneLayout,
@@ -57,11 +59,17 @@ import {
 import { AndroidHomeFabLayout } from "../home/AndroidHomeFab";
 import { HomeListOptionsProvider } from "../home/home-list-options";
 import { ThreadNavigationSidebar } from "../threads/ThreadNavigationSidebar";
+import { RenderErrorBoundary, RenderFailureView } from "../../components/RenderErrorBoundary";
 import { WORKSPACE_PANE_TIMING } from "./workspace-pane-animation";
 import { WorkspaceInspectorPane } from "./workspace-inspector-pane";
 import { WorkspaceContentWidthContext } from "./workspace-content-width";
+import {
+  NativeWorkspaceModeContext,
+  NativeWorkspaceInspectorContext,
+} from "../../native/v5-workspace-context";
 
 type WorkspaceInspectorRenderer = (registrationActive: boolean) => ReactNode;
+const makePanGesture = Gesture.Pan;
 
 interface AdaptiveWorkspaceContextValue {
   readonly layout: Layout;
@@ -237,6 +245,7 @@ function AdaptiveWorkspaceLayoutContent(
   },
 ) {
   const projectGroupingMode = props.projectGroupingMode;
+  const nativeWorkspace = use(NativeWorkspaceModeContext);
   const { width, height } = useWindowDimensions();
   const pathname = props.pathname;
   const navigation = useNavigation();
@@ -370,6 +379,25 @@ function AdaptiveWorkspaceLayoutContent(
     }
     setPrimarySidebarPreferredVisible(true);
   }, [panes.primarySidebarSuppressedByAuxiliary]);
+  const showCompactThreadList = useCallback(() => {
+    const hasHomeRoute =
+      navigation.getState()?.routes.some((route) => route.name === "Home") ?? false;
+    navigation.dispatch(hasHomeRoute ? StackActions.popTo("Home") : StackActions.replace("Home"));
+  }, [navigation]);
+  const revealThreadListSwipe = useMemo(
+    () =>
+      makePanGesture()
+        .enabled(!layout.usesSplitView && /^\/threads\/[^/]+\/[^/]+\/?$/.test(pathname))
+        .hitSlop({ left: 0, width: 48 })
+        .activeOffsetX(14)
+        .failOffsetY([-16, 16])
+        .onEnd((event) => {
+          if (event.translationX >= 72 && Math.abs(event.translationY) < 48) {
+            runOnJS(showCompactThreadList)();
+          }
+        }),
+    [layout.usesSplitView, pathname, showCompactThreadList],
+  );
   const handleToggleSidebarCommand = useCallback(() => {
     togglePrimarySidebar();
     return true;
@@ -471,9 +499,10 @@ function AdaptiveWorkspaceLayoutContent(
     panes.primarySidebarVisible ? (layout.listPaneWidth ?? 0) : 0,
   );
   useEffect(() => {
+    if (nativeWorkspace) return;
     const targetWidth = panes.primarySidebarVisible ? (layout.listPaneWidth ?? 0) : 0;
     renderedSidebarWidth.value = withTiming(targetWidth, WORKSPACE_PANE_TIMING);
-  }, [layout.listPaneWidth, panes.primarySidebarVisible, renderedSidebarWidth]);
+  }, [nativeWorkspace, layout.listPaneWidth, panes.primarySidebarVisible, renderedSidebarWidth]);
   const sidebarAnimatedStyle = useAnimatedStyle(() => ({
     opacity: Math.min(1, renderedSidebarWidth.value / 80),
     width: renderedSidebarWidth.value,
@@ -567,7 +596,42 @@ function AdaptiveWorkspaceLayoutContent(
       togglePrimarySidebar,
     ],
   );
+  const mainPane = (
+    <View
+      className={
+        Platform.OS === "android"
+          ? "flex-1 overflow-hidden bg-header"
+          : "flex-1 overflow-hidden bg-screen"
+      }
+      collapsable={false}
+    >
+      <View
+        collapsable={false}
+        style={contentSettledWidth !== null ? { flex: 1, width: contentSettledWidth } : { flex: 1 }}
+      >
+        <WorkspaceContentWidthContext value={layout.usesSplitView ? renderedContentWidth : null}>
+          {props.children}
+        </WorkspaceContentWidthContext>
+      </View>
+    </View>
+  );
 
+  if (nativeWorkspace) {
+    return (
+      <HomeListOptionsProvider projectGroupingMode={projectGroupingMode}>
+        <AdaptiveWorkspaceContext value={contextValue}>
+          <NativeWorkspaceInspectorContext
+            value={{
+              render: workspaceInspector ? () => workspaceInspector.render(true) : undefined,
+              visible: inspectorColumnTargetWidth > 0,
+            }}
+          >
+            {props.children}
+          </NativeWorkspaceInspectorContext>
+        </AdaptiveWorkspaceContext>
+      </HomeListOptionsProvider>
+    );
+  }
   return (
     <HomeListOptionsProvider projectGroupingMode={projectGroupingMode}>
       <AdaptiveWorkspaceContext.Provider value={contextValue}>
@@ -584,51 +648,41 @@ function AdaptiveWorkspaceLayoutContent(
               style={sidebarAnimatedStyle}
             >
               <View className="flex-1" style={{ width: layout.listPaneWidth }}>
-                <AndroidHomeFabLayout sidebar onStartNewTask={handleStartNewTask}>
-                  <ThreadNavigationSidebar
-                    width={layout.listPaneWidth}
-                    visible={panes.primarySidebarVisible}
-                    onRequestVisibility={revealPrimarySidebar}
-                    selectedThreadKey={selectedThreadKey}
-                    onOpenSettings={handleOpenSettings}
-                    onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
-                    onNewThreadInProject={handleNewThreadInProject}
-                    onNewThreadOnBranch={handleNewThreadOnBranch}
-                    onSelectThread={handleSelectThread}
-                    onSearchQueryChange={setPrimarySidebarSearchQuery}
-                    searchQuery={primarySidebarSearchQuery}
-                  />
-                </AndroidHomeFabLayout>
+                <RenderErrorBoundary
+                  renderFallback={(fallback) => (
+                    <RenderFailureView
+                      {...fallback}
+                      title="The sidebar couldn't be displayed"
+                      exit={{ label: "Open settings", onPress: handleOpenSettings }}
+                    />
+                  )}
+                >
+                  <AndroidHomeFabLayout sidebar onStartNewTask={handleStartNewTask}>
+                    <ThreadNavigationSidebar
+                      width={layout.listPaneWidth}
+                      visible={panes.primarySidebarVisible}
+                      onRequestVisibility={revealPrimarySidebar}
+                      selectedThreadKey={selectedThreadKey}
+                      onOpenSettings={handleOpenSettings}
+                      onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
+                      onNewThreadInProject={handleNewThreadInProject}
+                      onNewThreadOnBranch={handleNewThreadOnBranch}
+                      onSelectThread={handleSelectThread}
+                      onSearchQueryChange={setPrimarySidebarSearchQuery}
+                      searchQuery={primarySidebarSearchQuery}
+                    />
+                  </AndroidHomeFabLayout>
+                </RenderErrorBoundary>
               </View>
             </Animated.View>
           ) : null}
-          <View
-            className={
-              Platform.OS === "android"
-                ? "flex-1 overflow-hidden bg-header"
-                : "flex-1 overflow-hidden bg-screen"
-            }
-            collapsable={false}
-          >
-            <View
-              collapsable={false}
-              style={
-                contentSettledWidth !== null
-                  ? {
-                      flex: 1,
-                      width: contentSettledWidth,
-                    }
-                  : { flex: 1 }
-              }
-            >
-              <WorkspaceContentWidthContext
-                value={layout.usesSplitView ? renderedContentWidth : null}
-              >
-                {props.children}
-              </WorkspaceContentWidthContext>
-            </View>
-          </View>
+          {layout.usesSplitView ? (
+            mainPane
+          ) : (
+            <GestureDetector gesture={revealThreadListSwipe}>{mainPane}</GestureDetector>
+          )}
           <WorkspaceInspectorPane
+            pathname={props.pathname}
             renderedInspectorWidth={renderedInspectorWidth}
             active={workspaceInspector?.active ?? false}
             panes={panes}

@@ -1,7 +1,7 @@
 import { allowUnpinnedReorderAtom } from "./preferences";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect } from "react";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 
 import {
   reconcilePendingThreadOrder,

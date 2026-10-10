@@ -27,7 +27,7 @@ vi.mock("electron", () => ({
 
 import * as ElectronMenu from "./ElectronMenu.ts";
 
-const TestLayer = ElectronMenu.layer.pipe(
+const layerTest = ElectronMenu.layer.pipe(
   Layer.provide(Layer.succeed(HostProcessPlatform, "linux")),
 );
 
@@ -44,6 +44,28 @@ describe("ElectronMenu", () => {
     setApplicationMenuMock.mockReset();
   });
 
+  it.effect("keeps transfer discovery feedback in the native thread menu", () =>
+    Effect.gen(function* () {
+      buildFromTemplateMock.mockImplementation(() => ({
+        popup: (options: Electron.PopupOptions) => options.callback?.(),
+      }));
+      const electronMenu = yield* ElectronMenu.ElectronMenu;
+      for (const moveUnavailableLabel of ["Checking destinations…", "No eligible destinations"]) {
+        yield* electronMenu.showContextMenu({
+          window: makeWindow(),
+          position: Option.none(),
+          items: [{ id: "move-environment", label: moveUnavailableLabel, disabled: true }],
+        });
+        const template = buildFromTemplateMock.mock
+          .lastCall?.[0] as Electron.MenuItemConstructorOptions[];
+        const transfer = template.find((item) => item.label === moveUnavailableLabel);
+        assert.isDefined(transfer);
+        assert.isFalse(transfer?.enabled);
+        assert.isUndefined(transfer?.submenu);
+      }
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("returns none without building a menu when there are no valid items", () =>
     Effect.gen(function* () {
       const electronMenu = yield* ElectronMenu.ElectronMenu;
@@ -55,7 +77,7 @@ describe("ElectronMenu", () => {
 
       assert.isTrue(Option.isNone(selectedItemId));
       assert.equal(buildFromTemplateMock.mock.calls.length, 0);
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("resolves with the clicked leaf item id", () =>
@@ -82,7 +104,7 @@ describe("ElectronMenu", () => {
       });
 
       assert.equal(Option.getOrNull(selectedItemId), "copy");
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("resolves with none when the menu closes without a click", () =>
@@ -119,7 +141,7 @@ describe("ElectronMenu", () => {
         ),
         ["Copy", "separator", "Delete"],
       );
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("keeps a preceding non-destructive action in the destructive section", () =>
@@ -145,7 +167,7 @@ describe("ElectronMenu", () => {
         ),
         ["Copy", "separator", "Archive", "Delete"],
       );
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("defers popupTemplate side effects until the returned Effect runs", () =>
@@ -169,7 +191,7 @@ describe("ElectronMenu", () => {
       assert.equal(buildFromTemplateMock.mock.calls.length, 1);
       assert.equal(popupMock.mock.calls.length, 1);
       assert.strictEqual(popupMock.mock.calls[0]?.[0].frame, frame);
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("preserves application-menu failures as structured defects", () =>
@@ -195,7 +217,7 @@ describe("ElectronMenu", () => {
         assert.strictEqual(error.cause, cause);
         assert.notInclude(error.message, cause.message);
       }
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("preserves popup-template failures with window context", () =>
@@ -224,7 +246,7 @@ describe("ElectronMenu", () => {
         assert.equal(error.itemCount, 1);
         assert.strictEqual(error.cause, cause);
       }
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("preserves context-menu failures with normalized item context", () =>
@@ -252,6 +274,6 @@ describe("ElectronMenu", () => {
         assert.equal(error.itemCount, 1);
         assert.strictEqual(error.cause, cause);
       }
-    }).pipe(Effect.provide(TestLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 });

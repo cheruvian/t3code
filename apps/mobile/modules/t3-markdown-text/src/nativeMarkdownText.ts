@@ -1,6 +1,12 @@
+import {
+  resolvedMarkdownFileHref,
+  type MarkdownFileResolutions,
+} from "@t3tools/client-runtime/markdown-file-resolution";
 import type { MarkdownNode } from "react-native-nitro-markdown/headless";
+import { isMarkdownFileLinkLabel } from "@t3tools/client-runtime/markdown-links";
 import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineTokens";
 import { imageMimeType } from "@t3tools/shared/image";
+import { isWindowsAbsolutePath } from "@t3tools/shared/path";
 import { videoMimeType } from "@t3tools/shared/video";
 /**
  * Every accent shares a lightness so no kind reads heavier than another; only hue carries
@@ -18,6 +24,7 @@ const CONTEXT_CHIP_PRESENTATIONS = {
   "review-comment": { accent: "#8a70dd", symbol: "text.bubble" },
   "pull-request": { accent: "#7079e4", symbol: "git-pull-request" },
   skill: { accent: "#b261be", symbol: "cube" },
+  thread: { accent: "#009c96", symbol: "text.bubble" },
 } as const;
 
 /**
@@ -107,7 +114,8 @@ export function nativeMarkdownContextCopyRanges(
   }>,
 ) {
   let offset = 0;
-  return runs.flatMap(({ run, text, inlineImageLength }) => {
+  const ranges: Array<{ start: number; end: number; text: string }> = [];
+  for (const [index, { run, text, inlineImageLength }] of runs.entries()) {
     const start = offset;
     offset += text.length + inlineImageLength;
     const reference = parseComposerContextHref(run.href ?? "");
@@ -115,11 +123,25 @@ export function nativeMarkdownContextCopyRanges(
       ? formatComposerContextReference({ ...reference, label: run.text })
       : run.skillName
         ? `$${run.skillName}`
-        : run.fileIcon && run.href
-          ? (run.sourceText ?? `[${run.text}](<${run.href}>)`)
-          : null;
-    return source === null ? [] : [{ start, end: offset, text: source }];
-  });
+        : run.sourceText !== undefined
+          ? run.sourceText
+          : run.fileIcon && run.href
+            ? `[${run.text}](<${run.href}>)`
+            : null;
+    if (source === null) continue;
+    const previous = ranges.at(-1);
+    if (
+      run.sourceText !== undefined &&
+      !runs[index - 1]?.run.fileIcon &&
+      previous?.end === start &&
+      previous.text === source
+    ) {
+      previous.end = offset;
+    } else {
+      ranges.push({ start, end: offset, text: source });
+    }
+  }
+  return ranges;
 }
 
 import type { SelectableMarkdownSkill } from "./SelectableMarkdownText.types";
@@ -130,6 +152,7 @@ import {
 } from "./markdownLinks";
 
 export interface NativeMarkdownTextRun {
+  readonly inlineFileSource?: string;
   readonly text: string;
   readonly bold?: boolean;
   readonly italic?: boolean;
@@ -172,6 +195,7 @@ export type NativeMarkdownDocumentChunk =
     };
 
 interface RunContext {
+  readonly inlineFileSource?: string;
   readonly bold: boolean;
   readonly italic: boolean;
   readonly strikethrough: boolean;
@@ -179,6 +203,7 @@ interface RunContext {
   readonly href?: string;
   readonly externalHost?: string;
   readonly fileIcon?: MarkdownFileIcon;
+  readonly sourceText?: string;
   readonly role?: NativeMarkdownTextRun["role"];
   readonly headingLevel?: number;
   readonly depth?: number;
@@ -266,6 +291,7 @@ function sameRunStyle(left: NativeMarkdownTextRun, right: NativeMarkdownTextRun)
     left.href === right.href &&
     left.externalHost === right.externalHost &&
     left.fileIcon === right.fileIcon &&
+    left.sourceText === right.sourceText &&
     left.skillName === right.skillName &&
     left.skillLabel === right.skillLabel &&
     left.role === right.role &&
@@ -274,6 +300,7 @@ function sameRunStyle(left: NativeMarkdownTextRun, right: NativeMarkdownTextRun)
     left.spacing === right.spacing &&
     left.firstLineHeadIndent === right.firstLineHeadIndent &&
     left.headIndent === right.headIndent &&
+    left.inlineFileSource === right.inlineFileSource &&
     left.paragraphSpacing === right.paragraphSpacing
   );
 }
@@ -289,6 +316,7 @@ function appendRun(
 
   const run: NativeMarkdownTextRun = {
     text,
+    ...(context.inlineFileSource ? { inlineFileSource: context.inlineFileSource } : {}),
     ...(context.bold ? { bold: true } : {}),
     ...(context.italic ? { italic: true } : {}),
     ...(context.strikethrough ? { strikethrough: true } : {}),
@@ -296,6 +324,7 @@ function appendRun(
     ...(context.href ? { href: context.href } : {}),
     ...(context.externalHost ? { externalHost: context.externalHost } : {}),
     ...(context.fileIcon ? { fileIcon: context.fileIcon } : {}),
+    ...(context.sourceText !== undefined ? { sourceText: context.sourceText } : {}),
     ...(context.role ? { role: context.role } : {}),
     ...(context.headingLevel ? { headingLevel: context.headingLevel } : {}),
     ...(context.depth ? { depth: context.depth } : {}),
@@ -430,6 +459,36 @@ function nodeTextContent(node: MarkdownNode): string {
   return (node.children ?? []).map(nodeTextContent).join("");
 }
 
+function fileLinkLabelMarkdown(node: MarkdownNode): string {
+  const children = (node.children ?? []).map(fileLinkLabelMarkdown).join("");
+  switch (node.type) {
+    case "bold":
+      return `**${children}**`;
+    case "italic":
+      return `*${children}*`;
+    case "strikethrough":
+      return `~~${children}~~`;
+    case "code_inline": {
+      const content = nodeTextContent(node);
+      const fence = "`".repeat(
+        Math.max(0, ...(content.match(/`+/g) ?? []).map((run) => run.length)) + 1,
+      );
+      const padding = /^`|`$|^ .* $/.test(content) && content.trim().length > 0 ? " " : "";
+      return `${fence}${padding}${content}${padding}${fence}`;
+    }
+    case "soft_break":
+      return "\n";
+    case "line_break":
+      return "  \n";
+    case "text":
+      return textNodeContent(nodeTextContent(node)).replace(/[\\[\]*_`~]/g, "\\$&");
+    case "image":
+      return `![${(node.alt ?? "").replace(/[\\[\]]/g, "\\$&")}](<${node.href ?? ""}>)`;
+    default:
+      return node.content ?? children;
+  }
+}
+
 function appendNode(
   runs: NativeMarkdownTextRun[],
   node: MarkdownNode,
@@ -448,6 +507,7 @@ function appendNode(
         ? appendRun(runs, presentation.label, {
             ...context,
             href: presentation.href,
+            inlineFileSource: content,
             fileIcon: presentation.icon,
           })
         : appendRun(runs, content, { ...context, code: true });
@@ -480,6 +540,23 @@ function appendNode(
       }
       const presentation = resolveMarkdownLinkPresentation(node.href ?? "");
       if (presentation.kind === "file") {
+        const label = textNodeContent(nodeTextContent(node));
+        if (!isMarkdownFileLinkLabel(label, presentation.href)) {
+          const fileRuns: NativeMarkdownTextRun[] = [];
+          const fileContext = {
+            ...context,
+            href: presentation.href,
+            sourceText: `[${fileLinkLabelMarkdown(node)}](<${presentation.href}>)`,
+          };
+          appendChildren(fileRuns, node, fileContext);
+          appendRun(fileRuns, " ", fileContext);
+          appendRun(fileRuns, presentation.label, {
+            ...fileContext,
+            fileIcon: presentation.icon,
+          });
+          runs.push(...fileRuns);
+          return runs;
+        }
         return appendRun(runs, presentation.label, {
           ...context,
           href: presentation.href,
@@ -516,6 +593,35 @@ export function nativeMarkdownWithPreservedSoftBreaks(node: MarkdownNode): Markd
     ...(node.type === "soft_break" ? { type: "line_break" as const } : {}),
     ...(children ? { children } : {}),
   };
+}
+
+const WINDOWS_DESTINATION_PATTERN = /\](?:\(|:)\s*<?((?:[A-Za-z]:|\\\\)(?:\\.|[^\s()<>\\])*)/g;
+const MARKDOWN_ESCAPE_PATTERN = /\\([!-/:-@[-`{-~])/g;
+
+/**
+ * md4c reads the `\.` in `C:\me\.t3\shot.png` as an escape, even in a link destination.
+ * Every backslash in a Windows path is a separator, so link and image paths go back to
+ * the destination as written in `markdown`. A parsed path that more than one written
+ * destination could have produced stays as parsed.
+ */
+export function nativeMarkdownWithAuthoredWindowsPaths(
+  node: MarkdownNode,
+  markdown: string,
+): MarkdownNode {
+  const authoredByParsed = new Map<string, string | null>();
+  for (const [, authored = ""] of markdown.matchAll(WINDOWS_DESTINATION_PATTERN)) {
+    if (!isWindowsAbsolutePath(authored)) continue;
+    const parsed = authored.replace(MARKDOWN_ESCAPE_PATTERN, "$1");
+    const known = authoredByParsed.get(parsed);
+    authoredByParsed.set(parsed, known === undefined || known === authored ? authored : null);
+  }
+  if (authoredByParsed.size === 0) return node;
+  const restore = (current: MarkdownNode): MarkdownNode => {
+    const href = current.href && authoredByParsed.get(current.href);
+    const children = current.children?.map(restore);
+    return { ...current, ...(href ? { href } : {}), ...(children ? { children } : {}) };
+  };
+  return restore(node);
 }
 
 function appendBlockTerminator(
@@ -961,4 +1067,19 @@ export function nativeMarkdownDocumentRuns(
     }
   }
   return decorateMentionRuns(decorateSkillRuns(runs, skills));
+}
+
+/** Missing auto-detected files remain code; explicit links retain their authored destination. */
+export function resolveNativeMarkdownFileRuns(
+  runs: ReadonlyArray<NativeMarkdownTextRun>,
+  resolutions: MarkdownFileResolutions,
+) {
+  return runs.map((run) => {
+    if (!run.href || !run.fileIcon) return run;
+    const href = resolvedMarkdownFileHref(run.href, resolutions);
+    if (href) return { ...run, href };
+    if (!run.inlineFileSource) return run;
+    const { href: _href, fileIcon: _icon, inlineFileSource, ...plain } = run;
+    return { ...plain, text: inlineFileSource, code: true };
+  });
 }

@@ -1,7 +1,8 @@
 import type { StorageCleanupSettings, WorktreeCleanupRules } from "@t3tools/contracts";
 import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
+import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import {
@@ -11,15 +12,77 @@ import {
   NumberFieldIncrement,
   NumberFieldInput,
 } from "../ui/number-field";
-import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import {
+  SettingResetButton,
+  SettingsPageContainer,
+  SettingsRow,
+  SettingsSection,
+} from "./settingsLayout";
 import { SettingsScopeNotice } from "./SettingsScopeNotice";
+import { WorktreeCleanupPanel } from "./WorktreeCleanupPanel";
 import type { ScopedSettingsTarget } from "./scopedSettings";
 import { useSettingsScope } from "./SettingsScopeContext";
+import { searchableSetting } from "./settingsSearch";
 import {
   useClearScopedSettings,
   useScopedSettings,
+  useScopedSettingsMixed,
   useUpdateScopedSettings,
 } from "./useScopedSettings";
+
+function WorktreesDirectoryRow() {
+  const { connectedEnvironments, targets } = useSettingsScope();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  const mixed = useScopedSettingsMixed(["worktreesDirectory"]);
+  const edited = useRef(false);
+  if (
+    connectedEnvironments.some(
+      (environment) =>
+        environment.serverConfig?.environment.capabilities.worktreesDirectory !== true,
+    )
+  )
+    return null;
+  const scopeKey = targets.map((target) => target.environmentId).join(",");
+
+  return (
+    <SettingsRow
+      {...searchableSetting("storage-worktrees-location")}
+      description={
+        "Folder where new worktrees are created, on any drive, such as D:\\worktrees or ~/worktrees. Existing worktrees stay where they are. Leave empty to use the T3 home folder."
+      }
+      serverScoped
+      settingKeys={["worktreesDirectory"]}
+      resetAction={
+        mixed || settings.worktreesDirectory !== "" ? (
+          <SettingResetButton
+            label="worktree location"
+            onClick={() => updateSettings({ worktreesDirectory: "" })}
+          />
+        ) : null
+      }
+      control={
+        <Input
+          key={`${scopeKey}:${mixed}:${settings.worktreesDirectory}`}
+          aria-label="Worktree location"
+          autoCapitalize="none"
+          spellCheck={false}
+          placeholder={mixed ? "Mixed" : "Default"}
+          defaultValue={mixed ? "" : settings.worktreesDirectory}
+          onChange={() => {
+            edited.current = true;
+          }}
+          onBlur={(event) => {
+            const value = event.target.value.trim();
+            if (edited.current && (mixed || value !== settings.worktreesDirectory))
+              updateSettings({ worktreesDirectory: value });
+            edited.current = false;
+          }}
+        />
+      }
+    />
+  );
+}
 
 function RetentionControl({
   label,
@@ -62,7 +125,7 @@ function RetentionControl({
             <NumberFieldInput
               aria-label={`${label} in days`}
               size={new Intl.NumberFormat().format(draft ?? value).length}
-              className="field-sizing-content w-auto min-w-[1ch] grow-0 text-right in-data-[size=sm]:px-1"
+              className="field-sizing-content w-auto min-w-[1ch] grow-0 text-right"
             />
             <span aria-hidden="true" className="self-center pr-2 text-xs">
               days
@@ -152,6 +215,7 @@ export function StorageSettingsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsSection id="storage-worktrees" title="Worktrees">
+        {!isProjectScope && <WorktreesDirectoryRow />}
         {isProjectScope && (
           <SettingsRow
             title="Automatic worktree cleanup"
@@ -224,34 +288,49 @@ export function StorageSettingsPanel() {
               }
             />
             <SettingsRow
-              title="Delete merged worktrees"
+              title="Delete merged pull request worktrees"
               status={ruleStatus("worktreeOnMerge")}
-              description="Remove worktrees whose pull request is merged and whose commits are included in the default branch."
+              description="Remove worktrees whose pull request is merged and whose commits are included in the remote default branch."
               serverScoped={!isProjectScope}
               control={
                 <Switch
-                  aria-label="Delete merged worktrees"
+                  aria-label="Delete merged pull request worktrees"
                   checked={settings.worktreeOnMerge}
                   onCheckedChange={(worktreeOnMerge) => updateWorktree({ worktreeOnMerge })}
                 />
               }
             />
             <SettingsRow
-              title="Delete unchanged worktrees"
+              title="Delete worktrees pushed to the default branch"
               status={ruleStatus("worktreeUnchanged")}
-              description="Remove worktrees with no commits beyond the default branch."
+              description="Remove worktrees whose commits are on the remote default branch, even without a pull request."
               serverScoped={!isProjectScope}
               control={
                 <Switch
-                  aria-label="Delete unchanged worktrees"
+                  aria-label="Delete worktrees pushed to the default branch"
                   checked={settings.worktreeUnchanged}
                   onCheckedChange={(worktreeUnchanged) => updateWorktree({ worktreeUnchanged })}
+                />
+              }
+            />
+            <SettingsRow
+              title="Delete worktrees pushed to a remote branch"
+              status={ruleStatus("worktreeOnPush")}
+              description="Remove worktrees whose commits are on their upstream or same-name primary remote branch, even if unmerged."
+              serverScoped={!isProjectScope}
+              control={
+                <Switch
+                  aria-label="Delete worktrees pushed to a remote branch"
+                  checked={settings.worktreeOnPush}
+                  onCheckedChange={(worktreeOnPush) => updateWorktree({ worktreeOnPush })}
                 />
               }
             />
           </>
         )}
       </SettingsSection>
+
+      <WorktreeCleanupPanel />
 
       {!isProjectScope && (
         <SettingsSection id="storage-artifacts" title="Artifacts and logs">

@@ -47,6 +47,7 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const { height: windowHeight } = useWindowDimensions();
   const gitActions = useSelectedThreadGitActions();
+  const { canWriteSourceControl, canChangeThreadBranch } = gitActions;
 
   const params = props.route.params;
 
@@ -95,17 +96,27 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
   );
 
   const continuePendingAction = useCallback(async () => {
-    if (!confirmAction || !confirmationReady) return;
+    if (!canWriteSourceControl || !confirmAction || !confirmationReady) return;
     navigation.dispatch(StackActions.replace("Thread", { environmentId, threadId }));
     await gitActions.onRunSelectedThreadGitAction({
       action: confirmAction,
       ...(params.commitMessage ? { commitMessage: params.commitMessage } : {}),
       ...(params.filePaths ? { filePaths: params.filePaths.split(",") } : {}),
     });
-  }, [confirmAction, confirmationReady, environmentId, gitActions, params, navigation, threadId]);
+  }, [
+    canWriteSourceControl,
+    canChangeThreadBranch,
+    confirmAction,
+    confirmationReady,
+    environmentId,
+    gitActions,
+    params,
+    navigation,
+    threadId,
+  ]);
 
   const movePendingActionToFeatureBranch = useCallback(async () => {
-    if (!confirmAction || !confirmationReady) return;
+    if (!canChangeThreadBranch || !confirmAction || !confirmationReady) return;
     navigation.dispatch(StackActions.replace("Thread", { environmentId, threadId }));
 
     if (includesCommit) {
@@ -129,6 +140,7 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
       runAction: () => gitActions.onRunSelectedThreadGitAction({ action: confirmAction }),
     });
   }, [
+    canChangeThreadBranch,
     confirmAction,
     confirmationReady,
     gitActions,
@@ -142,7 +154,7 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
   return (
     <View
       collapsable={false}
-      className={Platform.OS === "android" ? "bg-sheet" : "flex-1 bg-sheet"}
+      className="bg-sheet ios:flex-1"
       style={Platform.OS === "android" ? { maxHeight: windowHeight * 0.92 } : undefined}
     >
       {Platform.OS === "android" ? (
@@ -165,49 +177,31 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
 
       <MaterialScreenContent fitToContents>
         <ScrollView
-          className={Platform.OS === "android" ? "shrink grow-0" : "flex-1"}
+          className="android:shrink android:grow-0 ios:flex-1"
           showsVerticalScrollIndicator={false}
-          contentContainerClassName={Platform.OS === "android" ? "gap-2 p-2" : undefined}
+          contentContainerClassName="android:gap-2 android:p-2"
           contentContainerStyle={
             Platform.OS === "android"
               ? { paddingBottom: Math.max(insets.bottom, 18) + 8 }
               : undefined
           }
         >
-          <View
-            className={
-              Platform.OS === "android"
-                ? "gap-2 rounded-[20px] bg-card p-3"
-                : "items-center gap-1 px-5 pb-3 pt-4"
-            }
-          >
+          <View className="android:gap-2 android:rounded-[20px] android:bg-card android:p-3 ios:items-center ios:gap-1 ios:px-5 ios:pb-3 ios:pt-4">
             {Platform.OS !== "android" ? (
               <Text className="text-xs font-t3-bold tracking-[1px] uppercase text-foreground-muted">
                 Confirm
               </Text>
             ) : null}
-            <Text
-              className={
-                Platform.OS === "android"
-                  ? "text-xl font-t3-medium"
-                  : "text-center text-3xl font-t3-bold"
-              }
-            >
+            <Text className="android:text-xl android:font-t3-medium ios:text-center ios:text-3xl ios:font-t3-bold">
               {copy?.title ?? "Run action on default branch?"}
             </Text>
-            <Text
-              className={
-                Platform.OS === "android"
-                  ? "text-foreground-secondary text-base leading-normal"
-                  : "text-center text-foreground-secondary text-sm font-medium leading-normal"
-              }
-            >
+            <Text className="text-foreground-secondary leading-normal android:text-base ios:text-center ios:text-sm ios:font-medium">
               {copy?.description ?? "Choose how to continue."}
             </Text>
           </View>
 
           <View
-            className={Platform.OS === "android" ? "gap-2" : "gap-3 px-5 pt-2"}
+            className="android:gap-2 ios:gap-3 ios:px-5 ios:pt-2"
             style={
               Platform.OS === "android"
                 ? undefined
@@ -217,13 +211,13 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
             <SheetActionButton
               icon="arrow.right.circle"
               label={copy?.continueLabel ?? "Continue"}
-              disabled={!confirmationReady}
+              disabled={!canWriteSourceControl || !confirmationReady}
               onPress={() => void continuePendingAction()}
             />
             <SheetActionButton
               icon="arrow.branch"
               label="Feature branch & continue"
-              disabled={!confirmationReady}
+              disabled={!canChangeThreadBranch || !confirmationReady}
               tone="primary"
               onPress={() => void movePendingActionToFeatureBranch()}
             />

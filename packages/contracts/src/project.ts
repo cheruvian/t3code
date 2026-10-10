@@ -1,15 +1,321 @@
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
+import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
+import { ModelSelection } from "./modelSelection.ts";
 import {
+  CommandId,
+  ForwardCompatibleUnion,
+  isUnknownUnionMember,
+  IsoDateTime,
   NonNegativeInt,
   PositiveInt,
+  ProjectId,
+  ThreadId,
   TrimmedNonEmptyString,
   TrimmedString,
+  type UnknownUnionMember,
 } from "./baseSchemas.ts";
 
 const PROJECT_SEARCH_ENTRIES_MAX_LIMIT = 200;
 const PROJECT_SEARCH_CONTENTS_MAX_LIMIT = 500;
 const PROJECT_WRITE_FILE_PATH_MAX_LENGTH = 512;
 const PROJECT_READ_FILE_PATH_MAX_LENGTH = 512;
+
+export const ProjectScriptIcon = Schema.Literals([
+  "play",
+  "test",
+  "lint",
+  "configure",
+  "build",
+  "debug",
+]);
+export type ProjectScriptIcon = typeof ProjectScriptIcon.Type;
+
+export const ResourceActionHooks = Schema.Struct({
+  color: Schema.String.check(Schema.isPattern(/^#[0-9a-fA-F]{6}$/)),
+  checkoutPrompt: Schema.String,
+  releaseCommand: Schema.String,
+  releasePrompt: Schema.String,
+});
+export type ResourceActionHooks = typeof ResourceActionHooks.Type;
+
+export const ProjectScript = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  command: TrimmedString,
+  resource: Schema.optional(ResourceActionHooks),
+  icon: ProjectScriptIcon,
+  runOnWorktreeCreate: Schema.Boolean,
+  /** Run in the thread's worktree each time the thread settles. */
+  runOnSettle: Schema.optional(Schema.Boolean),
+  /** Start the agent while setup runs unless explicitly disabled. */
+  async: Schema.optional(Schema.Boolean),
+  /**
+   * URL to open in the in-app browser preview when this script runs (or
+   * when the user explicitly requests a preview). Optional; only honored on
+   * the desktop build.
+   */
+  previewUrl: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * When true, automatically open the preview panel pointed at `previewUrl`
+   * the moment this script starts. Ignored without `previewUrl` or on web.
+   */
+  autoOpenPreview: Schema.optional(Schema.Boolean),
+}).check(
+  Schema.makeFilter((script) =>
+    script.resource
+      ? !script.runOnWorktreeCreate || "Resource actions cannot run on worktree creation."
+      : script.command.trim().length > 0 || "Command is required.",
+  ),
+);
+export type ProjectScript = typeof ProjectScript.Type;
+
+export const ResourceActionLog = Schema.Struct({
+  operationId: CommandId,
+  resourceName: Schema.String,
+  action: Schema.Literals(["checkout", "release"]),
+  status: Schema.Literals(["running", "succeeded", "failed"]),
+  command: Schema.String,
+  stdout: Schema.String,
+  stderr: Schema.String,
+  truncated: Schema.Boolean,
+  error: Schema.optional(Schema.String),
+});
+export type ResourceActionLog = typeof ResourceActionLog.Type;
+
+/** The action snapshot keeps cleanup available even if its definition is edited or removed. */
+export const ProjectResourceLock = Schema.Struct({
+  script: ProjectScript,
+  threadId: ThreadId,
+  operationId: CommandId,
+  cancelRequested: Schema.optional(Schema.Boolean),
+  phase: Schema.Literals(["checkout", "held", "release", "failed"]),
+  error: Schema.optional(Schema.String),
+});
+export type ProjectResourceLock = typeof ProjectResourceLock.Type;
+
+export const ProjectIconColor = Schema.Literals([
+  "gray",
+  "red",
+  "orange",
+  "amber",
+  "yellow",
+  "lime",
+  "green",
+  "emerald",
+  "teal",
+  "cyan",
+  "sky",
+  "blue",
+  "indigo",
+  "violet",
+  "purple",
+  "fuchsia",
+  "pink",
+  "rose",
+]);
+export type ProjectIconColor = typeof ProjectIconColor.Type;
+
+const ProjectLucideIconName = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(64),
+  Schema.isPattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+);
+
+const ProjectEmoji = TrimmedNonEmptyString.check(Schema.isMaxLength(32));
+
+// Grapheme-count validation belongs to the server command boundary, not snapshot decoding.
+export const ProjectMonogramText = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(32),
+  Schema.isPattern(/^[\p{L}\p{N}][\p{L}\p{N}\p{M}\u200c\u200d]*$/u),
+);
+
+const ProjectLucideIcon = Schema.Struct({
+  kind: Schema.Literal("lucide"),
+  name: ProjectLucideIconName,
+  color: ProjectIconColor,
+});
+const ProjectEmojiIcon = Schema.Struct({
+  kind: Schema.Literal("emoji"),
+  emoji: ProjectEmoji,
+});
+const ProjectMonogramIcon = Schema.Struct({
+  kind: Schema.Literal("monogram"),
+  text: ProjectMonogramText,
+  color: ProjectIconColor,
+});
+/** A workspace-relative image a project may use as its favicon. */
+export const ProjectFaviconPath = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(1024),
+  Schema.isPattern(/\.(?:avif|gif|ico|jpe?g|png|svg|webp)$/i),
+);
+export type ProjectFaviconPath = typeof ProjectFaviconPath.Type;
+
+/** A project's chosen icon, as clients set it. */
+export const ProjectIconOverride = Schema.Union([
+  ProjectLucideIcon,
+  ProjectEmojiIcon,
+  ProjectMonogramIcon,
+]);
+export type ProjectIconOverride = typeof ProjectIconOverride.Type;
+
+/**
+ * Before v2, servers sent a monogram as a lucide icon carrying its text, so
+ * older clients showed a folder. Icons stored then, and v2 servers released
+ * before this change, still use that shape; it is read here, never written.
+ */
+const ProjectLucideIconWithLegacyMonogram = Schema.Struct({
+  ...ProjectLucideIcon.fields,
+  monogramText: Schema.optional(ProjectMonogramText),
+  monogram: Schema.optional(ProjectMonogramText),
+});
+const projectIconMembers = [
+  ProjectLucideIconWithLegacyMonogram,
+  ProjectEmojiIcon,
+  ProjectMonogramIcon,
+] as const;
+type ProjectIconMember = (typeof projectIconMembers)[number]["Type"];
+
+const fromLegacyMonogram = (icon: ProjectIconMember): ProjectIconOverride => {
+  if (icon.kind !== "lucide") return icon;
+  const text = icon.monogramText ?? icon.monogram;
+  return text === undefined
+    ? { kind: "lucide", name: icon.name, color: icon.color }
+    : { kind: "monogram", text, color: icon.color };
+};
+
+/** An icon the server stores; it reads legacy monograms and writes the plain shape. */
+export const StoredProjectIcon = Schema.Union(projectIconMembers).pipe(
+  Schema.decodeTo(
+    Schema.toType(ProjectIconOverride),
+    SchemaTransformation.transform<ProjectIconOverride, ProjectIconMember>({
+      decode: fromLegacyMonogram,
+      encode: (icon) => icon,
+    }),
+  ),
+);
+
+/**
+ * An icon as clients receive it. A kind from a newer server decodes as no
+ * override, so the client shows the project's default icon.
+ */
+export const ReceivedProjectIcon = ForwardCompatibleUnion(projectIconMembers, "kind").pipe(
+  Schema.decodeTo(
+    Schema.NullOr(Schema.toType(ProjectIconOverride)),
+    SchemaTransformation.transform<
+      ProjectIconOverride | null,
+      ProjectIconMember | UnknownUnionMember<"kind">
+    >({
+      decode: (icon) => (isUnknownUnionMember(icon) ? null : fromLegacyMonogram(icon)),
+      encode: (icon) => icon as ProjectIconMember,
+    }),
+  ),
+);
+
+export const Project = Schema.Struct({
+  id: ProjectId,
+  title: TrimmedNonEmptyString,
+  workspaceRoot: TrimmedNonEmptyString,
+  repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
+  /** False while background repository discovery has not completed. */
+  repositoryIdentityResolved: Schema.optional(Schema.Boolean),
+  faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  projectIcon: Schema.optional(Schema.NullOr(ReceivedProjectIcon)),
+  defaultModelSelection: Schema.NullOr(ModelSelection),
+  defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
+  // Opt-in because background sync performs network I/O and may move the checkout.
+  autoPull: Schema.optional(Schema.Boolean),
+  disabledInheritedScriptIds: Schema.optional(Schema.Array(Schema.String)),
+  resourceLocks: Schema.optional(Schema.Array(ProjectResourceLock)),
+  scripts: Schema.Array(ProjectScript),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  deletedAt: Schema.NullOr(IsoDateTime),
+});
+export type Project = typeof Project.Type;
+
+export const ProjectSnapshot = Schema.Struct({
+  projects: Schema.Array(Project),
+  updatedAt: IsoDateTime,
+});
+export type ProjectSnapshot = typeof ProjectSnapshot.Type;
+
+export const ProjectChange = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("project.upserted"), project: Project }),
+  Schema.Struct({
+    type: Schema.Literal("project.deleted"),
+    projectId: ProjectId,
+    deletedAt: IsoDateTime,
+  }),
+]);
+export type ProjectChange = typeof ProjectChange.Type;
+
+export const ProjectCreatePayload = Schema.Struct({
+  title: TrimmedNonEmptyString,
+  workspaceRoot: TrimmedNonEmptyString,
+  createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
+  defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  disabledInheritedScriptIds: Schema.optional(Schema.Array(Schema.String)),
+  scripts: Schema.optional(Schema.Array(ProjectScript)),
+});
+export type ProjectCreatePayload = typeof ProjectCreatePayload.Type;
+
+export const ProjectUpdatePayload = Schema.Struct({
+  title: Schema.optional(TrimmedNonEmptyString),
+  workspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  autoPull: Schema.optional(Schema.Boolean),
+  projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
+  faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
+  disabledInheritedScriptIds: Schema.optional(Schema.Array(Schema.String)),
+  scripts: Schema.optional(Schema.Array(ProjectScript)),
+});
+export type ProjectUpdatePayload = typeof ProjectUpdatePayload.Type;
+
+export const ProjectResourceRequest = Schema.Struct({
+  commandId: CommandId,
+  projectId: ProjectId,
+  threadId: ThreadId,
+  script: ProjectScript,
+  action: Schema.Literals(["checkout", "takeover", "release", "force-release", "abort"]),
+  expectedOperationId: Schema.optional(CommandId),
+});
+export type ProjectResourceRequest = typeof ProjectResourceRequest.Type;
+
+export const ProjectMutation = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("project.resource.request"),
+    ...ProjectResourceRequest.fields,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("project.create"),
+    commandId: CommandId,
+    projectId: ProjectId,
+    ...ProjectCreatePayload.fields,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("project.update"),
+    commandId: CommandId,
+    projectId: ProjectId,
+    ...ProjectUpdatePayload.fields,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("project.delete"),
+    commandId: CommandId,
+    projectId: ProjectId,
+    force: Schema.optional(Schema.Boolean),
+  }),
+]);
+export type ProjectMutation = typeof ProjectMutation.Type;
+
+export class ProjectMutationError extends Schema.TaggedError<ProjectMutationError>()(
+  "ProjectMutationError",
+  {
+    commandId: CommandId,
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
 
 export const ProjectEntryKind = Schema.Literals(["file", "directory"]);
 export type ProjectEntryKind = typeof ProjectEntryKind.Type;
@@ -281,6 +587,26 @@ export const ProjectWriteFileResult = Schema.Struct({
 });
 export type ProjectWriteFileResult = typeof ProjectWriteFileResult.Type;
 
+/** The environment's Scratch project, created on first request. */
+export const ProjectEnsureScratchResult = Schema.Struct({
+  projectId: ProjectId,
+});
+export type ProjectEnsureScratchResult = typeof ProjectEnsureScratchResult.Type;
+
+/** A project started from just a name, in a new folder the server makes. */
+export const ProjectCreateNewInput = Schema.Struct({
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+});
+export type ProjectCreateNewInput = typeof ProjectCreateNewInput.Type;
+
+export const ProjectCreateNewResult = Schema.Struct({
+  projectId: ProjectId,
+  workspaceRoot: TrimmedNonEmptyString,
+  /** Why the first commit failed. The project and its files exist either way. */
+  commitError: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type ProjectCreateNewResult = typeof ProjectCreateNewResult.Type;
+
 export class ProjectWriteFileError extends Schema.TaggedError<ProjectWriteFileError>()(
   "ProjectWriteFileError",
   {
@@ -305,3 +631,23 @@ export class ProjectWriteFileError extends Schema.TaggedError<ProjectWriteFileEr
     } as any);
   }
 }
+
+/** Render-time file references. Message text and provider input are never rewritten. */
+export const ProjectResolveFilePathsInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  baseDir: Schema.optional(TrimmedNonEmptyString),
+  paths: Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(4096))).check(
+    Schema.isMaxLength(128),
+  ),
+});
+export type ProjectResolveFilePathsInput = typeof ProjectResolveFilePathsInput.Type;
+
+export const ProjectResolvedFilePath = Schema.Struct({
+  path: Schema.String,
+  absolutePath: Schema.NullOr(Schema.String),
+  relativePath: Schema.NullOr(Schema.String),
+});
+export type ProjectResolvedFilePath = typeof ProjectResolvedFilePath.Type;
+
+export const ProjectResolveFilePathsResult = Schema.Array(ProjectResolvedFilePath);
+export type ProjectResolveFilePathsResult = typeof ProjectResolveFilePathsResult.Type;

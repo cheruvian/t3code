@@ -6,7 +6,7 @@ import * as Path from "effect/Path";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Workflows from "../../bindings/workflows/Workflows.ts";
 import * as Docker from "../../Docker.ts";
 import * as Globals from "../../globals/Globals.ts";
@@ -130,6 +130,7 @@ describe("Workflows binding", () => {
 });
 
 const LIFECYCLE_SCRIPT = `
+import { WorkflowEntrypoint } from "cloudflare:workers";
 export class LifecycleWorkflow extends WorkflowEntrypoint {
   async run(event, step) {
     await step.do("first step", async () => "step-1-done");
@@ -154,6 +155,11 @@ export default {
     if (url.pathname === "/status") {
       const instance = await env.LIFECYCLE_WORKFLOW.get(id);
       return Response.json(await instance.status());
+    }
+    if (url.pathname === "/subscribe") {
+      const instance = await env.LIFECYCLE_WORKFLOW.get(id);
+      using subscription = await instance.subscribe({ filter: ["workflow_queued"] });
+      return Response.json(await subscription.next());
     }
     if (url.pathname === "/pause") {
       const instance = await env.LIFECYCLE_WORKFLOW.get(id);
@@ -202,6 +208,7 @@ const startLifecycleWorker = () =>
 // `workflows:<name>` Engine service plus a *shared* `workflows:storage`
 // service; the storage service must only be created once.
 const TWO_WORKFLOWS_SCRIPT = `
+import { WorkflowEntrypoint } from "cloudflare:workers";
 export class AlphaWorkflow extends WorkflowEntrypoint {
   async run(event, step) {
     await step.do("alpha step", async () => "alpha-done");
@@ -241,6 +248,18 @@ export default {
 layer(localRuntimeLayer, { excludeTestServices: true })(
   "Workflows binding lifecycle",
   (it) => {
+    it.effect("subscribes through the local workflow wrapper", () =>
+      Effect.gen(function* () {
+        const worker = yield* startLifecycleWorker();
+        const id = "subscription-test";
+        yield* worker.fetchJson(`/create?id=${id}`);
+        expect(yield* worker.fetchJson(`/subscribe?id=${id}`)).toMatchObject({
+          done: false,
+          value: { type: "workflow_queued", instanceId: id },
+        });
+      }),
+    );
+
     it.effect(
       "pause and resume a running workflow",
       () =>
@@ -377,6 +396,7 @@ layer(localRuntimeLayer, { excludeTestServices: true })(
 // registry, which we point at a temp dir via MINIFLARE_REGISTRY_PATH.
 
 const CROSS_INSTANCE_OWNER_SCRIPT = `
+import { WorkflowEntrypoint } from "cloudflare:workers";
 export class CrossWorkflow extends WorkflowEntrypoint {
   async run(event, step) {
     const first = await step.do("step-1", async () => "from-owner");

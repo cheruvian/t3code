@@ -158,6 +158,7 @@ describe("scoped settings writes", () => {
             worktreeOnDelete: true,
             worktreeOnMerge: true,
             worktreeUnchanged: false,
+            worktreeOnPush: false,
           },
         },
       },
@@ -181,12 +182,14 @@ describe("scoped settings writes", () => {
         worktreeOnDelete: false,
         worktreeOnMerge: true,
         worktreeUnchanged: false,
+        worktreeOnPush: false,
       },
       {
         worktreeAfterDays: null,
         worktreeOnDelete: false,
         worktreeOnMerge: false,
         worktreeUnchanged: false,
+        worktreeOnPush: false,
       },
     ]);
   });
@@ -293,6 +296,7 @@ describe("scoped settings writes", () => {
                 worktreeOnDelete: false,
                 worktreeOnMerge: true,
                 worktreeUnchanged: false,
+                worktreeOnPush: false,
               },
             },
           },
@@ -313,6 +317,7 @@ describe("scoped settings writes", () => {
               worktreeOnDelete: true,
               worktreeOnMerge: true,
               worktreeUnchanged: false,
+              worktreeOnPush: false,
             },
           },
         },
@@ -326,6 +331,7 @@ describe("scoped settings writes", () => {
               worktreeOnDelete: true,
               worktreeOnMerge: false,
               worktreeUnchanged: false,
+              worktreeOnPush: false,
             },
           },
         },
@@ -507,6 +513,53 @@ describe("project overrides at environment scope", () => {
         },
       },
     ]);
+  });
+});
+
+describe("null patches at project scope", () => {
+  it("removes the override for keys that cannot store null and keeps it for keys that can", () => {
+    const environmentId = EnvironmentId.make("laptop");
+    const projectId = ProjectId.make("fleet");
+    const scope = {
+      kind: "project" as const,
+      group: {} as never,
+      environmentId: null,
+      label: "fleet",
+      members: [{ id: projectId, environmentId } as never],
+      environmentIds: [environmentId],
+    };
+    const environments = [
+      {
+        environmentId,
+        label: "Laptop",
+        connection: { phase: "connected" as const },
+        serverConfig: {
+          settings: {
+            ...DEFAULT_SERVER_SETTINGS,
+            projectSettingsOverrides: {
+              [projectId]: { defaultThreadEnvMode: "worktree" as const, defaultAutoPull: true },
+            },
+          },
+          environment: { capabilities: { projectSettingsOverrides: true } },
+        },
+      },
+    ];
+    expect(
+      planScopedSettingsPatch(scope, environments, { defaultThreadEnvMode: null }).serverWrites[0]
+        ?.patch,
+    ).toEqual({ projectSettingsOverrides: { [projectId]: { defaultAutoPull: true } } });
+    expect(
+      planScopedSettingsPatch(scope, environments, { defaultModelSelection: null }).serverWrites[0]
+        ?.patch,
+    ).toEqual({
+      projectSettingsOverrides: {
+        [projectId]: {
+          defaultThreadEnvMode: "worktree",
+          defaultAutoPull: true,
+          defaultModelSelection: null,
+        },
+      },
+    });
   });
 });
 

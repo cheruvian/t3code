@@ -3,13 +3,13 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   AGENT_API_INVENTORY,
   AGENT_EXPOSED_API_NAMES,
-  ORCHESTRATION_WS_METHODS,
+  ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
 } from "./index.ts";
 
 describe("agent API inventory", () => {
   it("includes every typed RPC and orchestration method exactly once", () => {
-    const expected = [...Object.values(WS_METHODS), ...Object.values(ORCHESTRATION_WS_METHODS)];
+    const expected = [...Object.values(WS_METHODS), ...Object.values(ORCHESTRATION_V2_WS_METHODS)];
     const names = AGENT_API_INVENTORY.map((operation) => operation.name);
     expect(names).toHaveLength(new Set(names).size);
     expect(names).toEqual(expect.arrayContaining(expected));
@@ -30,8 +30,8 @@ describe("agent API inventory", () => {
     expect(names).not.toContain("projects.list");
     expect(names).not.toContain("projects.add");
     expect(names).not.toContain("projects.remove");
-    expect(AGENT_EXPOSED_API_NAMES).toContain(ORCHESTRATION_WS_METHODS.dispatchCommand);
-    expect(AGENT_EXPOSED_API_NAMES).toContain(ORCHESTRATION_WS_METHODS.subscribeShell);
+    expect(AGENT_EXPOSED_API_NAMES).toContain(ORCHESTRATION_V2_WS_METHODS.dispatchCommand);
+    expect(AGENT_EXPOSED_API_NAMES).toContain(ORCHESTRATION_V2_WS_METHODS.subscribeShell);
   });
 
   it("marks supported helper configuration APIs with their narrow scope", () => {

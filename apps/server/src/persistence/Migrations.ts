@@ -1,16 +1,17 @@
 /**
- * MigrationsLive - Migration runner with inline loader
+ * Migration runner with inline loader
  *
  * Uses Migrator.make with fromRecord to define migrations inline.
  * All migrations are statically imported - no dynamic file system loading.
  *
- * Migrations run automatically when the MigrationLayer is provided,
+ * SQLite persistence runs migrations during initialization,
  * ensuring the database schema is always up-to-date before the application starts.
  */
 
-import * as Migrator from "effect/unstable/sql/Migrator";
+import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
+import { reconcileV2PreviewMigration } from "./reconcileV2PreviewMigration.ts";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -77,7 +78,12 @@ import Migration0056 from "./Migrations/056_ProjectionThreadMessageContext.ts";
 import Migration0055 from "./Migrations/055_ProjectionThreadPullRequests.ts";
 import Migration0057 from "./Migrations/057_ProjectionThreadTitleState.ts";
 import Migration0059 from "./Migrations/059_ProjectResourceLocks.ts";
+import Migration0060 from "./Migrations/060_ProjectionThreadsAutoSettleDisabledAt.ts";
 import Migration0058 from "./Migrations/058_PullRequestFilesViewed.ts";
+import Migration0064 from "./Migrations/057_ScheduledTaskWebhooks.ts";
+import Migration0065 from "./Migrations/058_WebhookRelayDeliveries.ts";
+import Migration0066 from "./Migrations/059_McpAppModelContext.ts";
+import Migration0067 from "./Migrations/067_BackgroundThreadLookupIndexes.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -89,6 +95,11 @@ import Migration0058 from "./Migrations/058_PullRequestFilesViewed.ts";
  * Uses Migrator.fromRecord which parses the key format and
  * returns migrations sorted by ID.
  */
+import Migration0061 from "./Migrations/055_OrchestrationV2.ts";
+import Migration0062 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
+
+import Migration0063 from "./Migrations/063_ThreadWorkspaceMoveFence.ts";
+
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
@@ -149,6 +160,14 @@ export const migrationEntries = [
   [57, "ProjectionThreadTitleState", Migration0057],
   [58, "PullRequestFilesViewed", Migration0058],
   [59, "ProjectResourceLocks", Migration0059],
+  [60, "ProjectionThreadsAutoSettleDisabledAt", Migration0060],
+  [61, "OrchestrationV2", Migration0061],
+  [62, "RemoveRedundantProjectionIndexes", Migration0062],
+  [63, "ThreadWorkspaceMoveFence", Migration0063],
+  [64, "ScheduledTaskWebhooks", Migration0064],
+  [65, "WebhookRelayDeliveries", Migration0065],
+  [66, "McpAppModelContext", Migration0066],
+  [67, "BackgroundThreadLookupIndexes", Migration0067],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -176,7 +195,9 @@ export interface RunMigrationsOptions {
  * Run all pending migrations.
  *
  * Creates the migrations tracking table (effect_sql_migrations) if it doesn't exist,
- * then runs any migrations with ID greater than the latest recorded migration.
+ * reconciles recognized upstream histories into the fork ledger, then runs
+ * migrations with IDs greater than the latest recorded migration. Unknown
+ * histories fail before any schema changes.
  *
  * Returns array of [id, name] tuples for migrations that were run.
  *
@@ -185,29 +206,14 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
-  const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
+  const reconciled = yield* reconcileV2PreviewMigration(migrationEntries);
+  const executedMigrations = [
+    ...reconciled,
+    ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
+  ];
   const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
   yield* migrations.length === 0
     ? Effect.logDebug("Database schema is current")
     : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
   return executedMigrations;
 });
-
-/**
- * Layer that runs migrations when the layer is built.
- *
- * Use this to ensure migrations run before your application starts.
- * Migrations are run automatically - no separate script is needed.
- *
- * @example
- * ```typescript
- * import { MigrationsLive } from "@acme/db/Migrations"
- * import * as SqliteClient from "@acme/db/SqliteClient"
- *
- * // Migrations run automatically when SqliteClient is provided
- * const AppLayer = MigrationsLive.pipe(
- *   Layer.provideMerge(SqliteClient.layer({ filename: "database.sqlite" }))
- * )
- * ```
- */
-export const MigrationsLive = Layer.effectDiscard(runMigrations());

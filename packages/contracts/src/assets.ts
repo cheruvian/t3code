@@ -1,12 +1,12 @@
 import * as Schema from "effect/Schema";
 
-import { NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
 import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPES,
-  ProjectFaviconPath,
-} from "./orchestration.ts";
+} from "./chatAttachment.ts";
+import { ProjectFaviconPath } from "./project.ts";
 import { ToolActivityNativeAppReference } from "./providerRuntime.ts";
 
 const ASSET_PATH_MAX_LENGTH = 1024;
@@ -21,6 +21,11 @@ export const AssetResource = Schema.Union([
   // workspace; a relative one resolves against the thread's workspace.
   Schema.TaggedStruct("media-file", {
     threadId: ThreadId,
+    path: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
+  }),
+  // Download one arbitrary file from the environment host. This is separate
+  // from preview media so downloads are not limited to renderable extensions.
+  Schema.TaggedStruct("host-file-download", {
     path: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
   }),
   // A workspace file named by a draft that has no thread yet. The draft names
@@ -40,6 +45,13 @@ export const AssetResource = Schema.Union([
     /** Generic attachments download by default. Document viewers opt into an
         inline response after deciding the file type is safe to preview. */
     disposition: Schema.optionalKey(Schema.Literals(["inline", "attachment"])),
+  }),
+  // An image a tool returned inline, such as a device screenshot, by its order
+  // in the stored output. The timeline never carries these bytes.
+  Schema.TaggedStruct("tool-output-image", {
+    threadId: ThreadId,
+    itemId: TurnItemId,
+    index: NonNegativeInt,
   }),
   Schema.TaggedStruct("project-favicon", {
     cwd: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
@@ -218,7 +230,9 @@ export class AssetWorkspaceAssetNotFoundError extends Schema.TaggedError<AssetWo
   override get message(): string {
     return this.resource._tag === "media-file"
       ? "Media file was not found."
-      : "Workspace asset was not found.";
+      : this.resource._tag === "tool-output-image"
+        ? "Tool output image was not found."
+        : "Workspace asset was not found.";
   }
 }
 
@@ -318,3 +332,17 @@ export const AssetAccessError = Schema.Union([
   AssetSigningKeyLoadError,
 ]);
 export type AssetAccessError = typeof AssetAccessError.Type;
+
+/** Bounded batches preserve input order and report missing files independently. */
+export const ASSET_URL_BATCH_MAX_SIZE = 64;
+export const AssetCreateUrlsInput = Schema.Struct({
+  resources: Schema.Array(AssetResource).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(ASSET_URL_BATCH_MAX_SIZE),
+  ),
+});
+export type AssetCreateUrlsInput = typeof AssetCreateUrlsInput.Type;
+export const AssetCreateUrlsResult = Schema.Array(
+  Schema.Result(AssetCreateUrlResult, AssetAccessError),
+);
+export type AssetCreateUrlsResult = typeof AssetCreateUrlsResult.Type;

@@ -8,10 +8,10 @@
  *
  * @module browserLinkTarget
  */
-import type { BrowserLinkTarget } from "@t3tools/contracts";
+import type { BrowserLinkTarget, ScopedThreadRef } from "@t3tools/contracts";
 
 import { ensureClientSettingsHydrated, getClientSettings } from "~/hooks/useSettings";
-import { isPreviewSupportedInRuntime } from "~/previewStateStore";
+import { isPreviewAvailableFor } from "./previewRuntime";
 
 export interface ResolveLinkTargetInput {
   readonly url: string;
@@ -24,17 +24,26 @@ export interface ResolveLinkTargetInput {
 
 /**
  * The target a click resolves to. "app" only comes back when the preference
- * asks for it, the runtime can honour it, the URL is one the in-app browser
- * can load, and the click carried no modifier — the modifier is the one-gesture
+ * asks for it or the client is a Home Screen app, the runtime can honour it,
+ * the URL is one the in-app browser can load, and the click carried no modifier — the modifier is the one-gesture
  * way out when the default is in-app, mirroring how change-request links
  * already treat it.
  */
 export function resolveLinkTarget(input: ResolveLinkTargetInput): BrowserLinkTarget {
   if (input.event.metaKey || input.event.ctrlKey) return "system";
-  if (input.preference !== "app") return "system";
+  if (input.preference !== "app" && !isStandaloneWebApp()) return "system";
   if (!input.canOpenInApp) return "system";
   if (!isWebUrl(input.url)) return "system";
   return "app";
+}
+
+/** Home Screen apps have no browser Back control if an external page replaces them. */
+export function isStandaloneWebApp(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    (window.matchMedia?.("(display-mode: standalone)").matches === true ||
+      (window.navigator as Navigator & { standalone?: boolean }).standalone === true)
+  );
 }
 
 /**
@@ -62,7 +71,7 @@ export async function resolveBrowserLinkTargetPreference(): Promise<BrowserLinkT
   return getClientSettings().browserLinkTarget;
 }
 
-/** Whether the in-app target is available at all in this client. */
-export function canOpenLinksInApp(hasThread: boolean): boolean {
-  return hasThread && isPreviewSupportedInRuntime();
+/** Whether this thread's environment has an in-app browser available to this client. */
+export function canOpenLinksInApp(threadRef: ScopedThreadRef | null | undefined): boolean {
+  return threadRef != null && isPreviewAvailableFor(threadRef.environmentId);
 }

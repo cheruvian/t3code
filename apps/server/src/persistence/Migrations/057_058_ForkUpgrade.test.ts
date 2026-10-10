@@ -1,7 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 import { runMigrations } from "../Migrations.ts";
@@ -12,7 +12,7 @@ it.effect("adds title state and viewed files without changing the deployed fork 
     yield* runMigrations({ toMigrationInclusive: 56 });
     const before =
       yield* sql`SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id`;
-    const applied = yield* runMigrations();
+    const applied = yield* runMigrations({ toMigrationInclusive: 58 });
     assert.deepEqual(applied, [
       [57, "ProjectionThreadTitleState"],
       [58, "PullRequestFilesViewed"],
@@ -28,6 +28,6 @@ it.effect("adds title state and viewed files without changing the deployed fork 
     yield* sql`INSERT INTO pull_request_files_viewed (provider, host, repository, number, viewer, path, revision, viewed_at)
       VALUES ('github', 'github.com', 'owner/repo', 1, 'reader', 'README.md', 'abc', '2026-09-17T00:00:00.000Z')`;
     assert.equal((yield* sql`SELECT * FROM pull_request_files_viewed`).length, 1);
-    assert.deepEqual(yield* runMigrations(), []);
+    assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 58 }), []);
   }).pipe(Effect.provide(Layer.fresh(NodeSqliteClient.layer({ filename: ":memory:" })))),
 );

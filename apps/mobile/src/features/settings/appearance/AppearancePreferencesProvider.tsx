@@ -13,7 +13,7 @@ import {
 import { AppState, Appearance, Platform, useColorScheme } from "react-native";
 
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 
 import { ScopedTheme, ScopedVariables, Uniwind } from "uniwind";
 
@@ -154,7 +154,7 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
         Uniwind.updateCSSVariables(operation.themeName, operation.variables);
         continue;
       }
-      if (operation.kind === "set-appearance-mode") {
+      if (operation.kind === "set-appearance-mode" && Platform.OS !== "web") {
         Appearance.setColorScheme(
           operation.themeMode === "system" ? "unspecified" : operation.appearance,
         );
@@ -222,7 +222,7 @@ export function AppearancePreferencesProvider(props: { readonly children: ReactN
       // preference, so React batches the actual system palette into the one
       // urgent preference commit below.
       if (value === "system") {
-        Appearance.setColorScheme("unspecified");
+        if (Platform.OS !== "web") Appearance.setColorScheme("unspecified");
       }
       const nextAppearance =
         value === "system" ? (Appearance.getColorScheme() === "dark" ? "dark" : "light") : value;

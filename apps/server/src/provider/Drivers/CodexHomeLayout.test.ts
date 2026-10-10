@@ -220,6 +220,60 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
         }),
     );
 
+    it.effect.skipIf(!symlinksSupported)(
+      "preserves per-profile app-server runtime state when the shared home has matching entries",
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const sharedHome = yield* makeTempDir("t3code-codex-shared-");
+          const shadowHome = yield* makeTempDir("t3code-codex-shadow-");
+          const runtimeDirectories = [
+            "app-server-control",
+            "app-server-daemon",
+            "tui-thread-reference-capabilities",
+          ];
+          for (const directory of runtimeDirectories) {
+            yield* writeTextFile(path.join(sharedHome, directory, "state"), "shared");
+            yield* writeTextFile(path.join(shadowHome, directory, "state"), "profile");
+          }
+          yield* writeTextFile(path.join(sharedHome, ".sqlite-maintenance.lock"), "shared lock");
+          yield* writeTextFile(path.join(shadowHome, ".sqlite-maintenance.lock"), "profile lock");
+          yield* writeTextFile(path.join(sharedHome, "sessions", "thread.jsonl"), "conversation");
+          yield* writeTextFile(path.join(shadowHome, "auth.json"), "profile credentials");
+          const layout = yield* resolveCodexHomeLayout(
+            decodeCodexSettings({ homePath: sharedHome, shadowHomePath: shadowHome }),
+          );
+
+          yield* materializeCodexShadowHome(layout);
+          yield* materializeCodexShadowHome(layout);
+
+          for (const directory of runtimeDirectories) {
+            expect(
+              yield* fileSystem.readFileString(path.join(shadowHome, directory, "state")),
+            ).toBe("profile");
+            expect(
+              yield* fileSystem.readFileString(path.join(sharedHome, directory, "state")),
+            ).toBe("shared");
+          }
+          expect(
+            yield* fileSystem.readFileString(path.join(shadowHome, ".sqlite-maintenance.lock")),
+          ).toBe("profile lock");
+          expect(
+            yield* fileSystem.readFileString(path.join(shadowHome, "sessions", "thread.jsonl")),
+          ).toBe("conversation");
+          expect(yield* fileSystem.readFileString(path.join(shadowHome, "auth.json"))).toBe(
+            "profile credentials",
+          );
+
+          const freshShadowHome = yield* makeTempDir("t3code-codex-fresh-shadow-");
+          yield* materializeCodexShadowHome({ ...layout, effectiveHomePath: freshShadowHome });
+          for (const entry of [...runtimeDirectories, ".sqlite-maintenance.lock"]) {
+            expect(yield* fileSystem.exists(path.join(freshShadowHome, entry))).toBe(false);
+          }
+        }),
+    );
+
     it.effect("rejects shadow homes that point at the shared home", () =>
       Effect.gen(function* () {
         const sharedHome = yield* makeTempDir("t3code-codex-shared-");

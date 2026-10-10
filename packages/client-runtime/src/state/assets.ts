@@ -1,9 +1,11 @@
 import {
+  ASSET_URL_BATCH_MAX_SIZE,
   type AssetCreateUrlInput,
   type AssetCreateUrlResult,
   type AssetImageDimensions,
   AssetResource,
   EnvironmentId,
+  type ProjectCloneSnapshot,
   WS_METHODS,
 } from "@t3tools/contracts";
 import { mediaMimeTypeFromExtension } from "@t3tools/shared/filePreview";
@@ -13,14 +15,18 @@ import {
   isProjectFaviconFallbackUrl,
 } from "@t3tools/shared/projectFavicon";
 import * as Effect from "effect/Effect";
+import * as Context from "effect/Context";
+import * as Exit from "effect/Exit";
+import * as Request from "effect/Request";
+import * as RequestResolver from "effect/RequestResolver";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
-import { request } from "../rpc/client.ts";
+import { request, getInitialServerConfig } from "../rpc/client.ts";
 import type { ProjectFaviconCache, ProjectFaviconTarget } from "../projectFaviconCache.ts";
 import { createEnvironmentQueryAtomFamily } from "./runtime.ts";
 
@@ -72,6 +78,8 @@ export type AssetUrlState =
   | {
       readonly _tag: "Success";
       readonly url: string;
+      /** When the signed URL stops working, in epoch milliseconds. */
+      readonly expiresAt: number;
       /** The host path the server chose to serve, when it differs from what was asked for. */
       readonly sourcePath?: string;
       /** Pixel size from the image header, when the server could read one. */
@@ -89,12 +97,21 @@ export function assetUrlStateFromResult(
   return {
     _tag: "Success",
     url,
+    expiresAt: result.value.expiresAt,
     ...(result.value.sourcePath !== undefined ? { sourcePath: result.value.sourcePath } : {}),
     ...(result.value.imageDimensions !== undefined
       ? { imageDimensions: result.value.imageDimensions }
       : {}),
   };
 }
+
+class AssetUrlRead extends Request.Class<
+  AssetCreateUrlInput,
+  AssetCreateUrlResult,
+  | Effect.Error<ReturnType<typeof request<typeof WS_METHODS.assetsCreateUrl>>>
+  | Effect.Error<ReturnType<typeof getInitialServerConfig>>,
+  EnvironmentSupervisor.EnvironmentSupervisor
+> {}
 
 export function createAssetEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, E>,
@@ -103,8 +120,55 @@ export function createAssetEnvironmentAtoms<R, E>(
     readonly httpBaseUrl: string;
   } | null>,
 ) {
+  const resolver = RequestResolver.makeGrouped<AssetUrlRead, string>({
+    key: ({ request, context }) =>
+      JSON.stringify([
+        Context.get(context, EnvironmentSupervisor.EnvironmentSupervisor).target.environmentId,
+        // Keep filesystem reads separate so a denied file cannot hide an authorized attachment.
+        ["workspace-file", "media-file", "draft-workspace-file"].includes(request.resource._tag),
+      ]),
+    resolver: (entries) =>
+      Effect.gen(function* () {
+        const supportsBatch =
+          entries.length > 1 &&
+          (yield* getInitialServerConfig()).environment.capabilities.assetUrlBatches === true;
+        if (!supportsBatch) {
+          yield* Effect.forEach(
+            entries,
+            (entry) =>
+              request(WS_METHODS.assetsCreateUrl, entry.request).pipe(
+                Effect.exit,
+                Effect.map((exit) => entry.completeUnsafe(exit)),
+              ),
+            { concurrency: 4, discard: true },
+          );
+          return;
+        }
+        const results = yield* request(WS_METHODS.assetsCreateUrls, {
+          resources: entries.map(({ request }) => request.resource),
+        });
+        if (results.length !== entries.length)
+          return yield* Effect.die(
+            new Error("Asset URL batch returned an unexpected result count."),
+          );
+        for (const [index, entry] of entries.entries()) {
+          const result = results[index]!;
+          entry.completeUnsafe(
+            Result.isSuccess(result) ? Exit.succeed(result.success) : Exit.fail(result.failure),
+          );
+        }
+      }).pipe(
+        Effect.provideContext(entries[0].context),
+        Effect.catchCause((cause) =>
+          Effect.sync(() => {
+            for (const entry of entries) entry.completeUnsafe(Exit.failCause(cause));
+          }),
+        ),
+      ),
+  }).pipe(RequestResolver.batchN(ASSET_URL_BATCH_MAX_SIZE));
+  const read = (input: AssetCreateUrlInput) => Effect.request(new AssetUrlRead(input), resolver);
   const execute = Effect.fn("assets.createUrl")(function* (input: AssetCreateUrlInput) {
-    const result = yield* request(WS_METHODS.assetsCreateUrl, input).pipe(Effect.result);
+    const result = yield* read(input).pipe(Effect.result);
     if (Result.isSuccess(result)) return result.success;
     const error = result.failure;
     const resource = input.resource;
@@ -126,10 +190,7 @@ export function createAssetEnvironmentAtoms<R, E>(
     )
       return yield* error;
     const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-    const asset = yield* registry.run(
-      local.environmentId,
-      request(WS_METHODS.assetsCreateUrl, input),
-    );
+    const asset = yield* registry.run(local.environmentId, read(input));
     // Callers resolve against the thread's server, so preserve the local server's origin.
     return { ...asset, relativeUrl: new URL(asset.relativeUrl, local.httpBaseUrl).href };
   });
@@ -181,14 +242,33 @@ export function createProjectFaviconUrlAtomFamily(input: {
   readonly preparedConnection: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<Option.Option<{ readonly httpBaseUrl: string }>>;
+  /** The environment's tracked clones, empty when it reports none. */
+  readonly projectClones?: (
+    environmentId: EnvironmentId,
+  ) => Atom.Atom<ReadonlyArray<ProjectCloneSnapshot>>;
 }) {
   const decodeKey = Schema.decodeUnknownSync(
     Schema.Tuple([EnvironmentId, Schema.String, Schema.NullOr(Schema.String)]),
   );
+  const projectClones = input.projectClones;
   const family = Atom.family((key: string) => {
     const [environmentId, cwd, path] = decodeKey(JSON.parse(key));
     const resource = { _tag: "project-favicon" as const, cwd, ...(path ? { path } : {}) };
-    const request = input.createUrl({ environmentId, input: { resource } });
+    const query = input.createUrl({ environmentId, input: { resource } });
+    // A cloned project exists before its files do, and the server reports its
+    // icon missing until the clone lands. Ask again whenever the clone's phase
+    // changes: the first list a client sees may already say done.
+    const request = projectClones
+      ? query.pipe(
+          Atom.makeRefreshOnSignal(
+            Atom.make(
+              (get) =>
+                get(projectClones(environmentId)).find((clone) => clone.destinationPath === cwd)
+                  ?.phase ?? null,
+            ),
+          ),
+        )
+      : query;
     const resolvedUrl = Atom.make((get): string | null => {
       const result = get(request);
       const connection = get(input.preparedConnection(environmentId));

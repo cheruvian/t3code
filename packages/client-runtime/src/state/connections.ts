@@ -3,8 +3,13 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { AsyncResult, Atom } from "effect/unstable/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 
+import {
+  ConnectionTiming,
+  DEFAULT_CONNECTION_TIMING,
+  type ConnectionTimingSettings,
+} from "../connection/timing.ts";
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
 import { AVAILABLE_CONNECTION_STATE } from "../connection/model.ts";
@@ -96,6 +101,21 @@ export function createEnvironmentCatalogAtoms<R, E>(
     }),
   });
 
+  const timingAtom = runtime.atom(
+    Stream.unwrap(ConnectionTiming.pipe(Effect.map((timing) => timing.changes))),
+    { initialValue: DEFAULT_CONNECTION_TIMING },
+  );
+  const timingValueAtom = Atom.make((get) =>
+    Option.getOrElse(AsyncResult.value(get(timingAtom)), () => DEFAULT_CONNECTION_TIMING),
+  );
+  const setTiming = createRuntimeCommand(runtime, {
+    label: "environment-catalog:connection-timing",
+    scheduler: commandScheduler,
+    concurrency: serial,
+    execute: (settings: ConnectionTimingSettings) =>
+      ConnectionTiming.pipe(Effect.flatMap((timing) => timing.set(settings))),
+  });
+
   const networkStatusAtom = runtime.atom(
     Stream.unwrap(
       EnvironmentRegistry.EnvironmentRegistry.pipe(
@@ -161,6 +181,27 @@ export function createEnvironmentCatalogAtoms<R, E>(
         Effect.flatMap((registry) => registry.setEnabled(input.environmentId, input.enabled)),
       ),
   });
+  const removeRoute = createRuntimeCommand(runtime, {
+    label: "environment-catalog:remove-route",
+    scheduler: commandScheduler,
+    concurrency: serial,
+    execute: (input: { readonly environmentId: EnvironmentIdType; readonly routeId: string }) =>
+      EnvironmentRegistry.EnvironmentRegistry.pipe(
+        Effect.flatMap((registry) => registry.removeRoute(input.environmentId, input.routeId)),
+      ),
+  });
+  const reorderRoutes = createRuntimeCommand(runtime, {
+    label: "environment-catalog:reorder-routes",
+    scheduler: commandScheduler,
+    concurrency: serial,
+    execute: (input: {
+      readonly environmentId: EnvironmentIdType;
+      readonly routeIds: ReadonlyArray<string>;
+    }) =>
+      EnvironmentRegistry.EnvironmentRegistry.pipe(
+        Effect.flatMap((registry) => registry.reorderRoutes(input.environmentId, input.routeIds)),
+      ),
+  });
   const retryNow = createRuntimeCommand(runtime, {
     label: "environment-catalog:retry-now",
     scheduler: commandScheduler,
@@ -172,6 +213,8 @@ export function createEnvironmentCatalogAtoms<R, E>(
   });
 
   return {
+    timingValueAtom,
+    setTiming,
     catalogAtom,
     catalogValueAtom,
     githubRoutingPermissionsValueAtom,
@@ -181,6 +224,8 @@ export function createEnvironmentCatalogAtoms<R, E>(
     stateAtom,
     register,
     remove,
+    removeRoute,
+    reorderRoutes,
     removeRelayEnvironments,
     retryNow,
     setEnabled,

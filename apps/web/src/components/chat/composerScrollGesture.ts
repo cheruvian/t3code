@@ -23,6 +23,18 @@ export function shouldCollapseComposerForScrollKey(input: {
   }
 }
 
+/** A deliberate downward pull on the focused editor, starting at its top edge. */
+export function shouldDismissMobileKeyboardForComposerPull(input: {
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+}): boolean {
+  const down = input.currentY - input.startY;
+  const horizontal = Math.abs(input.currentX - input.startX);
+  return down >= 48 && down > horizontal * 1.5;
+}
+
 export function createComposerScrollGestureState(): ComposerScrollGestureState {
   return {
     accumulatedDeltaPx: 0,

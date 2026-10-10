@@ -5,6 +5,7 @@ import {
   recordComposerScrollGestureEvent,
   resetComposerScrollGesture,
   shouldCollapseComposerForScrollKey,
+  shouldDismissMobileKeyboardForComposerPull,
   suppressActiveComposerScrollGesture,
 } from "./composerScrollGesture";
 
@@ -36,6 +37,28 @@ describe("composer keyboard scroll collapse", () => {
 
   it("ignores unrelated keys", () => {
     expect(shouldCollapseComposerForScrollKey({ ...middle, key: "Enter" })).toBe(false);
+  });
+});
+
+describe("mobile composer keyboard pull", () => {
+  const start = { startX: 100, startY: 100 };
+
+  it("dismisses after a deliberate downward pull", () => {
+    expect(
+      shouldDismissMobileKeyboardForComposerPull({ ...start, currentX: 104, currentY: 150 }),
+    ).toBe(true);
+  });
+
+  it("keeps short, upward, and mostly sideways movement in the editor", () => {
+    for (const [currentX, currentY] of [
+      [100, 140],
+      [100, 45],
+      [165, 150],
+    ] as const) {
+      expect(shouldDismissMobileKeyboardForComposerPull({ ...start, currentX, currentY })).toBe(
+        false,
+      );
+    }
   });
 });
 

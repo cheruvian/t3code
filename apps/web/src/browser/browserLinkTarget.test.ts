@@ -1,5 +1,5 @@
 import type { BrowserLinkTarget } from "@t3tools/contracts";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { ensureClientSettingsHydrated } from "~/hooks/useSettings";
 
@@ -14,6 +14,8 @@ vi.mock("~/hooks/useSettings", () => ({
 
 const click = { metaKey: false, ctrlKey: false };
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe("resolveLinkTarget", () => {
   it("keeps the system browser unless the user asked for in-app", () => {
     expect(
@@ -25,6 +27,28 @@ describe("resolveLinkTarget", () => {
       }),
     ).toBe("system");
   });
+
+  it.each(["display-mode", "ios"])(
+    "keeps Home Screen links in a closable panel using %s detection",
+    (detection) => {
+      vi.stubGlobal("window", {
+        matchMedia: () => ({ matches: detection === "display-mode" }),
+        navigator: { standalone: detection === "ios" },
+      });
+      const input = {
+        url: "https://sven.tailf474c0.ts.net:8480/?v=2",
+        event: click,
+        preference: "system" as const,
+        canOpenInApp: true,
+      };
+      expect(resolveLinkTarget(input)).toBe("app");
+      expect(resolveLinkTarget({ ...input, canOpenInApp: false })).toBe("system");
+      expect(resolveLinkTarget({ ...input, event: { metaKey: true, ctrlKey: false } })).toBe(
+        "system",
+      );
+      expect(resolveLinkTarget({ ...input, url: "mailto:someone@example.com" })).toBe("system");
+    },
+  );
 
   it("opens in-app when asked and the runtime can", () => {
     expect(

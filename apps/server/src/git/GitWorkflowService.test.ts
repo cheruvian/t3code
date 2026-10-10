@@ -11,7 +11,7 @@ import * as GitWorkflowService from "./GitWorkflowService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 
-function makeLayer(input: {
+function layer(input: {
   readonly detect: VcsDriverRegistry.VcsDriverRegistry["Service"]["detect"];
 }) {
   return GitWorkflowService.layer.pipe(
@@ -34,7 +34,7 @@ describe("GitWorkflowService", () => {
       assert.equal(isRepository, false);
     }).pipe(
       Effect.provide(
-        makeLayer({
+        layer({
           detect: () =>
             Effect.succeed({
               kind: "jj",
@@ -74,11 +74,18 @@ describe("GitWorkflowService", () => {
       });
     }).pipe(
       Effect.provide(
-        makeLayer({
+        layer({
           detect: () => Effect.succeed(null),
         }),
       ),
     ),
+  );
+
+  it.effect("reports no worktree changes outside Git", () =>
+    Effect.gen(function* () {
+      const workflow = yield* GitWorkflowService.GitWorkflowService;
+      assert.equal(yield* workflow.hasWorkingTreeChanges({ cwd: "/not-a-repo" }), false);
+    }).pipe(Effect.provide(layer({ detect: () => Effect.succeed(null) }))),
   );
 
   it.effect("returns an empty full status when no VCS repository is detected", () =>
@@ -105,7 +112,7 @@ describe("GitWorkflowService", () => {
       });
     }).pipe(
       Effect.provide(
-        makeLayer({
+        layer({
           detect: () => Effect.succeed(null),
         }),
       ),
@@ -114,10 +121,11 @@ describe("GitWorkflowService", () => {
 
   it.effect("does not call GitManager status methods when no VCS repository is detected", () => {
     const localStatus = vi.fn();
+    const hasWorkingTreeChanges = vi.fn();
     const remoteStatus = vi.fn();
     const status = vi.fn();
 
-    const testLayer = GitWorkflowService.layer.pipe(
+    const layerTest = GitWorkflowService.layer.pipe(
       Layer.provide(
         Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
           detect: () => Effect.succeed(null),
@@ -127,6 +135,7 @@ describe("GitWorkflowService", () => {
       Layer.provide(
         Layer.mock(GitManager.GitManager)({
           localStatus,
+          hasWorkingTreeChanges,
           remoteStatus,
           status,
         }),
@@ -136,13 +145,15 @@ describe("GitWorkflowService", () => {
     return Effect.gen(function* () {
       const workflow = yield* GitWorkflowService.GitWorkflowService;
       yield* workflow.localStatus({ cwd: "/not-a-repo" });
+      yield* workflow.hasWorkingTreeChanges({ cwd: "/not-a-repo" });
       yield* workflow.remoteStatus({ cwd: "/not-a-repo" });
       yield* workflow.status({ cwd: "/not-a-repo" });
 
       assert.equal(localStatus.mock.calls.length, 0);
+      assert.equal(hasWorkingTreeChanges.mock.calls.length, 0);
       assert.equal(remoteStatus.mock.calls.length, 0);
       assert.equal(status.mock.calls.length, 0);
-    }).pipe(Effect.provide(testLayer));
+    }).pipe(Effect.provide(layerTest));
   });
 
   it.effect("returns an empty ref list when no VCS repository is detected", () =>
@@ -159,7 +170,7 @@ describe("GitWorkflowService", () => {
       });
     }).pipe(
       Effect.provide(
-        makeLayer({
+        layer({
           detect: () => Effect.succeed(null),
         }),
       ),
@@ -186,7 +197,7 @@ describe("GitWorkflowService", () => {
       expect(error.message).not.toContain(cause.detail);
     }).pipe(
       Effect.provide(
-        makeLayer({
+        layer({
           detect: () => Effect.fail(cause),
         }),
       ),
@@ -214,7 +225,7 @@ describe("GitWorkflowService", () => {
       expect(error.message).not.toContain(cause.detail);
     }).pipe(
       Effect.provide(
-        makeLayer({
+        layer({
           detect: () => Effect.fail(cause),
         }),
       ),

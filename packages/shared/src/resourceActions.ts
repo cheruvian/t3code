@@ -1,9 +1,4 @@
-import {
-  ResourceActionLog,
-  type OrchestrationThreadActivity,
-  type ProjectResourceLock,
-  type ThreadId,
-} from "@t3tools/contracts";
+import { ResourceActionLog, type ProjectResourceLock, type ThreadId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 
@@ -21,11 +16,13 @@ export function resourceActionsMatch(
 
 const decodeLog = Schema.decodeUnknownOption(ResourceActionLog);
 
-export function resourceActionLogs(activities: readonly OrchestrationThreadActivity[]) {
+export function resourceActionLogs(
+  activities: readonly { readonly type: string; readonly resourceActionLog?: unknown }[],
+) {
   const logs = new Map<string, ResourceActionLog>();
   for (const activity of activities) {
-    if (activity.kind !== "resource.action") continue;
-    const decoded = decodeLog(activity.payload);
+    if (activity.type !== "command_execution") continue;
+    const decoded = decodeLog(activity.resourceActionLog);
     if (Option.isSome(decoded)) {
       const log = decoded.value;
       if (!logs.has(log.operationId) || log.status !== "running") logs.set(log.operationId, log);

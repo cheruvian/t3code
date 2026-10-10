@@ -1,8 +1,9 @@
-import { createContext, memo, useContext, useMemo } from "react";
+import { createContext, memo, useContext, useMemo, useState } from "react";
 import { Image, Platform, ScrollView, Text, useColorScheme, View } from "react-native";
 import type { MarkdownNode } from "react-native-nitro-markdown/headless";
 
 import { CopyTextButton } from "./CopyTextButton";
+import { MermaidDiagram, MermaidViewToggle } from "./MermaidDiagram";
 import { MarkdownTextPrimitive } from "./MarkdownTextPrimitive";
 import {
   nativeMarkdownDocumentRuns,
@@ -156,6 +157,23 @@ function NativeCodeBlock(props: {
   const theme = colorScheme === "dark" ? "dark" : "light";
   const highlighted = useHighlightedCode(content, props.node.language, theme, props.highlightCode);
   const languageLabel = props.node.language?.toUpperCase() ?? "CODE";
+  const isMermaid = props.node.language?.trim().toLowerCase() === "mermaid";
+  const [showSource, setShowSource] = useState(false);
+  const source = (
+    <ScrollView
+      horizontal
+      bounces={false}
+      nestedScrollEnabled={Platform.OS === "android"}
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={{ paddingHorizontal: 14, paddingVertical: 12 }}
+    >
+      <HighlightedCodeText
+        content={content}
+        highlighted={highlighted}
+        textStyle={props.textStyle}
+      />
+    </ScrollView>
+  );
   return (
     <View
       style={{
@@ -193,6 +211,13 @@ function NativeCodeBlock(props: {
         >
           {languageLabel}
         </MarkdownTextPrimitive>
+        {isMermaid ? (
+          <MermaidViewToggle
+            showSource={showSource}
+            onPress={() => setShowSource((value) => !value)}
+            color={props.textStyle.mutedColor}
+          />
+        ) : null}
         <CopyTextButton
           accessibilityLabel={`Copy ${languageLabel.toLowerCase()} code`}
           text={content}
@@ -204,19 +229,13 @@ function NativeCodeBlock(props: {
           iconSize={14}
         />
       </View>
-      <ScrollView
-        horizontal
-        bounces={false}
-        nestedScrollEnabled={Platform.OS === "android"}
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 14, paddingVertical: 12 }}
-      >
-        <HighlightedCodeText
-          content={content}
-          highlighted={highlighted}
-          textStyle={props.textStyle}
-        />
-      </ScrollView>
+      {isMermaid && !showSource ? (
+        <MermaidDiagram code={content} theme={theme} color={props.textStyle.mutedColor}>
+          {source}
+        </MermaidDiagram>
+      ) : (
+        source
+      )}
     </View>
   );
 }

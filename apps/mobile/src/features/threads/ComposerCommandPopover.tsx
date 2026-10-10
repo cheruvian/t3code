@@ -3,7 +3,9 @@ import {
   type ProviderSkillSourceKind,
 } from "@t3tools/client-runtime/providerSkills";
 import type {
+  SavedPrompt,
   PullRequestContextMetadata,
+  ScopedThreadRef,
   ServerProviderSkill,
   ServerProviderSlashCommand,
 } from "@t3tools/contracts";
@@ -17,6 +19,13 @@ import { GlassSurface } from "../../components/GlassSurface";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
 export type ComposerCommandItem =
   | {
+      id: string;
+      type: "saved-prompt";
+      prompt: SavedPrompt;
+      label: string;
+      description: string;
+    }
+  | {
       readonly id: string;
       readonly type: "pull-request";
       readonly pullRequest: PullRequestContextMetadata;
@@ -28,6 +37,13 @@ export type ComposerCommandItem =
       readonly type: "path";
       readonly path: string;
       readonly kind: "file" | "directory";
+      readonly label: string;
+      readonly description: string;
+    }
+  | {
+      readonly id: string;
+      readonly type: "thread";
+      readonly thread: ScopedThreadRef;
       readonly label: string;
       readonly description: string;
     }
@@ -92,6 +108,8 @@ function itemIcon(item: ComposerCommandItem): AppSymbolName | null {
   switch (item.type) {
     case "pull-request":
       return { ios: "arrow.triangle.pull", android: "merge" };
+    case "saved-prompt":
+      return "text.bubble";
     case "slash-command":
     case "provider-slash-command":
       return "terminal";
@@ -99,6 +117,8 @@ function itemIcon(item: ComposerCommandItem): AppSymbolName | null {
       return SKILL_SOURCE_SYMBOL_BY_KIND[resolveProviderSkillSourceKind(item.skill)];
     case "path":
       return null;
+    case "thread":
+      return "text.bubble";
   }
 }
 
