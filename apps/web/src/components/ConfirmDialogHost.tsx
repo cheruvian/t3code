@@ -26,6 +26,7 @@ import {
   retrySettleWorktreeDialog,
   subscribeSettleWorktreeDialog,
   setSettleDialogRemoveAutomations,
+  setSettleDialogReleaseResources,
 } from "../settleWorktreeDialog";
 
 const SETTLE_WORKTREE_VISIBLE_FILES = 100;
@@ -184,6 +185,22 @@ export function ConfirmDialogHost() {
           )}
           {settlePrompt && (
             <div className="space-y-2 px-6 text-sm">
+              {settlePrompt.resourceNames.length > 0 && (
+                <>
+                  <label className="flex items-center gap-2">
+                    <Checkbox
+                      checked={settlePrompt.releaseResources}
+                      onCheckedChange={setSettleDialogReleaseResources}
+                    />
+                    Release resource locks
+                  </label>
+                  <p className="text-muted-foreground">
+                    {settlePrompt.resourceNames.join(", ")}. Release hooks must finish before
+                    settling. Reopening does not check them out again.
+                  </p>
+                </>
+              )}
+
               <label className="flex items-center gap-2">
                 <Checkbox
                   checked={settlePrompt.removeAutomations}

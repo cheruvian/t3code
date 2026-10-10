@@ -1,5 +1,15 @@
 import { describe, expect, it } from "@effect/vitest";
-import { EnvironmentId, ProjectId, type ScopedProjectRef, WS_METHODS } from "@t3tools/contracts";
+import {
+  CommandId,
+  ThreadId,
+  type ProjectResourceLock,
+  type ProjectMutation,
+  EnvironmentId,
+  ProjectId,
+  type ScopedProjectRef,
+  WS_METHODS,
+} from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -22,13 +32,16 @@ const PROJECT = {
   workspaceRoot: "/scratch",
 } as EnvironmentProject;
 
-const makeHarness = Effect.fn("TestProjectCommands.makeHarness")(function* () {
+const makeHarness = Effect.fn("TestProjectCommands.makeHarness")(function* (
+  resourceReply?: (input: ProjectMutation) => Effect.Effect<EnvironmentProject>,
+) {
   const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
     target: { environmentId: ENVIRONMENT_ID },
     session: yield* SubscriptionRef.make(
       Option.some({
         client: {
           [WS_METHODS.projectsEnsureScratch]: () => Effect.succeed({ projectId: PROJECT_ID }),
+          [WS_METHODS.projectsMutate]: resourceReply,
         },
       } as unknown as RpcSession),
     ),
@@ -60,7 +73,7 @@ const makeHarness = Effect.fn("TestProjectCommands.makeHarness")(function* () {
   const openScratch = Effect.promise(() =>
     commands.openScratch.run(registry, { environmentId: ENVIRONMENT_ID, input: {} }),
   );
-  return { registry, storedProject, openScratch };
+  return { registry, storedProject, openScratch, commands };
 });
 
 describe("openScratch", () => {
@@ -73,5 +86,67 @@ describe("openScratch", () => {
       const result = yield* Fiber.join(opening);
       expect(result).toMatchObject({ _tag: "Success", value: PROJECT });
     }).pipe(Effect.scoped),
+  );
+});
+
+const resource: ProjectResourceLock = {
+  threadId: ThreadId.make("owner"),
+  operationId: CommandId.make("held"),
+  phase: "held",
+  script: {
+    id: "sandbox",
+    name: "SANDBOX",
+    command: "",
+    icon: "configure",
+    runOnWorktreeCreate: false,
+    resource: {
+      color: "#abcdef",
+      checkoutPrompt: "",
+      releasePrompt: "",
+      releaseCommand: "cleanup",
+    },
+  },
+};
+
+describe("releaseThreadResources", () => {
+  it.effect.each([false, true])(
+    "waits for release completion and reports hook failure=%s",
+    (failed) =>
+      Effect.gen(function* () {
+        const requested = yield* Deferred.make<void>();
+        const releasing = {
+          ...resource,
+          operationId: CommandId.make("release"),
+          phase: "release" as const,
+        };
+        const h = yield* makeHarness((input) =>
+          Effect.gen(function* () {
+            expect(input).toMatchObject({
+              action: "release",
+              expectedOperationId: resource.operationId,
+            });
+            yield* Deferred.succeed(requested, undefined);
+            return { ...PROJECT, resourceLocks: [releasing] };
+          }),
+        );
+        h.registry.set(h.storedProject, { ...PROJECT, resourceLocks: [resource] });
+        const running = yield* Effect.forkChild(
+          Effect.promise(() =>
+            h.commands.releaseThreadResources.run(h.registry, {
+              environmentId: ENVIRONMENT_ID,
+              input: { projectId: PROJECT_ID, threadId: resource.threadId, locks: [resource] },
+            }),
+          ),
+        );
+        yield* Deferred.await(requested);
+        h.registry.set(h.storedProject, { ...PROJECT, resourceLocks: [releasing] });
+        expect(running.pollUnsafe()).toBeUndefined();
+        h.registry.set(h.storedProject, {
+          ...PROJECT,
+          resourceLocks: failed ? [{ ...releasing, phase: "failed", error: "cleanup failed" }] : [],
+        });
+        const result = yield* Fiber.join(running);
+        expect(result._tag).toBe(failed ? "Failure" : "Success");
+      }).pipe(Effect.scoped),
   );
 });

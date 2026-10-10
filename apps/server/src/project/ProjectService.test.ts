@@ -1046,6 +1046,21 @@ it.effect(
         operationId,
       });
       let before = Option.getOrThrow(yield* service.getById(projectId)).resourceLocks;
+      const staleRelease = yield* service
+        .resourceRequest({
+          commandId: CommandId.make("ownership:stale-release"),
+          projectId,
+          threadId: owner,
+          script: canonicalResource,
+          action: "release",
+          expectedOperationId: CommandId.make("outdated"),
+        })
+        .pipe(Effect.flip);
+      assert.include(
+        String(staleRelease._tag === "ProjectOperationError" && staleRelease.cause),
+        "Resource ownership changed",
+      );
+      assert.deepEqual(Option.getOrThrow(yield* service.getById(projectId)).resourceLocks, before);
       const rejectedCheckout = yield* service
         .resourceRequest({
           commandId: CommandId.make("ownership:alias-checkout"),

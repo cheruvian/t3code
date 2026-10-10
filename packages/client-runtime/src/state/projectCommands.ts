@@ -1,5 +1,7 @@
 import {
   type EnvironmentId,
+  type ThreadId,
+  type ProjectResourceLock,
   ProjectId,
   type ProjectReadFileResult,
   type ScopedProjectRef,
@@ -67,6 +69,11 @@ export class ScratchProjectNotLoadedError extends Schema.TaggedError<ScratchProj
   }
 }
 
+export class ResourceReleaseError extends Schema.TaggedError<ResourceReleaseError>()(
+  "ResourceReleaseError",
+  { message: Schema.String },
+) {}
+
 export function createProjectEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | Crypto.Crypto | R, E>,
   options: {
@@ -123,6 +130,58 @@ export function createProjectEnvironmentAtoms<R, E>(
       execute: (input: RequestProjectResourceInput) => requestProjectResource(input),
       scheduler: projectScheduler,
       concurrency: projectConcurrency,
+    }),
+    releaseThreadResources: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:project:release-thread-resources",
+      execute: (
+        input: { projectId: ProjectId; threadId: ThreadId; locks: readonly ProjectResourceLock[] },
+        registry,
+        environmentId,
+      ) =>
+        Effect.gen(function* () {
+          for (const lock of input.locks) {
+            if (lock.threadId !== input.threadId) continue;
+            const project = yield* requestProjectResource({
+              projectId: input.projectId,
+              threadId: input.threadId,
+              script: lock.script,
+              action: "release",
+              expectedOperationId: lock.operationId,
+            });
+            const releasing = project.resourceLocks?.find(
+              (entry) => entry.threadId === input.threadId && entry.script.id === lock.script.id,
+            );
+            if (!releasing) continue;
+            const completed = yield* AtomRegistry.toStream(
+              registry,
+              options.projectAtom({ environmentId, projectId: input.projectId }),
+            ).pipe(
+              Stream.filter(Predicate.isNotNull),
+              Stream.filter(
+                (updated) =>
+                  !updated.resourceLocks?.some(
+                    (entry) =>
+                      entry.operationId === lock.operationId ||
+                      (entry.operationId === releasing.operationId && entry.phase === "release"),
+                  ),
+              ),
+              Stream.runHead,
+            );
+            if (Option.isNone(completed))
+              return yield* new ResourceReleaseError({
+                message: "Disconnected while releasing resources. The thread was not settled.",
+              });
+            const remaining = completed.value.resourceLocks?.find(
+              (entry) => entry.threadId === input.threadId && entry.script.id === lock.script.id,
+            );
+            if (remaining)
+              return yield* new ResourceReleaseError({
+                message:
+                  remaining.error ??
+                  "Resource ownership changed while releasing. The thread was not settled.",
+              });
+          }
+        }),
     }),
     update: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:project:update",

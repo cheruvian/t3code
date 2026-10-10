@@ -61,16 +61,18 @@ describe("grouped resource locks", () => {
     expect(
       groupedResourceLocks({ ...input, connectedEnvironmentIds: new Set([localId, remoteId]) }),
     ).toEqual([{ project: remote, lock }]);
+    const savedSandbox = { id: "sandbox", name: "SANDBOX" };
+    const savedExport = { id: "export", name: "EXPORT" };
     expect(
       resourceOwnersForAction(
         groupedResourceLocks({ ...input, connectedEnvironmentIds: new Set([localId, remoteId]) }),
-        { id: "sandbox", name: "SANDBOX" },
+        savedSandbox,
       ),
     ).toEqual([{ project: remote, lock }]);
     expect(
       resourceOwnersForAction(
         groupedResourceLocks({ ...input, connectedEnvironmentIds: new Set([localId, remoteId]) }),
-        { id: "export", name: "EXPORT" },
+        savedExport,
       ),
     ).toEqual([]);
     expect(groupedResourceLocks({ ...input, connectedEnvironmentIds: new Set([localId]) })).toEqual(

@@ -1,3 +1,4 @@
+import { projectEnvironment } from "../state/projects";
 import {
   parseScopedThreadKey,
   scopeProjectRef,
@@ -279,6 +280,7 @@ export function useThreadActions() {
   const deleteThreadMutation = useOrchestrationCommand(threadEnvironment.delete, {
     reportFailure: false,
   });
+  const releaseThreadResources = useAtomCommand(projectEnvironment.releaseThreadResources);
   const settleThreadMutation = useOrchestrationCommand(threadEnvironment.settle, {
     reportFailure: false,
   });
@@ -792,6 +794,16 @@ export function useThreadActions() {
       let deleteWorktreePath: string | null = null;
       let deleteWorktreePreview: VcsStatusLocalResult | null = null;
       let removeAutomations = true;
+      let releaseResources = false;
+      const resourceLocks = resolved
+        ? (
+            readProject({
+              environmentId: target.environmentId,
+              projectId: resolved.thread.projectId,
+            })?.resourceLocks ?? []
+          ).filter((lock) => lock.threadId === target.threadId)
+        : [];
+      const resourceNames = resourceLocks.map((lock) => lock.script.name);
       if (resolved?.thread.worktreePath) {
         const worktreePath = resolved.thread.worktreePath;
         const project = readProject({
@@ -807,6 +819,7 @@ export function useThreadActions() {
           onlyThread && project !== null && threadRuntimeCanArchive(resolved.thread.runtime);
         const decision = await requestSettleWorktreeDialog({
           path: worktreePath,
+          resourceNames,
           canDelete,
           loadStatus: async () => {
             const status = await readWorktreeStatus({
@@ -821,14 +834,31 @@ export function useThreadActions() {
         });
         if (decision === null) return AsyncResult.failure(Cause.interrupt());
         removeAutomations = decision.removeAutomations;
+        releaseResources = decision.releaseResources;
         if (decision.choice === "delete" && canDelete) {
           deleteWorktreePath = worktreePath;
           deleteWorktreePreview = decision.status;
         }
       } else {
-        const decision = await requestSettleWorktreeDialog({ path: null, canDelete: false });
+        const decision = await requestSettleWorktreeDialog({
+          path: null,
+          canDelete: false,
+          resourceNames,
+        });
         if (decision === null) return AsyncResult.failure(Cause.interrupt());
         removeAutomations = decision.removeAutomations;
+        releaseResources = decision.releaseResources;
+      }
+      if (releaseResources && resolved) {
+        const released = await releaseThreadResources({
+          environmentId: target.environmentId,
+          input: {
+            projectId: resolved.thread.projectId,
+            threadId: target.threadId,
+            locks: resourceLocks,
+          },
+        });
+        if (released._tag !== "Success") return released;
       }
       const wokeAt = resolved
         ? threadWokeAt(resolved.thread, { now: new Date().toISOString() })
@@ -933,6 +963,7 @@ export function useThreadActions() {
       pinThread,
       resolveThreadTarget,
       settleThreadMutation,
+      releaseThreadResources,
       snoozeThreadMutation,
       unsettleThread,
       stopThreadSession,

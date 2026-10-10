@@ -6,7 +6,7 @@ import {
 } from "@t3tools/client-runtime/operations";
 import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, VcsStatusLocalResult } from "@t3tools/contracts";
-import { environmentProjects } from "../../state/projects";
+import { environmentProjects, projectEnvironment } from "../../state/projects";
 import { allowUnpinnedReorderAtom } from "../../state/preferences";
 import type { ThreadMoveDestination } from "../threads/threadOrder";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -206,8 +206,13 @@ function confirmSettlement(
   hasWorktree: boolean,
   status: VcsStatusLocalResult | null,
   canDelete: boolean,
+  resourceNames: readonly string[],
 ) {
-  return new Promise<{ deleteWorktree: boolean; removeAutomations: boolean } | null>((resolve) => {
+  return new Promise<{
+    deleteWorktree: boolean;
+    removeAutomations: boolean;
+    releaseResources: boolean;
+  } | null>((resolve) => {
     const changes = !hasWorktree
       ? "The conversation is kept and can be reopened."
       : status
@@ -221,9 +226,18 @@ function confirmSettlement(
       : "";
     showConfirmDialog({
       title: "Settle this conversation?",
-      message: `${changes}${worktreeWarning}\n\nRemoved automations stop running and are not restored when reopened. Turn this off to keep them active. Automations that create new conversations are kept.`,
+      message: `${changes}${worktreeWarning}${resourceNames.length > 0 ? "\n\nResource release hooks must finish before settling. Reopening does not check them out again." : ""}\n\nRemoved automations stop running and are not restored when reopened. Turn this off to keep them active. Automations that create new conversations are kept.`,
       confirmText: "Settle",
       options: [
+        ...(resourceNames.length > 0
+          ? [
+              {
+                id: "releaseResources",
+                label: `Release resource locks (${resourceNames.join(", ")})`,
+                defaultChecked: false,
+              },
+            ]
+          : []),
         { id: "removeAutomations", label: "Remove bound automations", defaultChecked: true },
         ...(canDelete && status
           ? [{ id: "deleteWorktree", label: "Delete worktree", defaultChecked: false }]
@@ -231,6 +245,7 @@ function confirmSettlement(
       ],
       onConfirm: (options) =>
         resolve({
+          releaseResources: options.releaseResources === true,
           removeAutomations: options.removeAutomations !== false,
           deleteWorktree: options.deleteWorktree === true,
         }),
@@ -246,6 +261,9 @@ function useThreadActionExecutor(
   const archiveMutation = useAtomCommand(threadEnvironment.archive, { reportFailure: false });
   const unarchiveMutation = useAtomCommand(threadEnvironment.unarchive, { reportFailure: false });
   const deleteMutation = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
+  const releaseThreadResources = useAtomCommand(projectEnvironment.releaseThreadResources, {
+    reportFailure: false,
+  });
   const settleMutation = useAtomCommand(threadEnvironment.settle, { reportFailure: false });
   const unsettleMutation = useAtomCommand(threadEnvironment.unsettle, { reportFailure: false });
   const readWorktreeStatus = useAtomCommand(vcsEnvironment.localStatus, { reportFailure: false });
@@ -290,6 +308,16 @@ function useThreadActionExecutor(
         }
         let deleteWorktreePreview: VcsStatusLocalResult | null = null;
         let removeAutomations = true;
+        let releaseResources = false;
+        const resourceLocks = (
+          appAtomRegistry.get(
+            environmentProjects.projectAtom({
+              environmentId: thread.environmentId,
+              projectId: thread.projectId,
+            }),
+          )?.resourceLocks ?? []
+        ).filter((lock) => lock.threadId === thread.id);
+        const resourceNames = resourceLocks.map((lock) => lock.script.name);
         if (action === "settle" && thread.worktreePath) {
           const shells = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
           const owners = shells.filter(
@@ -303,14 +331,29 @@ function useThreadActionExecutor(
             input: { cwd: thread.worktreePath },
           });
           const preview = status._tag === "Success" ? status.value : null;
-          const decision = await confirmSettlement(true, preview, canDelete);
+          const decision = await confirmSettlement(true, preview, canDelete, resourceNames);
           if (decision === null) return false;
           removeAutomations = decision.removeAutomations;
+          releaseResources = decision.releaseResources;
           if (decision.deleteWorktree) deleteWorktreePreview = preview;
         } else if (action === "settle") {
-          const decision = await confirmSettlement(false, null, false);
+          const decision = await confirmSettlement(false, null, false, resourceNames);
           if (decision === null) return false;
           removeAutomations = decision.removeAutomations;
+          releaseResources = decision.releaseResources;
+        }
+        if (releaseResources) {
+          const released = await releaseThreadResources({
+            environmentId: thread.environmentId,
+            input: { projectId: thread.projectId, threadId: thread.id, locks: resourceLocks },
+          });
+          if (released._tag === "Failure") {
+            Alert.alert(
+              "Could not release resources",
+              actionFailureMessage("settle", released.cause),
+            );
+            return false;
+          }
         }
         const result = await withThreadDismissal(
           key,
@@ -394,6 +437,7 @@ function useThreadActionExecutor(
       readWorktreeStatus,
       removeConfirmedWorktree,
       settleMutation,
+      releaseThreadResources,
       stopSession,
       unarchiveMutation,
       unsettleMutation,

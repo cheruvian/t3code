@@ -2,11 +2,17 @@ import type { VcsStatusLocalResult } from "@t3tools/contracts";
 
 export type SettleWorktreeChoice = "keep" | "delete" | null;
 export type SettleWorktreeDecision =
-  | { choice: "keep"; removeAutomations: boolean }
-  | { choice: "delete"; status: VcsStatusLocalResult; removeAutomations: boolean }
+  | { choice: "keep"; removeAutomations: boolean; releaseResources: boolean }
+  | {
+      choice: "delete";
+      status: VcsStatusLocalResult;
+      removeAutomations: boolean;
+      releaseResources: boolean;
+    }
   | null;
 
 export interface SettleWorktreePrompt {
+  resourceNames?: readonly string[];
   path: string | null;
   canDelete: boolean;
   loadStatus?: () => Promise<VcsStatusLocalResult>;
@@ -18,6 +24,8 @@ export interface SettleWorktreeDialogState {
   canDelete: boolean;
   phase: "loading" | "ready" | "error";
   status: VcsStatusLocalResult | null;
+  resourceNames: readonly string[];
+  releaseResources: boolean;
   removeAutomations: boolean;
 }
 
@@ -103,6 +111,8 @@ export function requestSettleWorktreeDialog(prompt: SettleWorktreePrompt) {
         phase: prompt.initialStatus || !prompt.path ? "ready" : "loading",
         status: prompt.initialStatus ?? null,
         removeAutomations: true,
+        resourceNames: prompt.resourceNames ?? [],
+        releaseResources: false,
       },
       resolve,
       loadVersion: 0,
@@ -129,10 +139,28 @@ export function respondToSettleWorktreeDialog(choice: SettleWorktreeChoice) {
     return;
   }
   if (choice === "keep") {
-    finish({ choice: "keep", removeAutomations: active.state.removeAutomations });
+    finish({
+      choice: "keep",
+      removeAutomations: active.state.removeAutomations,
+      releaseResources: active.state.releaseResources,
+    });
     return;
   }
   const { status, phase, canDelete } = active.state;
   if (phase !== "ready" || !status || !canDelete) return;
-  finish({ choice: "delete", status, removeAutomations: active.state.removeAutomations });
+  finish({
+    choice: "delete",
+    status,
+    removeAutomations: active.state.removeAutomations,
+    releaseResources: active.state.releaseResources,
+  });
+}
+
+export function setSettleDialogReleaseResources(releaseResources: boolean) {
+  if (!active) return;
+  active.state = {
+    ...active.state,
+    releaseResources: releaseResources && active.state.resourceNames.length > 0,
+  };
+  publish();
 }

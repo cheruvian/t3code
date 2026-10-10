@@ -7,6 +7,7 @@ import {
   respondToSettleWorktreeDialog,
   retrySettleWorktreeDialog,
   setSettleDialogRemoveAutomations,
+  setSettleDialogReleaseResources,
 } from "./settleWorktreeDialog";
 
 const dirtyStatus = {
@@ -44,17 +45,46 @@ describe("settle worktree dialog", () => {
     const first = requestSettleWorktreeDialog({ path: null, canDelete: false });
     expect(readSettleWorktreeDialog()?.phase).toBe("ready");
     respondToSettleWorktreeDialog("keep");
-    expect(await first).toEqual({ choice: "keep", removeAutomations: true });
+    expect(await first).toEqual({
+      choice: "keep",
+      releaseResources: false,
+      removeAutomations: true,
+    });
 
     const second = requestSettleWorktreeDialog({ path: null, canDelete: false });
     setSettleDialogRemoveAutomations(false);
     respondToSettleWorktreeDialog("keep");
-    expect(await second).toEqual({ choice: "keep", removeAutomations: false });
+    expect(await second).toEqual({
+      choice: "keep",
+      releaseResources: false,
+      removeAutomations: false,
+    });
 
     const third = requestSettleWorktreeDialog({ path: null, canDelete: false });
     expect(readSettleWorktreeDialog()?.removeAutomations).toBe(true);
     respondToSettleWorktreeDialog(null);
     expect(await third).toBeNull();
+  });
+  it("releases resources only when selected and resets the choice between threads", async () => {
+    unregister = registerSettleWorktreeDialog();
+    const choice = requestSettleWorktreeDialog({
+      path: null,
+      canDelete: false,
+      resourceNames: ["SANDBOX"],
+    });
+    expect(readSettleWorktreeDialog()?.releaseResources).toBe(false);
+    setSettleDialogReleaseResources(true);
+    respondToSettleWorktreeDialog("keep");
+    expect(await choice).toEqual({
+      choice: "keep",
+      removeAutomations: true,
+      releaseResources: true,
+    });
+    const next = requestSettleWorktreeDialog({ path: null, canDelete: false });
+    setSettleDialogReleaseResources(true);
+    expect(readSettleWorktreeDialog()?.releaseResources).toBe(false);
+    respondToSettleWorktreeDialog(null);
+    expect(await next).toBeNull();
   });
   it("opens before the detail request completes and accepts deletion only after review", async () => {
     unregister = registerSettleWorktreeDialog();
@@ -76,6 +106,7 @@ describe("settle worktree dialog", () => {
     expect(await choice).toEqual({
       choice: "delete",
       status: dirtyStatus,
+      releaseResources: false,
       removeAutomations: true,
     });
   });
@@ -114,7 +145,11 @@ describe("settle worktree dialog", () => {
     });
 
     respondToSettleWorktreeDialog("keep");
-    expect(await choice).toEqual({ choice: "keep", removeAutomations: true });
+    expect(await choice).toEqual({
+      choice: "keep",
+      releaseResources: false,
+      removeAutomations: true,
+    });
     expect(readSettleWorktreeDialog()).toBeNull();
 
     status.reject(new Error("Git status failed"));
@@ -140,6 +175,7 @@ describe("settle worktree dialog", () => {
     expect(await choice).toEqual({
       choice: "delete",
       status: cleanStatus,
+      releaseResources: false,
       removeAutomations: true,
     });
   });
@@ -155,6 +191,10 @@ describe("settle worktree dialog", () => {
     respondToSettleWorktreeDialog("delete");
     expect(readSettleWorktreeDialog()).not.toBeNull();
     respondToSettleWorktreeDialog("keep");
-    expect(await choice).toEqual({ choice: "keep", removeAutomations: true });
+    expect(await choice).toEqual({
+      choice: "keep",
+      releaseResources: false,
+      removeAutomations: true,
+    });
   });
 });

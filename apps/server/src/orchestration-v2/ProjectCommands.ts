@@ -267,7 +267,7 @@ export function planProjectCommand(input: {
         return invariant("Multiple threads hold this resource. Release the conflicting checkouts.");
       const changed = () => invariant("Resource ownership changed. Confirm takeover again.");
       if (
-        command.action === "force-release" &&
+        (command.action === "force-release" || command.action === "release") &&
         command.expectedOperationId !== undefined &&
         current?.operationId !== command.expectedOperationId
       )
