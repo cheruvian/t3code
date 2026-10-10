@@ -684,6 +684,7 @@ export const make = Effect.gen(function* () {
         event.preventDefault();
       }
     });
+    void window.webContents.setVisualZoomLevelLimits(1, 3).catch(() => undefined);
     window.webContents.on("input-event", (_event, input) => {
       if (input.type === "gestureScrollEnd") window.webContents.send(TRACKPAD_SCROLL_END_CHANNEL);
     });

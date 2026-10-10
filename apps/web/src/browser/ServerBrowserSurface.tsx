@@ -670,6 +670,19 @@ export function ServerBrowserSurface(props: {
       return;
     }
     const shortcut = event.ctrlKey || event.metaKey;
+    if (shortcut && !event.altKey && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (action === "down")
+        send({
+          type: "key",
+          action,
+          key: event.key,
+          code: event.code,
+          modifiers: previewStreamModifiers(event),
+        });
+      return;
+    }
     // Paste arrives as a paste event carrying this device's clipboard. Copy and cut run
     // in the page, which sends the copied text back. Shift+Insert is the same paste.
     if (shortcut && event.key.toLowerCase() === "v") return;

@@ -1303,3 +1303,38 @@ it.live("a desktop page the desktop takes back reconnects instead of closing", (
     }),
   ).pipe(Effect.provide(layer)),
 );
+
+it.live("finds in the streamed page and applies pinch zoom without scrolling", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, tabId } = yield* ready;
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+      yield* viewer.input({ type: "takeControl" });
+      const session = contexts[0]!.sessions.at(-1)!;
+      session.send.mockClear();
+      yield* viewer.input({ type: "key", action: "down", key: "f", code: "KeyF", modifiers: 4 });
+      expect(session.send).toHaveBeenCalledWith("Runtime.evaluate", {
+        expression: expect.stringContaining("Find in page"),
+      });
+      expect(session.send).not.toHaveBeenCalledWith("Input.dispatchKeyEvent", expect.anything());
+      session.send.mockClear();
+      yield* viewer.input({ type: "wheel", x: 100, y: 100, deltaX: 0, deltaY: -100, modifiers: 2 });
+      expect(session.send).not.toHaveBeenCalledWith("Input.dispatchMouseEvent", expect.anything());
+      expect(contexts[0]!.sessions[0]!.send).toHaveBeenCalledWith(
+        "Emulation.setDeviceMetricsOverride",
+        expect.objectContaining({
+          deviceScaleFactor: expect.any(Number),
+        }),
+      );
+      const listed = yield* (yield* Manager.PreviewManager).list({ threadId: testThread.threadId });
+      expect(
+        listed.sessions.find((snapshot) => snapshot.tabId === tabId)?.zoomFactor,
+      ).toBeGreaterThan(1);
+      yield* viewer.input({ type: "wheel", x: 100, y: 100, deltaX: 0, deltaY: 100, modifiers: 0 });
+      expect(session.send).toHaveBeenCalledWith(
+        "Input.dispatchMouseEvent",
+        expect.objectContaining({ type: "mouseWheel", deltaY: 100 }),
+      );
+    }),
+  ).pipe(Effect.provide(layer)),
+);

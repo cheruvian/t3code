@@ -367,6 +367,7 @@ const makeTestPreviewWebContents = (
     send: webviewSend,
     navigationHistory: { canGoBack: () => false, canGoForward: () => false },
     setIgnoreMenuShortcuts: vi.fn(),
+    setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
     setWindowOpenHandler: vi.fn(),
     debugger: {
       isAttached: () => false,
@@ -478,6 +479,7 @@ const makeFaviconWebContents = (options?: {
     session: { fetch },
     navigationHistory: { canGoBack: () => false, canGoForward: () => false },
     setIgnoreMenuShortcuts: vi.fn(),
+    setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
     setWindowOpenHandler: vi.fn(),
     executeJavaScriptInIsolatedWorld,
     debugger: {
@@ -571,6 +573,39 @@ describe("PreviewManager", () => {
     createFromPath.mockClear();
     webviewSend.mockClear();
   });
+
+  effectIt.effect("opens page find for Ctrl+F and Cmd+F and enables pinch", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const preview = makeFaviconWebContents();
+        const executeJavaScript = vi.fn(async () => undefined);
+        Object.assign(preview.webContents, { executeJavaScript });
+        fromId.mockReturnValue(preview.webContents);
+        yield* manager.createTab("tab_find");
+        yield* manager.registerWebview("tab_find", 42);
+        expect(
+          (preview.webContents as Electron.WebContents).setVisualZoomLevelLimits,
+        ).toHaveBeenCalledWith(1, 3);
+        const beforeInput = preview.listeners.get("before-input-event")!;
+        for (const control of [true, false]) {
+          const preventDefault = vi.fn();
+          beforeInput(
+            { preventDefault } as never,
+            {
+              type: "keyDown",
+              key: "f",
+              control,
+              meta: !control,
+              alt: false,
+            } as never,
+          );
+          expect(preventDefault).toHaveBeenCalledOnce();
+        }
+        expect(executeJavaScript).toHaveBeenCalledTimes(2);
+        expect(executeJavaScript).toHaveBeenCalledWith(expect.stringContaining("Find in page"));
+      }),
+    ),
+  );
 
   effectIt.effect("keeps preview shortcuts out of the host window", () =>
     withManager((manager) =>
@@ -899,6 +934,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setIgnoreMenuShortcuts: vi.fn(),
+          setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
           setWindowOpenHandler: vi.fn(),
           debugger: {
             isAttached: () => false,
@@ -992,6 +1028,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setIgnoreMenuShortcuts: vi.fn(),
+          setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
           setWindowOpenHandler: vi.fn(),
           get debugger() {
             if (destroyed) throw new Error("Object has been destroyed");
@@ -1497,6 +1534,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setIgnoreMenuShortcuts: vi.fn(),
+          setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
           setWindowOpenHandler: vi.fn(),
           debugger: {
             isAttached: () => false,
@@ -1562,6 +1600,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setIgnoreMenuShortcuts: vi.fn(),
+          setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
           setWindowOpenHandler: vi.fn(),
           debugger: {
             isAttached: () => false,
@@ -1603,6 +1642,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setIgnoreMenuShortcuts: vi.fn(),
+          setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
           setWindowOpenHandler: vi.fn(),
           debugger: {
             isAttached: () => false,
@@ -1650,6 +1690,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setIgnoreMenuShortcuts: vi.fn(),
+          setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
           setWindowOpenHandler: vi.fn(),
           debugger: {
             isAttached: () => false,
@@ -1706,6 +1747,7 @@ describe("PreviewManager", () => {
               send: webviewSend,
               navigationHistory: { canGoBack: () => false, canGoForward: () => false },
               setIgnoreMenuShortcuts: vi.fn(),
+              setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
               setWindowOpenHandler: vi.fn(),
               debugger: {
                 isAttached: () => false,
@@ -1804,6 +1846,7 @@ describe("PreviewManager", () => {
       send: webviewSend,
       navigationHistory: { canGoBack: () => false, canGoForward: () => false },
       setIgnoreMenuShortcuts: vi.fn(),
+      setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
       setWindowOpenHandler: vi.fn(),
       debugger: {
         isAttached: () => attach.mock.calls.length > detach.mock.calls.length,
@@ -1935,6 +1978,7 @@ describe("PreviewManager", () => {
         send: webviewSend,
         navigationHistory: { canGoBack: () => false, canGoForward: () => false },
         setIgnoreMenuShortcuts: vi.fn(),
+        setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
         setWindowOpenHandler: vi.fn(),
         debugger: {
           isAttached: () => false,
@@ -2386,6 +2430,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setIgnoreMenuShortcuts: vi.fn(),
+          setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
           setWindowOpenHandler: vi.fn(),
           debugger: {
             isAttached: () => false,
@@ -2479,6 +2524,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setIgnoreMenuShortcuts: vi.fn(),
+          setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
           setWindowOpenHandler: vi.fn(),
           debugger: {
             isAttached: () => false,
@@ -3046,6 +3092,7 @@ describe("PreviewManager", () => {
             send: webviewSend,
             navigationHistory: { canGoBack: () => false, canGoForward: () => false },
             setIgnoreMenuShortcuts: vi.fn(),
+            setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
             setWindowOpenHandler: vi.fn(),
             debugger: {
               isAttached: () => false,
@@ -3508,6 +3555,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setIgnoreMenuShortcuts: vi.fn(),
+          setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
           setWindowOpenHandler: vi.fn(),
           debugger: {
             isAttached: () => false,
@@ -4015,6 +4063,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setIgnoreMenuShortcuts: vi.fn(),
+          setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
           setWindowOpenHandler: vi.fn(),
           debugger: {
             isAttached: () => false,
@@ -4162,6 +4211,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setIgnoreMenuShortcuts: vi.fn(),
+          setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
           setWindowOpenHandler: vi.fn(),
           debugger: {
             isAttached: () => false,
@@ -4240,6 +4290,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setIgnoreMenuShortcuts: vi.fn(),
+          setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
           setWindowOpenHandler: vi.fn(),
           debugger: {
             isAttached: () => false,
@@ -4326,6 +4377,7 @@ describe("PreviewManager", () => {
             goForward,
           },
           setIgnoreMenuShortcuts: vi.fn(),
+          setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
           setWindowOpenHandler: vi.fn(),
           debugger: {
             isAttached: () => false,

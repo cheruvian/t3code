@@ -92,6 +92,7 @@ function makeFakeBrowserWindow() {
     reload: vi.fn(),
     replaceMisspelling: vi.fn(),
     send: vi.fn(),
+    setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
     setBackgroundThrottling: vi.fn(),
     setWindowOpenHandler: vi.fn(),
   };

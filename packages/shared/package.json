@@ -418,6 +418,10 @@
     "./mcpApp": {
       "types": "./src/mcpApp.ts",
       "import": "./src/mcpApp.ts"
+    },
+    "./browserFind": {
+      "types": "./src/browserFind.ts",
+      "import": "./src/browserFind.ts"
     }
   },
   "scripts": {

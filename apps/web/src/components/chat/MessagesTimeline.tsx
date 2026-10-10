@@ -1,3 +1,4 @@
+import { ThreadFindBar } from "./ThreadFindBar";
 import { ComputerUseAppIcon } from "~/components/Icons";
 import { ComposerTasksContent } from "./ComposerTasksBadge";
 import { useChatCanvas } from "./ChatCanvasContext";
@@ -847,6 +848,31 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     worktreeSetup,
   ]);
   const rows = useStableRows(rawRows, listIdentityKey);
+  const [findEntryId, setFindEntryId] = useState<string | null>(null);
+  const findScrollPending = useRef(false);
+  const selectFindEntry = useCallback(
+    (entry: Extract<TimelineEntry, { kind: "message" }>) => {
+      onManualNavigation();
+      if (entry.message.runId) expandCitedRun(entry.message.runId);
+      const attemptId = entry.attempt?.id;
+      if (attemptId) {
+        setExpandedAttemptIds((current) =>
+          current.has(attemptId) ? current : new Set([...current, attemptId]),
+        );
+      }
+      findScrollPending.current = true;
+      setFindEntryId(entry.id);
+    },
+    [onManualNavigation, expandCitedRun],
+  );
+  useEffect(() => {
+    if (!findEntryId || !findScrollPending.current) return;
+    const index = rows.findIndex((row) => row.id === findEntryId);
+    if (index < 0) return;
+    findScrollPending.current = false;
+    void listRef.current?.scrollToIndex({ index, animated: false, viewOffset: 64 });
+  }, [findEntryId, rows, listRef]);
+
   const latestSpokenReply = useMemo(
     () =>
       rows.findLast(
@@ -1423,17 +1449,23 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [listRef, registerTimeline],
   );
 
-  // Keep the row renderer stable: the width preference is applied by the
-  // timeline container so cached virtualized rows update without remounting.
+  // Width is applied by the timeline container; only moving a find match
+  // changes this renderer.
   const renderItem = useCallback(
     ({ item }: { item: MessagesTimelineRow }) => (
-      <div className="messages-timeline-row-frame">
+      <div
+        className={cn(
+          "messages-timeline-row-frame",
+          item.id === findEntryId && "rounded-md bg-accent/50 ring-1 ring-inset ring-ring",
+        )}
+        data-thread-find-match={item.id === findEntryId ? "true" : undefined}
+      >
         <div className="chat-content-lane overflow-x-clip" data-timeline-root="true">
           <TimelineRowContent row={item} />
         </div>
       </div>
     ),
-    [],
+    [findEntryId],
   );
 
   if (
@@ -1467,6 +1499,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           data-assistant-citation-viewport="true"
           data-thread-full-width={fullWidthThreadMessages ? "true" : undefined}
         >
+          <ThreadFindBar
+            key={listIdentityKey}
+            entries={timelineEntries}
+            onSelect={selectFindEntry}
+            onClose={() => setFindEntryId(null)}
+          />
           {onCiteAssistantText && citationThreadRef ? (
             <AssistantSelectionToolbar
               viewport={timelineViewportElement}

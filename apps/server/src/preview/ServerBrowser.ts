@@ -2,6 +2,7 @@
 // Screencasts ignore emulated device scale; real 2x keeps captures sharp.
 import {
   FILL_PREVIEW_VIEWPORT,
+  PREVIEW_ZOOM_LEVELS,
   INCOGNITO_BROWSER_PROFILE_ID,
   PREVIEW_AUTOMATION_SERVER_OPERATIONS,
   PreviewViewportSetting as PreviewViewportSettingSchema,
@@ -38,6 +39,7 @@ import {
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
 import { resolvePreviewViewport } from "@t3tools/shared/previewViewport";
+import { OPEN_BROWSER_FIND_SCRIPT } from "@t3tools/shared/browserFind";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
@@ -254,6 +256,7 @@ interface ViewerState {
   readonly pause: () => Promise<void>;
   readonly resume: () => Promise<void>;
   scrolledAt: number;
+  pinchZoom: { factor: number; published: number } | null;
   /** Last input from this viewer; page copies reach its clipboard only right after. */
   inputAt: number;
   /** Panel bounds, retained in fixed mode; passive viewers never request a size. */
@@ -1889,6 +1892,28 @@ const make = Effect.gen(function* () {
         return;
       }
       case "wheel":
+        if ((modifiers & 2) !== 0) {
+          // Accumulate small trackpad deltas, publishing only supported zoom steps.
+          const current =
+            viewer.pinchZoom?.published === tab.zoomFactor
+              ? viewer.pinchZoom.factor
+              : tab.zoomFactor;
+          const factor = Math.min(
+            5,
+            Math.max(0.25, current * Math.exp(-num(message.deltaY) / 300)),
+          );
+          const zoomFactor = PREVIEW_ZOOM_LEVELS.reduce((closest, level) =>
+            Math.abs(level - factor) < Math.abs(closest - factor) ? level : closest,
+          );
+          viewer.pinchZoom = { factor, published: zoomFactor };
+          if (zoomFactor === tab.zoomFactor) return;
+          const snapshot = await Effect.runPromise(
+            manager.adjust({ threadId: tab.threadId, tabId: tab.tabId, zoomFactor }),
+          );
+          await applyRendering(tab, snapshot);
+          return;
+        }
+        viewer.pinchZoom = null;
         viewer.scrolledAt = Date.now();
         await session.send("Input.dispatchMouseEvent", {
           type: "mouseWheel",
@@ -1903,6 +1928,15 @@ const make = Effect.gen(function* () {
         const key = typeof message.key === "string" ? message.key : "";
         const code = typeof message.code === "string" ? message.code : "";
         const text = typeof message.text === "string" ? message.text : undefined;
+        if (
+          message.action === "down" &&
+          (modifiers & (2 | 4)) !== 0 &&
+          (modifiers & 1) === 0 &&
+          key.toLowerCase() === "f"
+        ) {
+          await session.send("Runtime.evaluate", { expression: OPEN_BROWSER_FIND_SCRIPT });
+          return;
+        }
         if (message.action === "up") {
           await session.send("Input.dispatchKeyEvent", { type: "keyUp", key, code, modifiers });
           viewer.pressedKeys.delete(code || key);
@@ -2055,6 +2089,7 @@ const make = Effect.gen(function* () {
         },
         resume: () => startScreencast(screencastScale),
         scrolledAt: 0,
+        pinchZoom: null,
         inputAt: 0,
         requestedSize: null,
       };

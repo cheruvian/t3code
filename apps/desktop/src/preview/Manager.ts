@@ -5,6 +5,7 @@
  * elements live in the renderer; we only attach listeners and forward state
  * here). Single layer-scoped browser session partition.
  */
+import { OPEN_BROWSER_FIND_SCRIPT } from "@t3tools/shared/browserFind";
 import {
   DesktopPreviewRecordingInputSchema,
   DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER,
@@ -1535,6 +1536,17 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     };
     const beforeInput = (event: Electron.Event, input: Electron.Input): void => {
       syncMenuShortcuts(wc, input);
+      if (
+        input.type === "keyDown" &&
+        !input.isComposing &&
+        (input.control || input.meta) &&
+        !input.alt &&
+        input.key.toLowerCase() === "f"
+      ) {
+        event.preventDefault();
+        void wc.executeJavaScript(OPEN_BROWSER_FIND_SCRIPT).catch(() => undefined);
+        return;
+      }
       const host = wc.hostWebContents;
       const forwarded =
         input.type === "keyDown" &&
@@ -1629,6 +1641,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         });
         wc.on("did-create-window", windowCreated);
         wc.on("before-input-event", beforeInput);
+        void wc.setVisualZoomLevelLimits(1, 3).catch(() => undefined);
       });
       yield* Ref.update(attachedRef, (attached) =>
         replaceMap(attached, (copy) => {
