@@ -15,7 +15,7 @@ import ProjectScriptsControl, {
   type NewProjectScriptInput,
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
@@ -26,6 +26,10 @@ export interface ThreadDetailsPanelProps extends Pick<
   ComponentProps<typeof ThreadDetailsCard>,
   "anchor" | "handle" | "onPresentationChange"
 > {
+  resources?: ReactNode;
+  resourceLocks?: ComponentProps<typeof ProjectScriptsControl>["resourceLocks"];
+  resourceOwnerLabels?: ReadonlyMap<string, string>;
+  resourceActionsEnabled?: boolean;
   forceNewWorktree?: boolean;
   environmentId: EnvironmentId;
   threadId: ThreadId;
@@ -130,6 +134,12 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
 
               {props.activeProjectScripts ? (
                 <ProjectScriptsControl
+                  threadId={props.threadId}
+                  resourceActionsEnabled={props.resourceActionsEnabled ?? false}
+                  {...(props.resourceLocks ? { resourceLocks: props.resourceLocks } : {})}
+                  {...(props.resourceOwnerLabels
+                    ? { resourceOwnerLabels: props.resourceOwnerLabels }
+                    : {})}
                   environmentId={props.environmentId}
                   displayMode="panel"
                   scripts={props.activeProjectScripts}
@@ -141,6 +151,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   onDeleteScript={props.onDeleteProjectScript}
                 />
               ) : null}
+              {props.resources}
             </div>
           </ThreadDetailsSection>
 

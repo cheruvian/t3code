@@ -11442,6 +11442,17 @@ export default function ChatView(props: ChatViewProps) {
     ) : null
   ) : null;
   const threadDetailsPanelProps: ThreadDetailsPanelProps = {
+    resources:
+      activeProject && activeThreadId ? (
+        <ThreadResources
+          project={activeProject}
+          threadId={activeThreadId}
+          turnItems={serverProjection?.turnItems ?? []}
+        />
+      ) : null,
+    resourceLocks: activeGroupedResourceLocks,
+    resourceOwnerLabels,
+    resourceActionsEnabled: isServerThread,
     anchor: threadPanelPopoverAnchorRef,
     handle: threadPanelPopoverHandle,
     onPresentationChange: setThreadPanelPresentation,
@@ -11672,13 +11683,6 @@ export default function ChatView(props: ChatViewProps) {
           />
         </header>
 
-        {activeProject && activeThreadId && (
-          <ThreadResources
-            project={activeProject}
-            threadId={activeThreadId}
-            turnItems={serverProjection?.turnItems ?? []}
-          />
-        )}
         {/* Main content area with optional plan sidebar */}
         <div className="relative flex min-h-0 min-w-0 flex-1">
           {/* Chat column */}
