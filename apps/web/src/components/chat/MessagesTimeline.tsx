@@ -269,7 +269,8 @@ import { chatMarkdownClipboardPayload } from "../../markdown-clipboard";
 import { ContextChip, ContextChipLabel, type ContextChipKind } from "../ContextChip";
 import { createContextPresentationRegistry } from "../contextPresentationRegistry";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
-import { useClientSettings } from "~/hooks/useSettings";
+import { useClientSettings, useClientSettingsHydrated } from "~/hooks/useSettings";
+import { htmlRenderFileName } from "@t3tools/shared/htmlRender";
 import type { ChatMarkdownContextReference } from "../ChatMarkdown";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { cn } from "~/lib/utils";
@@ -848,6 +849,43 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     worktreeSetup,
   ]);
   const rows = useStableRows(rawRows, listIdentityKey);
+  const htmlPreviewDefaultMode = useClientSettings((settings) => settings.htmlPreviewDefaultMode);
+  const clientSettingsHydrated = useClientSettingsHydrated();
+  const latestHtmlRender = useMemo(
+    () =>
+      htmlPreviewDefaultMode === "side-panel"
+        ? rows.findLast((row) => row.kind === "html-render")?.htmlRender
+        : undefined,
+    [htmlPreviewDefaultMode, rows],
+  );
+  const automaticallyOpenedPreview = useRef<string | null>(null);
+  useEffect(() => {
+    if (htmlPreviewDefaultMode !== "side-panel") {
+      automaticallyOpenedPreview.current = null;
+      return;
+    }
+    if (!clientSettingsHydrated || !latestHtmlRender || onFileOpen === NOOP_OPEN_ATTACHMENT) return;
+    const key = `${listIdentityKey}:${latestHtmlRender.attachmentId}`;
+    // Opening belongs to the timeline, so mounting older rows cannot steal the panel.
+    // Remember the latest page so closing its panel survives subsequent timeline updates.
+    if (automaticallyOpenedPreview.current === key) return;
+    automaticallyOpenedPreview.current = key;
+    onFileOpen({
+      type: "file",
+      id: latestHtmlRender.attachmentId,
+      name: htmlRenderFileName(latestHtmlRender.title),
+      mimeType: "text/html",
+      sizeBytes: 0,
+      htmlRender: true,
+    });
+  }, [
+    clientSettingsHydrated,
+    htmlPreviewDefaultMode,
+    latestHtmlRender,
+    listIdentityKey,
+    onFileOpen,
+  ]);
+
   const [findEntryId, setFindEntryId] = useState<string | null>(null);
   const findScrollPending = useRef(false);
   const selectFindEntry = useCallback(

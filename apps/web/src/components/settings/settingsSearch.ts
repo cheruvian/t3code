@@ -236,6 +236,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["wide full width column layout messages composer monitor"],
   },
   {
+    id: "html-previews",
+    title: "HTML previews",
+    to: "/settings/appearance",
+    searchTerms: ["visual replies render inline collapsed opened chat side panel default"],
+  },
+  {
     id: "panel-animations",
     title: "Panel animations",
     to: "/settings/appearance",

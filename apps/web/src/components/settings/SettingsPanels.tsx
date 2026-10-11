@@ -41,6 +41,7 @@ import {
   DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE,
   DEFAULT_UNIFIED_SETTINGS,
   type ChatWidth,
+  type HtmlPreviewDefaultMode,
   type DiffLayout,
   type EnvironmentIdentificationMode,
   type SidebarThreadSortOrder,
@@ -255,6 +256,12 @@ const CHAT_WIDTH_LABELS: Record<ChatWidth, string> = {
   comfortable: "Comfortable",
   wide: "Wide",
   full: "Full",
+};
+
+const HTML_PREVIEW_DEFAULT_LABELS: Record<HtmlPreviewDefaultMode, string> = {
+  inline: "Opened in chat",
+  collapsed: "Collapsed in chat",
+  "side-panel": "Opened in side panel",
 };
 
 const DIFF_LAYOUT_LABELS: Record<DiffLayout, string> = {
@@ -598,6 +605,9 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Diff colors"]
         : []),
       ...(settings.chatWidth !== DEFAULT_UNIFIED_SETTINGS.chatWidth ? ["Chat width"] : []),
+      ...(settings.htmlPreviewDefaultMode !== DEFAULT_UNIFIED_SETTINGS.htmlPreviewDefaultMode
+        ? ["HTML previews"]
+        : []),
       ...(settings.panelAnimationDurationMs !== DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs
         ? ["Panel animations"]
         : []),
@@ -731,6 +741,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.appearanceContrast,
       settings.diffColorScheme,
       settings.chatWidth,
+      settings.htmlPreviewDefaultMode,
       settings.enableAgentBrowserAccess,
       settings.confirmQuit,
       settings.confirmThreadArchive,
@@ -850,6 +861,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       appearanceContrast: DEFAULT_UNIFIED_SETTINGS.appearanceContrast,
       diffColorScheme: DEFAULT_UNIFIED_SETTINGS.diffColorScheme,
       chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth,
+      htmlPreviewDefaultMode: DEFAULT_UNIFIED_SETTINGS.htmlPreviewDefaultMode,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
       inAppNotificationsEnabled: DEFAULT_UNIFIED_SETTINGS.inAppNotificationsEnabled,
@@ -1526,6 +1538,45 @@ export function AppearanceSettingsPanel() {
                   <SelectItem value="comfortable">Comfortable (default)</SelectItem>
                   <SelectItem value="wide">Wide</SelectItem>
                   <SelectItem value="full">Full</SelectItem>
+                </SelectPopup>
+              </Select>
+            </div>
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("html-previews")}
+          description="Choose where agent-created HTML previews open by default."
+          resetAction={
+            settings.htmlPreviewDefaultMode !== DEFAULT_UNIFIED_SETTINGS.htmlPreviewDefaultMode ? (
+              <SettingResetButton
+                label="HTML previews"
+                onClick={() =>
+                  updateSettings({
+                    htmlPreviewDefaultMode: DEFAULT_UNIFIED_SETTINGS.htmlPreviewDefaultMode,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="w-full sm:w-48">
+              <Select
+                value={settings.htmlPreviewDefaultMode}
+                onValueChange={(value) => {
+                  if (value === "inline" || value === "collapsed" || value === "side-panel")
+                    updateSettings({ htmlPreviewDefaultMode: value });
+                }}
+              >
+                <SelectTrigger size="sm" className="w-full min-w-0" aria-label="HTML previews">
+                  <SelectValue>
+                    {HTML_PREVIEW_DEFAULT_LABELS[settings.htmlPreviewDefaultMode]}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem value="inline">Opened in chat (default)</SelectItem>
+                  <SelectItem value="collapsed">Collapsed in chat</SelectItem>
+                  <SelectItem value="side-panel">Opened in side panel</SelectItem>
                 </SelectPopup>
               </Select>
             </div>

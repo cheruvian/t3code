@@ -396,6 +396,28 @@ describe("ClientSettings chat width", () => {
   });
 });
 
+describe("ClientSettings HTML preview defaults", () => {
+  it("keeps previews open in chat when saved settings omit the preference", () => {
+    expect(decodeClientSettings({}).htmlPreviewDefaultMode).toBe("inline");
+  });
+
+  it.each(["inline", "collapsed", "side-panel"])(
+    "persists the %s mode",
+    (htmlPreviewDefaultMode) => {
+      const saved = encodeClientSettings(decodeClientSettings({ htmlPreviewDefaultMode }));
+      expect(decodeClientSettings(saved).htmlPreviewDefaultMode).toBe(htmlPreviewDefaultMode);
+      expect(decodeClientSettingsPatch({ htmlPreviewDefaultMode }).htmlPreviewDefaultMode).toBe(
+        htmlPreviewDefaultMode,
+      );
+    },
+  );
+
+  it("rejects unsupported modes in saved settings and patches", () => {
+    expect(() => decodeClientSettings({ htmlPreviewDefaultMode: "floating" })).toThrow();
+    expect(() => decodeClientSettingsPatch({ htmlPreviewDefaultMode: "floating" })).toThrow();
+  });
+});
+
 describe("ClientSettings load balancing", () => {
   it("requires opt-in when settings are new or omit load balancing", () => {
     expect(decodeClientSettings({}).loadBalancingEnabled).toBe(false);

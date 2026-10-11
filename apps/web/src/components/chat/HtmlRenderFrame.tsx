@@ -5,15 +5,15 @@ import {
   htmlRenderFrameHeight,
   type HtmlRenderReference,
 } from "@t3tools/shared/htmlRender";
-import { Maximize2Icon } from "lucide-react";
+import { PanelRightOpenIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
 import type { ChatFileAttachment } from "~/types";
+import { useClientSettings } from "~/hooks/useSettings";
 
 import { HtmlRenderDocument } from "../files/BrowserDocumentFrame";
 import { Button } from "../ui/button";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 // A frame may load its URL a little after mounting.
 const MIN_URL_LIFE_MS = 5 * 60_000;
@@ -30,6 +30,9 @@ export function HtmlRenderFrame(props: {
   readonly onOpen: (attachment: ChatFileAttachment) => void;
 }) {
   const { attachmentId, title } = props.htmlRender;
+  const defaultMode = useClientSettings((settings) => settings.htmlPreviewDefaultMode);
+  const [collapsedOverride, setCollapsed] = useState<boolean | null>(null);
+  const collapsed = collapsedOverride ?? defaultMode !== "inline";
   // The frame takes the page's measured height at its own width, read before
   // first paint so the reserved box is already the right size.
   const boxRef = useRef<HTMLDivElement>(null);
@@ -64,16 +67,19 @@ export function HtmlRenderFrame(props: {
   // failed load. The page keeps its first URL for its lifetime.
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
-  const assetUrl = useAssetUrlState(src === null ? props.environmentId : null, resource);
+  const assetUrl = useAssetUrlState(
+    !collapsed && src === null ? props.environmentId : null,
+    resource,
+  );
   const cachedUrl = assetUrl._tag === "Success" ? assetUrl.url : null;
   const cachedExpiresAt = assetUrl._tag === "Success" ? assetUrl.expiresAt : 0;
   const cacheFailed = assetUrl._tag === "Failure";
   const refresh = useAssetUrlRefresh(props.environmentId, resource);
-  // At most one mint per mount: expiry is server time and the check uses the
+  // At most one mint per inline viewing: expiry is server time and the check uses the
   // client clock, so a skewed clock must not mint again on every update.
   const minting = useRef(false);
   useEffect(() => {
-    if (src !== null || minting.current) return;
+    if (collapsed || src !== null || minting.current) return;
     if (cacheFailed) {
       // oxlint-disable-next-line react/set-state-in-effect -- Mirrors the cached URL's failure.
       setFailed(true);
@@ -89,51 +95,59 @@ export function HtmlRenderFrame(props: {
       (url) => (url === null ? setFailed(true) : setSrc(url)),
       () => setFailed(true),
     );
-  }, [cacheFailed, cachedExpiresAt, cachedUrl, refresh, src]);
+  }, [cacheFailed, cachedExpiresAt, cachedUrl, collapsed, refresh, src]);
+
+  const openPreview = () => {
+    props.onOpen({
+      type: "file",
+      id: attachmentId,
+      name: fileName,
+      mimeType: "text/html",
+      // Unknown here; the preview leaves it out.
+      sizeBytes: 0,
+      htmlRender: true,
+    });
+    setCollapsed(true);
+  };
+  const showInline = () => {
+    // A collapsed page can outlive its signed URL. Resolve it again before remounting.
+    minting.current = false;
+    setSrc(null);
+    setFailed(false);
+    setContentHeight(undefined);
+    setCollapsed(false);
+  };
 
   return (
-    <div ref={boxRef} className="group/html-render relative" style={{ height }}>
-      {src !== null ? (
-        <>
-          <HtmlRenderDocument
-            src={src}
-            title={title}
-            className="block size-full"
-            onContentHeight={setContentHeight}
-          />
-          <div className="absolute end-2 top-2 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/html-render:opacity-100 pointer-coarse:opacity-100">
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    aria-label="Open in panel"
-                    size="icon-xs"
-                    variant="glass"
-                    onClick={() =>
-                      props.onOpen({
-                        type: "file",
-                        id: attachmentId,
-                        name: fileName,
-                        mimeType: "text/html",
-                        // Unknown here; the preview leaves it out.
-                        sizeBytes: 0,
-                        htmlRender: true,
-                      })
-                    }
-                  />
-                }
-              >
-                <Maximize2Icon className="size-3.5" />
-              </TooltipTrigger>
-              <TooltipPopup side="left">Open in panel</TooltipPopup>
-            </Tooltip>
-          </div>
-        </>
-      ) : failed ? (
-        <p className="flex size-full items-center justify-center text-muted-foreground text-xs">
-          Unable to load {title}
-        </p>
-      ) : null}
+    <div ref={boxRef} className="min-w-0">
+      <div className="flex min-w-0 items-center gap-2 py-1">
+        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{title}</span>
+        {collapsed ? (
+          <Button variant="ghost-muted" size="xs" onClick={showInline}>
+            Show inline
+          </Button>
+        ) : null}
+        <Button variant="outline" size="xs" onClick={openPreview}>
+          <PanelRightOpenIcon />
+          Open preview
+        </Button>
+      </div>
+      {collapsed ? null : (
+        <div className="relative" style={{ height }}>
+          {src !== null ? (
+            <HtmlRenderDocument
+              src={src}
+              title={title}
+              className="block size-full"
+              onContentHeight={setContentHeight}
+            />
+          ) : failed ? (
+            <p className="flex size-full items-center justify-center text-muted-foreground text-xs">
+              Unable to load {title}
+            </p>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }

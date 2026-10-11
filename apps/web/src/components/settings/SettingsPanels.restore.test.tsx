@@ -78,6 +78,21 @@ describe("restoring V2 settings", () => {
     expect(state.update.mock.calls[0]?.[0][key]).toBe(DEFAULT_UNIFIED_SETTINGS[key]);
   });
 
+  it.each(["collapsed", "side-panel"] as const)(
+    "restores the %s HTML preview default",
+    async (htmlPreviewDefaultMode) => {
+      state.settings = { ...DEFAULT_UNIFIED_SETTINGS, htmlPreviewDefaultMode };
+      hooks.beginRender();
+      const restore = useSettingsRestore();
+
+      expect(restore.changedSettingLabels).toEqual(["HTML previews"]);
+      await restore.restoreDefaults();
+
+      expect(state.confirm.mock.calls[0]?.[0]).toContain("HTML previews");
+      expect(state.update.mock.calls[0]?.[0].htmlPreviewDefaultMode).toBe("inline");
+    },
+  );
+
   it("does not reset settings after cancellation", async () => {
     state.settings = { ...DEFAULT_UNIFIED_SETTINGS, autoResumeLimitedThreads: true };
     state.confirm.mockResolvedValue(false);
