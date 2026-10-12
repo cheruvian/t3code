@@ -221,6 +221,7 @@ import {
   timelineContentOverflowsViewport,
   readTimelinePosition,
   observeTimelineRun,
+  scheduleAnchoredTimelineFollow,
   type TimelineRunObservation,
   type TimelineScrollMode,
 } from "./chat/timelineScrollAnchoring";
@@ -7008,6 +7009,30 @@ export default function ChatView(props: ChatViewProps) {
   ]);
 
   useEffect(() => {
+    if (timelineScrollModeRef.current !== "anchoring-new-turn") return;
+    const userScrollGeneration = anchorUserScrollGenerationRef.current;
+    return scheduleAnchoredTimelineFollow({
+      shouldFollow: () =>
+        timelineScrollModeRef.current === "anchoring-new-turn" &&
+        anchorUserScrollGenerationRef.current === userScrollGeneration &&
+        liveFollowUserScrollGenerationRef.current === userScrollGeneration &&
+        pendingTimelineAnchorRef.current === null &&
+        positionedTimelineAnchorRef.current !== null &&
+        settledTimelineAnchorRef.current === positionedTimelineAnchorRef.current,
+      getMeasurement: () => {
+        const state = legendListRef.current?.getState();
+        const anchorIndex = activeTimelineAnchorIndexRef.current;
+        return state && anchorIndex !== null ? { state, anchorIndex } : null;
+      },
+      composerOverlayHeight: composerTimelineInset,
+      anchorOffset: CHAT_TIMELINE_ANCHOR_OFFSET,
+      scrollToOffset: (offset) => {
+        void legendListRef.current?.scrollToOffset({ offset, animated: false });
+      },
+    });
+  }, [activeThreadKey, composerTimelineInset, timelineEntries, timelineAnchorMessageId]);
+
+  useEffect(() => {
     setPullRequestDialogState(null);
     const followEnd = readTimelinePosition(routeThreadKey)?.atEnd !== false;
     isAtEndRef.current = followEnd;
@@ -11750,6 +11775,7 @@ export default function ChatView(props: ChatViewProps) {
               <MessagesTimeline
                 citationRequest={paintOnlyDisplayedTimeline ? null : citationRequest}
                 citationHistoryLoading={threadDetailLoading}
+                threadSyncPending={!paintOnlyDisplayedTimeline && threadSyncPhase !== null}
                 {...(!paintOnlyDisplayedTimeline
                   ? {
                       onCiteAssistantText: citeAssistantText,

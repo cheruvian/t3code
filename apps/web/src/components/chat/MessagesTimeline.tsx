@@ -451,7 +451,7 @@ export interface MessagesTimelineHistoryControls {
 interface MessagesTimelineProps {
   citationRequest?: AssistantCitationRequest | null;
   citationHistoryLoading?: boolean;
-  threadSyncPending?: boolean;
+  threadSyncPending: boolean;
   onCiteAssistantText?: (
     citation: AssistantCitation,
     sourceAnchor: AssistantCitationSourceAnchor,
@@ -547,7 +547,7 @@ interface MessagesTimelineProps {
 export const MessagesTimeline = memo(function MessagesTimeline({
   citationRequest = null,
   citationHistoryLoading = false,
-  threadSyncPending = false,
+  threadSyncPending,
   onCiteAssistantText,
   isWorking,
   runlessWorkActive = false,

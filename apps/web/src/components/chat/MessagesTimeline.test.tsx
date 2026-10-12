@@ -397,6 +397,7 @@ describe("timeline tooltip scroll dismissal", () => {
 
 function buildProps() {
   return {
+    threadSyncPending: false,
     isWorking: false,
     activeTurnInProgress: false,
     listRef: createRef<LegendListRef | null>(),

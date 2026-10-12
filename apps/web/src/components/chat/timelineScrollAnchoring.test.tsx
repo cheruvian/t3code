@@ -1,7 +1,8 @@
 import { MessageId, RunId } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   observeTimelineRun,
+  scheduleAnchoredTimelineFollow,
   getAnchoredTurnMetrics,
   getRowBottom,
   lastTimelineReadingRowId,
@@ -30,6 +31,98 @@ function buildState({
     sizeAtIndex: (index: number) => sizes[index],
   };
 }
+
+describe("anchored reply follow", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function setup({ scroll = 900, replyHeight = 300 } = {}) {
+    const frames = new Map<number, FrameRequestCallback>();
+    let frameId = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.set(++frameId, callback);
+      return frameId;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    const state = buildState({
+      positions: [0, 900, 1180],
+      sizes: [800, 220, replyHeight],
+      scroll,
+      scrollLength: 760,
+    });
+    let following = true;
+    const scrollToOffset = vi.fn((offset: number) => {
+      state.scroll = offset;
+    });
+    const schedule = () =>
+      scheduleAnchoredTimelineFollow({
+        shouldFollow: () => following,
+        getMeasurement: () => ({ state, anchorIndex: 1 }),
+        composerOverlayHeight: 180,
+        anchorOffset: 16,
+        scrollToOffset,
+      });
+    const flushFrame = () => {
+      const callbacks = [...frames.values()];
+      frames.clear();
+      callbacks.forEach((callback) => callback(0));
+    };
+    return {
+      state,
+      schedule,
+      flushFrame,
+      scrollToOffset,
+      stopFollowing: () => {
+        following = false;
+      },
+    };
+  }
+
+  it("keeps text-only reply growth visible above the composer", () => {
+    const timeline = setup();
+    timeline.schedule();
+    timeline.flushFrame();
+    expect(timeline.state.scroll).toBe(900);
+    timeline.flushFrame();
+    expect(timeline.state.scroll).toBe(916);
+
+    timeline.state.sizeAtIndex = (index) => [800, 220, 600][index];
+    timeline.schedule();
+    timeline.flushFrame();
+    timeline.flushFrame();
+    expect(timeline.state.scroll).toBe(1216);
+  });
+
+  it("leaves a fitting reply and reserved end space in place", () => {
+    const timeline = setup({ replyHeight: 100 });
+    timeline.schedule();
+    timeline.flushFrame();
+    timeline.flushFrame();
+    expect(timeline.state.scroll).toBe(900);
+    expect(timeline.scrollToOffset).not.toHaveBeenCalled();
+  });
+
+  it("does not pull a reader back after navigation between layout frames", () => {
+    const timeline = setup();
+    timeline.schedule();
+    timeline.flushFrame();
+    timeline.stopFollowing();
+    timeline.state.scroll = 100;
+    timeline.flushFrame();
+    expect(timeline.state.scroll).toBe(100);
+    expect(timeline.scrollToOffset).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 1])("cancels pending positioning on a thread switch after %i frames", (frames) => {
+    const timeline = setup();
+    const cancel = timeline.schedule();
+    if (frames > 0) timeline.flushFrame();
+    cancel();
+    timeline.flushFrame();
+    timeline.flushFrame();
+    expect(timeline.state.scroll).toBe(900);
+    expect(timeline.scrollToOffset).not.toHaveBeenCalled();
+  });
+});
 
 describe("timelineContentOverflowsViewport", () => {
   const inset = { composerInset: 100, anchorOffset: 24 };

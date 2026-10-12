@@ -142,6 +142,39 @@ export function getAnchoredTurnMetrics({
   };
 }
 
+/** Reveal growing replies while anchored end space disables the list's native end-follow. */
+export function scheduleAnchoredTimelineFollow(input: {
+  readonly shouldFollow: () => boolean;
+  readonly getMeasurement: () => {
+    readonly state: TimelineListMeasurementState;
+    readonly anchorIndex: number;
+  } | null;
+  readonly composerOverlayHeight: number;
+  readonly anchorOffset: number;
+  readonly scrollToOffset: (offset: number) => void;
+}) {
+  let secondFrame: number | null = null;
+  const frame = requestAnimationFrame(() => {
+    secondFrame = requestAnimationFrame(() => {
+      secondFrame = null;
+      if (!input.shouldFollow()) return;
+      const measurement = input.getMeasurement();
+      if (!measurement) return;
+      const metrics = getAnchoredTurnMetrics({
+        ...measurement,
+        composerOverlayHeight: input.composerOverlayHeight,
+        anchorOffset: input.anchorOffset,
+      });
+      if (!metrics || metrics.scrollDeltaToRevealEnd <= 1) return;
+      input.scrollToOffset(metrics.targetScrollToRevealEnd);
+    });
+  });
+  return () => {
+    cancelAnimationFrame(frame);
+    if (secondFrame !== null) cancelAnimationFrame(secondFrame);
+  };
+}
+
 export interface RememberedTimelinePosition {
   readonly rowId: string;
   readonly lastRowId?: string;
