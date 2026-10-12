@@ -42,6 +42,8 @@ import {
 } from "../threads/threadOrder";
 import { getThreadListV2OrderedSection } from "../threads/threadListV2";
 import { threadCanArchive } from "./threadArchive";
+import { threadShellIsIdleForWorktreeCleanup } from "@t3tools/client-runtime/state/models";
+import { getWorktreeCleanupOwners } from "@t3tools/shared/worktreeOwnership";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
 
 export function readMobileThreadMoveAvailability(thread: EnvironmentThreadShell) {
@@ -320,10 +322,14 @@ function useThreadActionExecutor(
         const resourceNames = resourceLocks.map((lock) => lock.script.name);
         if (action === "settle" && thread.worktreePath) {
           const shells = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
-          const owners = shells.filter(
-            (entry) =>
-              entry.environmentId === thread.environmentId &&
-              entry.worktreePath === thread.worktreePath,
+          const owners = getWorktreeCleanupOwners(
+            shells.filter(
+              (entry) =>
+                entry.environmentId === thread.environmentId &&
+                entry.worktreePath === thread.worktreePath,
+            ),
+            thread.id,
+            threadShellIsIdleForWorktreeCleanup,
           );
           const canDelete = owners.length === 1 && threadCanArchive(thread.runtime);
           const status = await readWorktreeStatus({

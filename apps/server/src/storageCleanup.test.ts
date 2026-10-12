@@ -239,6 +239,8 @@ describe.each(["confirmed", "settled"] as const)("%s worktree removal", (mode) =
     "dedicated-session",
     "linked-worktree",
     "shared",
+    "idle-subagent",
+    "active-subagent",
     "changed",
     "active",
   ] as const)(
@@ -333,10 +335,27 @@ describe.each(["confirmed", "settled"] as const)("%s worktree removal", (mode) =
                             thread,
                             { ...thread, id: ThreadId.make("other"), worktreePath: worktree },
                           ]
-                        : scenario === "stale-shared-session" ||
-                            scenario === "nested-shared-session"
-                          ? [thread, otherThread]
-                          : [thread],
+                        : scenario === "idle-subagent" || scenario === "active-subagent"
+                          ? [
+                              thread,
+                              shell({
+                                id: ThreadId.make("reviewer"),
+                                branch: "feature",
+                                worktreePath: worktree,
+                                lineage: {
+                                  rootThreadId: thread.id,
+                                  parentThreadId: thread.id,
+                                  relationshipToParent: "subagent",
+                                },
+                                ...(scenario === "active-subagent"
+                                  ? { status: "running", activeRunId: RunId.make("review-run") }
+                                  : {}),
+                              }),
+                            ]
+                          : scenario === "stale-shared-session" ||
+                              scenario === "nested-shared-session"
+                            ? [thread, otherThread]
+                            : [thread],
                 }),
             }),
             Layer.mock(Orchestrator.OrchestratorV2)({}),
@@ -435,6 +454,7 @@ describe.each(["confirmed", "settled"] as const)("%s worktree removal", (mode) =
           const shouldRemove =
             scenario === "delete" ||
             scenario === "linked-parent" ||
+            scenario === "idle-subagent" ||
             scenario === "stale-shared-session";
           expect(removed).toBe(shouldRemove);
           expect(yield* fs.exists(worktree)).toBe(!shouldRemove);

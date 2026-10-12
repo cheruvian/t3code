@@ -86,6 +86,21 @@ function threadRunStatusIsActive(status: ThreadRuntimeSummary["status"]): boolea
   );
 }
 
+export function threadShellIsIdleForWorktreeCleanup(
+  thread: Pick<
+    EnvironmentThreadShell,
+    "runtime" | "pendingBackgroundTasks" | "hasPendingApprovals" | "hasPendingUserInput"
+  >,
+): boolean {
+  return (
+    !threadRuntimeIsActive(thread.runtime) &&
+    thread.runtime?.activeRunId == null &&
+    thread.pendingBackgroundTasks.length === 0 &&
+    !thread.hasPendingApprovals &&
+    !thread.hasPendingUserInput
+  );
+}
+
 export interface EnvironmentThreadShell {
   readonly environmentMoveOrigin?: OrchestrationV2ThreadShell["environmentMoveOrigin"];
   readonly environmentMove?: OrchestrationV2ThreadShell["environmentMove"];

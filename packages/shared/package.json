@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./worktreeOwnership": {
+      "types": "./src/worktreeOwnership.ts",
+      "import": "./src/worktreeOwnership.ts"
+    },
     "./quickCommandNavigation": {
       "types": "./src/quickCommandNavigation.ts",
       "import": "./src/quickCommandNavigation.ts"

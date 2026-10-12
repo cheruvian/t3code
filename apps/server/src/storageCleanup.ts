@@ -42,6 +42,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirectory.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import { withWorkspaceLease } from "./workspace/workspaceLease.ts";
+import { getWorktreeCleanupOwners } from "@t3tools/shared/worktreeOwnership";
 
 export class StorageCleanup extends Context.Service<
   StorageCleanup,
@@ -303,8 +304,22 @@ export const make = Effect.gen(function* () {
       (thread) => path.resolve(thread.worktreePath!),
     );
     const candidates = [
-      ...[...groups.values()].flatMap((group) => (group.length === 1 ? [group[0]!] : [])),
-      ...deletedThreads.filter((thread) => !groups.has(path.resolve(thread.worktreePath!))),
+      ...[...groups.values()].flatMap((group) =>
+        group.filter(
+          (thread) =>
+            getWorktreeCleanupOwners(group, thread.id, (entry) =>
+              storageCleanupThreadIdle(entry, now),
+            ).length === 1,
+        ),
+      ),
+      ...deletedThreads.filter(
+        (thread) =>
+          getWorktreeCleanupOwners(
+            groups.get(path.resolve(thread.worktreePath!)) ?? [],
+            thread.id,
+            (entry) => storageCleanupThreadIdle(entry, now),
+          ).length === 0,
+      ),
     ];
     for (const thread of candidates) {
       if (manual && ("workspaceRoot" in thread || thread.settledAt === null)) continue;
@@ -456,10 +471,13 @@ export const make = Effect.gen(function* () {
         // thread sharing this path cancels the removal.
         const latestSnapshot = yield* readThreads();
         if (yield* containsProjectRoot(worktreePath, [project, ...latestSnapshot.projects])) return;
-        const latest = yield* Effect.filter(latestSnapshot.threads, (entry) =>
+        const latestThreads = yield* Effect.filter(latestSnapshot.threads, (entry) =>
           entry.worktreePath === null
             ? Effect.succeed(false)
             : canonicalPath(entry.worktreePath).pipe(Effect.map((cwd) => cwd === realPath)),
+        );
+        const latest = getWorktreeCleanupOwners(latestThreads, thread.id, (entry) =>
+          storageCleanupThreadIdle(entry, now),
         );
         if (hasTerminal(worktreePath)) return;
         if (deleted) {
@@ -680,7 +698,7 @@ export const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const latest = yield* readThreads();
           const realWorktreePath = yield* fs.realPath(worktreePath);
-          const owners = yield* Effect.filter(latest.threads, (entry) =>
+          const linkedThreads = yield* Effect.filter(latest.threads, (entry) =>
             entry.worktreePath === null
               ? Effect.succeed(false)
               : canonicalPath(entry.worktreePath).pipe(
@@ -697,8 +715,11 @@ export const make = Effect.gen(function* () {
             ),
             canonicalPath,
           );
-          const current = owners[0];
           const now = yield* Clock.currentTimeMillis;
+          const owners = getWorktreeCleanupOwners(linkedThreads, input.threadId, (entry) =>
+            storageCleanupThreadIdle(entry, now),
+          );
+          const current = owners[0];
           if (
             owners.length !== 1 ||
             current?.id !== input.threadId ||

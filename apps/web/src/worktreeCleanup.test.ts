@@ -1,4 +1,4 @@
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
@@ -36,6 +36,119 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
 }
 
 describe("getOrphanedWorktreePathForThread", () => {
+  const worktreePath = "/tmp/repo/worktrees/feature-a";
+  function reviewer(overrides: Partial<Thread> = {}) {
+    return makeThread({
+      id: ThreadId.make("reviewer"),
+      worktreePath,
+      lineage: {
+        rootThreadId: ThreadId.make("thread-1"),
+        parentThreadId: ThreadId.make("thread-1"),
+        relationshipToParent: "subagent",
+      },
+      ...overrides,
+    });
+  }
+
+  it("allows a parent to remove its worktree after an idle review subagent finishes", () => {
+    expect(
+      getOrphanedWorktreePathForThread(
+        [makeThread({ worktreePath }), reviewer()],
+        ThreadId.make("thread-1"),
+      ),
+    ).toBe(worktreePath);
+  });
+
+  it("includes idle nested subagents in their parent's cleanup", () => {
+    expect(
+      getOrphanedWorktreePathForThread(
+        [
+          makeThread({ worktreePath }),
+          reviewer(),
+          reviewer({
+            id: ThreadId.make("nested-reviewer"),
+            lineage: {
+              rootThreadId: ThreadId.make("thread-1"),
+              parentThreadId: ThreadId.make("reviewer"),
+              relationshipToParent: "subagent",
+            },
+          }),
+        ],
+        ThreadId.make("thread-1"),
+      ),
+    ).toBe(worktreePath);
+  });
+
+  it.each(["running", "queued", "waiting"] as const)(
+    "keeps the worktree while its subagent is %s",
+    (status) => {
+      const child = reviewer({
+        runtime: {
+          status,
+          activeRunId: RunId.make("review-run"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          providerName: null,
+          lastError: null,
+          updatedAt: "2026-02-13T00:00:00.000Z",
+        },
+      });
+      expect(
+        getOrphanedWorktreePathForThread(
+          [makeThread({ worktreePath }), child],
+          ThreadId.make("thread-1"),
+        ),
+      ).toBeNull();
+    },
+  );
+
+  it.each(["hasPendingApprovals", "hasPendingUserInput"] as const)(
+    "keeps a subagent's workspace while %s",
+    (flag) => {
+      expect(
+        getOrphanedWorktreePathForThread(
+          [makeThread({ worktreePath }), reviewer({ [flag]: true })],
+          ThreadId.make("thread-1"),
+        ),
+      ).toBeNull();
+    },
+  );
+
+  it("keeps a worktree shared with a forked conversation", () => {
+    expect(
+      getOrphanedWorktreePathForThread(
+        [
+          makeThread({ worktreePath }),
+          reviewer({
+            lineage: {
+              rootThreadId: ThreadId.make("thread-1"),
+              parentThreadId: ThreadId.make("thread-1"),
+              relationshipToParent: "fork",
+            },
+          }),
+        ],
+        ThreadId.make("thread-1"),
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps a worktree referenced by an unrelated subagent", () => {
+    expect(
+      getOrphanedWorktreePathForThread(
+        [
+          makeThread({ worktreePath }),
+          reviewer({
+            lineage: {
+              rootThreadId: ThreadId.make("other-parent"),
+              parentThreadId: ThreadId.make("other-parent"),
+              relationshipToParent: "subagent",
+            },
+          }),
+        ],
+        ThreadId.make("thread-1"),
+      ),
+    ).toBeNull();
+  });
+
   it("returns null when the target thread does not exist", () => {
     const result = getOrphanedWorktreePathForThread([], ThreadId.make("missing-thread"));
     expect(result).toBeNull();
