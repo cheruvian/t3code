@@ -5,7 +5,7 @@ for (const name of ["runner", "watchdog"]) {
   const target = new URL("../src/" + name + "-program.js", import.meta.url);
   const encoded = "export default " + JSON.stringify(source) + ";\n";
   if (process.argv.includes("--check")) {
-    if ((await NodeFSP.readFile(target, "utf8")) !== encoded)
+    if ((await import(target.href)).default !== source)
       throw new Error("Regenerate broker supervisor programs.");
   } else await NodeFSP.writeFile(target, encoded);
 }
