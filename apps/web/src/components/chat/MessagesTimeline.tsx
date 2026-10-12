@@ -126,6 +126,7 @@ import {
   BrainIcon,
   CheckIcon,
   ChevronDownIcon,
+  ChevronsDownIcon,
   ChevronRightIcon,
   ChevronUpIcon,
   CircleAlertIcon,
@@ -532,6 +533,7 @@ interface MessagesTimelineProps {
   onContentOverflowChange?: (overflows: boolean) => void;
   onToolOutputCollapsedAtEnd?: () => void;
   onManualNavigation: () => void;
+  onScrollToEnd: () => void;
   cancelPositionRestoreRef?: React.RefObject<(() => void) | null>;
   hideEmptyPlaceholder?: boolean;
   topFadeEnabled?: boolean;
@@ -601,6 +603,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   liveFollowEnabled,
   onToolOutputCollapsedAtEnd,
   onManualNavigation,
+  onScrollToEnd,
   cancelPositionRestoreRef,
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
@@ -1598,6 +1601,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             hitStripWidth={minimapHitStripWidth}
             currentIndex={minimapCurrentIndex}
             stripMap={minimapStripMap}
+            onScrollToEnd={onScrollToEnd}
             onSelect={(item) => {
               onManualNavigation();
               void listRef.current?.scrollToIndex({
@@ -1678,6 +1682,7 @@ function TimelineMinimap({
   items,
   stripMap,
   onSelect,
+  onScrollToEnd,
 }: {
   hasPersistentGutter: boolean;
   hitStripWidth: number;
@@ -1685,6 +1690,7 @@ function TimelineMinimap({
   items: ReadonlyArray<TimelineMinimapItem>;
   stripMap: Map<string, HTMLSpanElement>;
   onSelect: (item: TimelineMinimapItem) => void;
+  onScrollToEnd: () => void;
 }) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
@@ -1909,6 +1915,12 @@ function TimelineMinimap({
               if (nextItem) onSelect(nextItem);
             }}
           />
+          <TimelineMinimapNavigationButton
+            direction="bottom"
+            disabled={false}
+            interactive={navigationInteractive}
+            onClick={onScrollToEnd}
+          />
         </div>
       </div>
     </div>
@@ -1921,14 +1933,15 @@ function TimelineMinimapNavigationButton({
   interactive,
   onClick,
 }: {
-  direction: "previous" | "next";
+  direction: "previous" | "next" | "bottom";
   disabled: boolean;
   interactive: boolean;
   onClick: () => void;
 }) {
   const previous = direction === "previous";
-  const label = previous ? "Previous turn" : "Next turn";
-  const Icon = previous ? ChevronUpIcon : ChevronDownIcon;
+  const bottom = direction === "bottom";
+  const label = previous ? "Previous turn" : bottom ? "Scroll to bottom" : "Next turn";
+  const Icon = previous ? ChevronUpIcon : bottom ? ChevronsDownIcon : ChevronDownIcon;
 
   return (
     <Tooltip>
@@ -1938,7 +1951,11 @@ function TimelineMinimapNavigationButton({
             className={cn(
               "absolute left-1 z-10 inline-flex -translate-x-1/2 opacity-0 transition-opacity duration-150 hover:opacity-100 focus-within:opacity-100",
               interactive ? "pointer-events-auto" : "pointer-events-none",
-              previous ? "bottom-[calc(100%+2px)]" : "top-[calc(100%+2px)]",
+              previous
+                ? "bottom-[calc(100%+2px)]"
+                : bottom
+                  ? "top-[calc(100%+26px)] group-hover/minimap:opacity-100"
+                  : "top-[calc(100%+2px)]",
             )}
           />
         }
@@ -1947,6 +1964,7 @@ function TimelineMinimapNavigationButton({
           aria-label={label}
           disabled={disabled}
           onClick={onClick}
+          onPointerDown={(event) => event.preventDefault()}
           size="icon-micro"
           type="button"
           variant="ghost-muted"

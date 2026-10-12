@@ -427,6 +427,7 @@ function buildProps() {
     liveFollowEnabled: true,
     onIsAtEndChange: () => {},
     onManualNavigation: () => {},
+    onScrollToEnd: () => {},
   };
 }
 
