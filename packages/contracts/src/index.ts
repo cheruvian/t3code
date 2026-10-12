@@ -66,3 +66,4 @@ export * from "./agentApi.ts";
 export * from "./worktreeSetup.ts";
 export * from "./secretRequest.ts";
 export * from "./clientRpcPermissions.ts";
+export * from "./credentialBroker.ts";

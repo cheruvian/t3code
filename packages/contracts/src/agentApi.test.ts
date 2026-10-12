@@ -8,6 +8,14 @@ import {
 } from "./index.ts";
 
 describe("agent API inventory", () => {
+  it("keeps credential operator actions and private state out of every agent API", () => {
+    for (const name of [WS_METHODS.credentialBrokerSubscribe, WS_METHODS.credentialBrokerAction]) {
+      expect(AGENT_API_INVENTORY.find((operation) => operation.name === name)?.exposure).toBe(
+        "ui-only",
+      );
+      expect(AGENT_EXPOSED_API_NAMES).not.toContain(name);
+    }
+  });
   it("includes every typed RPC and orchestration method exactly once", () => {
     const expected = [...Object.values(WS_METHODS), ...Object.values(ORCHESTRATION_V2_WS_METHODS)];
     const names = AGENT_API_INVENTORY.map((operation) => operation.name);

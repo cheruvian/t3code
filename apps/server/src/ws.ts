@@ -1,3 +1,4 @@
+import * as CredentialBroker from "./secrets/CredentialBroker.ts";
 import { THREAD_MOVE_RPC } from "@t3tools/contracts";
 import * as ThreadMoveTransfer from "./orchestration-v2/ThreadMoveTransferService.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
@@ -1232,6 +1233,7 @@ const layerWsRpc = (
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const secretRequests = yield* SecretRequests.SecretRequests;
+      const credentialBroker = yield* CredentialBroker.CredentialBroker;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
       const deviceService = yield* DeviceService.DeviceService;
@@ -1828,6 +1830,10 @@ const layerWsRpc = (
       });
 
       const handlers = ServerWsRpcGroup.of({
+        [WS_METHODS.credentialBrokerSubscribe]: (input) =>
+          credentialBroker.subscribe(currentSessionId, input.viewId),
+        [WS_METHODS.credentialBrokerAction]: (input) =>
+          credentialBroker.action(currentSessionId, input),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": command.commandId,
@@ -3070,6 +3076,7 @@ export const layer = Layer.unwrap(
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
+    const credentialBroker = yield* CredentialBroker.CredentialBroker;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3133,6 +3140,7 @@ export const layer = Layer.unwrap(
               Layer.provide(AgentSessionScanner.layer),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
+              Layer.provide(Layer.succeed(CredentialBroker.CredentialBroker, credentialBroker)),
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),

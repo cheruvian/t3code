@@ -1,0 +1,45 @@
+{
+  "name": "@t3tools/credential-broker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Approval-gated Bitwarden temporary credential files for agents",
+  "bin": {
+    "credential-broker": "./src/cli.js"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/t3.d.ts",
+      "default": "./src/t3.js"
+    },
+    "./cli": {
+      "types": "./src/cli.d.ts",
+      "default": "./src/cli.js"
+    },
+    "./worker": {
+      "types": "./src/worker.d.ts",
+      "default": "./src/worker.js"
+    }
+  },
+  "scripts": {
+    "start": "node src/cli.js start",
+    "demo": "node src/cli.js start --demo",
+    "test": "node --test test/*.test.js",
+    "check": "node scripts/embed-programs.mjs --check",
+    "desktop": "node src/cli.js start --bitwarden --approval desktop --runtime /tmp/credential-broker-live",
+    "desktop:demo": "node src/cli.js start --demo --approval desktop",
+    "test:desktop": "node test/desktop.e2e.mjs",
+    "embed-programs": "node scripts/embed-programs.mjs"
+  },
+  "dependencies": {
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@t3tools/contracts": "workspace:*",
+    "electron": "44.7.0",
+    "playwright-core": "1.60.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

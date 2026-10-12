@@ -2,6 +2,8 @@ import * as Result from "effect/Result";
 import { AssetResource } from "@t3tools/contracts";
 import {
   AuthEnvironmentMaintainScope,
+  AuthAccessReadScope,
+  AuthAccessWriteScope,
   AuthDiagnosticsReadScope,
   AuthFilesystemReadScope,
   AuthProvidersManageScope,
@@ -415,4 +417,47 @@ it.effect.each([false, true])(
       }
       expect(handled).toBe(1);
     }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "agent orchestration scopes cannot operate Credential Broker, while human access grants can",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const tag = WS_METHODS.credentialBrokerAction;
+        const group = WsRpcGroup.omit(
+          ...[...WsRpcGroup.requests.keys()].filter(
+            (name): name is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof tag> => name !== tag,
+          ),
+        );
+        let handled = 0;
+        const handlers = group.toLayerHandler(tag, () =>
+          Effect.sync(() => {
+            handled++;
+          }),
+        );
+        const agent = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(
+            Layer.merge(
+              handlers,
+              RpcAuthorization.layer([AuthOrchestrationOperateScope, AuthOrchestrationReadScope]),
+            ),
+          ),
+        );
+        expect(yield* agent[tag]({ type: "lock" }).pipe(Effect.flip)).toMatchObject({
+          requiredScope: AuthAccessWriteScope,
+        });
+        expect(handled).toBe(0);
+        const human = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(
+            Layer.merge(
+              handlers,
+              RpcAuthorization.layer([AuthAccessReadScope, AuthAccessWriteScope]),
+            ),
+          ),
+        );
+        yield* human[tag]({ type: "lock" });
+        expect(handled).toBe(1);
+      }),
+    ),
 );

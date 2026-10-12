@@ -20,6 +20,8 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
  * prefix. Adding an RPC to `WsRpcGroup` without a label is a type error.
  */
 const RPC_AGGREGATES = {
+  [WS_METHODS.credentialBrokerSubscribe]: "credentialBroker",
+  [WS_METHODS.credentialBrokerAction]: "credentialBroker",
   [THREAD_MOVE_RPC]: "orchestration",
   [WS_METHODS.projectsResolveFilePaths]: "workspace",
   [WS_METHODS.vcsLocalStatus]: "vcs",

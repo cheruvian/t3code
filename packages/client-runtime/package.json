@@ -411,6 +411,10 @@
     "./state/mcp-apps": {
       "types": "./src/state/mcpApps.ts",
       "default": "./src/state/mcpApps.ts"
+    },
+    "./state/credentialBroker": {
+      "types": "./src/state/credentialBroker.ts",
+      "default": "./src/state/credentialBroker.ts"
     }
   },
   "scripts": {

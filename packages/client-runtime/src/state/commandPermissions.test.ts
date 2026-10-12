@@ -8,6 +8,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
   AuthOrchestrationOperateScope,
+  AuthAccessWriteScope,
   AuthSourceControlWriteScope,
   ThreadId,
   EnvironmentId,
@@ -260,4 +261,39 @@ it.effect("rejects protected unary and streamed RPCs outside a guarded command",
     expect(streamed._tag).toBe("EnvironmentAuthorizationError");
     expect(writes).toBe(0);
   }),
+);
+
+it.effect(
+  "credential decisions require human access permission on the destination environment",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const credentialPermissions = createCommandPermissions(
+          runtime,
+          WS_METHODS.credentialBrokerAction,
+        );
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(credentialPermissions.permissionAtom(env))).toBe(false);
+        expect(
+          yield* credentialPermissions.authorize(registry, env, { type: "lock" }).pipe(Effect.flip),
+        ).toMatchObject({ requiredScope: AuthAccessWriteScope });
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(true),
+            scopes: [AuthAccessWriteScope],
+            permissions: [AuthAccessWriteScope],
+          }),
+        );
+        expect(registry.get(credentialPermissions.permissionAtom(env))).toBe(true);
+        yield* credentialPermissions.authorize(registry, env, { type: "lock" });
+        registry.set(sessions(other), AsyncResult.success(grant(true)));
+        expect(
+          yield* credentialPermissions
+            .authorize(registry, other, { type: "lock" })
+            .pipe(Effect.flip),
+        ).toMatchObject({ requiredScope: AuthAccessWriteScope });
+      }),
+    ),
 );

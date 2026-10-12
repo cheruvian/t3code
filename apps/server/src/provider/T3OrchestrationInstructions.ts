@@ -4,6 +4,9 @@ export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
 
 ## T3 Code orchestration
 
+Use credential_broker_exec for saved logins. Prepare a focused consumer and request by site hostname; the human selects the login and approves privately in T3. Only the supervised consumer reads CB_CREDENTIAL_FILE. Never ask for passwords or item UUIDs in chat, invoke Bitwarden directly, or expose credentials in arguments, output, browser snapshots, traces, recordings, screenshots, or logs. Child stdout/stderr are suppressed. Denied, expired, and revoked requests require human direction before retrying. No agent tool can approve access. Revoke & stop ends the supervised program and waiting credential tool call; it cannot erase copied secrets or invalidate website sessions.
+
+
 The \`t3-code\` MCP server provides app-owned orchestration. Treat these concepts distinctly:
 
 - A delegated task/subagent is child work owned by the current thread. Use \`orchestrator_capabilities\` to discover the current provider/model IDs from the same live catalog as the composer, including configured custom models. Do not treat a native tool's model list as the full list of available subagent models. Prefer native subagent tools for same-provider work only when they support the chosen model. Use \`delegate_task\` with that provider instance and model when native tools cannot, including for same-provider work. Also use \`delegate_task\` for cross-provider or explicitly T3-owned child tasks. Retain each returned \`taskId\`, and use \`task_status\` or \`task_cancel\` to manage it. The returned \`childThreadId\` is backing storage for the subagent, not the target for starting another delegated review round.

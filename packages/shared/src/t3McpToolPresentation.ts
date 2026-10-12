@@ -38,6 +38,7 @@ export type T3McpToolSummaryAction =
   | "question-list"
   | "question-read"
   | "question-respond"
+  | "credential-access"
   | "secret-request"
   | "worktree-handoff"
   | "worktree-list"
@@ -289,6 +290,7 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   t3_worktree_list: tool(["List", "Listing", "Listed", "workspace branches"], "worktree-list"),
   t3_preview_list: tool(["List", "Listing", "Listed", "preview tabs"], "browser", "browser"),
   t3_preview_close: tool(["Close", "Closing", "Closed", "a preview tab"], "browser", "browser"),
+  credential_broker_exec: tool(["Use", "Requesting", "Used", "a saved login"], "credential-access"),
   t3_environment_read: tool(
     ["Read", "Reading", "Read", "environment preferences"],
     "environment-read",

@@ -1,3 +1,5 @@
+import { CredentialsToolkit } from "./toolkits/credentials/tools.ts";
+import * as CredentialsHandlers from "./toolkits/credentials/handlers.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -864,6 +866,7 @@ export const layerMcpTransport = McpServer.layerHttp({
 }).pipe(Layer.provide(layerMcpAuthMiddleware));
 
 const layerStandardToolkits = Layer.mergeAll(
+  toolkitRegistration(CredentialsToolkit, CredentialsHandlers.layer),
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerThreadToolkit,

@@ -1,3 +1,4 @@
+import { CredentialBrokerCoordinator } from "./features/credentials/CredentialBrokerCoordinator";
 import {
   createV5StackNavigator as createNativeStackNavigator,
   createV5SheetStackNavigator,
@@ -621,6 +622,7 @@ function RootStackLayout(props: {
   return (
     <HardwareKeyboardCommandProvider pathname={pathname}>
       <ThreadOutboxDrainWorker />
+      <CredentialBrokerCoordinator />
       <ShowcaseCaptureCoordinator pathname={pathname} />
       <ExistingThreadSettingsRouteProvider>
         <AdaptiveWorkspaceLayout

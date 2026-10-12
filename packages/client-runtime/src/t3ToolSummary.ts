@@ -285,6 +285,9 @@ export function summarizeT3ToolCalls(
         quantity(countEntities(entityIds("requestId")), "pending question request"),
       );
       break;
+    case "credential-access":
+      label = phrase("Requested", "request", quantity(selected.length, "saved login access"));
+      break;
     case "secret-request":
       label = phrase("Asked for", "ask for", quantity(selected.length, "secret"));
       break;

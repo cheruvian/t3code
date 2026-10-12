@@ -1,0 +1,186 @@
+import { HostProcessArguments, HostProcessIsExecutable } from "@t3tools/shared/hostProcess";
+import * as Crypto from "effect/Crypto";
+import * as Option from "effect/Option";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import { loadCaller, unavailable } from "../mcp/threadAccess.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { T3CredentialBroker } from "@t3tools/credential-broker";
+import {
+  CredentialBrokerError,
+  OrchestratorMcpFailure,
+  type CredentialBrokerAction,
+  type CredentialBrokerState,
+  type CredentialCaller,
+  type CredentialExecInput,
+  type CredentialExecution,
+} from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
+import * as ServerConfig from "../config.ts";
+import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+
+export class CredentialBroker extends Context.Service<
+  CredentialBroker,
+  {
+    readonly execute: (
+      caller: CredentialCaller,
+      input: CredentialExecInput,
+    ) => Effect.Effect<CredentialExecution, CredentialBrokerError>;
+    readonly executeFromTool: (
+      input: CredentialExecInput,
+    ) => Effect.Effect<
+      CredentialExecution,
+      OrchestratorMcpFailure,
+      | McpInvocationContext.McpInvocationContext
+      | ProjectService.ProjectService
+      | ThreadManagement.ThreadManagementService
+      | Crypto.Crypto
+    >;
+    readonly action: (
+      sessionId: string,
+      input: CredentialBrokerAction,
+    ) => Effect.Effect<void, CredentialBrokerError>;
+    readonly subscribe: (
+      sessionId: string,
+      viewId: string,
+    ) => Stream.Stream<CredentialBrokerState, CredentialBrokerError>;
+  }
+>()("t3/secrets/CredentialBroker") {}
+
+/** Bind one authenticated tool invocation to its thread and committed lifetime. */
+export const bindToolCall = (
+  input: CredentialExecInput,
+  execute: (
+    caller: CredentialCaller,
+    input: CredentialExecInput,
+  ) => Effect.Effect<CredentialExecution, CredentialBrokerError>,
+) =>
+  Effect.gen(function* () {
+    const context = yield* loadCaller();
+    const { thread } = yield* McpInvocationContext.requireThreadScope(
+      context.scope,
+      "Credential Broker",
+    );
+    const caller = context.caller;
+    if (!caller || !caller.activeRunId) return yield* unavailable();
+    const projects = yield* ProjectService.ProjectService;
+    const project = yield* projects.getShell(caller.projectId).pipe(Effect.mapError(unavailable));
+    if (Option.isNone(project)) return yield* unavailable();
+    const crypto = yield* Crypto.Crypto;
+
+    // The UUID names this exact handler invocation and its cancellable fiber.
+    // Thread/session/run/workspace come from authenticated server state, never shell labels.
+    const toolCallId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+    const sequence = yield* context.threads
+      .getThreadEventSequence(thread.threadId)
+      .pipe(Effect.mapError(unavailable));
+    const current = yield* context.threads
+      .getThreadShell(thread.threadId)
+      .pipe(Effect.mapError(unavailable));
+    if (
+      !current ||
+      current.activeRunId !== caller.activeRunId ||
+      current.providerInstanceId !== thread.providerInstanceId
+    )
+      return yield* unavailable();
+    const stopped = context.threads
+      .streamStoredEventsFrom({ threadId: thread.threadId, afterSequence: sequence })
+      .pipe(
+        Stream.filter(
+          ({ event }) =>
+            (event.type === "run.updated" &&
+              event.payload.id === caller.activeRunId &&
+              ["completed", "failed", "interrupted", "cancelled", "rolled_back"].includes(
+                event.payload.status,
+              )) ||
+            ["thread.archived", "thread.deleted", "thread.provider-switched"].includes(event.type),
+        ),
+        Stream.take(1),
+        Stream.runDrain,
+        Effect.mapError(unavailable),
+        Effect.andThen(Effect.fail(unavailable())),
+      );
+    return yield* execute(
+      {
+        environmentId: context.scope.environmentId,
+        ...thread,
+        threadTitle: caller.title,
+        runId: caller.activeRunId,
+        toolCallId,
+        workspace: caller.worktreePath ?? project.value.workspaceRoot,
+        agent: caller.modelSelection.model,
+      },
+      input,
+    ).pipe(Effect.mapError(unavailable), Effect.raceFirst(stopped));
+  });
+
+const make = Effect.gen(function* () {
+  const config = yield* ServerConfig.ServerConfig;
+  const path = yield* Path.Path;
+  const registry = yield* McpSessionRegistry.McpSessionRegistry;
+  const argv = yield* HostProcessArguments;
+  const executable = yield* HostProcessIsExecutable;
+  const workerEntrypoint = executable
+    ? ["__credential-broker-worker"]
+    : [argv[1]!, "__credential-broker-worker"];
+  // This adapter is the sole Promise boundary for the reused standalone broker.
+  const broker = yield* Effect.acquireRelease(
+    Effect.sync(
+      () =>
+        new T3CredentialBroker({
+          runtime: path.join(config.stateDir, "credential-broker"),
+          workerEntrypoint,
+        }),
+    ),
+    (broker) => Effect.promise(() => broker.close()).pipe(Effect.ignore),
+  );
+  if (registry.onRevoke) {
+    yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        registry.onRevoke!((id) =>
+          Effect.promise(() => broker.cancelSession(id)).pipe(Effect.ignore),
+        ),
+      ),
+      (unsubscribe) => Effect.sync(unsubscribe),
+    );
+  }
+  const execute = (caller: CredentialCaller, input: CredentialExecInput) =>
+    Effect.tryPromise({
+      try: (signal) => broker.execute(caller, input, signal),
+      catch: () => new CredentialBrokerError({}),
+    }).pipe(
+      Effect.ensuring(
+        Effect.promise(() => broker.cancelCall(caller.toolCallId)).pipe(Effect.ignore),
+      ),
+    );
+  return CredentialBroker.of({
+    execute,
+    executeFromTool: (input) => bindToolCall(input, execute),
+    action: (sessionId, input) =>
+      Effect.tryPromise({
+        try: () => broker.action(sessionId, input),
+        catch: () => new CredentialBrokerError({}),
+      }),
+    subscribe: (sessionId, viewId) =>
+      Stream.callback<CredentialBrokerState, CredentialBrokerError>(
+        (queue) =>
+          Effect.acquireRelease(
+            Effect.try({
+              try: () =>
+                broker.subscribe(sessionId, viewId, (state) => {
+                  Queue.offerUnsafe(queue, state);
+                }),
+              catch: () => new CredentialBrokerError({}),
+            }),
+            (unsubscribe) => Effect.sync(unsubscribe),
+          ),
+        { bufferSize: 1, strategy: "sliding" },
+      ),
+  });
+});
+export const layer = Layer.effect(CredentialBroker, make);

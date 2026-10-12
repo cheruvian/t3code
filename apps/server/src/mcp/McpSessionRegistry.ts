@@ -46,6 +46,7 @@ export interface McpSessionRegistryShape {
   readonly revokeProviderSession: (providerSessionId: string) => Effect.Effect<void>;
   readonly revokeThread: (threadId: ThreadId) => Effect.Effect<void>;
   readonly revokeAll: Effect.Effect<void>;
+  readonly onRevoke?: (listener: (providerSessionId: string) => Effect.Effect<void>) => () => void;
 }
 
 export class McpSessionRegistry extends Context.Service<
@@ -245,10 +246,22 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     },
   );
 
+  const revocationListeners = new Set<(id: string) => Effect.Effect<void>>();
   const revokeWhere = (predicate: (record: CredentialRecord) => boolean) =>
-    SynchronizedRef.update(state, ({ records }) => ({
-      records: new Map(Array.from(records).filter(([, record]) => !predicate(record))),
-    }));
+    Effect.gen(function* () {
+      const revoked = yield* SynchronizedRef.modify(state, ({ records }) => {
+        const removed = Array.from(records.values())
+          .filter(predicate)
+          .map((r) => r.scope.thread.providerSessionId);
+        return [
+          removed,
+          { records: new Map(Array.from(records).filter(([, record]) => !predicate(record))) },
+        ];
+      });
+      for (const id of new Set(revoked)) {
+        yield* Effect.forEach(revocationListeners, (listener) => listener(id), { discard: true });
+      }
+    });
 
   return McpSessionRegistry.of({
     issue,
@@ -262,7 +275,13 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     revokeThread: Effect.fn("McpSessionRegistry.revokeThread")(function* (threadId) {
       yield* revokeWhere((record) => record.scope.thread.threadId === threadId);
     }),
-    revokeAll: SynchronizedRef.set(state, { records: new Map() }),
+    revokeAll: revokeWhere(() => true),
+    onRevoke: (listener) => {
+      revocationListeners.add(listener);
+      return () => {
+        revocationListeners.delete(listener);
+      };
+    },
   });
 });
 

@@ -217,6 +217,19 @@ export default defineConfig({
         rules: { "t3code/no-rpc-permission-bypass": "off" },
       },
       {
+        // The reused broker is a standalone Node boundary (CLI and Electron included),
+        // independent of Effect. Preserve its imports and explicit OS security adapters.
+        files: [
+          "packages/credential-broker/**/*.js",
+          "packages/credential-broker/**/*.mjs",
+          "packages/credential-broker/**/*.cjs",
+        ],
+        rules: {
+          "t3code/no-global-process-runtime": "off",
+          "t3code/namespace-node-imports": "off",
+        },
+      },
+      {
         // The one place that reads the host platform to seed the injected references.
         files: ["packages/shared/src/hostProcess.ts"],
         rules: { "t3code/no-global-process-runtime": "off" },

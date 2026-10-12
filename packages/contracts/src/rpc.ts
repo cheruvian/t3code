@@ -1,3 +1,8 @@
+import {
+  CredentialBrokerState,
+  CredentialBrokerAction,
+  CredentialBrokerError,
+} from "./credentialBroker.ts";
 import { OrchestrationDispatchCommandError } from "./orchestrationDispatch.ts";
 import {
   THREAD_MOVE_RPC,
@@ -478,6 +483,8 @@ export const WS_METHODS = {
   serverCommitDesktopUpdate: "server.commitDesktopUpdate",
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverRemoveKeybinding: "server.removeKeybinding",
+  credentialBrokerSubscribe: "credentialBroker.subscribe",
+  credentialBrokerAction: "credentialBroker.action",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverDiscoverSourceControl: "server.discoverSourceControl",
@@ -1842,7 +1849,21 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
   { error: EnvironmentAuthorizationError },
 ) {}
 
+const CredentialBrokerSubscribeRpc = Rpc.make(WS_METHODS.credentialBrokerSubscribe, {
+  payload: Schema.Struct({ viewId: Schema.String }),
+  success: CredentialBrokerState,
+  error: Schema.Union([CredentialBrokerError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+const CredentialBrokerActionRpc = Rpc.make(WS_METHODS.credentialBrokerAction, {
+  payload: CredentialBrokerAction,
+  success: Schema.Void,
+  error: Schema.Union([CredentialBrokerError, EnvironmentAuthorizationError]),
+});
+
 export const WsRpcGroup = RpcGroup.make(
+  CredentialBrokerSubscribeRpc,
+  CredentialBrokerActionRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
