@@ -19,7 +19,7 @@ export const CredentialExecInput = Schema.Struct({
   field: Schema.Literals(["login", "username", "password"]),
   label: Schema.String,
   reason: Schema.String,
-  ttlSeconds: Schema.Number,
+  ttlSeconds: Schema.Int.check(Schema.isBetween({ minimum: 5, maximum: 300 })),
   argv: Schema.Array(Schema.String),
   cwd: Schema.optional(Schema.String),
 });
