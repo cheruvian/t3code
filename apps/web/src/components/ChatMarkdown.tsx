@@ -197,6 +197,7 @@ import { useOpenLink } from "../browser/useOpenLink";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { isPreviewAvailableFor } from "../browser/previewRuntime";
 import { isAbsolutePath, resolvePathLinkTarget } from "../terminal-links";
+import { useHostFileDownload } from "../hostFileDownload";
 import {
   isBrowserPreviewFile,
   openFileInPreview,
@@ -1403,6 +1404,7 @@ interface MarkdownFileLinkProps {
   openInEditorMenuLabel: string;
   onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
   onOpenMedia?: (() => void) | undefined;
+  onDownload?: (() => Promise<void>) | undefined;
   onReveal?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
   /** Platform-specific menu label ("Reveal in Finder", ...); required for the
       reveal item to show. */
@@ -2149,6 +2151,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   openInEditorMenuLabel,
   onOpenInBrowser,
   onOpenMedia,
+  onDownload,
   onReveal,
   revealLabel,
 }: MarkdownFileLinkProps) {
@@ -2325,6 +2328,9 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       try {
         const clicked = await api.contextMenu.show(
           [
+            ...(onDownload
+              ? ([{ id: "download", label: "Download", icon: "download" }] as const)
+              : []),
             ...(onOpenMedia ? ([{ id: "preview-media", label: "Preview media" }] as const) : []),
             ...(onOpen ? ([{ id: "open", label: openInEditorMenuLabel }] as const) : []),
             ...(onOpenInBrowser
@@ -2337,6 +2343,10 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
           position,
         );
 
+        if (clicked === "download") {
+          await onDownload?.();
+          return;
+        }
         if (clicked === "preview-media") {
           onOpenMedia?.();
           return;
@@ -2375,6 +2385,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       handleRevealInFileManager,
       onOpenInBrowser,
       onOpenMedia,
+      onDownload,
       onOpen,
       onReveal,
       openInEditorMenuLabel,
@@ -2489,6 +2500,7 @@ function areMarkdownFileLinkPropsEqual(
     previous.openInEditorMenuLabel === next.openInEditorMenuLabel &&
     previous.onOpenInBrowser === next.onOpenInBrowser &&
     previous.onOpenMedia === next.onOpenMedia &&
+    previous.onDownload === next.onDownload &&
     previous.onReveal === next.onReveal &&
     previous.revealLabel === next.revealLabel
   );
@@ -2534,6 +2546,7 @@ function useChatMarkdownState({
   });
   const pullRequestLinking = usePullRequestLinking(threadRef?.environmentId);
   const environmentId = threadRef?.environmentId ?? explicitEnvironmentId ?? null;
+  const downloadHostFile = useHostFileDownload(environmentId);
   const fileResolutions = useMarkdownFileResolutions(text, environmentId, cwd, imageBaseDir);
   const canOperateHost = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const canOperatePreview = useEnvironmentScope(environmentId, AuthPreviewOperateScope);
@@ -2839,6 +2852,16 @@ function useChatMarkdownState({
     },
     [cwd, findWorkspaceBasenameMatch, revealFileInFileManager],
   );
+  const downloadMarkdownFile = useCallback(
+    async (fileLinkMeta: MarkdownFileLinkMeta) => {
+      const match = fileLinkMeta.workspaceRelativePath
+        ? await findWorkspaceBasenameMatch(fileLinkMeta.workspaceRelativePath)
+        : null;
+      const path = match && cwd ? resolvePathLinkTarget(match, cwd) : fileLinkMeta.filePath;
+      await downloadHostFile(path);
+    },
+    [cwd, downloadHostFile, findWorkspaceBasenameMatch],
+  );
   const fileLinkChip = useCallback(
     (fileLinkMeta: MarkdownFileLinkMeta, copyMarkdown: string, mediaSource?: string) => {
       const parentSuffix = fileLinkParentSuffixByPath.get(
@@ -2878,6 +2901,11 @@ function useChatMarkdownState({
           threadRef={threadRef}
           {...(canUseShellActions ? { onOpen: openInPreferredEditor } : {})}
           onOpenInPanel={openFileInPanel}
+          onDownload={
+            environmentId !== null && isAbsolutePath(fileLinkMeta.filePath)
+              ? () => downloadMarkdownFile(fileLinkMeta)
+              : undefined
+          }
           onOpenMedia={
             threadRef && canPreviewMedia
               ? () => openMarkdownMedia(mediaPath, fileLinkMeta.filePath)
@@ -2905,6 +2933,8 @@ function useChatMarkdownState({
       canUseShellActions,
       canOperatePreview,
       fileLinkParentSuffixByPath,
+      environmentId,
+      downloadMarkdownFile,
       openFileInPanel,
       openInPreferredEditor,
       openMarkdownFileInPreview,

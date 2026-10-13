@@ -55,7 +55,12 @@ describe("resolveFileContextMenuAbsolutePath", () => {
 });
 
 describe("buildFileContextMenuItems", () => {
-  it("offers open, reveal, and an open-with submenu when all are available", () => {
+  it("offers download without host editor or reveal capabilities", () => {
+    expect(
+      buildFileContextMenuItems({ hasAbsolutePath: true, capabilities: EMPTY_CAPABILITIES }),
+    ).toEqual([{ id: "download", label: "Download", icon: "download" }]);
+  });
+  it("offers download, open, reveal, and an open-with submenu when all are available", () => {
     const items = buildFileContextMenuItems({
       hasAbsolutePath: true,
       capabilities: {
@@ -65,15 +70,21 @@ describe("buildFileContextMenuItems", () => {
       },
     });
 
-    expect(items.map((item) => item.id)).toEqual(["open", "reveal-in-folder", "open-with"]);
-    expect(items[0]).toMatchObject({ label: "Open" });
-    expect(items[1]).toMatchObject({ label: "Reveal in Finder" });
-    const openWith = items[2];
+    expect(items.map((item) => item.id)).toEqual([
+      "download",
+      "open",
+      "reveal-in-folder",
+      "open-with",
+    ]);
+    expect(items[0]).toMatchObject({ label: "Download" });
+    expect(items[1]).toMatchObject({ label: "Open" });
+    expect(items[2]).toMatchObject({ label: "Reveal in Finder" });
+    const openWith = items[3];
     NodeAssert.ok(openWith);
     expect(openWith.children?.map((child) => child.id)).toEqual(["editor:vscode", "editor:cursor"]);
   });
 
-  it("offers only the reveal item when just reveal is enabled", () => {
+  it("keeps download available when only reveal is enabled", () => {
     const items = buildFileContextMenuItems({
       hasAbsolutePath: true,
       capabilities: {
@@ -83,8 +94,8 @@ describe("buildFileContextMenuItems", () => {
       },
     });
 
-    expect(items.map((item) => item.id)).toEqual(["reveal-in-folder"]);
-    expect(items[0]).toMatchObject({ label: "Reveal in File Explorer" });
+    expect(items.map((item) => item.id)).toEqual(["download", "reveal-in-folder"]);
+    expect(items[1]).toMatchObject({ label: "Reveal in File Explorer" });
   });
 
   it("offers nothing when the path cannot be resolved", () => {

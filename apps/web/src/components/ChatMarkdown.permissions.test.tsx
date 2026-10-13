@@ -45,7 +45,14 @@ vi.mock("./ui/toast", () => ({
   toastManager: { add: state.toast },
   stackedThreadToast: (value: unknown) => value,
 }));
-vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => state.search }));
+vi.mock("../state/projects", () => ({
+  projectEnvironment: { resolveFilePaths: "resolveFilePaths", searchEntries: "searchEntries" },
+}));
+vi.mock("../state/use-atom-query-runner", () => ({
+  useAtomQueryRunner: (query: string) =>
+    query === "resolveFilePaths" ? resolveFilePaths : state.search,
+}));
+const resolveFilePaths = vi.fn().mockResolvedValue(AsyncResult.success([]));
 vi.mock("../state/use-atom-command", () => ({
   useAtomCommand: (command: string) =>
     command === "updateMetadata" ? state.updateMetadata : state.openEditor,
@@ -191,14 +198,14 @@ function offeredActions() {
 it("removes host actions after revocation while keeping file preview and copying", async () => {
   await renderMarkdown("[Readme](docs/readme.md)");
   await openContextMenu();
-  expect(offeredActions()).toEqual(["open", "reveal", "copy-relative", "copy-full"]);
+  expect(offeredActions()).toEqual(["download", "open", "reveal", "copy-relative", "copy-full"]);
   await act(async () => {
     state.allowed = false;
     for (const listener of state.listeners) listener();
   });
   state.choose.mockResolvedValue("copy-full");
   await openContextMenu();
-  expect(offeredActions()).toEqual(["copy-relative", "copy-full"]);
+  expect(offeredActions()).toEqual(["download", "copy-relative", "copy-full"]);
   expect(state.copy).toHaveBeenCalledWith("/work/docs/readme.md");
   await act(async () => anchor().props.onClick(menuEvent()));
   expect(state.openFile).toHaveBeenCalledWith(threadRef, "docs/readme.md", undefined);
