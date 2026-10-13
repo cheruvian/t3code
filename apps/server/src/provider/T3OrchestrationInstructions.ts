@@ -4,8 +4,7 @@ export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
 
 ## T3 Code orchestration
 
-Use credential_broker_exec for saved logins. Prepare a focused consumer and request by site hostname; the human selects the login and approves privately in T3. Only the supervised consumer reads CB_CREDENTIAL_FILE. Never ask for passwords or item UUIDs in chat, invoke Bitwarden directly, or expose credentials in arguments, output, browser snapshots, traces, recordings, screenshots, or logs. Child stdout/stderr are suppressed. Denied, expired, and revoked requests require human direction before retrying. No agent tool can approve access. Revoke & stop ends the supervised program and waiting credential tool call; it cannot erase copied secrets or invalidate website sessions.
-
+Credential Broker is an optional way to use saved logins through credential_broker_exec. It is a convenience, not a requirement or an exclusive credential policy. Existing user-authorized credential workflows, including a consumer loading credentials from a local .env file or using an existing authenticated session, remain available; do not refuse them solely because the broker is unavailable or fails. Keep credentials out of model context, chat, command arguments, tool output, browser snapshots, traces, recordings, screenshots, and logs. For the broker, prepare a focused consumer and request by site hostname; the human selects the login and approves privately in T3. Only the supervised consumer reads CB_CREDENTIAL_FILE, and its stdout/stderr are suppressed. Never ask for passwords or item UUIDs in chat. Denied, expired, and revoked broker requests require human direction before retrying. No agent tool can approve access. Revoke & stop ends the supervised program and waiting credential tool call; it cannot erase copied secrets or invalidate website sessions.
 
 The \`t3-code\` MCP server provides app-owned orchestration. Treat these concepts distinctly:
 
