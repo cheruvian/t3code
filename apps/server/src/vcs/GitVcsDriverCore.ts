@@ -1269,13 +1269,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     ).pipe(Effect.asVoid);
   };
 
-  const resolveRepositoryPathsUncached = Effect.fn("resolveRepositoryPathsUncached")(function* (
-    cwd: string,
-  ) {
+  const readRepositoryMetadata = Effect.fn("readRepositoryMetadata")(function* (cwd: string) {
     const commonDirResult = yield* executeGitWithStableDiagnostics(
-      "GitVcsDriver.resolveRepositoryPaths.commonDir",
+      "GitVcsDriver.repositoryMetadata",
       cwd,
-      ["rev-parse", "--git-common-dir"],
+      ["rev-parse", "--git-common-dir", "--git-path", "index"],
       {
         timeoutMs: 5_000,
         allowNonZeroExit: true,
@@ -1288,9 +1286,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
       return yield* new GitCommandError({
         ...gitCommandContext({
-          operation: "GitVcsDriver.resolveRepositoryPaths.commonDir",
+          operation: "GitVcsDriver.repositoryMetadata",
           cwd,
-          args: ["rev-parse", "--git-common-dir"],
+          args: ["rev-parse", "--git-common-dir", "--git-path", "index"],
         }),
         detail: "Failed to resolve the Git common directory.",
         exitCode: commonDirResult.exitCode,
@@ -1299,13 +1297,56 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       });
     }
 
-    const commonDirOutput = commonDirResult.stdout.trim();
+    const outputs = commonDirResult.stdout.trim().split(/\r?\n/);
+    // rev-parse separates paths with newlines, which are also valid in directory names.
+    const [commonDirOutput, indexPathOutput] =
+      outputs.length === 2
+        ? outputs
+        : yield* Effect.all(
+            [
+              ["rev-parse", "--git-common-dir"],
+              ["rev-parse", "--git-path", "index"],
+            ].map((args) =>
+              runGitStdout("GitVcsDriver.repositoryMetadata.path", cwd, args).pipe(
+                Effect.map((output) => output.trim()),
+              ),
+            ),
+            { concurrency: 2 },
+          );
+    if (!commonDirOutput || !indexPathOutput) {
+      return yield* new GitCommandError({
+        operation: "GitVcsDriver.repositoryMetadata",
+        command: "git",
+        cwd,
+        detail: "Git repository metadata is incomplete.",
+      });
+    }
     const resolvedGitCommonDir = path.isAbsolute(commonDirOutput)
       ? path.normalize(commonDirOutput)
       : path.resolve(cwd, commonDirOutput);
     const gitCommonDir = yield* fileSystem
       .realPath(resolvedGitCommonDir)
       .pipe(Effect.orElseSucceed(() => resolvedGitCommonDir));
+    return { gitCommonDir, indexPath: path.resolve(cwd, indexPathOutput) };
+  });
+
+  const repositoryMetadataCache = yield* Cache.makeWith(readRepositoryMetadata, {
+    capacity: REPOSITORY_PATHS_CACHE_CAPACITY,
+    timeToLive: Exit.match({
+      onSuccess: (metadata) =>
+        metadata === null ? NON_REPOSITORY_PATHS_CACHE_TTL : REPOSITORY_PATHS_CACHE_TTL,
+      onFailure: () => Duration.zero,
+    }),
+  });
+  const resolveRepositoryMetadata = (cwd: string) =>
+    Cache.get(repositoryMetadataCache, path.normalize(path.resolve(cwd)));
+
+  const resolveRepositoryPathsUncached = Effect.fn("resolveRepositoryPathsUncached")(function* (
+    cwd: string,
+  ) {
+    const metadata = yield* resolveRepositoryMetadata(cwd);
+    if (metadata === null) return null;
+    const { gitCommonDir } = metadata;
     const [worktreeRootResult, currentBranchResult] = yield* Effect.all(
       [
         executeGit(
@@ -1364,7 +1405,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   );
   const repositoryPathsRefreshCache = yield* Cache.makeWith(
     (cwd: string) =>
-      Cache.invalidate(repositoryPathsCache, cwd).pipe(
+      Cache.invalidate(repositoryMetadataCache, cwd).pipe(
+        Effect.andThen(Cache.invalidate(repositoryPathsCache, cwd)),
         Effect.andThen(Cache.get(repositoryPathsCache, cwd)),
       ),
     {
@@ -1846,41 +1888,34 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       "--branch",
       ...(includeDivergence ? [] : ["--no-ahead-behind"]),
     ];
-    const indexResult = yield* executeGitWithStableDiagnostics(
-      "GitVcsDriver.statusDetails.indexPath",
-      cwd,
-      ["rev-parse", "--git-path", "index"],
-      { allowNonZeroExit: true },
-    ).pipe(
+    const metadata = yield* resolveRepositoryMetadata(cwd).pipe(
       Effect.catchTags({
         GitCommandError: (error) =>
           isMissingGitCwdError(error) ? Effect.succeed(null) : Effect.fail(error),
       }),
     );
-    if (indexResult === null) return NON_REPOSITORY_STATUS_DETAILS;
-    if (indexResult.exitCode === 0) {
-      const lockPath = `${path.resolve(cwd, indexResult.stdout.trim())}.lock`;
-      const lockError = new GitCommandError({
-        operation: "GitVcsDriver.statusDetails.indexPath",
-        command: "git",
-        cwd,
-        detail: "Git index is locked. Status will resume when the index lock is removed.",
-      });
-      // Status can succeed while locked, repeatedly running LFS clean filters without caching.
-      if (
-        yield* fileSystem.exists(lockPath).pipe(
-          Effect.mapError(
-            (cause) =>
-              new GitCommandError({
-                ...lockError,
-                detail: "Failed to check the Git index lock.",
-                cause,
-              }),
-          ),
-        )
-      ) {
-        return yield* lockError;
-      }
+    if (metadata === null) return NON_REPOSITORY_STATUS_DETAILS;
+    const lockPath = `${metadata.indexPath}.lock`;
+    const lockError = new GitCommandError({
+      operation: "GitVcsDriver.statusDetails.indexPath",
+      command: "git",
+      cwd,
+      detail: "Git index is locked. Status will resume when the index lock is removed.",
+    });
+    // Status can succeed while locked, repeatedly running LFS clean filters without caching.
+    if (
+      yield* fileSystem.exists(lockPath).pipe(
+        Effect.mapError(
+          (cause) =>
+            new GitCommandError({
+              ...lockError,
+              detail: "Failed to check the Git index lock.",
+              cause,
+            }),
+        ),
+      )
+    ) {
+      return yield* lockError;
     }
     const statusResult = yield* executeGitWithStableDiagnostics(
       "GitVcsDriver.statusDetails.status",
@@ -1920,10 +1955,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       });
     }
 
-    const repositoryPaths = yield* resolveRepositoryPaths(cwd).pipe(
-      Effect.catchTags({ GitCommandError: () => Effect.succeed(null) }),
-    );
-    const statusCacheKey = repositoryPaths?.gitCommonDir;
+    const statusCacheKey = metadata.gitCommonDir;
     const hasTrackedChanges = statusResult.stdout
       .split(/\r?\n/g)
       .some((line) => /^[12u] /.test(line));
@@ -2076,9 +2108,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     files.sort((a, b) => a.path.localeCompare(b.path));
 
     const branchChanges = options?.includeBranchChanges
-      ? yield* readBranchChangeTotals(repositoryPaths?.worktreeRoot ?? cwd, refName).pipe(
-          Effect.orElseSucceed(() => undefined),
-        )
+      ? yield* Effect.gen(function* () {
+          const repositoryPaths = yield* resolveRepositoryPaths(cwd);
+          return yield* readBranchChangeTotals(repositoryPaths?.worktreeRoot ?? cwd, refName);
+        }).pipe(Effect.orElseSucceed(() => undefined))
       : undefined;
 
     return {
@@ -3334,6 +3367,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     );
     yield* Cache.invalidate(repositoryPathsRefreshCache, repositoryPathsCacheKey);
     yield* Cache.invalidate(repositoryPathsCache, repositoryPathsCacheKey);
+    yield* Cache.invalidate(repositoryMetadataCache, repositoryPathsCacheKey);
   });
 
   const listRefs: GitVcsDriver.GitVcsDriver["Service"]["listRefs"] = Effect.fn("listRefs")(
@@ -4051,6 +4085,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           const cacheKey = normalizeRepositoryPathsCacheKey(input.cwd);
           yield* Cache.invalidate(repositoryPathsRefreshCache, cacheKey);
           yield* Cache.invalidate(repositoryPathsCache, cacheKey);
+          yield* Cache.invalidate(repositoryMetadataCache, cacheKey);
           yield* invalidateListRefsSnapshot(input.cwd).pipe(Effect.ignore);
         }),
       ),

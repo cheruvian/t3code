@@ -256,6 +256,57 @@ it.effect.each([{ timeoutMs: null }, { timeoutMs: 30_001 }])(
     }).pipe(Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
+it.effect.each(["root", "nested", "worktree", "newline"] as const)(
+  "reuses repository metadata and checks locks after warming status in a %s",
+  (location) =>
+    Effect.gen(function* () {
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      let commands: ReadonlyArray<string>[] = [];
+      const spawner = ChildProcessSpawner.make((command) => {
+        if (ChildProcess.isStandardCommand(command)) commands.push(command.args);
+        return delegate.spawn(command);
+      });
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provide(layerServerConfig),
+      );
+      const repository = yield* makeTmpDir();
+      yield* initRepoWithCommit(repository);
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      let cwd = repository;
+      if (location === "newline") {
+        cwd = path.join(repository, "checkout\nwith-newline");
+        yield* fs.makeDirectory(cwd);
+        yield* initRepoWithCommit(cwd);
+      } else if (location === "worktree") {
+        cwd = yield* makeTmpDir();
+        yield* git(repository, ["worktree", "add", "--detach", cwd]);
+      } else if (location === "nested") {
+        cwd = path.join(repository, "nested");
+        yield* fs.makeDirectory(cwd);
+      }
+      const before = yield* driver.statusDetailsLocal(cwd, { includeDivergence: false });
+      commands = [];
+      assert.deepStrictEqual(
+        yield* driver.statusDetailsLocal(cwd, { includeDivergence: false }),
+        before,
+      );
+      assert.deepStrictEqual(commands, [
+        ["status", "--porcelain=2", "--branch", "--no-ahead-behind"],
+      ]);
+
+      const indexPath = yield* git(cwd, ["rev-parse", "--git-path", "index"]);
+      yield* fs.writeFileString(`${path.resolve(cwd, indexPath)}.lock`, "");
+      commands = [];
+      const error = yield* driver
+        .statusDetailsLocal(cwd, { includeDivergence: false })
+        .pipe(Effect.flip);
+      assert.include(error.detail, "index is locked");
+      assert.deepStrictEqual(commands, []);
+    }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect.each(["root", "nested", "worktree"] as const)(
   "skips clean filters while the %s index is locked and resumes after unlock",
   (location) =>
@@ -401,10 +452,8 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
     yield* driver.listRefs({ cwd });
 
     assert.deepStrictEqual(commands, [
-      { args: ["rev-parse", "--git-path", "index"], lcAll: "C" },
-      { args: ["status", "--porcelain=2", "--branch"], lcAll: "C" },
+      { args: ["rev-parse", "--git-common-dir", "--git-path", "index"], lcAll: "C" },
       { args: ["rev-parse", "--abbrev-ref", "HEAD"], lcAll: "C" },
-      { args: ["rev-parse", "--git-common-dir"], lcAll: "C" },
     ]);
   }).pipe(Effect.provide(layer));
 });
