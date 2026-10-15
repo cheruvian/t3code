@@ -1926,36 +1926,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             }
           >
             {accessibleTitle}
-            {/* Settled history recedes: dimmed favicon at rest, restored on
-              hover so the tail stays scannable when you're hunting. */}
+            {/* Restore the project icon whenever the row is highlighted. */}
             {props.project ? (
-              <span className="relative isolate inline-flex size-4 shrink-0 items-center justify-center">
-                <span
-                  className={cn(
-                    "relative transition-opacity",
-                    (!props.isActive || variantAction === "unsettle") &&
-                      "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
-                  )}
-                >
-                  <ProjectFavicon project={props.project} className="size-4" />
-                </span>
-                <span
-                  aria-label={topStatus?.label ?? "Ready"}
-                  className={cn(
-                    "absolute right-0 bottom-0 z-10 size-1.5 rounded-full",
-                    compactStatusDotClassName,
-                  )}
-                  style={{ boxShadow: "0 0 0 1px var(--sidebar)" }}
-                  role="img"
-                />
-              </span>
-            ) : (
               <span
-                aria-label={topStatus?.label ?? "Ready"}
-                className={cn("size-1.5 shrink-0 rounded-full", compactStatusDotClassName)}
-                role="img"
-              />
-            )}
+                className={cn(
+                  "inline-flex size-4 shrink-0 items-center justify-center transition-opacity",
+                  !props.isActive &&
+                    !isSelected &&
+                    props.sweepAction === null &&
+                    !isFileDragOver &&
+                    "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
+                )}
+              >
+                <ProjectFavicon project={props.project} className="size-4" />
+              </span>
+            ) : null}
             {draftIndicator}
             {providerEntry?.driverKind ? (
               <ProviderInstanceIcon
@@ -1999,7 +1984,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               >
                 <span
                   className={cn(
-                    "inline-flex justify-end tabular-nums text-secondary-label transition-opacity",
+                    "relative inline-flex min-w-1.5 justify-end tabular-nums text-secondary-label transition-opacity",
                     !isWoke && "group-any-hover/sidebar-row:opacity-0",
                   )}
                 >
@@ -2035,6 +2020,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                         : threadTimeLabel(thread)}
                     </span>
                   )}
+                  <span
+                    aria-label={topStatus?.label ?? "Ready"}
+                    className={cn(
+                      "absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full",
+                      compactStatusDotClassName,
+                    )}
+                    style={{ boxShadow: "0 0 0 1px var(--sidebar)" }}
+                    role="img"
+                  />
                 </span>
                 {variantAction === "unsnooze" ? (
                   !props.snoozeSupported ? null : (
