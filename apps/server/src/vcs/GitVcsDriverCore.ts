@@ -46,6 +46,8 @@ import * as ServerConfig from "../config.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const gitProcesses = Semaphore.makeUnsafe(8);
+// Deleting dependency trees is disk-heavy; keep concurrent requests from multiplying that load.
+const worktreeRemovals = Semaphore.makeUnsafe(1);
 // `git worktree add` checks out the full tree, so on large repositories it can
 // take well beyond the default 30s (e.g. a 375k-file repo takes ~40s on an idle
 // machine). Give it generous headroom while still bounding a genuinely hung git.
@@ -3872,7 +3874,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       stdoutLength: result.stdout.length,
       stderrLength: result.stderr.length,
     });
-  });
+  }, worktreeRemovals.withPermits(1));
 
   const pruneWorktrees: GitVcsDriver.GitVcsDriver["Service"]["pruneWorktrees"] = Effect.fn(
     "pruneWorktrees",

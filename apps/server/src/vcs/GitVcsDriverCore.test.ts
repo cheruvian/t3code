@@ -256,6 +256,83 @@ it.effect.each([{ timeoutMs: null }, { timeoutMs: 30_001 }])(
     }).pipe(Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
+it.effect("serializes worktree deletions across drivers while leaving Git queries available", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const started = yield* Deferred.make<void>();
+    let active = 0;
+    let peak = 0;
+    const spawner = ChildProcessSpawner.make((command) => {
+      if (!ChildProcess.isStandardCommand(command)) return Effect.die("expected Git command");
+      if (!command.args.includes("remove")) return Effect.succeed(makeSuccessfulHandle("ok"));
+      return Effect.acquireRelease(
+        Effect.gen(function* () {
+          peak = Math.max(peak, ++active);
+          yield* Deferred.succeed(started, undefined);
+          return ChildProcessSpawner.makeHandle({
+            ...makeSuccessfulHandle(""),
+            exitCode: Deferred.await(gate).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+          });
+        }),
+        () => Effect.sync(() => active--),
+      );
+    });
+    const drivers = yield* Effect.all(
+      [0, 1].map(() =>
+        makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        ),
+      ),
+    );
+    const first = yield* drivers[0]!
+      .removeWorktree({ cwd: "/repo", path: "/first", force: true })
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(started);
+    const second = yield* drivers[1]!
+      .removeWorktree({ cwd: "/repo", path: "/second", force: true })
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    const query = yield* drivers[1]!.execute({
+      operation: "test.metadataDuringRemoval",
+      cwd: "/repo",
+      args: ["rev-parse", "HEAD"],
+    });
+    assert.equal(query.stdout, "ok");
+    assert.equal(peak, 1);
+    yield* Deferred.succeed(gate, undefined);
+    yield* Fiber.join(first);
+    yield* Fiber.join(second);
+    assert.equal(peak, 1);
+    assert.equal(active, 0);
+  }).pipe(Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("releases the deletion queue after a failed removal", () =>
+  Effect.gen(function* () {
+    let attempts = 0;
+    const spawner = ChildProcessSpawner.make((command) => {
+      if (!ChildProcess.isStandardCommand(command)) return Effect.die("expected Git command");
+      if (command.args.includes("remove") && ++attempts === 1) {
+        return Effect.succeed(
+          ChildProcessSpawner.makeHandle({
+            ...makeSuccessfulHandle(""),
+            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+          }),
+        );
+      }
+      return Effect.succeed(makeSuccessfulHandle(""));
+    });
+    const driver = yield* makeGitVcsDriverCore().pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
+    const failed = yield* driver
+      .removeWorktree({ cwd: "/repo", path: "/first", force: true })
+      .pipe(Effect.result);
+    assert.isTrue(Result.isFailure(failed));
+    yield* driver.removeWorktree({ cwd: "/repo", path: "/second", force: true });
+    assert.equal(attempts, 2);
+  }).pipe(Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
 it.effect.each(["root", "nested", "worktree", "newline"] as const)(
   "reuses repository metadata and checks locks after warming status in a %s",
   (location) =>
