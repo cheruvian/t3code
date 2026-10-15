@@ -31,7 +31,11 @@ import {
   type EnvironmentRpcInput,
 } from "../rpc/client.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
-import { vcsCommandConcurrency, vcsCommandScheduler } from "./vcsCommandScheduler.ts";
+import {
+  vcsCommandConcurrency,
+  vcsCommandScheduler,
+  vcsRefreshCommandScheduler,
+} from "./vcsCommandScheduler.ts";
 import {
   invalidateCachedVcsRefs,
   vcsRefsCacheStateAtom,
@@ -388,7 +392,7 @@ export function createVcsEnvironmentAtoms<R, E>(
     refreshStatus: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:refresh-status",
       tag: WS_METHODS.vcsRefreshStatus,
-      scheduler: vcsCommandScheduler,
+      scheduler: vcsRefreshCommandScheduler,
       concurrency: vcsCommandConcurrency,
       onSettled: invalidateRefs,
     }),
