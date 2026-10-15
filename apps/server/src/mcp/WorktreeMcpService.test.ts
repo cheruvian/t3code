@@ -260,7 +260,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
       workingTree: { files: [], insertions: 0, deletions: 0 },
     }),
   );
-  const refreshStatus = vi.fn((_: string) => Effect.die("refreshStatus stub"));
+  const refreshStatusInBackground = vi.fn((_: string) => Effect.void);
   const runForThread = vi.fn((input: { readonly worktreePath: string }) => {
     switch (options.setupScript ?? "started") {
       case "no-script":
@@ -332,7 +332,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
           runForThread,
         } satisfies Partial<ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]>),
         Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({
-          refreshStatus,
+          refreshStatusInBackground,
         } satisfies Partial<VcsStatusBroadcaster.VcsStatusBroadcaster["Service"]>),
         NodeServices.layer,
       ),

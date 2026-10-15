@@ -1749,10 +1749,7 @@ const layerWsRpc = (
           };
         });
 
-      const refreshGitStatus = (cwd: string) =>
-        vcsStatusBroadcaster
-          .refreshStatus(cwd)
-          .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
+      const refreshGitStatus = (cwd: string) => vcsStatusBroadcaster.refreshStatusInBackground(cwd);
 
       const getOrchestrationV2ArchivedShellSnapshot = readSql
         .withTransaction(

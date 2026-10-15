@@ -1,5 +1,7 @@
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -29,6 +31,7 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 
+const BACKGROUND_REFRESH_MAX_WAIT_MS = 30_000;
 const DEFAULT_VCS_STATUS_REFRESH_INTERVAL = Duration.seconds(30);
 const VCS_STATUS_REFRESH_FAILURE_BASE_DELAY = Duration.seconds(30);
 const VCS_STATUS_REFRESH_FAILURE_MAX_DELAY = Duration.minutes(15);
@@ -213,6 +216,7 @@ export class VcsStatusBroadcaster extends Context.Service<
       cwd: string,
     ) => Effect.Effect<VcsStatusLocalResult, GitManagerServiceError>;
     readonly refreshStatus: (cwd: string) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
+    readonly refreshStatusInBackground: (cwd: string) => Effect.Effect<void>;
     /**
      * Refresh a loaded cwd after a turn if background policy allows it.
      * GitManager retries missing PRs for the current branch and keeps known
@@ -621,13 +625,6 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  const refreshLocalStatus: VcsStatusBroadcaster["Service"]["refreshLocalStatus"] = Effect.fn(
-    "VcsStatusBroadcaster.refreshLocalStatus",
-  )(function* (rawCwd) {
-    const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
-    return yield* refreshLocalStatusCore(cwd);
-  });
-
   const maybeAutoPull = Effect.fn("VcsStatusBroadcaster.maybeAutoPull")(function* (
     cwd: string,
     remote: VcsStatusRemoteResult | null,
@@ -707,13 +704,15 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const refreshStatus: VcsStatusBroadcaster["Service"]["refreshStatus"] = Effect.fn(
-    "VcsStatusBroadcaster.refreshStatus",
-  )(function* (rawCwd) {
-    const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
+  const refreshStatusCore = Effect.fn("VcsStatusBroadcaster.refreshStatusCore")(function* (
+    cwd: string,
+    rawCwd: string,
+    shouldRun: Effect.Effect<boolean>,
+  ) {
     return yield* withRemoteOperationLock(
       cwd,
       Effect.gen(function* () {
+        if (!(yield* shouldRun)) return undefined;
         // invalidateStatus (not the two partial invalidations) so an explicit
         // refresh also bypasses GitManager's slow PR-lookup cache.
         yield* workflow.invalidateStatus(cwd);
@@ -753,12 +752,161 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const refreshPullRequestStatus: VcsStatusBroadcaster["Service"]["refreshPullRequestStatus"] =
-    Effect.fn("VcsStatusBroadcaster.refreshPullRequestStatus")(function* (rawCwd) {
-      const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
-      return yield* withRemoteOperationLock(
+  // Each refresh kind owns one running check and one follow-up per canonical workspace.
+  // Callers arriving during a check need its follow-up to observe their changes.
+  const makeRefreshLane = <A>(
+    run: (
+      cwd: string,
+      rawCwd: string,
+      shouldRun: Effect.Effect<boolean>,
+    ) => Effect.Effect<A | undefined, GitManagerServiceError>,
+  ) => {
+    interface RefreshBatch {
+      rawCwd: string;
+      readonly result: Deferred.Deferred<A, GitManagerServiceError>;
+      foregroundWaiters: number;
+      backgroundRequestedAt: number | null;
+    }
+    interface RefreshLane {
+      current: RefreshBatch;
+      pending: RefreshBatch | null;
+    }
+    const refreshLanes = new Map<string, RefreshLane>();
+
+    const drainRefreshLane = (cwd: string, lane: RefreshLane) =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          while (true) {
+            const batch = lane.current;
+            // Recheck inside the Git operation lock: its queue time counts toward freshness.
+            const shouldRun = Clock.currentTimeMillis.pipe(
+              Effect.map(
+                (now) =>
+                  batch.foregroundWaiters > 0 ||
+                  (batch.backgroundRequestedAt !== null &&
+                    now - batch.backgroundRequestedAt <= BACKGROUND_REFRESH_MAX_WAIT_MS),
+              ),
+            );
+            const exit = yield* restore(run(cwd, batch.rawCwd, shouldRun)).pipe(Effect.exit);
+            if (Exit.isFailure(exit)) {
+              yield* Deferred.done(batch.result, Exit.failCause(exit.cause));
+              if (Cause.hasInterrupts(exit.cause)) {
+                if (lane.pending)
+                  yield* Deferred.done(lane.pending.result, Exit.failCause(exit.cause));
+                return;
+              }
+              if (batch.foregroundWaiters === 0) {
+                yield* Effect.logWarning("VCS background status refresh failed", {
+                  ...remoteRefreshFailureDiagnostics(exit.cause),
+                });
+              }
+            } else if (exit.value !== undefined) {
+              yield* Deferred.succeed(batch.result, exit.value);
+            }
+            const hasNext = yield* Effect.sync(() => {
+              if (lane.pending === null) {
+                refreshLanes.delete(cwd);
+                return false;
+              }
+              lane.current = lane.pending;
+              lane.pending = null;
+              return true;
+            });
+            if (!hasNext) return;
+          }
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (refreshLanes.get(cwd) === lane) refreshLanes.delete(cwd);
+            }),
+          ),
+        ),
+      );
+
+    const enqueueRefresh = (
+      cwd: string,
+      rawCwd: string,
+      background: boolean,
+      requestedAt?: number,
+    ) =>
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis;
+          const existing = refreshLanes.get(cwd);
+          const batch = existing?.pending ?? {
+            rawCwd,
+            result: Deferred.makeUnsafe<A, GitManagerServiceError>(),
+            foregroundWaiters: 0,
+            backgroundRequestedAt: null,
+          };
+          batch.rawCwd = rawCwd;
+          if (background) {
+            batch.backgroundRequestedAt = Math.max(
+              batch.backgroundRequestedAt ?? 0,
+              requestedAt ?? now,
+            );
+          } else batch.foregroundWaiters += 1;
+          if (existing) {
+            existing.pending = batch;
+          } else {
+            const lane = { current: batch, pending: null };
+            refreshLanes.set(cwd, lane);
+            yield* drainRefreshLane(cwd, lane).pipe(
+              Effect.interruptible,
+              Effect.forkIn(broadcasterScope),
+            );
+          }
+          return batch;
+        }),
+      );
+
+    const refresh = (rawCwd: string) =>
+      Effect.gen(function* () {
+        const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
+        return yield* Effect.acquireUseRelease(
+          enqueueRefresh(cwd, rawCwd, false),
+          (batch) => Deferred.await(batch.result),
+          (batch) =>
+            Effect.sync(() => {
+              batch.foregroundWaiters -= 1;
+            }),
+        );
+      });
+
+    const refreshInBackground = (rawCwd: string) =>
+      Effect.gen(function* () {
+        const requestedAt = yield* Clock.currentTimeMillis;
+        // Path resolution can itself wait on a remote filesystem. Git actions must not await it.
+        yield* Effect.gen(function* () {
+          const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
+          yield* enqueueRefresh(cwd, rawCwd, true, requestedAt);
+        }).pipe(Effect.interruptible, Effect.forkIn(broadcasterScope, { startImmediately: true }));
+      });
+
+    return { refresh, refreshInBackground };
+  };
+
+  const fullRefresh = makeRefreshLane(refreshStatusCore);
+  const refreshStatus = Effect.fn("VcsStatusBroadcaster.refreshStatus")(fullRefresh.refresh);
+  const refreshStatusInBackground = Effect.fn("VcsStatusBroadcaster.refreshStatusInBackground")(
+    fullRefresh.refreshInBackground,
+  );
+  const localRefresh = makeRefreshLane<VcsStatusLocalResult>((cwd, _rawCwd, shouldRun) =>
+    Effect.gen(function* () {
+      if (!(yield* shouldRun)) return undefined;
+      return yield* refreshLocalStatusCore(cwd);
+    }),
+  );
+  const refreshLocalStatus = Effect.fn("VcsStatusBroadcaster.refreshLocalStatus")(
+    localRefresh.refresh,
+  );
+
+  const pullRequestRefresh = makeRefreshLane<VcsStatusRemoteResult | null>(
+    (cwd, rawCwd, shouldRun) =>
+      withRemoteOperationLock(
         cwd,
         Effect.gen(function* () {
+          if (!(yield* shouldRun)) return undefined;
           const cached = yield* getCachedStatus(cwd);
           if (cached?.remote?.value == null) return null;
           const poller = (yield* SynchronizedRef.get(pollersRef)).get(cwd);
@@ -783,8 +931,11 @@ export const make = Effect.gen(function* () {
           });
           return committed ? remote : null;
         }),
-      );
-    });
+      ),
+  );
+  const refreshPullRequestStatus = Effect.fn("VcsStatusBroadcaster.refreshPullRequestStatus")(
+    pullRequestRefresh.refresh,
+  );
 
   const makeRemoteRefreshLoop = (
     cwd: string,
@@ -1161,6 +1312,7 @@ export const make = Effect.gen(function* () {
     getStatus,
     refreshLocalStatus,
     refreshStatus,
+    refreshStatusInBackground,
     refreshPullRequestStatus,
     streamStatus,
   });
