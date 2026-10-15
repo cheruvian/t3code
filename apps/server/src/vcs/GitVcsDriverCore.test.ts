@@ -150,7 +150,7 @@ const initRepoWithCommit = (
     return { initialBranch };
   });
 
-it.effect("bounds Git bursts across drivers without timing out queued commands", () =>
+it.effect("bounds Git bursts across drivers", () =>
   Effect.gen(function* () {
     const gate = yield* Deferred.make<void>();
     const starts = yield* Queue.unbounded<number>();
@@ -188,7 +188,7 @@ it.effect("bounds Git bursts across drivers without timing out queued commands",
       { concurrency: "unbounded" },
     ).pipe(Effect.forkChild);
 
-    yield* TestClock.adjust("2 seconds");
+    yield* TestClock.adjust("0 seconds");
     assert.equal(yield* Queue.size(starts), 8);
     assert.equal(peak, 8);
     yield* Deferred.succeed(gate, undefined);
@@ -201,7 +201,134 @@ it.effect("bounds Git bursts across drivers without timing out queued commands",
       Metric.withAttributes(gitCommandDuration, [["operation", "test.gitBurst"]]),
     );
     assert.equal(duration.count, 16);
-    assert.equal(duration.sum, 16_000);
+    assert.equal(duration.sum, 0);
+  }).pipe(Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("expires queued Git commands before they spawn and recovers capacity", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    let starts = 0;
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.sync(() => {
+        starts++;
+        return ChildProcessSpawner.makeHandle({
+          ...makeSuccessfulHandle("ok"),
+          exitCode: Deferred.await(gate).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+        });
+      }),
+    );
+    const driver = yield* makeGitVcsDriverCore().pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
+    const running = yield* Effect.forEach(Array.from({ length: 8 }), () =>
+      driver
+        .execute({ operation: "test.running", cwd: "/repo", args: ["status"] })
+        .pipe(Effect.forkChild({ startImmediately: true })),
+    );
+    const queued = yield* Effect.forEach(Array.from({ length: 8 }), () =>
+      driver
+        .execute({ operation: "test.expired", cwd: "/repo", args: ["status"], timeoutMs: 1_000 })
+        .pipe(Effect.result, Effect.forkChild({ startImmediately: true })),
+    );
+    yield* TestClock.adjust("2 seconds");
+    assert.equal(starts, 8);
+    const results = yield* Effect.forEach(queued, Fiber.join);
+    assert.isTrue(results.every(Result.isFailure));
+    yield* Deferred.succeed(gate, undefined);
+    yield* Effect.forEach(running, Fiber.join);
+    yield* driver.execute({ operation: "test.recovered", cwd: "/repo", args: ["status"] });
+    assert.equal(starts, 9);
+  }).pipe(Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("charges queue wait against execution deadlines and finalizes timed-out processes", () =>
+  Effect.gen(function* () {
+    const blockers = yield* Deferred.make<void>();
+    const queuedStarted = yield* Deferred.make<void>();
+    let active = 0;
+    const spawner = ChildProcessSpawner.make((command) =>
+      Effect.acquireRelease(
+        Effect.gen(function* () {
+          active++;
+          const queued = ChildProcess.isStandardCommand(command) && command.args[0] === "queued";
+          if (queued) yield* Deferred.succeed(queuedStarted, undefined);
+          return ChildProcessSpawner.makeHandle({
+            ...makeSuccessfulHandle("ok"),
+            exitCode: queued
+              ? Effect.never
+              : Deferred.await(blockers).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+          });
+        }),
+        () => Effect.sync(() => active--),
+      ),
+    );
+    const driver = yield* makeGitVcsDriverCore().pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
+    const running = yield* Effect.forEach(Array.from({ length: 8 }), () =>
+      driver
+        .execute({ operation: "test.blocker", cwd: "/repo", args: ["status"] })
+        .pipe(Effect.forkChild({ startImmediately: true })),
+    );
+    const queued = yield* driver
+      .execute({ operation: "test.budget", cwd: "/repo", args: ["queued"], timeoutMs: 3_000 })
+      .pipe(Effect.result, Effect.forkChild({ startImmediately: true }));
+    yield* TestClock.adjust("2 seconds");
+    yield* Deferred.succeed(blockers, undefined);
+    yield* Effect.forEach(running, Fiber.join);
+    yield* Deferred.await(queuedStarted);
+    assert.equal(active, 1);
+    yield* TestClock.adjust("1 second");
+    assert.isTrue(Result.isFailure(yield* Fiber.join(queued)));
+    assert.equal(active, 0);
+    assert.equal(
+      (yield* driver.execute({ operation: "test.recover", cwd: "/repo", args: ["status"] })).stdout,
+      "ok",
+    );
+  }).pipe(Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("rejects excess Git admission and releases cancelled queue capacity", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    let starts = 0;
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.sync(() => {
+        starts++;
+        return ChildProcessSpawner.makeHandle({
+          ...makeSuccessfulHandle("ok"),
+          exitCode: Deferred.await(gate).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+        });
+      }),
+    );
+    const drivers = yield* Effect.forEach(Array.from({ length: 2 }), () =>
+      makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      ),
+    );
+    const execute = (index: number) =>
+      drivers[index % 2]!.execute({
+        operation: "test.admission",
+        cwd: "/repo",
+        args: ["status"],
+      });
+    const admitted = yield* Effect.forEach(Array.from({ length: 40 }), (_, index) =>
+      execute(index).pipe(Effect.forkChild({ startImmediately: true })),
+    );
+    yield* TestClock.adjust("0 seconds");
+    assert.equal(starts, 8);
+    const excess = yield* execute(40).pipe(Effect.result);
+    assert.isTrue(Result.isFailure(excess));
+    if (Result.isFailure(excess)) assert.match(excess.failure.detail, /queue is full/);
+    yield* Fiber.interrupt(admitted[39]!);
+    const replacement = yield* execute(41).pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.succeed(gate, undefined);
+    yield* Effect.forEach(admitted.slice(0, 39), Fiber.join);
+    assert.equal((yield* Fiber.join(replacement)).stdout, "ok");
+    assert.equal(starts, 40);
+    yield* execute(42);
+    assert.equal(starts, 41);
   }).pipe(Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 

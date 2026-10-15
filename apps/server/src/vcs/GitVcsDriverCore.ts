@@ -45,7 +45,12 @@ import {
 import * as ServerConfig from "../config.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const gitProcesses = Semaphore.makeUnsafe(8);
+const MAX_CONCURRENT_GIT_PROCESSES = 8;
+const MAX_PENDING_GIT_COMMANDS = 32;
+const gitProcesses = Semaphore.makeUnsafe(MAX_CONCURRENT_GIT_PROCESSES);
+// Include running commands so admission never adds another unbounded semaphore queue.
+// Long operations share the admission bound but leave the short-command pool available.
+const gitAdmissions = Semaphore.makeUnsafe(MAX_CONCURRENT_GIT_PROCESSES + MAX_PENDING_GIT_COMMANDS);
 // Deleting dependency trees is disk-heavy; keep concurrent requests from multiplying that load.
 const worktreeRemovals = Semaphore.makeUnsafe(1);
 // `git worktree add` checks out the full tree, so on large repositories it can
@@ -954,7 +959,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ...input,
         args: [...input.args],
       } as const;
-      const timeoutMs = input.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : input.timeoutMs;
       const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
       const appendTruncationMarker = input.appendTruncationMarker ?? false;
 
@@ -1063,49 +1067,63 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         } satisfies GitVcsDriver.ExecuteGitResult;
       });
 
-      const execution = runGitCommand().pipe(Effect.scoped);
-      if (timeoutMs === null) {
-        return yield* execution;
-      }
+      return yield* runGitCommand().pipe(Effect.scoped);
+    },
+  );
 
-      return yield* execution.pipe(
-        Effect.timeoutOption(timeoutMs),
+  const execute: GitVcsDriver.GitVcsDriver["Service"]["execute"] = (input) => {
+    const timeoutMs = input.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : input.timeoutMs;
+    const measured = executeRaw(input).pipe(
+      withMetrics({
+        counter: gitCommandsTotal,
+        timer: gitCommandDuration,
+        attributes: { operation: input.operation },
+      }),
+    );
+    const execution =
+      timeoutMs === null || timeoutMs > DEFAULT_TIMEOUT_MS
+        ? measured
+        : gitProcesses.withPermits(1)(measured);
+    // Queue wait and process execution share one deadline. Expired work must not spawn later.
+    const bounded =
+      timeoutMs === null
+        ? execution
+        : execution.pipe(
+            Effect.timeoutOption(timeoutMs),
+            Effect.flatMap((result) =>
+              Effect.fromOption(
+                result,
+                () =>
+                  new GitCommandError({
+                    ...gitCommandContext(input),
+                    detail: "Git command timed out.",
+                  }),
+              ),
+            ),
+          );
+    return gitAdmissions
+      .withPermitsIfAvailable(1)(bounded)
+      .pipe(
         Effect.flatMap((result) =>
           Effect.fromOption(
             result,
             () =>
               new GitCommandError({
-                ...gitCommandContext(commandInput),
-                detail: "Git command timed out.",
+                ...gitCommandContext(input),
+                detail: "Git command queue is full. Retry when current Git operations finish.",
               }),
           ),
         ),
+        Effect.withSpan(input.operation, {
+          kind: "client",
+          attributes: {
+            "git.operation": input.operation,
+            "git.cwd": input.cwd,
+            "git.args_count": input.args.length,
+          },
+        }),
       );
-    },
-  );
-
-  const execute: GitVcsDriver.GitVcsDriver["Service"]["execute"] = (input) =>
-    executeRaw(input).pipe(
-      withMetrics({
-        counter: gitCommandsTotal,
-        timer: gitCommandDuration,
-        attributes: {
-          operation: input.operation,
-        },
-      }),
-      (execution) =>
-        input.timeoutMs === null || (input.timeoutMs ?? DEFAULT_TIMEOUT_MS) > DEFAULT_TIMEOUT_MS
-          ? execution
-          : gitProcesses.withPermits(1)(execution),
-      Effect.withSpan(input.operation, {
-        kind: "client",
-        attributes: {
-          "git.operation": input.operation,
-          "git.cwd": input.cwd,
-          "git.args_count": input.args.length,
-        },
-      }),
-    );
+  };
 
   const executeGit = (
     operation: string,
