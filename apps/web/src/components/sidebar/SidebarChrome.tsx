@@ -1,3 +1,4 @@
+import { SidebarDeploymentNotices } from "./SidebarDeploymentNotice";
 import { SidebarProviderOutageIcon } from "./SidebarProviderOutageIcon";
 import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
@@ -249,6 +250,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   return (
     <SidebarFooter>
+      <SidebarDeploymentNotices />
       <SidebarThreadUndoNotice />
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />

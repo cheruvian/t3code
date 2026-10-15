@@ -1,3 +1,4 @@
+import * as DeploymentAdmission from "../cloud/DeploymentAdmission.ts";
 import {
   latestExecutedRun,
   latestRootProviderFailure,
@@ -781,6 +782,9 @@ function lastDeliveredRunForProviderThread(
 }
 
 const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(function* () {
+  const deploymentAdmission = Option.getOrUndefined(
+    yield* Effect.serviceOption(DeploymentAdmission.DeploymentAdmission),
+  );
   const checkpointService = yield* CheckpointServiceV2;
   const commandPolicy = yield* CommandPolicyV2;
   const contextHandoffService = yield* ContextHandoffServiceV2;
@@ -11074,15 +11078,38 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     } satisfies OrchestratorV2DispatchResult;
   });
 
+  const withDeploymentAdmission = <A, E, R>(
+    command: OrchestrationV2ServerCommand,
+    effect: Effect.Effect<A, E, R>,
+  ) =>
+    Effect.suspend<A, E | OrchestratorCommandRejectedError, R>(() => {
+      if (deploymentAdmission === undefined) return effect;
+      if (!deploymentAdmission.enter())
+        return Effect.fail(
+          new OrchestratorCommandRejectedError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause:
+              "This environment is restarting for a queued deployment. Reconnect before sending more work.",
+          }),
+        );
+      return effect.pipe(Effect.ensuring(Effect.sync(deploymentAdmission.leave)));
+    });
   const dispatchWithReceipt = (command: OrchestrationV2ServerCommand) =>
-    threadDispatch.withLock(commandThreadId(command), dispatchWithReceiptEffect(command));
+    withDeploymentAdmission(
+      command,
+      threadDispatch.withLock(commandThreadId(command), dispatchWithReceiptEffect(command)),
+    );
   const dispatchWithPrecondition: OrchestratorV2Shape["dispatchWithPrecondition"] = (
     command,
     precondition,
   ) =>
-    threadDispatch.withLock(
-      commandThreadId(command),
-      precondition.pipe(Effect.andThen(dispatchWithReceiptEffect(command))),
+    withDeploymentAdmission(
+      command,
+      threadDispatch.withLock(
+        commandThreadId(command),
+        precondition.pipe(Effect.andThen(dispatchWithReceiptEffect(command))),
+      ),
     );
 
   const handleTerminalRun = (stored: OrchestrationV2StoredEvent) =>

@@ -1,3 +1,5 @@
+import * as ManagedDeployment from "./cloud/ManagedDeployment.ts";
+import * as DeploymentAdmission from "./cloud/DeploymentAdmission.ts";
 import * as CredentialBroker from "./secrets/CredentialBroker.ts";
 import * as ResourceActionReactor from "./orchestration-v2/ResourceActionReactor.ts";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
@@ -425,6 +427,7 @@ const layerServerEnvironment = ServerEnvironment.layer.pipe(Layer.provide(Server
 
 const layerAuth = EnvironmentAuth.layer.pipe(
   Layer.provideMerge(layerPersistence),
+  Layer.provideMerge(DeploymentAdmission.layer),
   Layer.provide(layerServerEnvironment),
   Layer.provide(ServerSecretStore.layer),
 );
@@ -571,6 +574,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ReplayMarkers.layer,
 ).pipe(
   // Core Services
+  Layer.provideMerge(ManagedDeployment.layer),
   Layer.provideMerge(layerOrchestrationApplication),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
   Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),

@@ -1,4 +1,9 @@
 import {
+  ManagedDeploymentState,
+  ManagedDeploymentAction,
+  ManagedDeploymentError,
+} from "./managedDeployment.ts";
+import {
   CredentialBrokerState,
   CredentialBrokerAction,
   CredentialBrokerError,
@@ -475,6 +480,8 @@ export const WS_METHODS = {
 
   // Server meta
   serverProbe: "server.probe",
+  serverDeploymentSubscribe: "server.deploymentSubscribe",
+  serverDeploymentAction: "server.deploymentAction",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
@@ -600,6 +607,18 @@ const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
   payload: Schema.Struct({}),
   success: Schema.Struct({}),
   error: EnvironmentAuthorizationError,
+});
+
+const WsServerDeploymentSubscribeRpc = Rpc.make(WS_METHODS.serverDeploymentSubscribe, {
+  payload: Schema.Struct({}),
+  success: ManagedDeploymentState,
+  error: Schema.Union([ManagedDeploymentError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+const WsServerDeploymentActionRpc = Rpc.make(WS_METHODS.serverDeploymentAction, {
+  payload: ManagedDeploymentAction,
+  success: Schema.Void,
+  error: Schema.Union([ManagedDeploymentError, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
@@ -1865,6 +1884,8 @@ export const WsRpcGroup = RpcGroup.make(
   CredentialBrokerSubscribeRpc,
   CredentialBrokerActionRpc,
   WsServerProbeRpc,
+  WsServerDeploymentSubscribeRpc,
+  WsServerDeploymentActionRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
