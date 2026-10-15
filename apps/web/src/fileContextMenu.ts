@@ -7,7 +7,6 @@
  */
 import {
   EDITORS,
-  type AssetResource,
   type ContextMenuItem,
   type EditorId,
   type EnvironmentId,
@@ -26,21 +25,8 @@ import { useAtomCommand } from "./state/use-atom-command";
 import { resolvePathLinkTarget } from "./terminal-links";
 import { toastManager } from "./components/ui/toast";
 import { useAtomValue } from "@effect/atom-react";
-import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { assetEnvironment } from "~/state/assets";
-import { readPreparedConnection } from "~/state/session";
-import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 
-function startFileDownload(url: string, fileName: string): void {
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = fileName;
-  anchor.hidden = true;
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-}
+import { useHostFileDownload } from "./hostFileDownload";
 
 export type FileContextMenuAction =
   | "download"
@@ -133,10 +119,7 @@ export function buildFileContextMenuItems(input: {
 /** Builds and dispatches the file context menu for one environment's files. */
 export function useFileContextMenu(environmentId: EnvironmentId | null) {
   const openInEditor = useAtomCommand(shellEnvironment.openInEditor, { reportFailure: false });
-  const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
-    reportFailure: false,
-    refresh: true,
-  });
+  const downloadHostFile = useHostFileDownload(environmentId);
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
 
   return useMemo(() => {
@@ -164,22 +147,7 @@ export function useFileContextMenu(environmentId: EnvironmentId | null) {
       if (absolutePath === null || environmentId === null) return;
 
       if (action === "download") {
-        try {
-          const connection = readPreparedConnection(environmentId);
-          if (connection === null) throw new Error("Reconnect to this environment and try again.");
-          const resource: AssetResource = { _tag: "host-file-download", path: absolutePath };
-          const result = await createAssetUrl({ environmentId, input: { resource } });
-          if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-          const url = resolveAssetUrl(connection.httpBaseUrl, result.value.relativeUrl);
-          if (url === null) throw new Error("The environment returned an invalid download URL.");
-          startFileDownload(url, absolutePath.split(/[\\/]/).at(-1) ?? "download");
-        } catch (cause) {
-          toastManager.add({
-            type: "error",
-            title: "Could not download file",
-            description: cause instanceof Error ? cause.message : String(cause),
-          });
-        }
+        await downloadHostFile(absolutePath);
         return;
       }
 
@@ -232,7 +200,7 @@ export function useFileContextMenu(environmentId: EnvironmentId | null) {
       activate,
       show,
     };
-  }, [createAssetUrl, environmentId, openInEditor, serverConfig]);
+  }, [downloadHostFile, environmentId, openInEditor, serverConfig]);
 }
 
 /** Convenience callback for onContextMenu handlers. */
