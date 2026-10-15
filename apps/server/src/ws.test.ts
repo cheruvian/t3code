@@ -18,7 +18,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as PubSub from "effect/PubSub";
-import * as SqliteClient from "@t3tools/shared/nodeSqliteClient";
+import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/process";
@@ -52,7 +52,7 @@ it.effect(
       const threadId = ThreadId.make("thread:shared-ws-shell");
       const dependencies = Layer.mergeAll(
         ServerSettings.layerTest(),
-        SqliteClient.layer({ filename: ":memory:" }),
+        SqlitePersistence.layerMemory,
         Layer.mock(ProjectStore.ProjectStoreV2)({ listShells: () => Effect.succeed([]) }),
         Layer.mock(ProjectService.ProjectService)({}),
         Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({

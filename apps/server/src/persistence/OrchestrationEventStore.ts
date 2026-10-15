@@ -36,6 +36,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { replayAndBufferProjectedLiveEvents } from "../orchestration-v2/LiveStreamBudget.ts";
+import { ReadOnlySqlClient } from "./Services/ReadOnlySqlClient.ts";
 
 import {
   toPersistenceDecodeError,
@@ -295,6 +296,7 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
 
 const makeEventStore = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const readSql = Option.getOrElse(yield* Effect.serviceOption(ReadOnlySqlClient), () => sql);
   const committedEvents = yield* PubSub.unbounded<ApplicationStoredEvent>();
 
   const appendProjectEventRow = SqlSchema.findOne({
@@ -391,7 +393,7 @@ const makeEventStore = Effect.gen(function* () {
     readonly onlyAgentEvents?: boolean;
     readonly limit: number;
   }) =>
-    sql<ApplicationEventRow>`
+    readSql<ApplicationEventRow>`
       SELECT
         sequence,
         event_id,
@@ -541,7 +543,7 @@ const makeEventStore = Effect.gen(function* () {
   };
 
   const getAgentReplayStats: OrchestrationEventStore["Service"]["getAgentReplayStats"] = (input) =>
-    sql<{
+    readSql<{
       readonly eventCount: number;
       readonly rawPayloadBytes: number;
       readonly hasCreateEvent: number;
@@ -571,7 +573,7 @@ const makeEventStore = Effect.gen(function* () {
     );
 
   const getReplayStats: OrchestrationEventStore["Service"]["getReplayStats"] = (input) =>
-    sql<{ readonly eventCount: number; readonly rawPayloadBytes: number }>`
+    readSql<{ readonly eventCount: number; readonly rawPayloadBytes: number }>`
       SELECT
         COUNT(*) AS "eventCount",
         COALESCE(SUM(octet_length(payload_json)), 0) AS "rawPayloadBytes"
@@ -593,7 +595,7 @@ const makeEventStore = Effect.gen(function* () {
   const latestAgentSequence: OrchestrationEventStore["Service"]["latestAgentSequence"] = (
     threadId,
   ) =>
-    sql<{ readonly sequence: number | null }>`
+    readSql<{ readonly sequence: number | null }>`
       SELECT MAX(sequence) AS sequence
       FROM orchestration_events
       ${
@@ -610,7 +612,7 @@ const makeEventStore = Effect.gen(function* () {
     );
 
   // The OR planner otherwise scans every V2 event instead of seeking the final sequence.
-  const latestApplicationSequence = sql<{ readonly sequence: number | null }>`
+  const latestApplicationSequence = readSql<{ readonly sequence: number | null }>`
     SELECT MAX(sequence) AS sequence
     FROM orchestration_events INDEXED BY idx_orchestration_events_application_high_water
     WHERE aggregate_kind = 'project'

@@ -299,6 +299,76 @@ it.effect.each(["root", "nested", "worktree"] as const)(
     }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect.each(["root", "worktree"] as const)(
+  "reuses clean-filter results across status reads in a %s",
+  (location) =>
+    Effect.gen(function* () {
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const repository = yield* makeTmpDir();
+      yield* initRepoWithCommit(repository);
+      const cwd = location === "worktree" ? yield* makeTmpDir() : repository;
+      if (location === "worktree") yield* git(repository, ["worktree", "add", "--detach", cwd]);
+      yield* git(cwd, ["config", "filter.probe.clean", "echo clean >> .filter-runs; cat"]);
+      yield* writeTextFile(cwd, ".gitattributes", "asset.bin filter=probe\n");
+      yield* writeTextFile(cwd, ".gitignore", ".filter-runs\n");
+      yield* writeTextFile(cwd, "asset.bin", "original\n");
+      yield* git(cwd, ["add", "."]);
+      yield* git(cwd, ["commit", "-m", "filtered asset"]);
+      NodeFS.utimesSync(path.join(cwd, "asset.bin"), 1, 1);
+      const runsPath = path.join(cwd, ".filter-runs");
+      yield* fs.remove(runsPath, { force: true });
+      const stagedBefore = yield* git(cwd, ["ls-files", "--stage"]);
+
+      for (let read = 0; read < 3; read++) {
+        assert.isFalse((yield* driver.statusDetailsLocal(cwd)).hasWorkingTreeChanges);
+      }
+      assert.deepStrictEqual((yield* fs.readFileString(runsPath)).trim().split("\n"), ["clean"]);
+      assert.equal(yield* git(cwd, ["ls-files", "--stage"]), stagedBefore);
+
+      yield* writeTextFile(cwd, "asset.bin", "changed\n");
+      const status = yield* driver.statusDetailsLocal(cwd);
+      assert.isTrue(status.hasWorkingTreeChanges);
+      assert.deepStrictEqual(status.workingTree.files, [
+        { path: "asset.bin", insertions: 1, deletions: 1 },
+      ]);
+      assert.equal(yield* git(cwd, ["ls-files", "--stage"]), stagedBefore);
+    }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("skips the tracked-file diff for clean and untracked-only status", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+    let numstatScans = 0;
+    const spawner = ChildProcessSpawner.make((command) => {
+      if (ChildProcess.isStandardCommand(command) && command.args.includes("--numstat")) {
+        numstatScans++;
+      }
+      return delegate.spawn(command);
+    });
+    const driver = yield* makeGitVcsDriverCore().pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provide(layerServerConfig),
+    );
+    assert.deepStrictEqual((yield* driver.statusDetailsLocal(cwd)).workingTree.files, []);
+    yield* writeTextFile(cwd, "untracked.txt", "untracked\n");
+    assert.deepStrictEqual((yield* driver.statusDetailsLocal(cwd)).workingTree.files, [
+      { path: "untracked.txt", insertions: 0, deletions: 0 },
+    ]);
+    assert.equal(numstatScans, 0);
+    yield* writeTextFile(cwd, "README.md", "changed\n");
+    const status = yield* driver.statusDetailsLocal(cwd);
+    assert.equal(numstatScans, 1);
+    assert.deepStrictEqual(status.workingTree.files, [
+      { path: "README.md", insertions: 1, deletions: 1 },
+      { path: "untracked.txt", insertions: 0, deletions: 0 },
+    ]);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("uses stable diagnostics for every parsed non-repository command", () => {
   const commands: Array<{ readonly args: ReadonlyArray<string>; readonly lcAll?: string }> = [];
   const spawner = ChildProcessSpawner.make((command) =>

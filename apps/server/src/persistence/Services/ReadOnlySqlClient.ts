@@ -8,10 +8,11 @@
  * `readonly` against the same WAL database so those reads run on their own
  * permit.
  *
- * Only genuinely read-only, client-facing queries belong here. Anything that
- * round-trips rows back through a write — the revert projector's
- * list/delete/upsert in particular — must stay on the write client so it reads
- * its own uncommitted state.
+ * Only genuinely read-only queries belong here. Read-modify-write operations
+ * must begin their transaction on the write client.
+ * Both clients share a transaction context, so a read called inside a write
+ * transaction uses the writer's connection. Outside a transaction, reads use
+ * the independent read-only connection and permit.
  *
  * @module ReadOnlySqlClient
  */

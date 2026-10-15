@@ -8,7 +8,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
-import * as SqlClient from "effect/sql/SqlClient";
+import { ReadOnlySqlClient } from "../persistence/Services/ReadOnlySqlClient.ts";
 
 import {
   annotateEnvironmentRequest,
@@ -68,7 +68,7 @@ export const layer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "orchestration",
   Effect.fnUntraced(function* (handlers) {
-    const sql = yield* SqlClient.SqlClient;
+    const sql = yield* ReadOnlySqlClient;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
     const projectStore = yield* ProjectStore.ProjectStoreV2;

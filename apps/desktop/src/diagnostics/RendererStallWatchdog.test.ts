@@ -1,14 +1,16 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
 import {
   CAPTURE_DURATION_MS,
   CHECK_INTERVAL_MS,
-  MAX_CAPTURES_PER_SESSION,
+  MAX_RETAINED_PROFILES,
   MIN_CAPTURE_INTERVAL_MS,
   STALL_THRESHOLD_MS,
   installRendererStallWatchdog,
@@ -40,6 +42,12 @@ function makeHarness(options?: { readonly failFirstStop?: boolean }) {
     },
     fileSystem: {
       makeDirectory: () => Effect.void,
+      readDirectory: (path) =>
+        Effect.sync(() => [...writes.keys()].map((entry) => entry.slice(path.length + 1))),
+      remove: (path) =>
+        Effect.sync(() => {
+          writes.delete(path);
+        }),
       writeFileString: (path, contents) =>
         Effect.sync(() => {
           writes.set(path, contents);
@@ -215,14 +223,14 @@ describe("RendererStallWatchdog", () => {
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
-  it.effect("rate-limits a persistent stall and caps captures for the session", () =>
+  it.effect("rate-limits a persistent stall and retains the newest five captures", () =>
     Effect.gen(function* () {
       const harness = makeHarness();
       const fiber = yield* makeRendererStallWatchdog(harness.dependencies)
         .watch(harness.target)
         .pipe(Effect.forkChild({ startImmediately: true }));
 
-      for (let index = 0; index < MAX_CAPTURES_PER_SESSION + 1; index += 1) {
+      for (let index = 0; index < MAX_RETAINED_PROFILES + 2; index += 1) {
         yield* advance(
           index === 0 ? STALL_THRESHOLD_MS + CHECK_INTERVAL_MS : MIN_CAPTURE_INTERVAL_MS,
         );
@@ -231,9 +239,74 @@ describe("RendererStallWatchdog", () => {
 
       assert.equal(
         harness.commands.filter((command) => command === "attach").length,
-        MAX_CAPTURES_PER_SESSION,
+        MAX_RETAINED_PROFILES + 2,
       );
+      const metadata = [...harness.writes.entries()]
+        .filter(([path]) => path.endsWith(".json"))
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([, contents]) => decodeJson(contents) as { sessionCaptureIndex: number });
+      assert.deepStrictEqual(
+        metadata.map((entry) => entry.sessionCaptureIndex),
+        [3, 4, 5, 6, 7],
+      );
+      assert.equal(harness.writes.size, MAX_RETAINED_PROFILES * 2);
       yield* Fiber.interrupt(fiber);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("prunes captures from previous sessions and preserves unrelated files", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-renderer-profiles-test-" });
+      const oldBasenames = Array.from(
+        { length: 6 },
+        (_, index) => `renderer-stall-1969-12-${20 + index}T00-00-00.000Z`,
+      );
+      for (const basename of oldBasenames) {
+        yield* fs.writeFileString(`${dir}/${basename}.cpuprofile`, "{}");
+        yield* fs.writeFileString(`${dir}/${basename}.json`, "{}");
+      }
+      yield* fs.writeFileString(`${dir}/unrelated.cpuprofile`, "keep");
+      yield* fs.writeFileString(`${dir}/renderer-stall-not-a-timestamp.json`, "keep");
+      const watchdog = makeRendererStallWatchdog({
+        ...harness.dependencies,
+        diagnosticsDir: dir,
+        fileSystem: {
+          makeDirectory: (path) => fs.makeDirectory(path, { recursive: true }).pipe(Effect.orDie),
+          readDirectory: (path) => fs.readDirectory(path).pipe(Effect.orDie),
+          writeFileString: (path, contents) =>
+            fs.writeFileString(path, contents).pipe(Effect.orDie),
+          remove: (path) => fs.remove(path, { force: true }).pipe(Effect.orDie),
+        },
+      });
+      const capture = yield* watchdog.captureNow(harness.target).pipe(Effect.forkChild);
+      yield* advance(CAPTURE_DURATION_MS);
+      assert.isTrue(yield* Fiber.join(capture));
+      for (const [index, basename] of oldBasenames.entries()) {
+        assert.equal(yield* fs.exists(`${dir}/${basename}.cpuprofile`), index >= 2);
+        assert.equal(yield* fs.exists(`${dir}/${basename}.json`), index >= 2);
+      }
+      assert.equal(yield* fs.readFileString(`${dir}/unrelated.cpuprofile`), "keep");
+      assert.equal(yield* fs.readFileString(`${dir}/renderer-stall-not-a-timestamp.json`), "keep");
+      assert.equal((yield* fs.readDirectory(dir)).length, MAX_RETAINED_PROFILES * 2 + 2);
+      assert.isFalse(yield* watchdog.captureNow(harness.target));
+    }).pipe(Effect.scoped, Effect.provide([NodeServices.layer, TestClock.layer()])),
+  );
+
+  it.effect("preserves previous captures when a replacement capture fails", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({ failFirstStop: true });
+      const profilePath = `${harness.dependencies.diagnosticsDir}/renderer-stall-1969-12-20T00-00-00.000Z.cpuprofile`;
+      harness.writes.set(profilePath, "previous capture");
+      const watchdog = makeRendererStallWatchdog(harness.dependencies);
+      const capture = yield* watchdog
+        .captureNow(harness.target)
+        .pipe(Effect.exit, Effect.forkChild({ startImmediately: true }));
+      assert.isFalse(yield* watchdog.captureNow(harness.target));
+      yield* advance(CAPTURE_DURATION_MS);
+      assert.equal((yield* Fiber.join(capture))._tag, "Failure");
+      assert.deepStrictEqual([...harness.writes.entries()], [[profilePath, "previous capture"]]);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 

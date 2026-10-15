@@ -15,6 +15,7 @@ type RuntimeSqliteLayerConfig = {
   readonly filename: string;
   readonly readonly?: boolean;
   readonly spanAttributes?: Record<string, unknown>;
+  readonly transactionClient?: SqlClient.SqlClient;
 };
 // Size the -wal file is cut back to on the first commit after a WAL reset.
 export const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
@@ -76,7 +77,7 @@ const readOnlySqlClientLayer = (config: RuntimeSqliteLayerConfig) =>
       const writeClient = yield* SqlClient.SqlClient;
       return isInMemoryDatabase(config.filename)
         ? Layer.succeed(ReadOnlySqlClient, writeClient)
-        : readOnlyConnectionLayer(config);
+        : readOnlyConnectionLayer({ ...config, transactionClient: writeClient });
     }),
   );
 

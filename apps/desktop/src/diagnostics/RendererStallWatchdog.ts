@@ -20,7 +20,7 @@ export const CHECK_INTERVAL_MS = 1_000;
 export const STALL_THRESHOLD_MS = 6_000;
 export const CAPTURE_DURATION_MS = 5_000;
 export const MIN_CAPTURE_INTERVAL_MS = 300_000;
-export const MAX_CAPTURES_PER_SESSION = 5;
+export const MAX_RETAINED_PROFILES = 5;
 
 const METADATA_KEYS = [
   "capturedAt",
@@ -57,6 +57,8 @@ export interface RendererStallWatchdogDependencies {
   readonly fileSystem: {
     readonly makeDirectory: (path: string) => Effect.Effect<void>;
     readonly writeFileString: (path: string, contents: string) => Effect.Effect<void>;
+    readonly readDirectory: (path: string) => Effect.Effect<ReadonlyArray<string>>;
+    readonly remove: (path: string) => Effect.Effect<void>;
   };
   readonly diagnosticsDir: string;
   readonly appVersion: string;
@@ -82,13 +84,10 @@ export function evaluateCaptureAllowed(input: {
   readonly now: number;
   readonly lastCaptureAt: number | undefined;
   readonly minIntervalMs: number;
-  readonly capturesThisSession: number;
-  readonly maxCaptures: number;
   readonly captureInProgress: boolean;
 }): boolean {
   return (
     !input.captureInProgress &&
-    input.capturesThisSession < input.maxCaptures &&
     (input.lastCaptureAt === undefined || input.now - input.lastCaptureAt >= input.minIntervalMs)
   );
 }
@@ -138,6 +137,29 @@ export function makeRendererStallWatchdog(
   let lastCaptureAt: number | undefined;
   let capturesThisSession = 0;
   let captureInProgress = false;
+  const pruneProfiles = Effect.fn("rendererStallWatchdog.pruneProfiles")(function* () {
+    const entries = yield* dependencies.fileSystem.readDirectory(dependencies.diagnosticsDir);
+    const captureBasenames = [
+      ...new Set(
+        entries.flatMap((entry) => {
+          const match =
+            /^(renderer-stall-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z)\.(?:cpuprofile|json)$/.exec(
+              entry,
+            );
+          const basename = match?.[1];
+          return basename ? [basename] : [];
+        }),
+      ),
+    ]
+      .sort()
+      .toReversed();
+    for (const basename of captureBasenames.slice(MAX_RETAINED_PROFILES)) {
+      yield* dependencies.fileSystem.remove(
+        `${dependencies.diagnosticsDir}/${basename}.cpuprofile`,
+      );
+      yield* dependencies.fileSystem.remove(`${dependencies.diagnosticsDir}/${basename}.json`);
+    }
+  });
   const capture = Effect.fn("rendererStallWatchdog.capture")(function* (
     target: RendererStallTarget,
     input: {
@@ -177,6 +199,11 @@ export function makeRendererStallWatchdog(
     yield* dependencies.fileSystem.makeDirectory(dependencies.diagnosticsDir);
     yield* dependencies.fileSystem.writeFileString(profilePath, encodeProfile(profile));
     yield* dependencies.fileSystem.writeFileString(metadataPath, `${encodeMetadata(metadata)}\n`);
+    yield* pruneProfiles().pipe(
+      Effect.catchCause((cause) =>
+        logWarning("renderer stall profile retention failed", { cause }),
+      ),
+    );
     yield* logInfo("renderer stall CPU profile captured", {
       profilePath,
       metadataPath,
@@ -195,8 +222,6 @@ export function makeRendererStallWatchdog(
         now,
         lastCaptureAt,
         minIntervalMs: MIN_CAPTURE_INTERVAL_MS,
-        capturesThisSession,
-        maxCaptures: MAX_CAPTURES_PER_SESSION,
         captureInProgress,
       })
     ) {
@@ -311,6 +336,8 @@ export const layer = (ipcMain: typeof Electron.ipcMain) =>
             fileSystem.makeDirectory(path, { recursive: true }).pipe(Effect.orDie),
           writeFileString: (path, contents) =>
             fileSystem.writeFileString(path, contents).pipe(Effect.orDie),
+          readDirectory: (path) => fileSystem.readDirectory(path).pipe(Effect.orDie),
+          remove: (path) => fileSystem.remove(path, { force: true }).pipe(Effect.orDie),
         },
         diagnosticsDir: environment.path.join(
           environment.stateDir,

@@ -16,6 +16,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
+import { ReadOnlySqlClient } from "../persistence/Services/ReadOnlySqlClient.ts";
 
 export class ProjectStoreV2Error extends Schema.TaggedError<ProjectStoreV2Error>()(
   "ProjectStoreV2Error",
@@ -109,6 +110,7 @@ export class ProjectStoreV2 extends Context.Service<
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const readSql = Option.getOrElse(yield* Effect.serviceOption(ReadOnlySqlClient), () => sql);
   const encodeRow = Schema.encodeEffect(ProjectDbRow);
 
   const selectRows = SqlSchema.findAll({
@@ -119,7 +121,7 @@ export const make = Effect.gen(function* () {
       includeDeleted: Schema.Boolean,
     }),
     Result: ProjectDbRow,
-    execute: (request) => sql`
+    execute: (request) => readSql`
       SELECT
         project_id AS "projectId",
         title,

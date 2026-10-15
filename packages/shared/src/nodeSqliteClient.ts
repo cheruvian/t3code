@@ -13,6 +13,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import { identity } from "effect/Function";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -35,6 +36,8 @@ export interface SqliteClientConfig {
   readonly prepareCacheSize?: number | undefined;
   readonly prepareCacheTTL?: Duration.Input | undefined;
   readonly spanAttributes?: Record<string, unknown> | undefined;
+  /** Inherit this client's active transactions when opening a read-only companion. */
+  readonly transactionClient?: Client.SqlClient | undefined;
   readonly transformResultNames?: ((str: string) => string) | undefined;
   readonly transformQueryNames?: ((str: string) => string) | undefined;
 }
@@ -285,10 +288,14 @@ const make = Effect.fn("makeWithDatabase")(function* (
     );
   });
 
-  return yield* Client.make({
+  const transactionClient = options.transactionClient;
+  const client = yield* Client.make({
     acquirer,
     compiler,
     transactionAcquirer,
+    ...(transactionClient === undefined
+      ? {}
+      : { transactionService: transactionClient.transactionService }),
     // A deferred BEGIN only takes the write lock at the first write. If another
     // process commits after this transaction's first read, that write fails at
     // once with SQLITE_BUSY_SNAPSHOT, which busy_timeout cannot wait out. Taking
@@ -301,6 +308,24 @@ const make = Effect.fn("makeWithDatabase")(function* (
       [ATTR_DB_SYSTEM_NAME, "sqlite"],
     ],
     transformRows,
+  });
+  if (transactionClient === undefined) return client;
+
+  const withTransaction = client.withTransaction;
+  return Object.assign(client, {
+    withTransaction: <R, E, A>(effect: Effect.Effect<A, E, R>) =>
+      Effect.flatMap(
+        Effect.serviceOption(client.transactionService),
+        Option.match({
+          onNone: () => withTransaction(effect),
+          // Nested transactions must use the owning client's savepoint
+          // semaphore as well as its connection.
+          onSome: ([activeConnection]) =>
+            activeConnection === connection
+              ? withTransaction(effect)
+              : transactionClient.withTransaction(effect),
+        }),
+      ),
   });
 });
 
