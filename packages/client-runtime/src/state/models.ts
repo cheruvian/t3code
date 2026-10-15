@@ -22,6 +22,7 @@ import { formatSubagentDisplayTitle } from "./subagentDisplay.ts";
 
 export interface EnvironmentProject extends OrchestrationProjectShell {
   readonly environmentId: EnvironmentId;
+  readonly isT3ChatHelper?: boolean;
 }
 
 /**

@@ -4,7 +4,9 @@ import type {
   OrchestrationV2ShellSnapshot,
   ProjectId,
   ScopedProjectRef,
+  ServerConfig,
 } from "@t3tools/contracts";
+import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import { Atom } from "effect/reactivity";
 
 import type { EnvironmentProject } from "./models.ts";
@@ -20,6 +22,7 @@ export function createEnvironmentProjectAtoms(input: {
   readonly snapshotAtom: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<OrchestrationV2ShellSnapshot | null>;
+  readonly serverConfigValueAtom: (environmentId: EnvironmentId) => Atom.Atom<ServerConfig | null>;
 }) {
   const environmentProjectsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make(
@@ -57,13 +60,23 @@ export function createEnvironmentProjectAtoms(input: {
     const ref = parseProjectKey(key);
     let previousSource: OrchestrationProjectShell | null = null;
     let previousValue: EnvironmentProject | null = null;
+    let previousIsT3ChatHelper = false;
     return Atom.make((get) => {
       const source = get(environmentProjectIndexAtom(ref.environmentId)).get(ref.projectId) ?? null;
-      if (source === previousSource) {
+      const helperRoot = get(input.serverConfigValueAtom(ref.environmentId))?.environment
+        .t3CodeProjectRoot;
+      const isT3ChatHelper =
+        source !== null &&
+        helperRoot !== undefined &&
+        normalizeProjectPathForComparison(source.workspaceRoot) ===
+          normalizeProjectPathForComparison(helperRoot);
+      if (source === previousSource && isT3ChatHelper === previousIsT3ChatHelper) {
         return previousValue;
       }
       previousSource = source;
-      previousValue = source === null ? null : scopeProject(ref.environmentId, source);
+      previousIsT3ChatHelper = isT3ChatHelper;
+      previousValue =
+        source === null ? null : { ...scopeProject(ref.environmentId, source), isT3ChatHelper };
       return previousValue;
     }).pipe(Atom.withLabel(`environment-project:${key}`));
   });

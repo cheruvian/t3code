@@ -29,7 +29,7 @@ import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import { makeEnvironmentShellState } from "./shell.ts";
 import * as ShellSnapshotLoader from "./shellSnapshotHttp.ts";
-import { v2Project, v2ShellSnapshot } from "./orchestrationV2TestFixtures.ts";
+import { v2Project, v2ShellSnapshot, v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -64,6 +64,117 @@ function session(client: WsRpcProtocolClient): RpcSession.RpcSession {
 }
 
 describe("environment shell synchronization", () => {
+  it.effect.each(
+    (["complete", "unavailable", "still-missing"] as const).flatMap((result) =>
+      [true, false].map((duringReplay) => ({ result, duringReplay })),
+    ),
+  )(
+    "repairs a missing thread project once: $result, duringReplay=$duringReplay",
+    ({ result, duringReplay }) =>
+      Effect.gen(function* () {
+        const events = yield* Queue.unbounded<OrchestrationV2ShellStreamItem>();
+        const subscribed = yield* Deferred.make<void>();
+        const client = {
+          [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: () =>
+            Stream.fromQueue(events).pipe(Stream.onStart(Deferred.succeed(subscribed, undefined))),
+        } as unknown as WsRpcProtocolClient;
+        const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+          target: TARGET,
+          state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
+          session: yield* SubscriptionRef.make(Option.some(session(client))),
+          prepared: yield* SubscriptionRef.make(Option.some(PREPARED)),
+          connect: Effect.void,
+          disconnect: Effect.void,
+          retryNow: Effect.void,
+        });
+        const initial = { ...v2ShellSnapshot, snapshotSequence: 1, projects: [], threads: [] };
+        const repaired = {
+          ...v2ShellSnapshot,
+          snapshotSequence: 2,
+          projects: result === "complete" ? [v2Project] : [],
+          threads: [v2ThreadShell],
+        };
+        const loaderCalls = yield* Ref.make(0);
+        const snapshotLoader = ShellSnapshotLoader.ShellSnapshotLoader.of({
+          load: () =>
+            Ref.updateAndGet(loaderCalls, (count) => count + 1).pipe(
+              Effect.map((count) =>
+                count === 1
+                  ? Option.some(initial)
+                  : result === "unavailable"
+                    ? Option.none()
+                    : Option.some(repaired),
+              ),
+            ),
+        });
+        const cache = Persistence.EnvironmentCacheStore.of({
+          loadShell: () => Effect.succeedNone,
+          saveShell: () => Effect.void,
+          loadThread: () => Effect.succeedNone,
+          saveThread: () => Effect.void,
+          removeThread: () => Effect.void,
+          loadServerConfig: () => Effect.succeedNone,
+          saveServerConfig: () => Effect.void,
+          loadVcsRefs: () => Effect.succeedNone,
+          saveVcsRefs: () => Effect.void,
+          removeVcsRefs: () => Effect.void,
+          clearVcsRefs: () => Effect.void,
+          clear: () => Effect.void,
+        });
+        const state = yield* makeEnvironmentShellState().pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+          Effect.provideService(ShellSnapshotLoader.ShellSnapshotLoader, snapshotLoader),
+        );
+        yield* Deferred.await(subscribed);
+        if (!duringReplay) {
+          yield* Queue.offer(events, { kind: "synchronized" });
+          yield* SubscriptionRef.changes(state).pipe(
+            Stream.filter((value) => value.status === "live"),
+            Stream.runHead,
+          );
+        }
+        // Replay may deliver a thread before its project. Repair only after
+        // catch-up completes, rather than fetching a snapshot between deltas.
+        yield* Queue.offer(events, {
+          kind: "thread.updated",
+          sequence: 2,
+          location: "active",
+          thread: v2ThreadShell,
+        });
+        yield* SubscriptionRef.changes(state).pipe(
+          Stream.filter((value) => Option.getOrNull(value.snapshot)?.snapshotSequence === 2),
+          Stream.runHead,
+        );
+        if (duringReplay) {
+          expect(yield* Ref.get(loaderCalls)).toBe(1);
+          yield* Queue.offer(events, { kind: "synchronized" });
+          yield* SubscriptionRef.changes(state).pipe(
+            Stream.filter((value) => value.status === "live"),
+            Stream.runHead,
+          );
+        }
+        expect(yield* Ref.get(loaderCalls)).toBe(2);
+        expect(Option.getOrThrow((yield* SubscriptionRef.get(state)).snapshot).projects).toEqual(
+          result === "complete" ? [v2Project] : [],
+        );
+        yield* Queue.offer(events, {
+          kind: "thread.updated",
+          sequence: 3,
+          location: "active",
+          thread: { ...v2ThreadShell, title: "Still running" },
+        });
+        yield* SubscriptionRef.changes(state).pipe(
+          Stream.filter((value) => Option.getOrNull(value.snapshot)?.snapshotSequence === 3),
+          Stream.runHead,
+        );
+        expect(yield* Ref.get(loaderCalls)).toBe(2);
+        expect(
+          Option.getOrThrow((yield* SubscriptionRef.get(state)).snapshot).threads[0]?.title,
+        ).toBe("Still running");
+      }),
+  );
+
   it.effect("publishes live state before persistence and preserves it when ready", () =>
     Effect.gen(function* () {
       const events = yield* Queue.unbounded<OrchestrationV2ShellStreamItem>();

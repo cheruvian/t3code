@@ -126,7 +126,7 @@ function deriveRepositoryScopedKey(
 export function deriveLogicalProjectKey(
   project: Pick<
     EnvironmentProject,
-    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity"
+    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity" | "isT3ChatHelper"
   >,
   options?: {
     readonly groupingMode?: SidebarProjectGroupingMode;
@@ -136,6 +136,7 @@ export function deriveLogicalProjectKey(
   if (groupingMode === "separate") {
     return derivePhysicalProjectKey(project);
   }
+  if (project.isT3ChatHelper) return "builtin:t3-chat-helper";
 
   return (
     deriveRepositoryScopedKey(project, groupingMode) ??
@@ -147,7 +148,7 @@ export function deriveLogicalProjectKey(
 export function deriveLogicalProjectKeyFromSettings(
   project: Pick<
     EnvironmentProject,
-    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity"
+    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity" | "isT3ChatHelper"
   >,
   settings: ProjectGroupingSettings,
 ): string {
@@ -313,8 +314,9 @@ export function buildProjectGroups<TProject extends EnvironmentProject>(input: {
         : null) ?? members[0]!.project;
     return {
       key,
-      label:
-        members.length > 1
+      label: representative.isT3ChatHelper
+        ? "T3 Chat Helper"
+        : members.length > 1
           ? deriveProjectGroupLabel({
               representative,
               members: members.map((member) => member.project),
