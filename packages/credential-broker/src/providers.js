@@ -11,7 +11,7 @@ function matchingHosts(record, site) {
           return ["http:", "https:"].includes(url.protocol) &&
             !url.username &&
             !url.password &&
-            (url.hostname === site || url.hostname.endsWith(`.${site}`))
+            (url.hostname === site || (site.includes(".") && url.hostname.endsWith(`.${site}`)))
             ? [url.hostname]
             : [];
         } catch {

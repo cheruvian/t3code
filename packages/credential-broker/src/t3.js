@@ -234,8 +234,22 @@ export class T3CredentialBroker {
   }
   execute(origin, input, signal) {
     const broker = this.#broker;
-    if (!broker || this.#status !== "ready" || signal?.aborted)
-      return Promise.reject(new BrokerError("Unlock the vault privately in T3 first."));
+    if (signal?.aborted)
+      return Promise.reject(
+        new BrokerError("Credential caller was cancelled.", 409, "caller_cancelled"),
+      );
+    if (this.#status === "unsupported")
+      return Promise.reject(
+        new BrokerError("Platform security adapters are unavailable.", 503, "unsupported_platform"),
+      );
+    if (!broker || this.#status !== "ready")
+      return Promise.reject(
+        new BrokerError(
+          "Unlock the vault privately in T3 first.",
+          503,
+          this.#status === "unlocking" ? "vault_unlocking" : "vault_locked",
+        ),
+      );
     const request = broker.request(
       {
         kind: "exec",

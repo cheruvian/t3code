@@ -13,6 +13,35 @@ const input = {
   ttl_seconds: 5,
 };
 const secondId = "22222222-2222-4222-8222-222222222222";
+test("local hostname search matches the exact host and excludes lookalikes", async () => {
+  assert.equal(parseRequest({ ...input, site: "heihei" }).site, "heihei");
+  for (const site of [
+    "heihei:22",
+    "heihei/path",
+    "heihei..local",
+    "-heihei",
+    "https://user:password@heihei",
+  ])
+    assert.throws(() => parseRequest({ ...input, site }));
+  const records = ["https://heihei", "https://heihei.evil.test", "https://other.heihei"].map(
+    (uri, index) => ({
+      id: index === 0 ? DEMO_ITEM : secondId,
+      type: 1,
+      name: "Test host",
+      login: { username: "fake-user", password: "fake-password", uris: [{ uri }] },
+    }),
+  );
+  const provider = new BitwardenProvider({
+    passwordPrompt: async () => "fake-master",
+    runner: async (_, args) =>
+      args[0] === "unlock" ? "fake-session" : args[0] === "list" ? JSON.stringify(records) : "",
+  });
+  await provider.initialize();
+  assert.deepEqual(await provider.search("heihei"), [
+    { item_id: DEMO_ITEM, name: "Test host", hosts: ["heihei"] },
+  ]);
+  await provider.close();
+});
 async function setup(t, provider) {
   const runtime = await mkdtemp("/tmp/cb-search-");
   const broker = new Broker({ runtime, provider, watchdog: false });
@@ -141,13 +170,14 @@ test("provider search strips credential fields and lookalikes, rechecks host at 
 
 test("request requires exactly one site or UUID and rejects non-origin sites", () => {
   assert.equal(parseRequest(input).site, "example.com");
+  assert.equal(parseRequest({ ...input, site: "localhost" }).site, "localhost");
   for (const site of [
     "file:///tmp/vault",
     "https://u:p@example.com",
     "https://example.com/path",
     "https://example.com?token=secret",
     "https://example.com:8080",
-    "localhost",
+    "bad_host",
   ])
     assert.throws(() => parseRequest({ ...input, site }), /Invalid request/);
   assert.throws(() => parseRequest({ ...input, item_id: DEMO_ITEM }), /Invalid request/);

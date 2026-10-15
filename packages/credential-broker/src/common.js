@@ -17,7 +17,12 @@ export function siteHost(value) {
     url.search ||
     url.hash ||
     url.pathname !== "/" ||
-    !url.hostname.includes(".") ||
+    !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(url.hostname) ||
+    url.hostname
+      .split(".")
+      .some(
+        (label) => !label || label.length > 63 || label.startsWith("-") || label.endsWith("-"),
+      ) ||
     url.hostname.endsWith(".")
   )
     throw new Error("Invalid site");
@@ -92,9 +97,10 @@ export const requestSchema = z
   });
 
 export class BrokerError extends Error {
-  constructor(message, status = 400) {
+  constructor(message, status = 400, code) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -103,6 +109,8 @@ export function parseRequest(input) {
   if (!result.success)
     throw new BrokerError(
       "Invalid request: provide exactly one item UUID or site, label, reason, field, and TTL of 5–300 seconds. Exec also requires an absolute executable, cwd, and dedicated file environment variable.",
+      400,
+      "invalid_request",
     );
   return result.data;
 }

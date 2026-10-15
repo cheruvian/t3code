@@ -95,6 +95,25 @@ function visible(broker, viewId = "view") {
   const detach = broker.subscribe("human", viewId, () => {});
   return broker.action("human", { type: "presenter", viewId, visible: true }).then(() => detach);
 }
+test("locked vault reports a safe actionable code before requesting access", async () => {
+  const broker = new T3CredentialBroker({ runtime: "/unused" });
+  await assert.rejects(broker.execute(origin, { site: "heihei" }), { code: "vault_locked" });
+});
+test("a local hostname can be privately approved and delivered to its consumer", async (t) => {
+  const provider = new DemoProvider();
+  provider.search = async (site) => {
+    assert.equal(site, "heihei");
+    return [{ item_id: DEMO_ITEM, name: "Local host", hosts: [site] }];
+  };
+  const { broker, caller, input, marker } = await setup(t, { provider });
+  const { result } = await allow(broker, caller, { ...input, site: "heihei" });
+  assert.equal(result.state, "completed");
+  assert.equal(result.exitCode, 0);
+  const delivery = JSON.parse(await readFile(marker, "utf8"));
+  assert.equal(delivery.received, true);
+  await assert.rejects(stat(delivery.path), { code: "ENOENT" });
+  assert.ok(!JSON.stringify(result).includes(DEMO_PASSWORD));
+});
 async function auto(broker, caller, input) {
   const appearing = milestone(broker, (s) => s.notices.some((n) => !n.revoked));
   const execution = broker.execute(

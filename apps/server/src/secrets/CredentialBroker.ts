@@ -8,6 +8,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import { T3CredentialBroker } from "@t3tools/credential-broker";
 import {
   CredentialBrokerError,
+  CredentialBrokerFailureCode,
   OrchestratorMcpFailure,
   type CredentialBrokerAction,
   type CredentialBrokerState,
@@ -21,6 +22,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 
@@ -51,6 +53,18 @@ export class CredentialBroker extends Context.Service<
     ) => Stream.Stream<CredentialBrokerState, CredentialBrokerError>;
   }
 >()("t3/secrets/CredentialBroker") {}
+
+/** Only stable broker codes cross the boundary; never copy provider error text. */
+const isBrokerFailureCode = Schema.is(CredentialBrokerFailureCode);
+export function safeBrokerFailure(error: unknown) {
+  const code =
+    typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+  return new CredentialBrokerError({
+    code: isBrokerFailureCode(code) ? code : "broker_unavailable",
+  });
+}
+const toolBrokerFailure = (error: CredentialBrokerError) =>
+  new OrchestratorMcpFailure({ code: "credential_broker_error", message: error.message });
 
 /** Bind one authenticated tool invocation to its thread and committed lifetime. */
 export const bindToolCall = (
@@ -103,7 +117,9 @@ export const bindToolCall = (
         Stream.take(1),
         Stream.runDrain,
         Effect.mapError(unavailable),
-        Effect.andThen(Effect.fail(unavailable())),
+        Effect.andThen(
+          Effect.fail(toolBrokerFailure(new CredentialBrokerError({ code: "caller_cancelled" }))),
+        ),
       );
     return yield* execute(
       {
@@ -116,7 +132,7 @@ export const bindToolCall = (
         agent: caller.modelSelection.model,
       },
       input,
-    ).pipe(Effect.mapError(unavailable), Effect.raceFirst(stopped));
+    ).pipe(Effect.mapError(toolBrokerFailure), Effect.raceFirst(stopped));
   });
 
 const make = Effect.gen(function* () {
@@ -152,7 +168,7 @@ const make = Effect.gen(function* () {
   const execute = (caller: CredentialCaller, input: CredentialExecInput) =>
     Effect.tryPromise({
       try: (signal) => broker.execute(caller, input, signal),
-      catch: () => new CredentialBrokerError({}),
+      catch: safeBrokerFailure,
     }).pipe(
       Effect.ensuring(
         Effect.promise(() => broker.cancelCall(caller.toolCallId)).pipe(Effect.ignore),

@@ -105,11 +105,32 @@ export const CredentialBrokerAction = Schema.Union([
   Schema.Struct({ type: Schema.Literal("lock") }),
 ]);
 export type CredentialBrokerAction = typeof CredentialBrokerAction.Type;
+export const CredentialBrokerFailureCode = Schema.Literals([
+  "vault_locked",
+  "vault_unlocking",
+  "unsupported_platform",
+  "invalid_request",
+  "caller_cancelled",
+  "broker_unavailable",
+]);
 export class CredentialBrokerError extends Schema.TaggedError<CredentialBrokerError>()(
   "CredentialBrokerError",
-  {},
+  { code: Schema.optional(CredentialBrokerFailureCode) },
 ) {
   override get message() {
-    return "Credential Broker could not complete the operation. Review vault status and access in T3.";
+    switch (this.code) {
+      case "vault_locked":
+        return "Credential Broker vault_locked: open Credential access for this environment and unlock the vault privately in T3.";
+      case "vault_unlocking":
+        return "Credential Broker vault_unlocking: wait for the human's private vault unlock to finish.";
+      case "unsupported_platform":
+        return "Credential Broker unsupported_platform: this host's security adapters are unavailable.";
+      case "invalid_request":
+        return "Credential Broker invalid_request: use a valid hostname, an absolute executable and working directory, and an integer lifetime of 5–300 seconds.";
+      case "caller_cancelled":
+        return "Credential Broker caller_cancelled: the originating tool call or turn ended; no further access is authorized.";
+      default:
+        return "Credential Broker broker_unavailable: review vault status and access in T3. Provider output is withheld.";
+    }
   }
 }

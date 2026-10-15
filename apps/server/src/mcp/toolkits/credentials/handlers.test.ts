@@ -45,6 +45,19 @@ const invocation = {
   capabilities: new Set(["orchestration" as const]),
 };
 
+it("forwards only known broker failure codes and suppresses arbitrary provider errors", () => {
+  const marker = "fake-secret-provider-output";
+  const locked = CredentialBroker.safeBrokerFailure({ code: "vault_locked", message: marker });
+  expect(locked.code).toBe("vault_locked");
+  expect(locked.message).toContain("unlock the vault privately");
+  for (const error of [new Error(marker), { code: marker, message: marker }]) {
+    const failure = CredentialBroker.safeBrokerFailure(error);
+    expect(failure.code).toBe("broker_unavailable");
+    expect(JSON.stringify(failure)).not.toContain(marker);
+    expect(failure.message).not.toContain(marker);
+  }
+});
+
 it.effect(
   "uses authenticated thread identity and cancels the exact invocation on a committed thread stop",
   () =>
@@ -84,6 +97,21 @@ it.effect(
           NodeServices.layer,
         );
         yield* Effect.gen(function* () {
+          const threads = yield* ThreadManagement.ThreadManagementService;
+          const locked = yield* CredentialBroker.bindToolCall(input, () =>
+            Effect.fail(
+              CredentialBroker.safeBrokerFailure({ code: "vault_locked", message: "fake-secret" }),
+            ),
+          ).pipe(
+            Effect.provideService(ThreadManagement.ThreadManagementService, {
+              ...threads,
+              streamStoredEventsFrom: () => Stream.never,
+            }),
+            Effect.flip,
+          );
+          expect(locked).toMatchObject({ code: "credential_broker_error" });
+          expect(locked.message).toContain("unlock the vault privately");
+          expect(locked.message).not.toContain("fake-secret");
           const broker = yield* CredentialBroker.CredentialBroker;
           const execution = yield* CredentialBroker.bindToolCall(input, broker.execute).pipe(
             Effect.forkChild,
@@ -111,7 +139,7 @@ it.effect(
             },
           });
           const result = yield* Fiber.join(execution).pipe(Effect.flip);
-          expect(result).toMatchObject({ code: "orchestration_error" });
+          expect(result).toMatchObject({ code: "credential_broker_error" });
           yield* Deferred.await(cleaned);
         }).pipe(Effect.provide(dependencies));
       }),
