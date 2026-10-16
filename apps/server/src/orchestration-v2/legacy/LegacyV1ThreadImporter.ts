@@ -14,6 +14,7 @@ import {
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2TurnItem,
+  OrchestrationV2TurnItemJson,
   ProjectId,
   ResourceActionLog,
   ProviderInstanceId,
@@ -84,6 +85,7 @@ interface LegacyMessageRow {
 interface LegacyImportRow {
   readonly thread_id: string;
   readonly transcript_imported_at: string | null;
+  readonly activity_imported_at: string | null;
 }
 
 export interface LegacyV1ImportSummary {
@@ -120,6 +122,9 @@ export class LegacyV1ThreadImporter extends Context.Service<
   LegacyV1ThreadImporterShape
 >()("t3/orchestration-v2/legacy/LegacyV1ThreadImporter") {}
 
+const decodeTurnItem = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(OrchestrationV2TurnItemJson),
+);
 const decodeMessageContext = Schema.decodeUnknownSync(OrchestrationMessageContext);
 const decodeResourceActionLog = Schema.decodeUnknownEffect(ResourceActionLog);
 const decodeModelSelection = Schema.decodeUnknownOption(ModelSelection);
@@ -346,108 +351,105 @@ const make = Effect.gen(function* () {
   const eventSink = yield* EventSink.EventSinkV2;
   const transcriptImports = yield* KeyedLock.make<ThreadId>();
 
-  const listMessages = (threadId: ThreadId) =>
-    sql<LegacyMessageRow>`
-      SELECT
-        message_id,
-        thread_id,
-        role,
-        text,
-        attachments_json,
-        context_json,
-        is_streaming,
-        created_at,
-        updated_at,
-        ROW_NUMBER() OVER (
-          PARTITION BY thread_id
-          ORDER BY created_at ASC, message_id ASC
-        ) + (SELECT COUNT(*) FROM projection_thread_activities AS activity
-          WHERE activity.thread_id = projection_thread_messages.thread_id
-            AND activity.kind = 'resource.action'
-            AND activity.created_at < projection_thread_messages.created_at
-        ) AS ordinal
-      FROM projection_thread_messages
-      WHERE thread_id = ${threadId}
-        AND role IN ('user', 'assistant')
-      ORDER BY created_at ASC, message_id ASC
-    `;
+  // Sequence-less activity precedes sequenced activity. Clamp timestamps in that
+  // order so merging messages cannot reverse the canonical activity sequence.
+  const transcriptPositions = (threadId: ThreadId) => sql`
+    WITH activities AS (
+      SELECT activity_id, kind, created_at,
+        ROW_NUMBER() OVER (ORDER BY sequence, created_at, activity_id) AS activity_order,
+        MAX(created_at) OVER (ORDER BY sequence, created_at, activity_id
+          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS ordering_time
+      FROM projection_thread_activities WHERE thread_id = ${threadId}
+        AND kind NOT IN ('context-window.updated', 'tool.started', 'tool.progress', 'task.updated')
+    ), timeline AS (
+      SELECT message_id AS source_id, 'message' AS kind, created_at AS ordering_time,
+        0 AS activity_order, 0 AS item_kind
+      FROM projection_thread_messages WHERE thread_id = ${threadId} AND role IN ('user','assistant')
+      UNION ALL
+      SELECT activity_id, kind, ordering_time, activity_order, 1 FROM activities
+    ), positions AS (
+      SELECT source_id, kind, ROW_NUMBER() OVER
+        (ORDER BY ordering_time, item_kind, activity_order, source_id) AS ordinal FROM timeline
+    )
+  `;
 
-  const listShellMessages = (threadId: ThreadId) =>
-    Effect.gen(function* () {
-      const latest = yield* sql<LegacyMessageRow>`
-        SELECT
-          message.message_id,
-          message.thread_id,
-          message.role,
-          message.text,
-          message.attachments_json,
-          message.context_json,
-          message.is_streaming,
-          message.created_at,
-          message.updated_at,
-          (
-            SELECT COUNT(*)
-            FROM projection_thread_messages AS earlier
-            WHERE earlier.thread_id = message.thread_id
-              AND earlier.role IN ('user', 'assistant')
-              AND (
-                earlier.created_at < message.created_at
-                OR (
-                  earlier.created_at = message.created_at
-                  AND earlier.message_id <= message.message_id
-                )
-              )
-          ) + (SELECT COUNT(*) FROM projection_thread_activities AS activity
-            WHERE activity.thread_id = message.thread_id
-              AND activity.kind = 'resource.action'
-              AND activity.created_at < message.created_at
-          ) AS ordinal
-        FROM projection_thread_messages AS message
-        WHERE message.thread_id = ${threadId}
-          AND message.role IN ('user', 'assistant')
-        ORDER BY message.created_at DESC, message.message_id DESC
-        LIMIT 1
-      `;
-      const latestUser = yield* sql<LegacyMessageRow>`
-        SELECT
-          message.message_id,
-          message.thread_id,
-          message.role,
-          message.text,
-          message.attachments_json,
-          message.context_json,
-          message.is_streaming,
-          message.created_at,
-          message.updated_at,
-          (
-            SELECT COUNT(*)
-            FROM projection_thread_messages AS earlier
-            WHERE earlier.thread_id = message.thread_id
-              AND earlier.role IN ('user', 'assistant')
-              AND (
-                earlier.created_at < message.created_at
-                OR (
-                  earlier.created_at = message.created_at
-                  AND earlier.message_id <= message.message_id
-                )
-              )
-          ) + (SELECT COUNT(*) FROM projection_thread_activities AS activity
-            WHERE activity.thread_id = message.thread_id
-              AND activity.kind = 'resource.action'
-              AND activity.created_at < message.created_at
-          ) AS ordinal
-        FROM projection_thread_messages AS message
-        WHERE message.thread_id = ${threadId}
-          AND message.role = 'user'
-        ORDER BY message.created_at DESC, message.message_id DESC
-        LIMIT 1
-      `;
-      return [latestUser[0], latest[0]].filter(
-        (message, index, selected): message is LegacyMessageRow =>
-          message !== undefined &&
-          selected.findIndex((candidate) => candidate?.message_id === message.message_id) === index,
-      );
-    });
+  const listMessages = (threadId: ThreadId) => sql<LegacyMessageRow>`
+    ${transcriptPositions(threadId)}
+    SELECT message.*, positions.ordinal FROM projection_thread_messages AS message
+    JOIN positions ON positions.kind = 'message' AND positions.source_id = message.message_id
+    WHERE message.thread_id = ${threadId}
+    ORDER BY positions.ordinal
+  `;
+
+  const listShellMessages = (threadId: ThreadId) => sql<LegacyMessageRow>`
+    ${transcriptPositions(threadId)}
+    SELECT message.*, positions.ordinal FROM projection_thread_messages AS message
+    JOIN positions ON positions.kind = 'message' AND positions.source_id = message.message_id
+    WHERE message.thread_id = ${threadId} AND message.message_id IN (
+      SELECT message_id FROM (
+        SELECT message_id FROM projection_thread_messages WHERE thread_id = ${threadId}
+          AND role IN ('user','assistant') ORDER BY created_at DESC, message_id DESC LIMIT 1
+      ) UNION SELECT message_id FROM (
+        SELECT message_id FROM projection_thread_messages WHERE thread_id = ${threadId}
+          AND role = 'user' ORDER BY created_at DESC, message_id DESC LIMIT 1
+      )
+    ) ORDER BY positions.ordinal
+  `;
+
+  const prepareActivityPositions = (threadId: ThreadId) =>
+    sql.withTransaction(
+      Effect.gen(function* () {
+        const timeline = yield* sql<{ source_id: string; kind: string; ordinal: number }>`
+      ${transcriptPositions(threadId)} SELECT * FROM positions ORDER BY ordinal`;
+        const desired = new Map(
+          timeline.map((row) => [
+            `${IMPORT_EVENT_PREFIX}:${row.kind === "message" ? "turn-item" : row.kind === "resource.action" ? "resource-action" : "activity"}:${row.source_id}`,
+            row.ordinal,
+          ]),
+        );
+        const existing = yield* sql<{
+          turn_item_id: string;
+          ordinal: number;
+          payload_json: string | null;
+        }>`
+      SELECT position.turn_item_id, position.ordinal, item.payload_json
+      FROM orchestration_v2_turn_item_positions AS position
+      LEFT JOIN orchestration_v2_projection_turn_items AS item
+        ON item.thread_id = position.thread_id AND item.turn_item_id = position.turn_item_id
+      WHERE position.thread_id = ${threadId} ORDER BY position.ordinal`;
+        let afterLegacy = timeline.length;
+        for (const row of existing) {
+          if (!desired.has(row.turn_item_id)) {
+            // Run ordinals occupy separate million-entry ranges. Thread-level V2
+            // actions before the first run follow the complete imported history.
+            desired.set(row.turn_item_id, row.ordinal < 1_000_000 ? ++afterLegacy : row.ordinal);
+          }
+        }
+        // Reserve all final positions atomically before writing events; allocation
+        // must see the final order even when an imported item changes position.
+        yield* sql`DELETE FROM orchestration_v2_turn_item_positions WHERE thread_id = ${threadId}`;
+        for (const [id, ordinal] of desired) {
+          yield* sql`INSERT INTO orchestration_v2_turn_item_positions (thread_id,turn_item_id,ordinal)
+        VALUES (${threadId},${id},${ordinal})`;
+        }
+        for (const row of existing) {
+          const ordinal = desired.get(row.turn_item_id)!;
+          if (row.payload_json === null || ordinal === row.ordinal) continue;
+          const item = yield* decodeTurnItem(row.payload_json);
+          yield* eventSink.write({
+            events: [
+              {
+                id: EventId.make(`${IMPORT_EVENT_PREFIX}:activity-order:${item.id}`),
+                type: "turn-item.updated",
+                threadId,
+                occurredAt: item.updatedAt,
+                payload: { ...item, ordinal },
+              },
+            ],
+          });
+        }
+      }),
+    );
 
   const reconcileShellsBase = Effect.gen(function* () {
     const now = DateTime.formatIso(yield* DateTime.now);
@@ -684,7 +686,7 @@ const make = Effect.gen(function* () {
       UNION
       SELECT legacy_import.thread_id
       FROM orchestration_v2_legacy_imports AS legacy_import
-      WHERE legacy_import.transcript_imported_at IS NULL
+      WHERE legacy_import.transcript_imported_at IS NULL OR legacy_import.activity_imported_at IS NULL
     )
   `.pipe(
     Effect.map((rows) => rows[0]?.count ?? 0),
@@ -694,7 +696,7 @@ const make = Effect.gen(function* () {
   );
 
   // Threads whose transcript import this process has already confirmed.
-  // `transcript_imported_at` is never reset to NULL, so a positive answer
+  // Both import markers are durable, so a positive answer
   // stays valid for the process lifetime; ensureTranscript runs on most
   // thread reads and command dispatches, so skipping the lock + lookup here
   // keeps that path off the database entirely after first confirmation.
@@ -705,18 +707,22 @@ const make = Effect.gen(function* () {
       threadId,
       Effect.gen(function* () {
         const imports = yield* sql<LegacyImportRow>`
-          SELECT thread_id, transcript_imported_at
+          SELECT thread_id, transcript_imported_at, activity_imported_at
           FROM orchestration_v2_legacy_imports
           WHERE thread_id = ${threadId}
           LIMIT 1
         `;
         const imported = imports[0];
-        if (imported === undefined || imported.transcript_imported_at !== null) {
+        if (
+          imported === undefined ||
+          (imported.transcript_imported_at !== null && imported.activity_imported_at !== null)
+        ) {
           if (imported !== undefined) {
             confirmedTranscriptThreadIds.add(threadId);
           }
           return { importedThreadCount: 0, importedMessageCount: 0 };
         }
+        if (imported.activity_imported_at === null) yield* prepareActivityPositions(threadId);
         const messages = yield* listMessages(threadId);
         const existingRows = yield* sql<{ readonly event_id: string }>`
           SELECT event_id
@@ -754,34 +760,42 @@ const make = Effect.gen(function* () {
         }
         const activities = yield* sql<{
           readonly activity_id: string;
+          readonly kind: string;
+          readonly tone: string;
+          readonly summary: string;
           readonly payload_json: string;
           readonly created_at: string;
           readonly ordinal: number;
         }>`
-          SELECT activity_id, payload_json, created_at,
-            ROW_NUMBER() OVER (ORDER BY created_at, activity_id) + (
-              SELECT COUNT(*) FROM projection_thread_messages AS message
-              WHERE message.thread_id = activity.thread_id
-                AND message.role IN ('user', 'assistant')
-                AND message.created_at <= activity.created_at
-            ) AS ordinal
-          FROM projection_thread_activities AS activity
-          WHERE thread_id = ${threadId} AND kind = 'resource.action'
-          ORDER BY created_at, activity_id
+          ${transcriptPositions(threadId)}
+          SELECT activity.*, positions.ordinal FROM projection_thread_activities AS activity
+          JOIN positions ON positions.kind != 'message' AND positions.source_id = activity.activity_id
+          WHERE activity.thread_id = ${threadId} ORDER BY positions.ordinal
         `;
         for (const activity of activities) {
-          const eventId = EventId.make(
-            `${IMPORT_EVENT_PREFIX}:resource-action:${activity.activity_id}`,
-          );
+          const itemId = `${IMPORT_EVENT_PREFIX}:${activity.kind === "resource.action" ? "resource-action" : "activity"}:${activity.activity_id}`;
+          const eventId = EventId.make(itemId);
           const persisted = yield* sql`
             SELECT 1 FROM orchestration_events WHERE event_id = ${eventId} LIMIT 1
           `;
           if (persisted.length > 0) continue;
-          const log = yield* decodeResourceActionLog(parseJson(activity.payload_json));
+          const raw = parseJson(activity.payload_json) ?? activity.payload_json;
+          const record = (value: unknown): Record<string, unknown> =>
+            value !== null && typeof value === "object" && !Array.isArray(value)
+              ? (value as Record<string, unknown>)
+              : {};
+          const payload = record(raw);
+          const data = record(payload.data);
+          const native = record(data.item);
+          const text = (...values: unknown[]) =>
+            values.find(
+              (value): value is string => typeof value === "string" && value.trim().length > 0,
+            );
+          const log =
+            activity.kind === "resource.action" ? yield* decodeResourceActionLog(raw) : null;
           const occurredAt = dateTime(activity.created_at);
           const item: OrchestrationV2TurnItem = {
-            id: TurnItemId.make(`${IMPORT_EVENT_PREFIX}:resource-action:${activity.activity_id}`),
-            type: "command_execution",
+            id: TurnItemId.make(itemId),
             threadId,
             runId: null,
             nodeId: null,
@@ -790,20 +804,46 @@ const make = Effect.gen(function* () {
             nativeItemRef: null,
             parentItemId: null,
             ordinal: activity.ordinal,
-            status:
-              log.status === "running"
-                ? "interrupted"
-                : log.status === "succeeded"
-                  ? "completed"
-                  : "failed",
-            title: `${log.resourceName}: ${log.action}`,
             startedAt: occurredAt,
             completedAt: occurredAt,
             updatedAt: occurredAt,
-            input: log.command,
-            output: [log.stdout, log.stderr, log.error].filter(Boolean).join("\n"),
-            outputIndicatesFailure: log.status === "failed",
-            resourceActionLog: log,
+            ...(log !== null
+              ? {
+                  type: "command_execution" as const,
+                  status:
+                    log.status === "running"
+                      ? ("interrupted" as const)
+                      : log.status === "succeeded"
+                        ? ("completed" as const)
+                        : ("failed" as const),
+                  title: `${log.resourceName}: ${log.action}`,
+                  input: log.command,
+                  output: [log.stdout, log.stderr, log.error].filter(Boolean).join("\n"),
+                  outputIndicatesFailure: log.status === "failed",
+                  resourceActionLog: log,
+                }
+              : {
+                  type: "dynamic_tool" as const,
+                  status:
+                    activity.tone === "error" || payload.status === "failed"
+                      ? ("failed" as const)
+                      : payload.status === "running" ||
+                          payload.status === "inProgress" ||
+                          activity.kind.endsWith(".requested")
+                        ? ("interrupted" as const)
+                        : ("completed" as const),
+                  title: activity.summary,
+                  toolName:
+                    text(
+                      payload.toolName,
+                      data.toolName,
+                      native.tool,
+                      native.name,
+                      payload.title,
+                    ) ?? activity.kind,
+                  input: data.input ?? payload.input ?? native.arguments ?? native.command ?? raw,
+                  output: raw,
+                }),
           };
           yield* sql.withTransaction(
             Effect.gen(function* () {
@@ -831,6 +871,7 @@ const make = Effect.gen(function* () {
           UPDATE orchestration_v2_legacy_imports
           SET
             transcript_imported_at = ${now},
+            activity_imported_at = ${now},
             imported_message_count = ${messages.length},
             last_error = NULL
           WHERE thread_id = ${threadId}
@@ -859,9 +900,9 @@ const make = Effect.gen(function* () {
 
   const importPendingTranscripts = Effect.gen(function* () {
     const rows = yield* sql<LegacyImportRow>`
-      SELECT thread_id, transcript_imported_at
+      SELECT thread_id, transcript_imported_at, activity_imported_at
       FROM orchestration_v2_legacy_imports
-      WHERE transcript_imported_at IS NULL
+      WHERE transcript_imported_at IS NULL OR activity_imported_at IS NULL
       ORDER BY shell_imported_at ASC, thread_id ASC
     `;
     let importedThreadCount = 0;

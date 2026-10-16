@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, EventId, ResourceActionLog, ThreadId } from "@t3tools/contracts";
+import { CommandId, EventId, ResourceActionLog, ThreadId, TurnItemId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -36,6 +36,7 @@ const layerTest = Layer.mergeAll(
   layerStoresProvided,
   layerEventSinkProvided,
   layerImporterProvided,
+  layerEventSinkProvided,
   layerProjectionMaintenanceProvided,
 );
 
@@ -580,3 +581,171 @@ it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
     }),
   );
 });
+
+it.effect.each([false, true])(
+  "preserves ordered V1 tool activity (already imported: %s)",
+  (alreadyImported) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const importer = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const sink = yield* EventSink.EventSinkV2;
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const threadId = ThreadId.make("legacy-activity-proof");
+      const start = "2026-01-01T00:00:00.000Z";
+      const end = "2026-01-01T00:10:00.000Z";
+      yield* sql`INSERT INTO projection_projects
+      (project_id,title,workspace_root,default_model_selection_json,scripts_json,created_at,updated_at)
+      VALUES ('activity-project','Activity project','/tmp/activity-project','{"instanceId":"codex","model":"gpt-5.4"}','[]',${start},${end})`;
+      yield* sql`INSERT INTO projection_threads
+      (thread_id,project_id,title,model_selection_json,runtime_mode,interaction_mode,created_at,updated_at)
+      VALUES (${threadId},'activity-project','Archived activity','{"instanceId":"codex","model":"gpt-5.4"}','full-access','default',${start},${end})`;
+      for (const [id, role, time] of [
+        ["first", "user", start],
+        ["last", "assistant", end],
+      ]) {
+        yield* sql`INSERT INTO projection_thread_messages
+        (message_id,thread_id,role,text,is_streaming,created_at,updated_at)
+        VALUES (${id},${threadId},${role},${id},0,${time},${time})`;
+      }
+      yield* sql`INSERT INTO projection_thread_activities
+      (activity_id,thread_id,tone,kind,summary,payload_json,created_at)
+      VALUES ('resource',${threadId},'info','resource.action','Checkout',${encodeResourceActionLog({
+        operationId: CommandId.make("legacy-resource"),
+        resourceName: "database",
+        action: "checkout",
+        status: "succeeded",
+        command: "allocate",
+        stdout: "allocated",
+        stderr: "",
+        truncated: false,
+      })},'2026-01-01T00:05:00.000Z')`;
+      if (alreadyImported) {
+        yield* importer.reconcileShells;
+        yield* importer.ensureTranscript(threadId);
+        const [base] = (yield* projections.getThreadProjection(threadId)).turnItems;
+        if (!base) throw new Error("Expected imported message");
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make("post-import-event"),
+              type: "turn-item.updated",
+              threadId,
+              occurredAt: DateTime.makeUnsafe(end),
+              payload: {
+                id: TurnItemId.make("post-import"),
+                threadId,
+                runId: null,
+                nodeId: null,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                type: "system_notice",
+                message: "V2 item",
+                ordinal: 4,
+                status: "completed",
+                title: null,
+                startedAt: base.startedAt,
+                completedAt: base.completedAt,
+                updatedAt: base.updatedAt,
+              },
+            },
+          ],
+        });
+      }
+      for (const [id, sequence, time] of [
+        ["null-later", null, "02"],
+        ["null-earlier", null, "01"],
+        ["sequence-two", 2, "03"],
+        ["sequence-one", 1, "04"],
+      ] as const) {
+        yield* sql`INSERT INTO projection_thread_activities
+        (activity_id,thread_id,tone,kind,summary,payload_json,sequence,created_at)
+        VALUES (${id},${threadId},'tool','tool.completed',${id},${JSON.stringify({
+          toolCallId: id,
+          status: "completed",
+          data: {
+            item: {
+              type: "commandExecution",
+              command: "printf history",
+              aggregatedOutput: "retained output",
+            },
+          },
+        })},${sequence},${`2026-01-01T00:${time}:00.000Z`})`;
+      }
+      yield* sql`INSERT INTO projection_thread_activities
+        (activity_id,thread_id,tone,kind,summary,payload_json,sequence,created_at)
+        VALUES ('question',${threadId},'info','user-input.requested','Which branch?',
+          '{"requestId":"old-question","questions":[{"id":"branch","question":"Which branch?"}]}',3,'2026-01-01T00:06:00.000Z')`;
+      yield* sql`INSERT INTO projection_thread_activities
+      (activity_id,thread_id,tone,kind,summary,payload_json,created_at)
+      VALUES ('meter',${threadId},'info','context-window.updated','Meter','{}',${start})`;
+      if (alreadyImported) {
+        // Model an upgrade from the messages/resource-only importer before a new process starts.
+        yield* sql`UPDATE orchestration_v2_legacy_imports SET activity_imported_at=NULL WHERE thread_id=${threadId}`;
+      } else {
+        yield* importer.reconcileShells;
+      }
+      const freshImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter.pipe(
+        Effect.provide(Layer.fresh(LegacyV1ThreadImporter.layer)),
+      );
+      assert.equal(yield* freshImporter.pendingThreadCount, 1);
+      yield* freshImporter.importPendingTranscripts;
+      const projection = yield* projections.getThreadProjection(threadId);
+      const expected = [
+        "migration:v1:turn-item:first",
+        "migration:v1:activity:null-earlier",
+        "migration:v1:activity:null-later",
+        "migration:v1:resource-action:resource",
+        "migration:v1:activity:sequence-one",
+        "migration:v1:activity:sequence-two",
+        "migration:v1:activity:question",
+        "migration:v1:turn-item:last",
+        ...(alreadyImported ? ["post-import"] : []),
+      ];
+      assert.deepEqual(
+        projection.turnItems.map((item) => item.id),
+        expected,
+      );
+      assert.deepEqual(
+        projection.turnItems.map((item) => item.ordinal),
+        expected.map((_, i) => i + 1),
+      );
+      const tool = projection.turnItems.find(
+        (item) => item.id === "migration:v1:activity:sequence-one",
+      );
+      assert.equal(tool?.type, "dynamic_tool");
+      if (tool?.type !== "dynamic_tool") throw new Error("Expected migrated tool");
+      assert.equal(tool.status, "completed");
+      assert.nestedPropertyVal(tool.output, "data.item.aggregatedOutput", "retained output");
+      assert.equal(yield* freshImporter.pendingThreadCount, 0);
+      const countEvents = sql<{
+        count: number;
+      }>`SELECT count(*) AS count FROM orchestration_events WHERE stream_id=${threadId}`;
+      const before = yield* countEvents;
+      yield* freshImporter.ensureTranscript(threadId);
+      yield* freshImporter.importPendingTranscripts;
+      assert.deepEqual(yield* countEvents, before);
+      // A restart after events commit but before the completion marker retries safely.
+      yield* sql`UPDATE orchestration_v2_legacy_imports SET activity_imported_at=NULL WHERE thread_id=${threadId}`;
+      const restartedImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter.pipe(
+        Effect.provide(Layer.fresh(LegacyV1ThreadImporter.layer)),
+      );
+      yield* restartedImporter.ensureTranscript(threadId);
+      assert.deepEqual(yield* countEvents, before);
+      assert.lengthOf(projection.runtimeRequests, 0);
+      const question = projection.turnItems.find(
+        (item) => item.id === "migration:v1:activity:question",
+      );
+      assert.equal(question?.status, "interrupted");
+      if (question?.type !== "dynamic_tool") throw new Error("Expected archived question");
+      assert.nestedPropertyVal(question.output, "questions[0].question", "Which branch?");
+      yield* maintenance.rebuild;
+      assert.deepEqual(
+        (yield* projections.getThreadProjection(threadId)).turnItems,
+        projection.turnItems,
+      );
+      assert.isTrue((yield* maintenance.verify).valid);
+    }).pipe(Effect.provide(Layer.fresh(layerTest))),
+);

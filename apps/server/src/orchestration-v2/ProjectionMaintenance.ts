@@ -150,27 +150,15 @@ export const layer: Layer.Layer<
               .pipe(Stream.runCollect);
             for (const stored of page) {
               yield* projectionStore.apply(stored.event);
-              if (stored.event.type === "turn-item.updated") {
-                yield* sql`
-                INSERT INTO orchestration_v2_turn_item_positions (
-                  thread_id,
-                  turn_item_id,
-                  ordinal
-                )
-                VALUES (
-                  ${stored.event.threadId},
-                  ${stored.event.payload.id},
-                  ${stored.event.payload.ordinal}
-                )
-                ON CONFLICT(thread_id, turn_item_id) DO UPDATE SET
-                  ordinal = excluded.ordinal
-                `;
-              }
               lastSequence = stored.sequence;
             }
             if (page.length < pageSize) break;
             yield* Effect.yieldNow;
           }
+          // Rebuild positions from final item state: historical reordering can
+          // temporarily reuse an ordinal while earlier events are replayed.
+          yield* sql`INSERT INTO orchestration_v2_turn_item_positions (thread_id,turn_item_id,ordinal)
+            SELECT thread_id,turn_item_id,ordinal FROM orchestration_v2_projection_turn_items`;
           const now = DateTime.formatIso(yield* DateTime.now);
           yield* sql`
             INSERT INTO orchestration_v2_projection_metadata (
