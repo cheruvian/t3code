@@ -1,3 +1,4 @@
+import { MobileAppLinks } from "../MobileAppLinks";
 import { threadMoveUndoParticipants } from "@t3tools/client-runtime/operations";
 import { undoThreadEnvironmentMove } from "../../lib/threadEnvironmentMove";
 import { SavedPromptsSettings } from "./SavedPromptsSettings";
@@ -3793,6 +3794,7 @@ export function GeneralSettingsPanel() {
             />
           </>
         )}
+        <MobileAppLinks />
         <SettingsRow
           {...searchableSetting("privacy-policy")}
           description="How we handle your data, including the anonymous usage data T3 Code collects."
