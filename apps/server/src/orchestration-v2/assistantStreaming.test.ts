@@ -2,9 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 import { MessageId, NodeId, ProviderDriverKind, ThreadId, TurnItemId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { makeAssistantStreamingFilter, splitBufferedAssistantText } from "./assistantStreaming.ts";
-import type { ProviderAdapterV2Event } from "./ProviderAdapter.ts";
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
-const message = (text: string, streaming = true): ProviderAdapterV2Event => ({
+const message = (text: string, streaming = true): ProviderAdapter.ProviderAdapterV2Event => ({
   type: "message.updated",
   driver: ProviderDriverKind.make("codex"),
   message: {
@@ -27,7 +27,7 @@ const turnItem = (
   text: string,
   streaming = true,
   type: "assistant_message" | "reasoning" = "assistant_message",
-): ProviderAdapterV2Event => ({
+): ProviderAdapter.ProviderAdapterV2Event => ({
   type: "turn_item.updated",
   driver: ProviderDriverKind.make("codex"),
   turnItem: {
@@ -108,7 +108,7 @@ describe("V2 assistant streaming", () => {
     "suppresses running assistant nodes in %s mode while delivering tool and completed nodes",
     (mode) => {
       const filter = makeAssistantStreamingFilter(mode);
-      const running: Extract<ProviderAdapterV2Event, { type: "node.updated" }> = {
+      const running: Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "node.updated" }> = {
         type: "node.updated",
         driver: ProviderDriverKind.make("codex"),
         node: {
@@ -148,3 +148,22 @@ it("holds a streamed section heading until its content has a boundary", () => {
     rest: "Next",
   });
 });
+
+it("forwards continuous assistant and reasoning updates unchanged", () => {
+  const filter = makeAssistantStreamingFilter("token");
+  for (const event of [message("p"), message("pa"), turnItem("r", true, "reasoning")]) {
+    expect(filter(event, 0)).toBe(event);
+  }
+});
+
+it.each(["turn", "paragraph"] as const)(
+  "flushes a final unfinished paragraph on interruption in %s mode",
+  (mode) => {
+    const filter = makeAssistantStreamingFilter(mode);
+    filter(turnItem("Partial reply"), 0);
+    expect(filter.flush(100)).toMatchObject([
+      { turnItem: { text: "Partial reply", streaming: false, status: "interrupted" } },
+    ]);
+    expect(filter.flush(101)).toEqual([]);
+  },
+);

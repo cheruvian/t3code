@@ -46,6 +46,14 @@ export const layer: Layer.Layer<TurnItemPositionStoreV2, never, SqlClient.SqlCli
       runOrdinal: suppliedRunOrdinal,
     }) =>
       Effect.gen(function* () {
+        const existing = yield* sql<{ readonly ordinal: number }>`
+          SELECT ordinal
+          FROM orchestration_v2_turn_item_positions
+          WHERE thread_id = ${threadId} AND turn_item_id = ${turnItemId}
+          LIMIT 1
+        `;
+        if (existing[0] !== undefined) return existing[0].ordinal;
+
         const runRows =
           runId === null
             ? []
@@ -58,6 +66,8 @@ export const layer: Layer.Layer<TurnItemPositionStoreV2, never, SqlClient.SqlCli
         const runOrdinal = suppliedRunOrdinal ?? runRows[0]?.ordinal ?? null;
         const lowerBound = runOrdinal === null ? 0 : runOrdinal * 1_000_000;
         const upperBound = runOrdinal === null ? 999_999 : lowerBound + 999_999;
+        // Thread-level actions belong after the current history, not in the
+        // pre-run bucket that recent-history windows have already paged out.
         yield* sql`
           INSERT INTO orchestration_v2_turn_item_positions (thread_id, turn_item_id, ordinal)
           SELECT
@@ -66,8 +76,7 @@ export const layer: Layer.Layer<TurnItemPositionStoreV2, never, SqlClient.SqlCli
             COALESCE(MAX(ordinal), ${lowerBound}) + 1
           FROM orchestration_v2_turn_item_positions
           WHERE thread_id = ${threadId}
-            AND ordinal >= ${lowerBound}
-            AND ordinal <= ${upperBound}
+            ${runOrdinal === null ? sql`` : sql`AND ordinal >= ${lowerBound} AND ordinal <= ${upperBound}`}
           ON CONFLICT(thread_id, turn_item_id) DO NOTHING
         `;
         const rows = yield* sql<{ readonly ordinal: number }>`

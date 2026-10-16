@@ -4,8 +4,11 @@ import {
   DEFAULT_MODEL,
   ProjectId,
   ProviderInstanceId,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
+import * as Cause from "effect/Cause";
+import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -193,4 +196,49 @@ it.effect("automatic pull only updates enabled, behind, clean default-branch che
     ).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, git));
     assert.deepStrictEqual(pulled, ["/inherited"]);
   }),
+);
+
+it.effect(
+  "keeps commands and activation closed when recovery fails and preserves structured context",
+  () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("failed-startup-recovery");
+      const recoveryError = new ProviderRuntimeRecovery.ProviderRuntimeRecoveryError({
+        operation: "reconcile",
+        threadId,
+        cause: new Error("Storage unavailable"),
+      });
+      const gate = yield* ServerRuntimeStartup.makeCommandGate;
+      const calls: string[] = [];
+      const record = (name: string) =>
+        Effect.sync(() => {
+          calls.push(name);
+        });
+      const queued = yield* gate.enqueueCommand(record("command")).pipe(Effect.forkScoped);
+      const result = yield* ServerRuntimeStartup.runOrderedV2StartupPhases({
+        importLegacyShells: record("import"),
+        recover: Effect.fail(recoveryError),
+        recoverDelegatedTasks: record("delegated"),
+        startEffectWorker: record("worker"),
+        autoBootstrap: record("bootstrap"),
+      }).pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(result));
+      if (Exit.isSuccess(result)) return;
+      const error = ServerRuntimeStartup.makeServerRuntimeStartupError({
+        mode: "web",
+        host: "127.0.0.1",
+        port: 3773,
+        cause: result.cause,
+      });
+      yield* gate.failCommandReady(error);
+      const rejected = yield* Fiber.join(queued).pipe(Effect.flip);
+      assert.strictEqual(rejected, error);
+      assert.deepEqual(calls, ["import"]);
+      assert.equal(error.phase, "orchestration-v2.recovery");
+      assert.equal(error.operation, "reconcile");
+      assert.equal(error.failureKind, "recovery-failed");
+      assert.deepEqual(error.affectedThreadIds, [threadId]);
+      assert.strictEqual(error.cause, result.cause);
+      assert.strictEqual(Cause.squash(result.cause), recoveryError);
+    }).pipe(Effect.scoped),
 );

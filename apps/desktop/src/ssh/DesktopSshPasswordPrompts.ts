@@ -1,5 +1,8 @@
-import type { DesktopSshPasswordPromptRequest } from "@t3tools/contracts";
-import { DesktopSshPasswordPromptResolutionInputSchema } from "@t3tools/contracts";
+import {
+  type DesktopSshPasswordPromptRequest,
+  DesktopSshPasswordPromptResolutionInputSchema,
+} from "@t3tools/contracts";
+
 import type { SshPasswordRequest } from "@t3tools/ssh/auth";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -307,7 +310,7 @@ export const make = Effect.fn("desktop.sshPasswordPrompts.make")(function* (
       });
     }
 
-    const requestId = yield* crypto.randomUUIDv4.pipe(
+    const requestId = yield* crypto.randomUUIDv4().pipe(
       Effect.mapError(
         (cause) =>
           new DesktopSshPromptRequestIdGenerationError({

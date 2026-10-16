@@ -2,7 +2,7 @@
 
 Agents can answer with a page instead of only text: a chart, table, diagram, image collage, or mockup. Ask for one ("show this as a chart", "make a collage of these screenshots") and the agent builds a self-contained HTML page, which appears in the thread above its written reply. It works with every provider, on web, desktop, and mobile.
 
-Pages use your current theme, including custom themes, and follow light and dark mode as you switch. Scripts run inside the page, but it is sandboxed away from T3 Code and your session. Links you click in a page open in your browser. On web and desktop, select **Open preview** to move a page into the side panel and collapse it in chat. Select **Show inline** to display it in chat again. On mobile, use the expand button to open the page full screen. The viewer also lets you view its source or save it.
+Pages use your current theme, including custom themes, and follow light and dark mode as you switch. Scripts run inside the page, but it is sandboxed away from T3 Code and your session. Links you click in a page open in your browser. On web and desktop, select **Open preview** to move a page into the side panel and collapse it in chat. Select **Show inline** to display it in chat again. Use the expand button on any client to open the page full screen. On web and desktop, the full-screen viewer includes zoom controls. On mobile, use the expand button to open the page full screen. The viewer also lets you view its source or save it.
 
 In **Settings → Appearance → HTML previews**, choose whether pages open in chat, stay collapsed in chat, or open in the side panel by default. This preference applies to your web or desktop client. Side-panel mode opens the newest page in the thread.
 

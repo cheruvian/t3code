@@ -1,6 +1,6 @@
 import { ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-import { getWorktreeCleanupOwners } from "./worktreeOwnership";
+import { getWorktreeCleanupOwners } from "./worktreeOwnership.ts";
 
 function subagent(id: string, parentId: string) {
   return {

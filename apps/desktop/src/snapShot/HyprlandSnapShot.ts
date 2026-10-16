@@ -7,9 +7,9 @@ import * as NodeURL from "node:url";
 import * as Schema from "effect/Schema";
 import type { DesktopCaptureHelperState } from "@t3tools/contracts";
 import type { LinuxWindowSnapshot } from "./LinuxSnapShot.ts";
-import { readPortalPng } from "./linuxCaptureSession.ts";
+import { readPortalPng, HYPRLAND_CAPTURE_ACTION } from "./linuxCaptureSession.ts";
 import { startNativeCaptureFeedback } from "./NativeCaptureFeedback.ts";
-import { HYPRLAND_CAPTURE_ACTION } from "./linuxCaptureSession.ts";
+
 export { isHyprlandCaptureSession } from "./linuxCaptureSession.ts";
 
 export const HYPRLAND_CAPTURE_EXECUTABLE = "t3-hyprland-snap-shot";
@@ -29,7 +29,8 @@ function hyprlandCaptureBinding(appId: string, lua: boolean): string {
 /** Omarchy owns its defaults; instructions always point at a user-owned config. */
 export async function hyprlandCaptureShortcut(
   appId: string,
-  configHome = process.env.XDG_CONFIG_HOME || NodePath.join(NodeOS.homedir(), ".config"),
+  home: string,
+  configHome = process.env.XDG_CONFIG_HOME || NodePath.join(home, ".config"),
 ) {
   const directory = NodePath.join(configHome, "hypr");
   const exists = async (name: string) =>

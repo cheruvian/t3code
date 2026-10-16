@@ -119,7 +119,7 @@ export interface LatestProposedPlanState {
 
 export type TimelineAttempt = Pick<
   OrchestrationV2RunAttempt,
-  "id" | "runId" | "attemptOrdinal" | "rootNodeId" | "status"
+  "id" | "runId" | "attemptOrdinal" | "rootNodeId" | "status" | "completedAt"
 >;
 
 export interface TurnPlanEntry {
@@ -1077,11 +1077,13 @@ export function deriveTimelineEntriesFromVisibleTurnItemsWithState(
   input: TimelineEntriesInput,
   previous: TimelineEntriesProjection | null = null,
 ): TimelineEntriesProjection {
+  // Retain the observed row references even if a caller reuses its input array.
+  const observedInput = { ...input, visibleTurnItems: [...input.visibleTurnItems] };
   const reused = previous === null ? null : reuseTimelineEntries(input, previous);
-  if (reused !== null) return { input, entries: reused };
+  if (reused !== null) return { input: observedInput, entries: reused };
   const entries = deriveTimelineEntriesFromVisibleTurnItems(input);
   if (previous === null || !shallow(input.attachmentUrlById, previous.input.attachmentUrlById)) {
-    return { input, entries };
+    return { input: observedInput, entries };
   }
   // Tool output and lifecycle changes rebuild grouping, but unchanged message
   // objects and previews still let memoized history rows stay mounted.
@@ -1091,7 +1093,7 @@ export function deriveTimelineEntriesFromVisibleTurnItemsWithState(
     ),
   );
   return {
-    input,
+    input: observedInput,
     entries: entries.map((entry) => {
       if (entry.kind !== "message" || entry.projectedItem === undefined) return entry;
       const before = previousMessages.get(entry.id);

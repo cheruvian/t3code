@@ -10,12 +10,9 @@ import {
 
 describe("resource action presentation", () => {
   it("identifies named resources across saved and file action IDs", () => {
-    expect(
-      resourceActionsMatch(
-        { id: "sandbox", name: "SANDBOX" },
-        { id: "file:sandbox", name: " sandbox " },
-      ),
-    ).toBe(true);
+    const saved = { id: "sandbox", name: "SANDBOX" };
+    const fileAction = { id: "file:sandbox", name: " sandbox " };
+    expect(resourceActionsMatch(saved, fileAction)).toBe(true);
     expect(resourceActionKey({ name: " SANDBOX " })).toBe("sandbox");
     expect(resourceActionsMatch({ name: "SANDBOX" }, { name: "EXPORT" })).toBe(false);
   });

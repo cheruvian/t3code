@@ -1,4 +1,4 @@
-import { MermaidDiagram, MermaidViewToggle } from "@t3tools/mobile-markdown-text/mermaid";
+import { MermaidDiagram, MermaidViewToggle } from "../../native/MermaidDiagram";
 import { useState } from "react";
 import { Platform, ScrollView, Text as NativeText, View, type ColorValue } from "react-native";
 

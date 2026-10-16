@@ -177,7 +177,7 @@ const startThread = Command.make("start", {
                   ? project.defaultModelSelection
                   : { instanceId: ProviderInstanceId.make(instanceId), model };
               const threadId = ThreadId.make(
-                yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie),
+                yield* (yield* Crypto.Crypto).randomUUIDv4().pipe(Effect.orDie),
               );
               const branchSuffix = Array.from(
                 yield* (yield* Crypto.Crypto).randomBytes(4).pipe(Effect.orDie),
@@ -195,10 +195,10 @@ const startThread = Command.make("start", {
                 branch,
                 threadId,
                 messageId: MessageId.make(
-                  yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie),
+                  yield* (yield* Crypto.Crypto).randomUUIDv4().pipe(Effect.orDie),
                 ),
                 commandId: CommandId.make(
-                  yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie),
+                  yield* (yield* Crypto.Crypto).randomUUIDv4().pipe(Effect.orDie),
                 ),
               });
               const { thread: created } = yield* dispatchBootstrapRpc({
@@ -280,9 +280,13 @@ const sendMessage = Command.make("send", {
           type: "message.dispatch" as const,
           createdBy: "user" as const,
           creationSource: "server" as const,
-          commandId: CommandId.make(yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie)),
+          commandId: CommandId.make(
+            yield* (yield* Crypto.Crypto).randomUUIDv4().pipe(Effect.orDie),
+          ),
           threadId: thread.id,
-          messageId: MessageId.make(yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie)),
+          messageId: MessageId.make(
+            yield* (yield* Crypto.Crypto).randomUUIDv4().pipe(Effect.orDie),
+          ),
           text,
           attachments: [],
           modelSelection: thread.modelSelection,

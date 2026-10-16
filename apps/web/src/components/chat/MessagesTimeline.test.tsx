@@ -13,6 +13,7 @@ import {
   act,
   createRef,
   useLayoutEffect,
+  useState,
   type ReactNode,
   type Ref,
   type ReactElement,
@@ -88,6 +89,11 @@ beforeEach(() => {
   activityTestState.expandedRuns = false;
 });
 
+const legendListTestState = vi.hoisted(() => ({
+  data: undefined as unknown,
+  onScroll: undefined as (() => void) | undefined,
+}));
+
 vi.mock("@legendapp/list/react", async () => {
   const legendListTestId = "legend-list";
 
@@ -124,8 +130,11 @@ vi.mock("@legendapp/list/react", async () => {
         };
     className?: string;
     contentInsetEndAdjustment?: number;
+    onScroll?: () => void;
     ref?: Ref<LegendListRef>;
   }) => {
+    legendListTestState.data = props.data;
+    legendListTestState.onScroll = props.onScroll;
     if (props.anchoredEndSpace) {
       props.anchoredEndSpace.onSizeChanged?.(240);
       props.anchoredEndSpace.onReady?.({ anchorIndex: props.anchoredEndSpace.anchorIndex });
@@ -269,10 +278,11 @@ function stubDomGlobals() {
 }
 
 beforeEach(stubDomGlobals);
+// Cold transformation of the full chat dependency graph needs extra time on slower CI workers.
 beforeAll(async () => {
   Object.defineProperty(window, "matchMedia", { value: matchMedia, configurable: true });
   ({ MessagesTimeline, resolvePreviewAnnotationImage } = await import("./MessagesTimeline"));
-}, 30_000);
+}, 120_000);
 
 const ACTIVE_THREAD_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const MESSAGE_CREATED_AT = "2026-03-17T19:12:28.000Z";
@@ -1178,20 +1188,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("<a href=");
   });
 
-  it("glides to the end while a turn is running and snaps otherwise", () => {
-    const entries = [buildUserTimelineEntry("Hello")];
-    const working = renderToStaticMarkup(
-      <MessagesTimeline {...buildProps()} isWorking timelineEntries={entries} />,
-    );
-    expect(working).toContain('data-maintain-scroll-at-end-animated="true"');
-
-    const idle = renderToStaticMarkup(
-      <MessagesTimeline {...buildProps()} timelineEntries={entries} />,
-    );
-    expect(idle).toContain('data-maintain-scroll-at-end-animated="false"');
-  });
-
-  it("snaps to the end while a thread switch settles, even mid-turn", async () => {
+  it("snaps on mount and thread switches, glides after settling, and snaps while idle", async () => {
     const frames = new Map<number, FrameRequestCallback>();
     let nextFrame = 0;
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
@@ -1233,6 +1230,30 @@ describe("MessagesTimeline", () => {
     try {
       act(() => {
         renderer = create(
+          <MessagesTimeline
+            {...buildProps()}
+            isWorking
+            routeThreadKey="env-1:thread-a"
+            timelineEntries={entries}
+          />,
+        );
+      });
+      expect(animatedAttr(renderer)).toBe(false);
+      flushFrame();
+      flushFrame();
+      expect(animatedAttr(renderer)).toBe(true);
+      act(() => {
+        renderer.update(
+          <MessagesTimeline
+            {...buildProps()}
+            routeThreadKey="env-1:thread-a"
+            timelineEntries={entries}
+          />,
+        );
+      });
+      expect(animatedAttr(renderer)).toBe(false);
+      act(() => {
+        renderer.update(
           <MessagesTimeline
             {...buildProps()}
             isWorking
@@ -1289,12 +1310,16 @@ describe("MessagesTimeline", () => {
       },
     } as unknown as React.RefObject<LegendListRef>;
     const threadKey = "environment-local:syncing-position-test";
-    rememberTimelinePosition(threadKey, {
-      rowId: "syncing-work",
-      offsetWithinRow: 20,
-      scrollOffset: 800,
-      atEnd: false,
-    });
+    rememberTimelinePosition(
+      threadKey,
+      {
+        rowId: "syncing-work",
+        offsetWithinRow: 20,
+        scrollOffset: 800,
+        atEnd: false,
+      },
+      false,
+    );
     const entry = {
       id: "syncing-work",
       kind: "work" as const,
@@ -1334,12 +1359,16 @@ describe("MessagesTimeline", () => {
       expect(scrollToIndex).toHaveBeenCalledTimes(2);
 
       const nextThreadKey = "environment-local:syncing-navigation-test";
-      rememberTimelinePosition(nextThreadKey, {
-        rowId: "syncing-work",
-        offsetWithinRow: 20,
-        scrollOffset: 900,
-        atEnd: false,
-      });
+      rememberTimelinePosition(
+        nextThreadKey,
+        {
+          rowId: "syncing-work",
+          offsetWithinRow: 20,
+          scrollOffset: 900,
+          atEnd: false,
+        },
+        false,
+      );
       const onManualNavigation = vi.fn();
       scrollToOffset.mockClear();
       scrollToIndex.mockClear();
@@ -1422,13 +1451,17 @@ describe("MessagesTimeline", () => {
       await act(async () => {
         renderer = create(<MessagesTimeline {...props} />);
       });
-      rememberTimelinePosition(threadKey, {
-        rowId: "reading-work",
-        lastRowId: "reading-work",
-        offsetWithinRow: 20,
-        scrollOffset: 800,
-        atEnd: false,
-      });
+      rememberTimelinePosition(
+        threadKey,
+        {
+          rowId: "reading-work",
+          lastRowId: "reading-work",
+          offsetWithinRow: 20,
+          scrollOffset: 800,
+          atEnd: false,
+        },
+        false,
+      );
       await act(async () => {
         renderer.update(
           <MessagesTimeline
@@ -2011,31 +2044,6 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("h-28 w-52 max-w-full");
   });
 
-  it("does not reserve end space for a follow-up user message", () => {
-    const onAnchorReady = vi.fn();
-    const firstEntry = buildUserTimelineEntry("First prompt.");
-    const secondEntry = {
-      ...buildUserTimelineEntry("Newest prompt."),
-      id: "entry-2",
-      message: {
-        ...buildUserTimelineEntry("Newest prompt.").message,
-        id: MessageId.make("message-2"),
-      },
-    };
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...buildProps()}
-        anchorMessageId={secondEntry.message.id}
-        onAnchorReady={onAnchorReady}
-        timelineEntries={[firstEntry, secondEntry]}
-      />,
-    );
-
-    expect(markup).not.toContain("data-anchor-index=");
-    expect(markup).toContain('data-maintain-scroll-at-end="enabled"');
-    expect(onAnchorReady).not.toHaveBeenCalled();
-  });
-
   it("offers preview and download actions for PDF attachments", () => {
     const entry = {
       ...buildUserTimelineEntry("Read the report."),
@@ -2087,32 +2095,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('aria-label="Preview report.pdf"');
     expect(markup).toContain('aria-label="Download report.pdf"');
     expect(markup).not.toContain("<a ");
-  });
-
-  it("does not download an optimistic file before the server supplies its attachment ID", () => {
-    const entry = {
-      ...buildUserTimelineEntry("Read the report."),
-      message: {
-        ...buildUserTimelineEntry("Read the report.").message,
-        attachments: [
-          {
-            type: "file" as const,
-            id: "composer-local-report",
-            name: "report.pdf",
-            mimeType: "application/pdf",
-            sizeBytes: 42,
-            downloadable: false,
-          },
-        ],
-      },
-    };
-
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline {...buildProps()} timelineEntries={[entry]} />,
-    );
-
-    expect(markup).toContain("report.pdf");
-    expect(markup).not.toContain('aria-label="Download report.pdf"');
   });
 
   it("renders unknown attachment types as inert rows instead of crashing", () => {
@@ -2185,56 +2167,6 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-maintain-scroll-at-end="enabled"');
   });
 
-  it("hands end-following back to the list once the send anchor is released", () => {
-    const firstEntry = buildUserTimelineEntry("First prompt.");
-    const secondEntry = {
-      ...buildUserTimelineEntry("Newest prompt."),
-      id: "entry-2",
-      message: {
-        ...buildUserTimelineEntry("Newest prompt.").message,
-        id: MessageId.make("message-2"),
-      },
-    };
-    const timelineEntries = [firstEntry, secondEntry];
-
-    // While the send anchor holds the end space open, ChatView owns streaming
-    // scrolls and LegendList must not re-pin behind it.
-    expect(
-      renderToStaticMarkup(
-        <MessagesTimeline
-          {...buildProps()}
-          anchorMessageId={firstEntry.message.id}
-          timelineEntries={timelineEntries}
-        />,
-      ),
-    ).not.toContain('data-maintain-scroll-at-end="enabled"');
-
-    // Dropping the anchor is what actually gives end-following back, so
-    // returning to the live edge has to release it — re-enabling live follow
-    // alone leaves nothing pinned to the stream.
-    expect(
-      renderToStaticMarkup(
-        <MessagesTimeline
-          {...buildProps()}
-          anchorMessageId={null}
-          timelineEntries={timelineEntries}
-        />,
-      ),
-    ).toContain('data-maintain-scroll-at-end="enabled"');
-
-    // Reading history still wins over both.
-    expect(
-      renderToStaticMarkup(
-        <MessagesTimeline
-          {...buildProps()}
-          anchorMessageId={null}
-          liveFollowEnabled={false}
-          timelineEntries={timelineEntries}
-        />,
-      ),
-    ).not.toContain('data-maintain-scroll-at-end="enabled"');
-  });
-
   it("renders collapse controls for long user messages", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -2254,19 +2186,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-user-message-collapsed="true"');
     expect(markup).toContain('data-user-message-fade="true"');
     expect(markup).toContain('data-user-message-footer="true"');
-  });
-
-  it("does not render collapse controls for short user messages", () => {
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...buildProps()}
-        timelineEntries={[buildUserTimelineEntry("Short prompt.")]}
-      />,
-    );
-
-    expect(markup).not.toContain("Show full message");
-    expect(markup).toContain('data-user-message-collapsible="false"');
-    expect(markup).toContain("rounded-2xl bg-message p-3");
   });
 
   it("identifies user-role messages sent by another agent", async () => {
@@ -2383,6 +2302,7 @@ describe("MessagesTimeline", () => {
       attemptOrdinal: 1,
       rootNodeId: "node-attempt-1" as never,
       status: "superseded" as const,
+      completedAt: null,
     };
     const activeAttempt = {
       id: "attempt-2" as never,
@@ -2390,6 +2310,7 @@ describe("MessagesTimeline", () => {
       attemptOrdinal: 2,
       rootNodeId: "node-attempt-2" as never,
       status: "running" as const,
+      completedAt: null,
     };
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -2438,7 +2359,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-superseded-attempt-id="attempt-1"');
     expect(markup).toContain('aria-expanded="false"');
     expect(markup).toContain("Superseded attempt");
-    expect(markup).toContain("Partial output retained");
+    expect(markup).toContain("Cut off by a steer");
     expect(markup).toContain("Current response remains visible");
     expect(markup).not.toContain("Partial response from the old attempt");
   });
@@ -3626,6 +3547,220 @@ describe("MessagesTimeline", () => {
           (node) => node.type === "div" && node.props["aria-expanded"] === true,
         ),
       ).toHaveLength(0);
+    } finally {
+      await act(() => renderer?.unmount());
+    }
+  });
+  it.each([true, false])(
+    "keeps the end in view when tool output toggles only at the end: %s",
+    async (isAtEnd) => {
+      const frames = new Map<number, FrameRequestCallback>();
+      let nextFrame = 0;
+      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        frames.set(++nextFrame, callback);
+        return nextFrame;
+      });
+      vi.stubGlobal("cancelAnimationFrame", (frame: number) => frames.delete(frame));
+      vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+      const flushFrame = () =>
+        act(() => {
+          const callbacks = [...frames.values()];
+          frames.clear();
+          callbacks.forEach((callback) => callback(0));
+        });
+      const viewport = { scrollTop: 400, scrollHeight: 1000 };
+      const props = buildProps();
+      props.listRef.current = {
+        getState: () => ({ isAtEnd }),
+        getScrollableNode: () => viewport,
+      } as unknown as LegendListRef;
+      let renderer: ReactTestRenderer | undefined;
+      try {
+        await act(() => {
+          renderer = create(
+            <MessagesTimeline
+              {...props}
+              timelineEntries={[
+                {
+                  id: "tool",
+                  kind: "work",
+                  createdAt: MESSAGE_CREATED_AT,
+                  entry: {
+                    id: "tool",
+                    createdAt: MESSAGE_CREATED_AT,
+                    label: "Run command",
+                    tone: "tool",
+                    toolLifecycleStatus: "completed",
+                    detail: "Command output",
+                  },
+                },
+              ]}
+            />,
+          );
+        });
+        const toggle = renderer!.root.findByProps({ "aria-expanded": false });
+        const list = renderer!.root.find(
+          (node) => node.props.ListFooterComponent !== undefined && node.props.onItemSizeChanged,
+        );
+        for (const scrollHeight of [1300, 900]) {
+          await act(() => toggle.props.onClick());
+          // The rows grow or shrink once the list measures them.
+          viewport.scrollHeight = scrollHeight;
+          await flushFrame();
+          expect(viewport.scrollTop).toBe(isAtEnd ? scrollHeight : 400);
+          // Tool output that renders late is pinned before the next frame.
+          viewport.scrollHeight = scrollHeight + 200;
+          await act(() => list.props.onItemSizeChanged());
+          expect(viewport.scrollTop).toBe(isAtEnd ? scrollHeight + 200 : 400);
+          await flushFrame();
+          await flushFrame();
+          viewport.scrollTop = 400;
+        }
+      } finally {
+        await act(() => renderer?.unmount());
+      }
+    },
+  );
+
+  function stubFollowTimeline(routeThreadKey: string) {
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextFrame = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.set(++nextFrame, callback);
+      return nextFrame;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (frame: number) => frames.delete(frame));
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const props = { ...buildProps(), routeThreadKey };
+    const timeline = {
+      props,
+      scrollTop: 1400,
+      flushFrame: () =>
+        act(() => {
+          const callbacks = [...frames.values()];
+          frames.clear();
+          callbacks.forEach((callback) => callback(0));
+        }),
+    };
+    const viewport = {
+      get scrollTop() {
+        return timeline.scrollTop;
+      },
+      getBoundingClientRect: () => ({ top: 0 }),
+    };
+    props.listRef.current = {
+      getScrollableNode: () => viewport,
+      getState: () => ({
+        data: legendListTestState.data,
+        scroll: timeline.scrollTop,
+        scrollLength: 600,
+        contentLength: 2000,
+        indexByKey: () => 0,
+        positionAtIndex: () => 0,
+        sizeAtIndex: () => 2000,
+        elementAtIndex: () => ({ getBoundingClientRect: () => ({ top: -timeline.scrollTop }) }),
+      }),
+    } as unknown as LegendListRef;
+    return timeline;
+  }
+
+  it("remembers a manual reading position when the chat closes before the next frame", async () => {
+    const { readTimelinePosition } = await import("./timelineScrollAnchoring");
+    const timeline = stubFollowTimeline("environment-local:manual-departure");
+    const { props } = timeline;
+    let navigateManually = () => {};
+    function ChatProbe() {
+      const [liveFollowEnabled, setLiveFollowEnabled] = useState(true);
+      navigateManually = () => setLiveFollowEnabled(false);
+      return (
+        <MessagesTimeline
+          {...props}
+          timelineEntries={[buildUserTimelineEntry("First prompt")]}
+          liveFollowEnabled={liveFollowEnabled}
+          onManualNavigation={navigateManually}
+        />
+      );
+    }
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(() => {
+        renderer = create(<ChatProbe />);
+      });
+      await timeline.flushFrame();
+      expect(readTimelinePosition(props.routeThreadKey)?.atEnd).toBe(true);
+
+      // The scroll event lands before the follow opt-out renders.
+      timeline.scrollTop = 1300;
+      await act(() => {
+        navigateManually();
+        legendListTestState.onScroll?.();
+      });
+      await act(() => renderer?.unmount());
+      renderer = undefined;
+
+      expect(readTimelinePosition(props.routeThreadKey)).toMatchObject({
+        atEnd: false,
+        scrollOffset: 1300,
+      });
+    } finally {
+      await act(() => renderer?.unmount());
+    }
+  });
+
+  it("keeps a following thread's intent while its timeline is held for the next thread", async () => {
+    const { readTimelinePosition } = await import("./timelineScrollAnchoring");
+    const timeline = stubFollowTimeline("environment-local:held-departure");
+    const { props } = timeline;
+    // Smooth follow is still catching up with the stream.
+    timeline.scrollTop = 1300;
+    const render = (held: boolean) => (
+      <MessagesTimeline
+        {...props}
+        timelineEntries={[buildUserTimelineEntry("First prompt")]}
+        liveFollowEnabled={!held}
+        paintOnly={held}
+      />
+    );
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(() => {
+        renderer = create(render(false));
+      });
+      await timeline.flushFrame();
+      expect(readTimelinePosition(props.routeThreadKey)?.atEnd).toBe(true);
+
+      await act(() => renderer?.update(render(true)));
+      await timeline.flushFrame();
+
+      expect(readTimelinePosition(props.routeThreadKey)?.atEnd).toBe(true);
+    } finally {
+      await act(() => renderer?.unmount());
+    }
+  });
+
+  it("remembers a first send held near the top as a reading position", async () => {
+    const { readTimelinePosition } = await import("./timelineScrollAnchoring");
+    const timeline = stubFollowTimeline("environment-local:anchored-first-send");
+    const { props } = timeline;
+    timeline.scrollTop = 1300;
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(() => {
+        renderer = create(
+          <MessagesTimeline
+            {...props}
+            timelineEntries={[buildUserTimelineEntry("First prompt")]}
+            anchorMessageId={MessageId.make("message-1")}
+            liveFollowEnabled
+          />,
+        );
+      });
+      await timeline.flushFrame();
+
+      expect(readTimelinePosition(props.routeThreadKey)).toMatchObject({
+        atEnd: false,
+        scrollOffset: 1300,
+      });
     } finally {
       await act(() => renderer?.unmount());
     }

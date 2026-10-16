@@ -7,19 +7,24 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  TurnItemId,
   type ProjectResourceLock,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import { layerMemory } from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
-import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
+import type { ProviderAdapterV2Shape } from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import { layerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import { planProjectCommand } from "./ProjectCommands.ts";
+import { EventSinkV2 } from "./EventSink.ts";
 
 const instanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId, model: "gpt-5.1-codex" };
@@ -107,6 +112,88 @@ const setup = Effect.gen(function* () {
   });
   return { orchestrator, projections: yield* ProjectionStore.ProjectionStoreV2 };
 });
+
+it.effect("keeps a new thread-level resource log in the recent history window", () =>
+  Effect.gen(function* () {
+    const { orchestrator, projections } = yield* setup;
+    yield* setLocks([]);
+    for (let index = 0; index < 8; index++) {
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`history-send:${index}`),
+        threadId,
+        messageId: MessageId.make(`history-message:${index}`),
+        text: `Turn ${index}`,
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const active = (yield* projections.getThreadShell(threadId))!.activeRunId!;
+      yield* orchestrator.dispatch({
+        type: "run.interrupt",
+        commandId: CommandId.make(`history-stop:${index}`),
+        threadId,
+        runId: active,
+      });
+    }
+    const sink = yield* EventSinkV2;
+    const now = yield* DateTime.now;
+    const logId = TurnItemId.make("resource-log:recent");
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make("resource-log:recent"),
+          type: "turn-item.updated",
+          threadId,
+          occurredAt: now,
+          payload: {
+            id: logId,
+            type: "command_execution",
+            threadId,
+            runId: null,
+            nodeId: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 0,
+            status: "failed",
+            title: "Device: checkout",
+            startedAt: null,
+            completedAt: now,
+            updatedAt: now,
+            input: "exit 1",
+            output: "checkout failed",
+            outputIndicatesFailure: true,
+            resourceActionLog: {
+              operationId,
+              resourceName: "Device",
+              action: "checkout",
+              status: "failed",
+              command: "exit 1",
+              stdout: "",
+              stderr: "",
+              truncated: false,
+              error: "checkout failed",
+            },
+          },
+        },
+      ],
+    });
+    const window = yield* projections.getThreadSnapshotWindow(threadId, {
+      rowLimit: 20,
+      userTurnLimit: 2,
+    });
+    const log = window.projection.turnItems.find((item) => item.id === logId);
+    assert.isDefined(log);
+    assert.equal(log!.type, "command_execution");
+    assert.isAbove(
+      log!.ordinal,
+      window.projection.turnItems.find((item) => item.type === "user_message")!.ordinal,
+    );
+  }).pipe(Effect.provide(testLayer)),
+);
 
 it.effect.each(["checkout", "release"] as const)(
   "queues messages during %s without an active provider and resumes after completion",
@@ -344,4 +431,54 @@ it.effect("keeps server-originated notifications queued during a resource action
     assert.equal(yield* orchestrator.resumeQueuedRuns, 1);
     assert.equal((yield* projections.getThreadProjection(threadId)).runs[0]!.status, "starting");
   }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect.each([false, true])(
+  "a busy resource owner can release only without hooks (hooks=%s)",
+  (hooks) =>
+    Effect.gen(function* () {
+      const { orchestrator, projections } = yield* setup;
+      const held = {
+        ...lock,
+        phase: "held" as const,
+        script: {
+          ...lock.script,
+          resource: { ...lock.script.resource!, releaseCommand: hooks ? "cleanup" : "" },
+        },
+      };
+      yield* setLocks([held]);
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("busy-owner"),
+        threadId,
+        messageId: MessageId.make("busy-owner-message"),
+        text: "Continue working",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const thread = (yield* projections.getThreadShell(threadId))!;
+      assert.isNotNull(thread.activeRunId);
+      const projects = yield* ProjectStore.ProjectStoreV2;
+      const result = planProjectCommand({
+        command: {
+          type: "project.resource.request",
+          commandId: CommandId.make("release-busy-owner"),
+          projectId,
+          threadId,
+          script: held.script,
+          action: "release",
+          expectedOperationId: operationId,
+        },
+        state: {
+          project: Option.getOrThrow(yield* projects.get(projectId)),
+          workspaceOwner: undefined,
+          resourceThread: thread,
+        },
+        eventId: EventId.make("release-plan"),
+        now: yield* DateTime.now,
+      });
+      assert.equal(Result.isSuccess(result), !hooks);
+    }).pipe(Effect.provide(testLayer)),
 );

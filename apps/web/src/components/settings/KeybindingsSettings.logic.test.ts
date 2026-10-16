@@ -10,6 +10,7 @@ import {
   groupKeybindingRows,
   keybindingConflictLabels,
   keybindingFromKeyboardEvent,
+  shouldSkipKeybindingCapture,
   keybindingSearchFromKeyboardEvent,
   parseWhenExpressionDraft,
   shortcutToKeybindingInput,
@@ -274,6 +275,23 @@ describe("KeybindingsSettings.logic", () => {
     expect(keybindingFromKeyboardEvent({ key, code, ...noModifiers }, "MacIntel")).toBe(expected);
   });
 
+  it("preserves plain Tab navigation while capturing modified Tab chords", () => {
+    const plain = {
+      key: "Tab",
+      code: "Tab",
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+    };
+    expect(shouldSkipKeybindingCapture(plain)).toBe(true);
+    for (const modifier of ["metaKey", "ctrlKey", "altKey", "shiftKey"] as const) {
+      const modified = { ...plain, [modifier]: true };
+      expect(shouldSkipKeybindingCapture(modified)).toBe(false);
+      expect(keybindingFromKeyboardEvent(modified, "MacIntel")).toMatch(/\+tab$/);
+    }
+  });
+
   it("waits for a key when only a modifier is pressed", () => {
     expect(
       keybindingFromKeyboardEvent(
@@ -399,6 +417,7 @@ describe("KeybindingsSettings.logic", () => {
     expect(commandLabel("commandPalette.toggle")).toBe("Command Palette: Toggle");
     expect(commandLabel("themeEditor.toggle")).toBe("Theme Editor: Toggle");
     expect(commandLabel("view.reopenClosed")).toBe("Reopen Closed Tab");
+    expect(commandLabel("preview.focusUrl")).toBe("Preview: Focus URL");
     expect(commandLabel("script.setup-db.run")).toBe("Run Script: Setup Db");
   });
 

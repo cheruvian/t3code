@@ -24,6 +24,8 @@ import {
   getSidebarForkParentThreadId,
   getSidebarThreadIdsToPrewarm,
   hasUnseenCompletion,
+  hasUnreadAssistantMessage,
+  resolveSidebarV2UnreadState,
   isContextMenuPointerDown,
   isSidebarSubagentThread,
   isSidebarThreadWorking,
@@ -44,6 +46,7 @@ import {
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
+  pullRequestMatchesSearchQuery,
   searchSidebarThreads,
   shouldClearThreadSelectionOnMouseDown,
   shouldShowSidebarV2Duration,
@@ -507,6 +510,46 @@ function makeLatestRun(overrides?: {
       overrides?.completedAt !== undefined ? overrides.completedAt : "2026-03-09T10:05:00.000Z",
   };
 }
+
+describe("assistant-message unread state", () => {
+  it("lights only a newly observed assistant message", () => {
+    expect(
+      hasUnreadAssistantMessage({
+        latestAssistantMessageId: "assistant-2",
+        lastReadAssistantMessageId: "assistant-1",
+      }),
+    ).toBe(true);
+    expect(
+      hasUnreadAssistantMessage({
+        latestAssistantMessageId: "assistant-1",
+        lastReadAssistantMessageId: "assistant-1",
+      }),
+    ).toBe(false);
+    expect(
+      hasUnreadAssistantMessage({
+        latestAssistantMessageId: "assistant-1",
+        lastReadAssistantMessageId: undefined,
+      }),
+    ).toBe(false);
+  });
+
+  it.each(["assistant-1", null])(
+    "keeps acknowledged text read after completion with latest assistant %s",
+    (latestAssistantMessageId) => {
+      const thread = makeThread({
+        latestRun: makeLatestRun({ completedAt: "2026-03-09T10:30:00.000Z" }),
+        lastVisitedAt: "2026-03-09T10:20:00.000Z",
+      });
+      expect(
+        resolveSidebarV2UnreadState({
+          thread,
+          latestAssistantMessageId,
+          lastReadAssistantMessageId: latestAssistantMessageId ?? undefined,
+        }),
+      ).toEqual({ hasUnreadCompletion: true, hasUnreadAssistantMessage: false });
+    },
+  );
+});
 
 describe("hasUnseenCompletion", () => {
   it("returns true when a thread completed after its last visit", () => {
@@ -1010,6 +1053,27 @@ describe("resolveSidebarThreadStatus", () => {
   it("keeps Waiting static while Working shows elapsed duration", () => {
     expect(shouldShowSidebarV2Duration("waiting")).toBe(false);
     expect(shouldShowSidebarV2Duration("working")).toBe(true);
+  });
+});
+
+describe("pullRequestMatchesSearchQuery", () => {
+  const branchPullRequest = {
+    projectId: ProjectId.make("project"),
+    repository: "pingdotgg/t3code",
+    number: 123,
+    url: "https://github.com/pingdotgg/t3code/pull/123",
+  };
+
+  it("matches when every query token appears in the PR's terms", () => {
+    expect(pullRequestMatchesSearchQuery({ branchPullRequest }, "123")).toBe(true);
+    expect(pullRequestMatchesSearchQuery({ branchPullRequest }, "pingdotgg/t3code #123")).toBe(
+      true,
+    );
+  });
+
+  it("rejects queries with a token the PR does not carry, and blank queries", () => {
+    expect(pullRequestMatchesSearchQuery({ branchPullRequest }, "rebase 123")).toBe(false);
+    expect(pullRequestMatchesSearchQuery({ branchPullRequest }, "   ")).toBe(false);
   });
 });
 
@@ -1757,7 +1821,10 @@ describe("planSidebarThreadDrop", () => {
           ["a3", "t"],
         ]),
       }),
-    ).toEqual({ kind: "none" });
+    ).toMatchObject({
+      kind: "move-active",
+      assignments: [{ id: "a3", orderKey: expect.any(String) }],
+    });
     expect(plan({ ...input, activeReorderableKeys: new Set() })).toEqual({ kind: "none" });
   });
 
@@ -1841,21 +1908,31 @@ describe("planSidebarThreadDrop", () => {
       order: ["p1", "p3", "a1", "p2"],
     },
     { activeKey: "p1", activeSection: "pinned" as const, order: ["p3", "p1", "p2"] },
-  ])("rejects $activeSection drops that require rewriting a disabled neighbor", (source) => {
-    expect(
-      plan({
-        activeKey: source.activeKey,
-        activeSection: source.activeSection,
-        target: { section: "pinned", pinnedOrder: source.order },
-        pinnedOrder: ["p1", "p3", "p2"],
-        pinnedKeysById: new Map([
-          ["p1", "f"],
-          ["p2", null],
-          ["p3", "t"],
-        ]),
-        reorderableKeys: new Set(["p1", "p3", source.activeKey]),
-      }),
-    ).toEqual({ kind: "none" });
+  ])("leaves a keyless disabled neighbor untouched during $activeSection drops", (source) => {
+    const result = plan({
+      activeKey: source.activeKey,
+      activeSection: source.activeSection,
+      target: { section: "pinned", pinnedOrder: source.order },
+      pinnedOrder: ["p1", "p3", "p2"],
+      pinnedKeysById: new Map([
+        ["p1", "f"],
+        ["p2", null],
+        ["p3", "t"],
+      ]),
+      reorderableKeys: new Set(["p1", "p3", source.activeKey]),
+    });
+    if (source.activeSection === "active") {
+      expect(result).toMatchObject({
+        kind: "pin",
+        orderKey: expect.any(String),
+        extraAssignments: [],
+      });
+    } else {
+      expect(result).toMatchObject({
+        kind: "reorder-pinned",
+        assignments: [{ id: source.activeKey, orderKey: expect.any(String) }],
+      });
+    }
   });
 
   it("rewrites the section when a foreign thread lands next to a keyless pin", () => {

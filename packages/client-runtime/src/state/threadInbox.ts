@@ -9,16 +9,20 @@ type WorkingThreadInput = Pick<
   | "hasActionableProposedPlan"
   | "hasPendingApprovals"
   | "hasPendingUserInput"
+  | "pendingSubagentRequest"
   | "interactionMode"
   | "latestRun"
+  | "lastVisitedAt"
   | "runtime"
 >;
 
 /** Threads busy with work that does not need the user fold into the Working
     section: a running run, or one stopped with background work that will wake
-    it. Approvals, questions, plan prompts, and failures stay in the inbox. */
+    it. Approvals, questions (its own or a subagent's), plan prompts, and
+    failures stay in the inbox. */
 export function isThreadWorking(thread: WorkingThreadInput): boolean {
   if (thread.hasPendingApprovals || thread.hasPendingUserInput) return false;
+  if (thread.pendingSubagentRequest != null) return false;
   if (!threadRuntimeIsActive(thread.runtime) && thread.runtime?.status !== "idle") return false;
   // A plan prompt outranks lingering background work: the user has to act on it.
   const run = thread.latestRun;
@@ -30,6 +34,13 @@ export function isThreadWorking(thread: WorkingThreadInput): boolean {
     run.status !== "running" &&
     run.status !== "waiting" &&
     thread.runtime?.activeRunId !== run.runId;
+  // Keep an unseen completion in the inbox even while a monitor remains live.
+  if (runSettled && run.status === "completed" && run.completedAt && thread.lastVisitedAt) {
+    const completedAt = Date.parse(run.completedAt);
+    const visitedAt = Date.parse(thread.lastVisitedAt);
+    if (Number.isFinite(completedAt) && (!Number.isFinite(visitedAt) || completedAt > visitedAt))
+      return false;
+  }
   return !(thread.interactionMode === "plan" && thread.hasActionableProposedPlan && runSettled);
 }
 

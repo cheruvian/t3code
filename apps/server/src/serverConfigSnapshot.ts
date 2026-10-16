@@ -91,6 +91,7 @@ export const loadServerConfig = Effect.gen(function* () {
           shellRevealInFileManager: true,
           shellRevealInFileManagerKind: fileManagerRevealKind,
         }),
+    assistantPreviews: true,
     threadResumeCompletionMarker: true,
     threadSnapshotPagination: true,
     reasoningMessages: true,

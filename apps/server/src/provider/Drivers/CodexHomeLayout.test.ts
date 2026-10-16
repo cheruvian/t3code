@@ -141,6 +141,74 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
     );
 
     it.effect.skipIf(!symlinksSupported)(
+      "replaces a Codex-created local sqlite maintenance lock with the shared lock",
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const sharedHome = yield* makeTempDir("t3code-codex-shared-");
+          const shadowRoot = yield* makeTempDir("t3code-codex-shadow-root-");
+          const shadowHome = path.join(shadowRoot, "shadow");
+          const sharedLock = path.join(sharedHome, ".sqlite-maintenance.lock");
+          const shadowLock = path.join(shadowHome, ".sqlite-maintenance.lock");
+
+          yield* writeTextFile(sharedLock, "");
+          yield* writeTextFile(shadowLock, "");
+
+          const layout = yield* resolveCodexHomeLayout(
+            decodeCodexSettings({
+              homePath: sharedHome,
+              shadowHomePath: shadowHome,
+            }),
+          );
+
+          yield* materializeCodexShadowHome(layout);
+
+          expect(yield* fileSystem.readLink(shadowLock)).toBe(sharedLock);
+        }),
+    );
+
+    it.effect.skipIf(!symlinksSupported)(
+      "shares a maintenance lock created through either profile before the shared home has one",
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const sharedHome = yield* makeTempDir("t3code-codex-shared-");
+          const profileA = yield* makeTempDir("t3code-codex-profile-a-");
+          const profileB = yield* makeTempDir("t3code-codex-profile-b-");
+          const sharedLock = path.join(sharedHome, ".sqlite-maintenance.lock");
+
+          for (const shadowHome of [profileA, profileB]) {
+            yield* materializeCodexShadowHome(
+              yield* resolveCodexHomeLayout(
+                decodeCodexSettings({ homePath: sharedHome, shadowHomePath: shadowHome }),
+              ),
+            );
+            expect(
+              yield* fileSystem.readLink(path.join(shadowHome, ".sqlite-maintenance.lock")),
+            ).toBe(sharedLock);
+          }
+
+          expect(yield* fileSystem.exists(sharedLock)).toBe(false);
+          yield* fileSystem.writeFileString(
+            path.join(profileA, ".sqlite-maintenance.lock"),
+            "owner",
+          );
+          expect(
+            yield* fileSystem.readFileString(path.join(profileB, ".sqlite-maintenance.lock")),
+          ).toBe("owner");
+          const sharedState = yield* fileSystem.stat(sharedLock);
+          for (const shadowHome of [profileA, profileB]) {
+            const profileState = yield* fileSystem.stat(
+              path.join(shadowHome, ".sqlite-maintenance.lock"),
+            );
+            expect(profileState.ino).toEqual(sharedState.ino);
+          }
+        }),
+    );
+
+    it.effect.skipIf(!symlinksSupported)(
       "replaces Codex-created local MCP OAuth locks with the shared lock directory",
       () =>
         Effect.gen(function* () {
@@ -258,7 +326,7 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
           }
           expect(
             yield* fileSystem.readFileString(path.join(shadowHome, ".sqlite-maintenance.lock")),
-          ).toBe("profile lock");
+          ).toBe("shared lock");
           expect(
             yield* fileSystem.readFileString(path.join(shadowHome, "sessions", "thread.jsonl")),
           ).toBe("conversation");
@@ -266,9 +334,13 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
             "profile credentials",
           );
 
+          expect(
+            yield* fileSystem.readLink(path.join(shadowHome, ".sqlite-maintenance.lock")),
+          ).toBe(path.join(sharedHome, ".sqlite-maintenance.lock"));
+
           const freshShadowHome = yield* makeTempDir("t3code-codex-fresh-shadow-");
           yield* materializeCodexShadowHome({ ...layout, effectiveHomePath: freshShadowHome });
-          for (const entry of [...runtimeDirectories, ".sqlite-maintenance.lock"]) {
+          for (const entry of runtimeDirectories) {
             expect(yield* fileSystem.exists(path.join(freshShadowHome, entry))).toBe(false);
           }
         }),

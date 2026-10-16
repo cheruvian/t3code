@@ -17,7 +17,7 @@ import * as Schema from "effect/Schema";
 
 import * as CheckpointService from "./CheckpointService.ts";
 import * as EventSink from "./EventSink.ts";
-import * as IdAllocator from "./IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
 export class CheckpointCaptureExecutionError extends Schema.TaggedError<CheckpointCaptureExecutionError>()(
@@ -67,16 +67,17 @@ export const layer: Layer.Layer<
     }) {
       const { run, rootNode, scope, providerThread, readyCheckpointOrdinals } =
         yield* projections.getCheckpointCaptureContext(input.threadId, input);
-      // A stopped run is already terminal. Its checkpoint is the rollback point
-      // for the message after it, so capture leaves its status alone.
-      const stopped = run?.status === "interrupted" || run?.status === "cancelled";
+      // A terminal run's checkpoint is the rollback point for the next message.
+      // Capture must preserve its outcome, including when the capture fails.
+      const preserveOutcome =
+        run?.status === "interrupted" || run?.status === "cancelled" || run?.status === "failed";
 
       // The effect is at-least-once. A settled run with a checkpoint proves
       // that an earlier execution committed its result.
       if (
         run !== undefined &&
         run.checkpointId !== null &&
-        (run.status === "completed" || stopped)
+        (run.status === "completed" || preserveOutcome)
       ) {
         return;
       }
@@ -89,7 +90,7 @@ export const layer: Layer.Layer<
 
       if (
         run === undefined ||
-        (run.status !== "waiting" && !stopped) ||
+        (run.status !== "waiting" && !preserveOutcome) ||
         rootNode === undefined ||
         scope === undefined ||
         rootNode.checkpointScopeId !== scope.id ||
@@ -206,7 +207,7 @@ export const layer: Layer.Layer<
             nodeId: rootNode.id,
             providerInstanceId: run.providerInstanceId,
             occurredAt: capturedAt,
-            payload: stopped
+            payload: preserveOutcome
               ? { ...runWithoutDelegatedCompletion, checkpointId: checkpoint.id }
               : {
                   ...runWithoutDelegatedCompletion,
@@ -215,7 +216,7 @@ export const layer: Layer.Layer<
                   checkpointId: checkpoint.id,
                 },
           },
-          ...(stopped
+          ...(preserveOutcome
             ? []
             : [
                 {
@@ -252,7 +253,7 @@ export const layer: Layer.Layer<
 );
 
 function makeCheckpointTurnItem(input: {
-  readonly idAllocator: IdAllocator.IdAllocatorV2Shape;
+  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly run: OrchestrationV2Run;
   readonly rootNode: OrchestrationV2ExecutionNode;
   readonly providerThread: OrchestrationV2ProviderThread;

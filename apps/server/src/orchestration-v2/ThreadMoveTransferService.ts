@@ -46,7 +46,7 @@ import {
   base64UrlDecodeUtf8,
 } from "../auth/utils.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
-import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import {
@@ -59,6 +59,7 @@ import {
   exportThreadWorkspace,
   restoreThreadWorkspace,
   fingerprintThreadWorkspace,
+  readThreadMoveRepositoryHead,
 } from "./ThreadMovePortable.ts";
 import {
   hashMoveFile,
@@ -84,7 +85,7 @@ import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as SetupScripts from "../project/ProjectSetupScriptRunner.ts";
-import { readThreadMoveRepositoryHead } from "./ThreadMovePortable.ts";
+
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 
 const Part = Schema.Struct({
@@ -354,7 +355,7 @@ export const layer = Layer.effect(
       const instance = deriveProviderInstanceConfigMap(current)[instanceId];
       if (instance?.driver !== driver)
         return yield* failure("The selected provider is incompatible.");
-      const env = mergeProviderInstanceEnvironment(instance.environment);
+      const env = yield* mergeProviderInstanceEnvironment(instance.environment);
       if (driver === "claudeAgent") {
         const claude = decodeClaudeSettings(instance.config ?? {});
         return {

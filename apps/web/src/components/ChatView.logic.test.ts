@@ -1,42 +1,12 @@
-import { resolveUncertainSendRecovery } from "./ChatView.logic";
-import { shouldMountDiffPanel, shouldMountDiffWorkerPool } from "./ChatView.logic";
-import { findRecordedWorktreeSetup, resolveVisibleWorktreeSetup } from "./ChatView.logic";
 import {
+  resolveUncertainSendRecovery,
+  shouldMountDiffPanel,
+  shouldMountDiffWorkerPool,
+  findRecordedWorktreeSetup,
+  resolveVisibleWorktreeSetup,
   recallCheckoutIsRepo,
   rememberCheckoutIsRepo,
   threadShellHasStarted,
-} from "./ChatView.logic";
-import {
-  ANTIGRAVITY_DEFAULT_MODEL,
-  ProviderDriverKind,
-  type ServerProvider,
-} from "@t3tools/contracts";
-import { deriveProviderInstanceEntries, NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
-import type { RightPanelSurface } from "../rightPanelStore";
-import {
-  CommandId,
-  EnvironmentId,
-  EventId,
-  MessageId,
-  ProjectId,
-  ProviderInstanceId,
-  ThreadId,
-  RunId,
-  TurnItemId,
-  type OrchestrationV2ProjectedTurnItem,
-  type WorktreeSetupSnapshot,
-} from "@t3tools/contracts";
-import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
-import * as DateTime from "effect/DateTime";
-import * as Option from "effect/Option";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { Atom, AsyncResult } from "effect/reactivity";
-import { appAtomRegistry } from "../rpc/atomRegistry";
-import { environmentThreadDetails } from "../state/threads";
-
-import type { Thread, TurnDiffSummary } from "../types";
-import { makeThreadFixture, makeThreadProjectionFixture } from "../test-fixtures";
-import {
   agentControlledBrowserCloseConfirmation,
   ENVIRONMENT_RECONNECT_WARNING_GRACE_MS,
   getAntigravitySendBlockReason,
@@ -88,6 +58,36 @@ import {
   waitForRevertedMessage,
   prepareRevertedMessageAttachments,
 } from "./ChatView.logic";
+
+import {
+  ANTIGRAVITY_DEFAULT_MODEL,
+  ProviderDriverKind,
+  type ServerProvider,
+  CommandId,
+  EnvironmentId,
+  EventId,
+  MessageId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+  RunId,
+  TurnItemId,
+  type OrchestrationV2ProjectedTurnItem,
+  type WorktreeSetupSnapshot,
+} from "@t3tools/contracts";
+import { deriveProviderInstanceEntries, NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
+import type { RightPanelSurface } from "../rightPanelStore";
+
+import type { CodexArtifactTemplate } from "@t3tools/shared/codexArtifactTemplates";
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { Atom, AsyncResult } from "effect/reactivity";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { environmentThreadDetails } from "../state/threads";
+
+import type { Thread, TurnDiffSummary } from "../types";
+import { makeThreadFixture, makeThreadProjectionFixture } from "../test-fixtures";
 
 const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");

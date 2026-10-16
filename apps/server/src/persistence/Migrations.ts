@@ -84,6 +84,11 @@ import Migration0064 from "./Migrations/057_ScheduledTaskWebhooks.ts";
 import Migration0065 from "./Migrations/058_WebhookRelayDeliveries.ts";
 import Migration0066 from "./Migrations/059_McpAppModelContext.ts";
 import Migration0067 from "./Migrations/067_BackgroundThreadLookupIndexes.ts";
+import Migration0068 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
+import Migration0069 from "./Migrations/061_PullRequestReviewGuides.ts";
+import Migration0071 from "./Migrations/071_AssistantMessageShellIndex.ts";
+import Migration0072 from "./Migrations/072_TurnItemWirePayload.ts";
+import Migration0070 from "./Migrations/062_ThreadFailureLookupIndex.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -168,6 +173,11 @@ export const migrationEntries = [
   [65, "WebhookRelayDeliveries", Migration0065],
   [66, "McpAppModelContext", Migration0066],
   [67, "BackgroundThreadLookupIndexes", Migration0067],
+  [68, "ThreadSnapshotWindowIndexes", Migration0068],
+  [69, "PullRequestReviewGuides", Migration0069],
+  [70, "ThreadFailureLookupIndex", Migration0070],
+  [71, "AssistantMessageShellIndex", Migration0071],
+  [72, "TurnItemWirePayload", Migration0072],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -180,6 +190,48 @@ export const makeMigrationLoader = (throughId?: number) =>
         .map(([id, name, migration]) => [`${id}_${name}`, migration]),
     ),
   );
+
+// Fork-owned schema migrations occupy IDs from 41 onward.
+const FIRST_FORK_MIGRATION_ID = 41;
+
+/**
+ * Fail before migrating when the migrator would skip one of V2's own
+ * migrations. It skips every id up to the highest recorded one, whatever name
+ * was recorded, so a database that took a V2 id for another migration would
+ * start without V2's schema and fail on first use. Earlier ids keep the
+ * warning below: databases with a site-local migration there still work.
+ */
+const assertForkMigrationsCanRun = Effect.fn("assertForkMigrationsCanRun")(function* (
+  throughId?: number,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const tables = yield* sql`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
+  `;
+  if (tables.length === 0) return;
+  const recorded = yield* sql<{
+    readonly migration_id: number;
+    readonly name: string;
+  }>`SELECT migration_id, name FROM effect_sql_migrations`;
+  const latestRecordedId = Math.max(0, ...recorded.map((row) => row.migration_id));
+  const recordedNames = new Map(recorded.map((row) => [row.migration_id, row.name]));
+  const skipped = migrationEntries.flatMap(([id, name]) => {
+    if (
+      id < FIRST_FORK_MIGRATION_ID ||
+      id > latestRecordedId ||
+      (throughId !== undefined && id > throughId)
+    )
+      return [];
+    const recordedName = recordedNames.get(id);
+    if (recordedName === name) return [];
+    return [`${id}_${name} (recorded: ${recordedName ?? "nothing"})`];
+  });
+  if (skipped.length === 0) return;
+  return yield* new Migrator.MigrationError({
+    kind: "BadState",
+    message: `This database's migration history would skip required schema migrations: ${skipped.join(", ")}. The migrator skips every id up to the highest recorded id (${latestRecordedId}), regardless of name. It was probably written by a different build. Start the build that wrote it, or report this migration history so an upgrade path can be added.`,
+  });
+});
 
 /**
  * Migrator run function - no schema dumping needed
@@ -207,6 +259,8 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
   const reconciled = yield* reconcileV2PreviewMigration(migrationEntries);
+  if (toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_FORK_MIGRATION_ID)
+    yield* assertForkMigrationsCanRun(toMigrationInclusive);
   const executedMigrations = [
     ...reconciled,
     ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),

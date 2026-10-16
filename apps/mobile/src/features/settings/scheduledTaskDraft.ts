@@ -1,14 +1,14 @@
-import type {
-  ModelSelection,
-  ServerConfig,
-  ProjectId,
-  RuntimeMode,
-  ScheduledTask,
-  ScheduledTaskUpsertSchedule,
-  ScheduledTaskWebhookSignature,
+import {
+  type ModelSelection,
+  type ServerConfig,
+  type ProjectId,
+  type RuntimeMode,
+  type ScheduledTask,
+  type ScheduledTaskUpsertSchedule,
+  type ScheduledTaskWebhookSignature,
+  DEFAULT_SERVER_SETTINGS,
 } from "@t3tools/contracts";
 
-import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
 import { parseMaxDeliveryAge } from "@t3tools/client-runtime/scheduled-task-webhook";
 import {
   resolveProjectSettings,
@@ -28,13 +28,18 @@ export function scheduledTaskDefaultModel(
   const configured = resolveProjectSettings(settings, project?.id ?? null, project).settings
     .defaultModelSelection;
   const projectDefaultSelection =
-    resolveDefaultableModelSelection(config, configured) ??
-    resolveDefaultableModelSelection(config, settings.defaultModelSelection);
+    resolveDefaultableModelSelection(config, configured, project?.id ?? null) ??
+    resolveDefaultableModelSelection(config, settings.defaultModelSelection, project?.id ?? null);
   return resolveNewTaskModelSelection({
     draftSelection: null,
     projectDefaultSelection,
     stickySelection: null,
-    modelOptions: buildModelOptions(config, projectDefaultSelection),
+    modelOptions: buildModelOptions(
+      config,
+      projectDefaultSelection,
+      undefined,
+      project?.id ?? null,
+    ),
   });
 }
 

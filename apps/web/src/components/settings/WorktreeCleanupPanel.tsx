@@ -1,6 +1,10 @@
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { presentThreadShell } from "@t3tools/client-runtime/state/models";
+import {
+  presentThreadShell,
+  threadShellIsIdleForWorktreeCleanup,
+} from "@t3tools/client-runtime/state/models";
+import { getWorktreeCleanupOwners } from "@t3tools/shared/worktreeOwnership";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -53,7 +57,18 @@ function WorktreeRow({ group, removed }: { group: WorktreeGroup; removed: boolea
           input: { cwd: group.path },
         }),
   );
-  const primary = group.threads[0]!;
+  const owners = useMemo(() => {
+    for (const thread of group.threads) {
+      const owners = getWorktreeCleanupOwners(
+        group.threads,
+        thread.id,
+        threadShellIsIdleForWorktreeCleanup,
+      );
+      if (owners.length === 1) return owners;
+    }
+    return group.threads;
+  }, [group.threads]);
+  const primary = owners[0]!;
   const files = status.data?.workingTree.files ?? [];
   const dirty = status.data?.hasWorkingTreeChanges === true;
 
@@ -70,9 +85,9 @@ function WorktreeRow({ group, removed }: { group: WorktreeGroup; removed: boolea
             {removed
               ? "Worktree removed · conversations kept"
               : dirty
-                ? `${files.length} changed ${files.length === 1 ? "file" : "files"} · kept${group.threads.length > 1 ? ` · shared by ${group.threads.length} conversations` : ""}`
-                : group.threads.length > 1
-                  ? `Shared by ${group.threads.length} conversations · kept`
+                ? `${files.length} changed ${files.length === 1 ? "file" : "files"} · kept${owners.length > 1 ? ` · shared by ${owners.length} conversations` : ""}`
+                : owners.length > 1
+                  ? `Shared by ${owners.length} conversations · kept`
                   : !nearViewport || status.isPending
                     ? "Checking local changes…"
                     : status.error

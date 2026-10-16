@@ -1,17 +1,17 @@
-import type {
-  ProjectCloneSnapshot,
-  ProjectCloneStage,
-  ProjectCloneStartInput,
-  ProjectCloneStartResult,
-  ProjectId,
-  SourceControlRepositoryInfo,
-} from "@t3tools/contracts";
 import {
+  SourceControlProviderKind,
+  type ProjectCloneSnapshot,
+  type ProjectCloneStage,
+  type ProjectCloneStartInput,
+  type ProjectCloneStartResult,
+  type ProjectId,
+  type SourceControlRepositoryInfo,
   OrchestrationDispatchCommandError,
   PROJECT_CLONE_DETAIL_MAX_LENGTH,
   PROJECT_CLONE_ERROR_MAX_LENGTH,
   SourceControlRepositoryError,
 } from "@t3tools/contracts";
+
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -301,7 +301,7 @@ export const make = Effect.gen(function* () {
       if (!claimed) {
         return yield* new SourceControlRepositoryError({
           operation: "cloneRepository",
-          provider: input.provider ?? "unknown",
+          provider: input.provider ?? SourceControlProviderKind.make("unknown"),
           detail: "A clone into this destination is already in progress.",
         });
       }

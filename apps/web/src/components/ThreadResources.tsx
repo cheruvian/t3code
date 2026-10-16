@@ -108,6 +108,7 @@ export function ThreadResources({
                       threadId,
                       script: lock.script,
                       action: "release",
+                      expectedOperationId: lock.operationId,
                     },
                   })
                 }
@@ -125,6 +126,7 @@ export function ThreadResources({
                       threadId,
                       script: lock.script,
                       action: "force-release",
+                      expectedOperationId: lock.operationId,
                     },
                   })
                 }

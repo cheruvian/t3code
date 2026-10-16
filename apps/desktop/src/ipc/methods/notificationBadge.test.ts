@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import { beforeEach, expect, vi } from "vite-plus/test";
 import { it } from "@effect/vitest";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 const native = vi.hoisted(() => ({
   setBadgeCount: vi.fn(),
@@ -118,11 +118,24 @@ it.effect("validates IPC and clears on native focus, quit, and disposal", () =>
         expect(native.webContents.send).toHaveBeenCalledTimes(2);
         native.getFocusedWindow.mockReturnValue(null);
         yield* Effect.promise(() => Promise.resolve(handler(event, badge)));
+        yield* Effect.promise(() =>
+          Promise.resolve(handler(event, { ...badge, persistUntilVisited: true })),
+        );
+        native.getFocusedWindow.mockReturnValue({});
+        native.listeners.get("browser-window-focus")!();
+        expect(native.setBadgeCount).toHaveBeenLastCalledWith(2);
+        yield* Effect.promise(() =>
+          Promise.resolve(handler(event, { count: 0, image: null, persistUntilVisited: true })),
+        );
+        expect(native.setBadgeCount).toHaveBeenLastCalledWith(0);
+        yield* Effect.promise(() =>
+          Promise.resolve(handler(event, { ...badge, persistUntilVisited: true })),
+        );
         native.listeners.get("before-quit")!();
         expect(native.setBadgeCount).toHaveBeenLastCalledWith(0);
       }),
     ).pipe(
-      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provideService(HostProcess.Platform, "linux"),
       Effect.provide([
         ElectronApp.layer,
         DesktopIpc.layer({
@@ -142,3 +155,11 @@ it.effect("validates IPC and clears on native focus, quit, and disposal", () =>
     expect(handlers.size).toBe(0);
   }),
 );
+
+it("keeps unread completion counts while focused until the renderer acknowledges visits", () => {
+  native.getFocusedWindow.mockReturnValue({});
+  applyNotificationBadge("darwin", { ...badge, persistUntilVisited: true });
+  expect(native.setBadgeCount).toHaveBeenLastCalledWith(2);
+  applyNotificationBadge("darwin", { count: 0, image: null, persistUntilVisited: true });
+  expect(native.setBadgeCount).toHaveBeenLastCalledWith(0);
+});

@@ -1,3 +1,4 @@
+import { withAssistantPreviews } from "./assistantPreviews.ts";
 import type { OrchestrationV2ThreadProjection, ScopedThreadRef } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -37,12 +38,22 @@ export function createEnvironmentThreadDetailAtoms<E>(
     ).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-state-value:${key}`));
   });
 
+  const viewProjectionAtomFamily = Atom.family((key: string) =>
+    Atom.make((get) => {
+      const state = get(threadStateValueAtomFamily(key));
+      const projection = Option.getOrNull(state.data);
+      return projection === null
+        ? null
+        : withAssistantPreviews(projection, state.assistantPreviews);
+    }).pipe(Atom.setIdleTTL(0)),
+  );
+
   const threadAtomFamily = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
     let previousProjection: OrchestrationV2ThreadProjection | null = null;
     let previousValue: EnvironmentThread | null = null;
     return Atom.make((get) => {
-      const projection = Option.getOrNull(get(threadStateValueAtomFamily(key)).data);
+      const projection = get(viewProjectionAtomFamily(key));
       if (projection === previousProjection) return previousValue;
       previousProjection = projection;
       previousValue = projection === null ? null : { environmentId: ref.environmentId, projection };
@@ -53,7 +64,7 @@ export function createEnvironmentThreadDetailAtoms<E>(
   const visibleTurnItemsAtomFamily = Atom.family((key: string) => {
     const projectQuestionHistory = createQuestionHistoryProjector();
     return Atom.make((get): OrchestrationV2ThreadProjection["visibleTurnItems"] => {
-      const projection = Option.getOrNull(get(threadStateValueAtomFamily(key)).data);
+      const projection = get(viewProjectionAtomFamily(key));
       return projection === null ? EMPTY_VISIBLE_TURN_ITEMS : projectQuestionHistory(projection);
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-visible-turn-items:${key}`));
   });

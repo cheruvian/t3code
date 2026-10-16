@@ -1,24 +1,24 @@
-import { AuthSettingsWriteScope } from "@t3tools/contracts";
-import { useEnvironmentsWithScope } from "../../state/session";
 import {
+  AuthSettingsWriteScope,
   requiredScopesForServerSettingsPatch,
   EnvironmentAuthorizationError,
-} from "@t3tools/contracts";
-import { readEnvironmentScope } from "../../state/session";
-import * as Cause from "effect/Cause";
-import { AsyncResult } from "effect/reactivity";
-import {
   DEFAULT_SERVER_SETTINGS,
   type ProjectScopedServerSettingKey,
   type ServerSettings,
   type UnifiedSettings,
 } from "@t3tools/contracts";
+import { useEnvironmentsWithScope, readEnvironmentScope } from "../../state/session";
+
+import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/reactivity";
+
 import { useCallback, useMemo } from "react";
 
 import {
   mergeEnvironmentSettings,
   persistClientSettingsPatch,
   useClientSettings,
+  useMigrateModelPreferences,
 } from "../../hooks/useSettings";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -42,6 +42,7 @@ export function useScopedSettings<T = UnifiedSettings>(
   const { target } = useSettingsScope();
   const clientSettings = useClientSettings();
   const serverSettings = target?.settings ?? DEFAULT_SERVER_SETTINGS;
+  useMigrateModelPreferences(target?.environmentId ?? null, target?.settings ?? null);
   const settings = useMemo(
     () => mergeEnvironmentSettings(serverSettings, clientSettings),
     [clientSettings, serverSettings],
@@ -83,20 +84,27 @@ function useRunScopedPlan() {
               Cause.fail(
                 new EnvironmentAuthorizationError({
                   requiredScope: missing,
-                  message: "This connection cannot change these settings.",
+                  message: "This connection lacks permission to change these settings.",
                 }),
               ),
             );
           return persistServer(request);
         },
         persistClientSettingsPatch,
-      ).then(({ failedEnvironments, savedEnvironmentCount }) => {
+      ).then(({ failedEnvironments, savedEnvironments, savedEnvironmentCount }) => {
         if (failedEnvironments.length === 0) return;
         toastManager.add({
           type: "error",
           title:
             savedEnvironmentCount > 0 ? "Setting saved on some environments" : "Setting not saved",
-          description: `Could not update ${failedEnvironments.map((environment) => environment.label).join(", ")}.${savedEnvironmentCount > 0 ? " The other selected environments saved the change." : ""}`,
+          description: [
+            ...failedEnvironments.map(
+              ({ label, message }) => `Could not save on ${label}: ${message}`,
+            ),
+            ...(savedEnvironmentCount > 0
+              ? [`Saved on ${savedEnvironments.map(({ label }) => label).join(", ")}.`]
+              : []),
+          ].join("\n"),
         });
       });
     },

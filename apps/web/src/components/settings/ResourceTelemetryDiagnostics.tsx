@@ -1,5 +1,19 @@
 import { ProcessSignalActions } from "./ProcessSignalActions";
-import { AuthEnvironmentMaintainScope } from "@t3tools/contracts";
+import {
+  AuthEnvironmentMaintainScope,
+  type BackgroundBooleanState,
+  type EnvironmentId,
+  type ResourceAttributionEntry,
+  type ResourceTelemetryAggregate,
+  type ResourceTelemetryHistoryBucket,
+  type ResourceTelemetryIoSemantics,
+  type ResourceTelemetryProcess,
+  type ResourceTelemetryProcessCategory,
+  type ResourceTelemetryProcessSummary,
+  type ResourceTelemetrySourceHealth,
+  type ResourceTelemetrySourceStatus,
+  type ServerProcessSignal,
+} from "@t3tools/contracts";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import {
   ActivityIcon,
@@ -12,20 +26,7 @@ import {
   MemoryStickIcon,
 } from "lucide-react";
 import { ChevronDown, ChevronRight } from "lucide";
-import type {
-  BackgroundBooleanState,
-  EnvironmentId,
-  ResourceAttributionEntry,
-  ResourceTelemetryAggregate,
-  ResourceTelemetryHistoryBucket,
-  ResourceTelemetryIoSemantics,
-  ResourceTelemetryProcess,
-  ResourceTelemetryProcessCategory,
-  ResourceTelemetryProcessSummary,
-  ResourceTelemetrySourceHealth,
-  ResourceTelemetrySourceStatus,
-  ServerProcessSignal,
-} from "@t3tools/contracts";
+
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -39,6 +40,7 @@ import {
   useResourceTelemetryHistory,
 } from "../../lib/resourceTelemetryState";
 import { cn } from "../../lib/utils";
+import { formatBytes } from "../../lib/formatBytes";
 import { ensureLocalApi } from "../../localApi";
 import { serverEnvironment } from "../../state/server";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
@@ -64,18 +66,6 @@ const HISTORY_WINDOWS = [
   { label: "30m", windowMs: 30 * 60_000, bucketMs: 60_000 },
   { label: "1h", windowMs: 60 * 60_000, bucketMs: 2 * 60_000 },
 ] as const;
-
-function formatBytes(value: number): string {
-  if (value < 1_024) return `${Math.round(value)} B`;
-  const units = ["KB", "MB", "GB", "TB"] as const;
-  let next = value;
-  let unitIndex = -1;
-  do {
-    next /= 1_024;
-    unitIndex += 1;
-  } while (next >= 1_024 && unitIndex < units.length - 1);
-  return `${next.toFixed(next >= 100 ? 0 : next >= 10 ? 1 : 2)} ${units[unitIndex]}`;
-}
 
 function formatRate(value: number): string {
   return `${formatBytes(value)}/s`;

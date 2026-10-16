@@ -1,3 +1,4 @@
+import { SourceControlProviderKind, SourceControlProviderError } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -5,7 +6,7 @@ import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
-import { SourceControlProviderError } from "@t3tools/contracts";
+
 import { resolveThreadTitleLinks } from "./ThreadTitleLinks.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 
@@ -87,7 +88,7 @@ it.effect("keeps lookup failure out of generation and skips unlinked messages", 
         resolveLink: () =>
           Effect.fail(
             new SourceControlProviderError({
-              provider: "unknown",
+              provider: SourceControlProviderKind.make("unknown"),
               operation: "resolveLink",
               cwd: "/tmp",
               detail: "Unavailable",

@@ -25,6 +25,7 @@ export function brandTitleOffset(): number {
 export function CompactBrandTitle(
   props: {
     readonly allowFontScaling?: boolean;
+    readonly accessibilityLabel?: string;
   } = {},
 ) {
   const stageLabel = resolveMobileStageLabel(Constants.expoConfig?.extra?.appVariant);
@@ -33,7 +34,10 @@ export function CompactBrandTitle(
 
   return (
     <View
-      accessible={false}
+      aria-level={1}
+      accessibilityLabel={props.accessibilityLabel ?? "T3 Code, Threads"}
+      accessible
+      role="heading"
       className="flex-row items-center gap-1.5"
       style={[{ marginLeft: titleOffset }, Platform.OS === "android" && { gap: 5.25 * scale }]}
     >

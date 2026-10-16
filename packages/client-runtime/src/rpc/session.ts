@@ -26,15 +26,14 @@ import * as Socket from "effect/socket/Socket";
 
 import { makeWsRpcProtocolClient, type WsRpcProtocolClient } from "./protocol.ts";
 import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
-import type {
-  ConnectionAttemptError,
-  ConnectionTransientError,
-  PreparedConnection,
-} from "../connection/model.ts";
 import {
+  type ConnectionAttemptError,
+  type ConnectionTransientError,
+  type PreparedConnection,
   ConnectionBlockedError,
   ConnectionTransientError as ConnectionTransientErrorClass,
 } from "../connection/model.ts";
+
 import {
   applyServerConfigProjection,
   type ServerConfigProjection,
@@ -172,16 +171,11 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     const timing = yield* (yield* ConnectionTiming).get;
     const connected = yield* Deferred.make<void>();
     const disconnected = yield* Deferred.make<never, ConnectionTransientError>();
-    // Set when the socket closes because pongs stopped, so the failure says so
+    // Set when the socket closes because the server stopped answering, so the failure says so
     // instead of looking like the server closed the connection.
     const pingTimedOut = yield* Ref.make(false);
     const hooks = RpcClient.ConnectionHooks.of({
-      missedPongLimit:
-        timing.heartbeatSeconds === 0
-          ? options.missedPongLimit
-          : Math.ceil(timing.heartbeatSeconds / 5),
       onConnect: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
-      onPingTimeout: Ref.set(pingTimedOut, true),
       onDisconnect: Effect.all([Deferred.isDone(connected), Ref.get(pingTimedOut)]).pipe(
         Effect.flatMap(([wasConnected, timedOut]) =>
           Deferred.fail(
@@ -207,8 +201,13 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     const layerProtocol = Layer.effect(
       RpcClient.Protocol,
       RpcClient.makeProtocolSocket({
+        pingTimeout:
+          timing.heartbeatSeconds === 0
+            ? (options.missedPongLimit ?? 3) * 5_000
+            : timing.heartbeatSeconds * 1_000,
         retryTransientErrors: false,
         retryPolicy: Schedule.recurs(0),
+        onPingTimeout: Ref.set(pingTimedOut, true),
       }),
     ).pipe(
       Layer.provide(

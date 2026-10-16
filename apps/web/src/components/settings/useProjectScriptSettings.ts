@@ -1,4 +1,12 @@
-import { AuthSettingsWriteScope, EnvironmentAuthorizationError } from "@t3tools/contracts";
+import {
+  AuthSettingsWriteScope,
+  EnvironmentAuthorizationError,
+  type EnvironmentId,
+  type ProjectId,
+  type ProjectScript,
+  type ResolvedKeybindingsConfig,
+  type ServerSettings,
+} from "@t3tools/contracts";
 import { readEnvironmentScope } from "../../state/session";
 import {
   isAtomCommandInterrupted,
@@ -6,20 +14,13 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import {
-  type EnvironmentId,
-  type ProjectId,
-  type ProjectScript,
-  type ResolvedKeybindingsConfig,
-  type ServerSettings,
-} from "@t3tools/contracts";
+
 import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
 import { clearProjectSettingsOverrides } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { useRef, useState } from "react";
 
-import { isElectron } from "../../env";
 import {
   decodeProjectScriptKeybindingRule,
   keybindingValueForCommand,
@@ -50,7 +51,7 @@ function reportScriptFailure(result: AtomCommandResult<unknown, unknown>) {
 
 /**
  * Edits the action list on every target: the environment default when there is
- * no project, else that project's override entry. Shortcuts follow on desktop.
+ * no project, else that project's override entry, then saves changed shortcuts.
  */
 export function useProjectScriptSettings(
   targets: readonly {
@@ -129,7 +130,6 @@ export function useProjectScriptSettings(
           },
         });
         if (result._tag === "Failure") return reportScriptFailure(result);
-        if (!isElectron) continue;
         const changedIds = scriptId
           ? [scriptId]
           : current

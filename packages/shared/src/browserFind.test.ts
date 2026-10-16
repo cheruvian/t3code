@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, expect, it, vi } from "vite-plus/test";
-import { OPEN_BROWSER_FIND_SCRIPT } from "./browserFind";
+import { OPEN_BROWSER_FIND_SCRIPT } from "./browserFind.ts";
 
 const find = vi.fn(() => true);
 beforeEach(() => {

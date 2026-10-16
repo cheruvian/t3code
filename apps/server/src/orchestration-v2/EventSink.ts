@@ -1,7 +1,10 @@
+import { modelSelectionsEqual } from "@t3tools/shared/model";
 import {
   CommandId,
+  EventId,
   type OrchestrationV2Run,
   OrchestrationV2DomainEvent,
+  type OrchestrationV2ProviderThread,
   OrchestrationV2StoredEvent,
   ProviderThreadId,
   RunAttemptId,
@@ -75,18 +78,18 @@ export type EventSinkV2Error = typeof EventSinkV2Error.Type;
  */
 export interface EventSinkV2Shape {
   readonly write: (input: {
-    readonly guardPendingUserInputCancellations?: boolean;
+    readonly guardPendingUserInputSettlements?: { readonly reopen: boolean };
     readonly commandId?: CommandId;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
   }) => Effect.Effect<ReadonlyArray<OrchestrationV2StoredEvent>, EventSinkV2Error>;
   readonly writeWithEffects: (input: {
-    readonly guardPendingUserInputCancellations?: boolean;
+    readonly guardPendingUserInputSettlements?: { readonly reopen: boolean };
     readonly commandId?: CommandId;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly effects: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
   }) => Effect.Effect<ReadonlyArray<OrchestrationV2StoredEvent>, EventSinkV2Error>;
   readonly writeIfRunCurrent: (input: {
-    readonly guardPendingUserInputCancellations?: boolean;
+    readonly guardPendingUserInputSettlements?: { readonly reopen: boolean };
     readonly commandId?: CommandId;
     readonly threadId: ThreadId;
     readonly runId: RunId;
@@ -108,12 +111,28 @@ export interface EventSinkV2Shape {
    * a newer attempt that already claimed the thread.
    */
   readonly writeIfProviderThreadOwner: (input: {
-    readonly guardPendingUserInputCancellations?: boolean;
+    readonly guardPendingUserInputSettlements?: { readonly reopen: boolean };
     readonly commandId?: CommandId;
     readonly providerThreadId: ProviderThreadId;
     readonly runId: RunId;
     readonly activeAttemptId: RunAttemptId;
     readonly expectedLastRunOrdinal: number;
+    readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
+  }) => Effect.Effect<
+    {
+      readonly committed: boolean;
+      readonly storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>;
+    },
+    EventSinkV2Error
+  >;
+  /**
+   * Atomically commit only while the stored provider thread still equals
+   * `expected`, the row its writer read, so a read-modify-write of the row
+   * cannot overwrite an update published in between. The whole row is
+   * compared because not every writer moves `updatedAt`.
+   */
+  readonly writeIfProviderThreadUnchanged: (input: {
+    readonly expected: OrchestrationV2ProviderThread;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
   }) => Effect.Effect<
     {
@@ -269,7 +288,10 @@ const layerBase: Layer.Layer<
 
     // A user can answer after terminal normalization reads the pending request.
     // Recheck inside the write transaction so stale cleanup cannot erase answers.
-    const guardUserInputCancellations = (events: ReadonlyArray<OrchestrationV2DomainEvent>) =>
+    const guardUserInputSettlements = (
+      events: ReadonlyArray<OrchestrationV2DomainEvent>,
+      options: { readonly reopen: boolean },
+    ) =>
       Effect.gen(function* () {
         const staleRequests = new Set<RuntimeRequestId>();
         const staleNodes = new Set<NodeId>();
@@ -277,7 +299,12 @@ const layerBase: Layer.Layer<
           if (
             event.type !== "runtime-request.updated" ||
             event.payload.kind !== "user_input" ||
-            event.payload.status !== "cancelled"
+            (event.payload.status !== "cancelled" &&
+              !(
+                options.reopen &&
+                event.payload.status === "pending" &&
+                event.payload.responseCapability.type === "message"
+              ))
           )
             continue;
           const current = yield* projectionStore.getRuntimeRequest(
@@ -297,18 +324,65 @@ const layerBase: Layer.Layer<
         return events.filter((event) => {
           switch (event.type) {
             case "runtime-request.updated":
-              return event.payload.status !== "cancelled" || !staleRequests.has(event.payload.id);
+              return !staleRequests.has(event.payload.id);
             case "node.updated":
-              return event.payload.status !== "cancelled" || !staleNodes.has(event.payload.id);
+              return !staleNodes.has(event.payload.id);
             case "turn-item.updated":
               return (
                 event.payload.type !== "user_input_request" ||
-                event.payload.status !== "cancelled" ||
                 !staleRequests.has(event.payload.requestId)
               );
             default:
               return true;
           }
+        });
+      });
+
+    // A turn or session can end after failure planning reads it. Check in
+    // the commit transaction so the reopened question has a usable channel.
+    const reconcileReopenedQuestions = (events: ReadonlyArray<OrchestrationV2DomainEvent>) =>
+      Effect.gen(function* () {
+        const messageRequests = new Set<RuntimeRequestId>();
+        for (const event of events) {
+          if (
+            event.type !== "runtime-request.updated" ||
+            event.payload.kind !== "user_input" ||
+            event.payload.status !== "pending" ||
+            event.payload.responseCapability.type !== "live"
+          )
+            continue;
+          const request = event.payload;
+          const live = yield* sql<{ readonly live: number }>`
+            SELECT 1 AS live
+            FROM orchestration_v2_projection_provider_turns AS turn
+            JOIN orchestration_v2_projection_provider_threads AS thread
+              ON thread.provider_thread_id = turn.provider_thread_id
+            JOIN orchestration_v2_projection_provider_sessions AS session
+              ON session.provider_session_id = thread.provider_session_id
+            JOIN orchestration_v2_projection_provider_session_bindings AS binding
+              ON binding.provider_session_id = session.provider_session_id
+              AND binding.thread_id = turn.thread_id
+            WHERE turn.thread_id = ${event.threadId}
+              AND turn.provider_turn_id = ${request.providerTurnId}
+              AND session.provider_session_id = ${event.payload.responseCapability.providerSessionId}
+              AND turn.status = 'running' AND session.status = 'ready'
+            LIMIT 1
+          `;
+          if (live.length === 0) messageRequests.add(request.id);
+        }
+        return events.map((event): OrchestrationV2DomainEvent => {
+          if (event.type === "runtime-request.updated" && messageRequests.has(event.payload.id))
+            return {
+              ...event,
+              payload: { ...event.payload, responseCapability: { type: "message" } },
+            };
+          if (
+            event.type === "turn-item.updated" &&
+            event.payload.type === "user_input_request" &&
+            messageRequests.has(event.payload.requestId)
+          )
+            return { ...event, payload: { ...event.payload, responseMode: "message" } };
+          return event;
         });
       });
 
@@ -377,8 +451,11 @@ const layerBase: Layer.Layer<
       return yield* commitThenPublish(
         Effect.gen(function* () {
           const normalized = yield* normalizeEvents(
-            input.guardPendingUserInputCancellations === true
-              ? yield* guardUserInputCancellations(input.events)
+            input.guardPendingUserInputSettlements !== undefined
+              ? yield* guardUserInputSettlements(
+                  input.events,
+                  input.guardPendingUserInputSettlements,
+                )
               : input.events,
           );
           const committed = yield* eventStore.append({
@@ -388,7 +465,12 @@ const layerBase: Layer.Layer<
           yield* applyStoredEvents(committed);
           yield* effectOutbox.enqueue(input.effects);
           return committed;
-        }),
+        }).pipe(
+          // Every streamed agent event is a write, so its statements would
+          // dominate the trace file. This span and its sql.transaction span
+          // still time each write, including the commit.
+          Effect.withTracerEnabled(false),
+        ),
         (storedEvents) =>
           Effect.gen(function* () {
             if (input.effects.length > 0) {
@@ -434,10 +516,53 @@ const layerBase: Layer.Layer<
               };
             }
 
+            let events = input.events;
+            const failedStart = events.find(
+              (event) =>
+                event.type === "run.updated" &&
+                event.payload.id === input.runId &&
+                event.payload.status === "failed" &&
+                event.payload.startedAt === null,
+            );
+            if (
+              failedStart?.type === "run.updated" &&
+              failedStart.payload.selectionBeforeStart !== undefined
+            ) {
+              const failedRun = failedStart.payload;
+              const source = failedStart.payload.selectionBeforeStart;
+              const thread = yield* projectionStore.getThread(input.threadId);
+              // Read and check the current selection inside the same transaction as
+              // failure settlement. Unrelated metadata and newer choices survive.
+              if (
+                thread.activeProviderThreadId === failedRun.providerThreadId &&
+                thread.providerInstanceId === failedRun.providerInstanceId &&
+                modelSelectionsEqual(thread.modelSelection, failedRun.modelSelection)
+              ) {
+                events = [
+                  ...events,
+                  {
+                    id: EventId.make(`${failedStart.id}:restore-selection`),
+                    type: "thread.provider-switched",
+                    threadId: input.threadId,
+                    runId: input.runId,
+                    providerInstanceId: source.modelSelection.instanceId,
+                    occurredAt: failedStart.occurredAt,
+                    payload: {
+                      ...thread,
+                      modelSelection: source.modelSelection,
+                      providerInstanceId: source.modelSelection.instanceId,
+                      activeProviderThreadId: source.activeProviderThreadId,
+                      updatedAt: failedStart.occurredAt,
+                    },
+                  },
+                ];
+              }
+            }
+
             const normalized = yield* normalizeEvents(
-              input.guardPendingUserInputCancellations === true
-                ? yield* guardUserInputCancellations(input.events)
-                : input.events,
+              input.guardPendingUserInputSettlements !== undefined
+                ? yield* guardUserInputSettlements(events, input.guardPendingUserInputSettlements)
+                : events,
             );
             const storedEvents = yield* eventStore.append({
               ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
@@ -500,14 +625,50 @@ const layerBase: Layer.Layer<
           }
 
           const normalized = yield* normalizeEvents(
-            input.guardPendingUserInputCancellations === true
-              ? yield* guardUserInputCancellations(input.events)
+            input.guardPendingUserInputSettlements !== undefined
+              ? yield* guardUserInputSettlements(
+                  input.events,
+                  input.guardPendingUserInputSettlements,
+                )
               : input.events,
           );
           const storedEvents = yield* eventStore.append({
             ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
             events: normalized,
           });
+          yield* applyStoredEvents(storedEvents);
+          return { committed: true as const, storedEvents };
+        }),
+        (result) => (result.committed ? publishStoredEvents(result.storedEvents) : Effect.void),
+      );
+    });
+
+    const writeIfProviderThreadUnchangedEffect = Effect.fn(
+      "orchestrationV2.EventSink.writeIfProviderThreadUnchanged",
+    )(function* (input: Parameters<EventSinkV2Shape["writeIfProviderThreadUnchanged"]>[0]) {
+      yield* Effect.annotateCurrentSpan({
+        "orchestration_v2.event_count": input.events.length,
+        "orchestration_v2.provider_thread_id": input.expected.id,
+      });
+      const expectedJson = yield* ProjectionStore.encodeProviderThreadPayload(input.expected);
+
+      return yield* commitThenPublish(
+        Effect.gen(function* () {
+          const rows = yield* sql<{ readonly payload_json: string }>`
+            SELECT payload_json
+            FROM orchestration_v2_projection_provider_threads
+            WHERE provider_thread_id = ${input.expected.id}
+            LIMIT 1
+          `;
+          if (rows[0]?.payload_json !== expectedJson) {
+            return {
+              committed: false as const,
+              storedEvents: [] as ReadonlyArray<OrchestrationV2StoredEvent>,
+            };
+          }
+
+          const normalized = yield* normalizeEvents(input.events);
+          const storedEvents = yield* eventStore.append({ events: normalized });
           yield* applyStoredEvents(storedEvents);
           return { committed: true as const, storedEvents };
         }),
@@ -566,7 +727,11 @@ const layerBase: Layer.Layer<
             });
           }
 
-          const normalized = yield* normalizeEvents(input.events);
+          const normalized = yield* normalizeEvents(
+            input.commandType === "runtime-request.response-failed"
+              ? yield* reconcileReopenedQuestions(input.events)
+              : input.events,
+          );
           const storedEvents = yield* eventStore.append({
             commandId: input.commandId,
             events: normalized,
@@ -837,6 +1002,12 @@ const layerBase: Layer.Layer<
                 ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
                 cause,
               }),
+          ),
+        ),
+      writeIfProviderThreadUnchanged: (input) =>
+        writeIfProviderThreadUnchangedEffect(input).pipe(
+          Effect.mapError(
+            (cause) => new EventSinkWriteError({ eventCount: input.events.length, cause }),
           ),
         ),
       commitCommand: (input) =>

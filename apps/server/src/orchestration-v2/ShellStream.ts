@@ -1,25 +1,26 @@
-import type {
-  ApplicationStoredEvent,
-  OrchestrationProjectShell,
-  OrchestrationV2ArchivedShellStreamItem,
-  OrchestrationV2ShellSnapshot,
-  OrchestrationV2ThreadShell,
-  OrchestrationV2ThreadShellSnapshot,
-  OrchestrationV2ShellStreamItem,
-  OrchestrationV2StoredEvent,
-  PerformanceSettings,
-} from "@t3tools/contracts";
 import {
+  type ApplicationStoredEvent,
+  type OrchestrationProjectShell,
+  type OrchestrationV2ArchivedShellStreamItem,
+  type OrchestrationV2ShellSnapshot,
+  type OrchestrationV2ThreadShell,
+  type OrchestrationV2ThreadShellSnapshot,
+  type OrchestrationV2ShellStreamItem,
+  type OrchestrationV2StoredEvent,
+  type PerformanceSettings,
   DEFAULT_PERFORMANCE_SETTINGS,
   OrchestrationProjectShell as ProjectShellSchema,
   OrchestrationV2ThreadShell as ThreadShellSchema,
 } from "@t3tools/contracts";
+
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Schedule from "effect/Schedule";
 import * as Sink from "effect/Sink";
 import * as Duration from "effect/Duration";
+import type * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
 /** Build the regular navigation shell without duplicating the archive dataset. */
@@ -36,6 +37,36 @@ export function buildActiveShellSnapshot(input: {
     archivedThreads: [],
   };
 }
+
+/**
+ * Loads the thread shell, projects and sequence for the shell snapshots.
+ * One transaction covers the reads so they agree; the threads are decoded
+ * after it commits, because the server shares one SQLite connection and
+ * decoding a large shell takes longer than reading it.
+ */
+export const loadShellSnapshotParts = <E1, E2, E3, E4>(input: {
+  readonly sql: SqlClient.SqlClient;
+  readonly readThreads: Effect.Effect<Effect.Effect<OrchestrationV2ThreadShellSnapshot, E2>, E1>;
+  readonly listProjects: Effect.Effect<ReadonlyArray<OrchestrationProjectShell>, E3>;
+  readonly latestSequence: Effect.Effect<number, E4>;
+}) =>
+  Effect.gen(function* () {
+    // Read on the reader worker, off the event loop and the writer.
+    const read = yield* input.sql
+      .withTransaction(
+        Effect.all({
+          decodeThreads: input.readThreads,
+          projects: input.listProjects,
+          snapshotSequence: input.latestSequence,
+        }),
+      )
+      .pipe(NodeSqliteClient.readOnly);
+    return {
+      projects: read.projects,
+      threads: yield* read.decodeThreads,
+      snapshotSequence: read.snapshotSequence,
+    };
+  });
 
 export type ShellApplicationEvent =
   | Pick<

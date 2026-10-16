@@ -34,7 +34,7 @@ const decodeManifest = Schema.decodeUnknownSync(Schema.fromJsonString(PackageMan
 
 describe("shouldBundleCliDependency", () => {
   it("bundles ordinary runtime dependencies", () => {
-    for (const id of ["effect", "@effect/platform", "hono", "@t3tools/shared/hostProcess"]) {
+    for (const id of ["effect", "@effect/platform", "hono", "@t3tools/shared/HostProcess"]) {
       assert.strictEqual(shouldBundleCliDependency(id), true, id);
     }
   });
@@ -104,50 +104,44 @@ describe("selectCliRuntimeExternalDependencies", () => {
 // required detect-libc, which was bundled. Windows was fine; WSL got
 // MODULE_NOT_FOUND.
 it.layer(NodeServices.layer)("external package dependency closure", (it) => {
-  // Read manifests off disk from the pnpm store rather than resolving them.
-  // `require("<name>/package.json")` cannot do this job: under pnpm isolation a
-  // transitive package (node-addon-api, ffi-rs) is not reachable
-  // by name from this file at all, and an `exports` map can refuse the
-  // `/package.json` subpath outright (@ff-labs/fff-node). Both surface as "not
-  // installed", which would let this test skip everything and pass while
-  // checking nothing. The store contains the dependency graph the sidecar's
-  // minimal production install resolves.
+  // Follow installed dependency links, including pnpm's shared virtual store.
+  // Read package.json by path so package exports cannot hide the manifest.
   const readInstalledPackages = Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const storeDir = path.resolve(
+    const root = path.resolve(
       path.dirname(NodeURL.fileURLToPath(import.meta.url)),
-      "../../node_modules/.pnpm",
+      "../../apps/server",
     );
-
-    // The store holds regular files too (lock.yaml), so a path built under one
-    // raises ENOTDIR rather than reporting absence. That throws on Linux while
-    // Windows quietly returns false, which is exactly the kind of difference
-    // this test exists to catch, so treat any failure as "not there".
-    const isPresent = (candidate: string) =>
-      fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false));
-
     const installed = new Map<string, PackageManifest>();
-    if (!(yield* isPresent(storeDir))) return installed;
-
-    for (const entry of yield* fileSystem.readDirectory(storeDir)) {
-      const modulesDir = path.join(storeDir, entry, "node_modules");
-      if (!(yield* isPresent(modulesDir))) continue;
-
-      for (const owner of yield* fileSystem.readDirectory(modulesDir)) {
-        const names = owner.startsWith("@")
-          ? (yield* fileSystem.readDirectory(path.join(modulesDir, owner))).map(
-              (scoped) => `${owner}/${scoped}`,
-            )
-          : [owner];
-
-        for (const name of names) {
-          if (installed.has(name)) continue;
-          const manifestPath = path.join(modulesDir, name, "package.json");
-          if (!(yield* isPresent(manifestPath))) continue;
-          installed.set(name, decodeManifest(yield* fileSystem.readFileString(manifestPath)));
+    const visited = new Set<string>();
+    const queue = Object.keys(serverPackageJson.dependencies)
+      .filter(isRuntimeExternalCliDependency)
+      .map((name) => ({ name, from: root }));
+    for (const { name, from } of queue) {
+      let directory = from;
+      let manifestPath: string | undefined;
+      while (true) {
+        const candidate = path.join(directory, "node_modules", name, "package.json");
+        if (yield* fileSystem.exists(candidate)) {
+          manifestPath = yield* fileSystem.realPath(candidate);
+          break;
         }
+        const parent = path.dirname(directory);
+        if (parent === directory) break;
+        directory = parent;
       }
+      // Optional platform packages can be absent on this host.
+      if (manifestPath === undefined || visited.has(manifestPath)) continue;
+      visited.add(manifestPath);
+      const manifest = decodeManifest(yield* fileSystem.readFileString(manifestPath));
+      installed.set(name, manifest);
+      for (const dependency of Object.keys({
+        ...manifest.dependencies,
+        ...manifest.optionalDependencies,
+        ...manifest.peerDependencies,
+      }))
+        queue.push({ name: dependency, from: path.dirname(manifestPath) });
     }
     return installed;
   }).pipe(Effect.cached, Effect.runSync);
@@ -184,7 +178,7 @@ it.layer(NodeServices.layer)("external package dependency closure", (it) => {
       const installed = yield* readInstalledPackages;
       const violations: string[] = [];
       const seen = new Set<string>();
-      // Seeded from what is actually installed and matches a prefix, so scoped
+      // Seeded from the installed runtime dependency graph, so scoped
       // prefixes like "@yuuang/" and "@ff-labs/" are covered too. Seeding from
       // the prefix strings themselves would skip every scoped entry, since a
       // prefix is not a package name.

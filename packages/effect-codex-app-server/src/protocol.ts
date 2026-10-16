@@ -158,14 +158,18 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
     const protocolScope = yield* Scope.Scope;
     const requestHandlerScope = yield* Scope.fork(protocolScope, "parallel");
     const outgoing = yield* Queue.unbounded<string, Cause.Done<void>>();
-    const incomingNotifications =
-      yield* Queue.sliding<CodexAppServerIncomingNotification>(MAX_BUFFERED_RAW_MESSAGES);
-    const incomingRequests =
-      yield* Queue.sliding<CodexAppServerIncomingRequest>(MAX_BUFFERED_RAW_MESSAGES);
+    const incomingNotifications = yield* Queue.sliding<
+      CodexAppServerIncomingNotification,
+      Cause.Done<void>
+    >(MAX_BUFFERED_RAW_MESSAGES);
+    const incomingRequests = yield* Queue.sliding<CodexAppServerIncomingRequest, Cause.Done<void>>(
+      MAX_BUFFERED_RAW_MESSAGES,
+    );
     const pending = yield* Ref.make(new Map<string, CodexAppServerPendingRequest>());
     const nextRequestId = yield* Ref.make(1);
     const remainder: Array<string> = [];
     const terminationHandled = yield* Ref.make(false);
+    const terminationComplete = yield* Deferred.make<void>();
     const terminationFailure = yield* Ref.make(Option.none<CodexError.CodexAppServerError>());
     const terminationSignal = yield* Deferred.make<void>();
     const activeRequestHandlers = yield* Ref.make(0);
@@ -196,14 +200,14 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
     const handleTermination = (classify: () => Effect.Effect<CodexError.CodexAppServerError>) =>
       Ref.modify(terminationHandled, (handled) => {
         if (handled) {
-          return [Effect.void, true] as const;
+          return [Deferred.await(terminationComplete), true] as const;
         }
         return [
           Effect.gen(function* () {
+            yield* Queue.end(outgoing);
             const error = yield* classify();
             yield* Ref.set(terminationFailure, Option.some(error));
             yield* failAllPending(error);
-            yield* Queue.end(outgoing);
             yield* Deferred.succeed(terminationSignal, undefined);
             yield* Scope.close(requestHandlerScope, Exit.void).pipe(
               Effect.forkIn(protocolScope, { startImmediately: true }),
@@ -212,10 +216,12 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
             if (options.onTermination) {
               yield* options.onTermination(error);
             }
-          }),
+          }).pipe(
+            Effect.onExit((exit) => Deferred.done(terminationComplete, exit).pipe(Effect.asVoid)),
+          ),
           true,
         ] as const;
-      }).pipe(Effect.flatten);
+      }).pipe(Effect.flatten, Effect.uninterruptible);
 
     const offerOutgoing = (message: Record<string, unknown>) =>
       Effect.gen(function* () {
@@ -446,6 +452,17 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
     );
 
     yield* Stream.fromQueue(outgoing).pipe(Stream.run(options.stdio.stdout()), Effect.forkScoped);
+
+    // Closing a client scope must settle its waiters even if the process is
+    // still alive. A termination already classifying an exit keeps its cause.
+    yield* Effect.addFinalizer(() =>
+      handleTermination(() =>
+        Effect.succeed(new CodexError.CodexAppServerInputStreamEndedError({})),
+      ).pipe(
+        Effect.andThen(Queue.end(incomingNotifications)),
+        Effect.andThen(Queue.end(incomingRequests)),
+      ),
+    );
 
     const request = (method: string, payload?: unknown) =>
       Effect.gen(function* () {

@@ -1,4 +1,7 @@
-import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
+import type {
+  OrchestrationV2ThreadProjection,
+  OrchestrationV2AssistantMessageItem,
+} from "@t3tools/contracts";
 import * as Option from "effect/Option";
 
 import { EMPTY_THREAD_HISTORY_META, type ThreadHistoryMeta } from "./threadHistoryMerge.ts";
@@ -7,6 +10,8 @@ export type EnvironmentThreadStatus = "empty" | "cached" | "synchronizing" | "li
 
 export interface EnvironmentThreadState {
   readonly data: Option.Option<OrchestrationV2ThreadProjection>;
+  /** Transient UI snippets; excluded from durable snapshots and replay cursors. */
+  readonly assistantPreviews?: ReadonlyArray<OrchestrationV2AssistantMessageItem>;
   readonly status: EnvironmentThreadStatus;
   readonly error: Option.Option<string>;
   /**

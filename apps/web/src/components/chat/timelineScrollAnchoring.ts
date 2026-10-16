@@ -1,4 +1,4 @@
-import type { MessageId, RunId } from "@t3tools/contracts";
+import { type MessageId, type RunId, type RunAttemptId } from "@t3tools/contracts";
 
 export interface TimelineRunObservation {
   readonly threadKey: string | null;
@@ -33,7 +33,6 @@ export function observeTimelineRun(
   }
   return { observation, anchorMessageId: input.messageId };
 }
-import type { RunAttemptId } from "@t3tools/contracts";
 
 // Match the titlebar fade inset so draft promotion preserves the first row's position.
 export const CHAT_TIMELINE_ANCHOR_OFFSET = 24;
@@ -216,9 +215,16 @@ export function readTimelinePosition(threadKey: string) {
   return rememberedTimelinePositions.get(threadKey);
 }
 
-export function rememberTimelinePosition(threadKey: string, position: RememberedTimelinePosition) {
+export function rememberTimelinePosition(
+  threadKey: string,
+  position: RememberedTimelinePosition,
+  liveFollowEnabled: boolean,
+) {
   rememberedTimelinePositions.delete(threadKey);
-  rememberedTimelinePositions.set(threadKey, position);
+  rememberedTimelinePositions.set(threadKey, {
+    ...position,
+    atEnd: liveFollowEnabled || position.atEnd,
+  });
   if (rememberedTimelinePositions.size > 100) {
     const oldest = rememberedTimelinePositions.keys().next().value;
     if (oldest !== undefined) rememberedTimelinePositions.delete(oldest);

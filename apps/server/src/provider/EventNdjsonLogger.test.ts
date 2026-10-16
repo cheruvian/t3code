@@ -4,6 +4,8 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { ThreadId } from "@t3tools/contracts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { makeAsyncRotatingFileSink } from "@t3tools/shared/logging";
 import { assert, describe, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -19,12 +21,30 @@ import {
   makeEventNdjsonLogStore,
   type EventNdjsonLogStore,
   type EventNdjsonLogStoreOptions,
+  type EventNdjsonSinkFactory,
   type PendingRecord,
   writeBatchedMessages,
 } from "./EventNdjsonLogger.ts";
 
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const decodeUnknownJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+
+function observedAsyncSinkFactory(flushed: Deferred.Deferred<void>): EventNdjsonSinkFactory {
+  return (input) => {
+    let sink: Effect.Success<ReturnType<typeof makeAsyncRotatingFileSink>> | undefined;
+    return {
+      write: (lines) =>
+        Effect.gen(function* () {
+          sink ??= yield* makeAsyncRotatingFileSink(input).pipe(
+            Effect.provide(NodeServices.layer),
+            Effect.orDie,
+          );
+          yield* sink.write(lines).pipe(Effect.orDie);
+          yield* Deferred.succeed(flushed, undefined);
+        }),
+    };
+  };
+}
 
 function ownedLogPath(basePath: string, segment: string): string {
   const basename = NodePath.basename(basePath);
@@ -280,13 +300,18 @@ describe("EventNdjsonLogger", () => {
       const threadPath = ownedLogPath(basePath, "thread-batched");
 
       try {
-        const store = yield* makeEventNdjsonLogStore(basePath, { batchWindowMs: 1_000 });
+        const flushed = yield* Deferred.make<void>();
+        const store = yield* makeEventNdjsonLogStore(basePath, {
+          batchWindowMs: 1_000,
+          sinkFactory: observedAsyncSinkFactory(flushed),
+        });
         yield* store
           .logger("native")
           .write({ id: "batched-event" }, ThreadId.make("thread-batched"));
 
         assert.equal(NodeFS.existsSync(threadPath), false);
         yield* TestClock.adjust(1_000);
+        yield* Deferred.await(flushed);
         assert.equal(NodeFS.existsSync(threadPath), true);
         yield* store.close();
       } finally {
@@ -398,7 +423,11 @@ describe("EventNdjsonLogger", () => {
       const threadPath = ownedLogPath(basePath, "thread-interrupted");
 
       try {
-        const store = yield* makeEventNdjsonLogStore(basePath, { batchWindowMs: 1_000 });
+        const flushed = yield* Deferred.make<void>();
+        const store = yield* makeEventNdjsonLogStore(basePath, {
+          batchWindowMs: 1_000,
+          sinkFactory: observedAsyncSinkFactory(flushed),
+        });
         const logger = store.logger("native");
         const interruptedWrite = yield* logger
           .write({ id: "possibly-interrupted" }, ThreadId.make("thread-interrupted"))
@@ -408,6 +437,7 @@ describe("EventNdjsonLogger", () => {
         yield* logger.write({ id: "accepted" }, ThreadId.make("thread-interrupted"));
 
         yield* TestClock.adjust(1_000);
+        yield* Deferred.await(flushed);
 
         assert.equal(NodeFS.existsSync(threadPath), true);
         assert.include(NodeFS.readFileSync(threadPath, "utf8"), '{"id":"accepted"}');
@@ -431,6 +461,15 @@ describe("EventNdjsonLogger", () => {
         const circularDelta: Record<string, unknown> = { type: "content.delta" };
         circularDelta["self"] = circularDelta;
 
+        for (const event of [
+          { type: "message.updated", message: { streaming: true, text: circularDelta } },
+          { type: "turn_item.updated", turnItem: { streaming: true, text: circularDelta } },
+        ]) {
+          assert.deepInclude(yield* canonical.write(event, threadId), {
+            _tag: "Rejected",
+            reason: "filtered",
+          });
+        }
         yield* canonical.write(circularDelta, threadId);
         yield* canonical.write({ type: "item.completed", id: "final" }, threadId);
         yield* native.write({ type: "content.delta", id: "native-delta" }, threadId);

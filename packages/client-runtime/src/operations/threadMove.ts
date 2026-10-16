@@ -334,7 +334,7 @@ export const moveThread = Effect.fn("clientRuntime.moveThread")(function* (input
   >();
   const execute = Effect.runPromiseWith(context);
   const crypto = yield* Crypto.Crypto;
-  const moveId = input.moveId ?? (yield* crypto.randomUUIDv4.pipe(Effect.orDie));
+  const moveId = input.moveId ?? (yield* crypto.randomUUIDv4().pipe(Effect.orDie));
   const sourceEnvironmentId = source.target.environmentId;
   if (sourceEnvironmentId === input.destinationEnvironmentId)
     return yield* new ThreadMoveTransferError({

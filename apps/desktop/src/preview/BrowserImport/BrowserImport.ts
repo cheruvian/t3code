@@ -4,13 +4,14 @@
  *
  * @module BrowserImport
  */
-import type {
-  BrowserImportInput,
-  BrowserImportResult,
-  BrowserImportSource,
-  BrowserImportUnavailableReason,
+import {
+  type BrowserImportInput,
+  type BrowserImportResult,
+  type BrowserImportSource,
+  type BrowserImportUnavailableReason,
+  BrowserImportFailureReason,
 } from "@t3tools/contracts";
-import { BrowserImportFailureReason } from "@t3tools/contracts";
+
 import * as Context from "effect/Context";
 import type { Session } from "electron";
 import * as Effect from "effect/Effect";
@@ -21,7 +22,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { ChildProcessSpawner } from "effect/process";
 
-import { HostProcessExecutablePath, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as BrowserSession from "../BrowserSession.ts";
 import { ChromiumCookieReadError, readChromiumCookies } from "./ChromiumCookies.ts";
@@ -169,8 +170,8 @@ export const writeCookies = Effect.fn("BrowserImport.writeCookies")(function* (
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* BrowserImportMake() {
   const browserSession = yield* BrowserSession.BrowserSession;
-  const platform = yield* HostProcessPlatform;
-  const executablePath = yield* HostProcessExecutablePath;
+  const platform = yield* HostProcess.Platform;
+  const executablePath = yield* HostProcess.ExecutablePath;
   // Captured here so the service's methods stay free of a requirements
   // channel: the layer is built where NodeServices is already in scope.
   const platformServices = yield* Effect.context<

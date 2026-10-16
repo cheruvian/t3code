@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  type OrchestrationV2AssistantMessageItem,
   NodeId,
   ProviderDriverKind,
   RuntimeRequestId,
@@ -325,4 +326,121 @@ it("keeps worktree and pending requests stable during output updates, then refle
   expect(registry.get(details.worktreePathAtom(ref))).toBe("/workspace/moved");
   dispose();
   registry.dispose();
+});
+
+it("shows an early reply in the shared timeline while keeping the durable projection pristine", () => {
+  const item: OrchestrationV2AssistantMessageItem = {
+    id: TurnItemId.make("early-reply"),
+    threadId: ref.threadId,
+    runId: null,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 1,
+    status: "running",
+    title: null,
+    startedAt: null,
+    completedAt: null,
+    updatedAt: v2Now,
+    type: "assistant_message",
+    messageId: MessageId.make("early-message"),
+    text: "Early reply",
+    streaming: true,
+  };
+  const initial: EnvironmentThreadState = {
+    data: Option.some(v2Projection),
+    status: "live",
+    error: Option.none(),
+    history: EMPTY_THREAD_HISTORY_META,
+    assistantPreviews: [item],
+  };
+  const source = Atom.make(AsyncResult.success(initial));
+  const details = createEnvironmentThreadDetailAtoms(() => source);
+  const registry = AtomRegistry.make();
+  const stop = registry.mount(details.visibleTurnItemsAtom(ref));
+  expect(registry.get(details.visibleTurnItemsAtom(ref)).at(-1)?.item).toEqual(item);
+  expect(registry.get(details.threadAtom(ref))?.projection.turnItems.at(-1)).toEqual(item);
+  expect(Option.getOrThrow(initial.data)).toBe(v2Projection);
+  registry.set(source, AsyncResult.success({ ...initial, assistantPreviews: [] }));
+  expect(registry.get(details.visibleTurnItemsAtom(ref))).toBe(v2Projection.visibleTurnItems);
+  stop();
+  registry.dispose();
+});
+
+it("places a provider preview after the persisted prompt and earlier reply", () => {
+  const preview: OrchestrationV2AssistantMessageItem = {
+    id: TurnItemId.make("preview-after-prompt"),
+    threadId: ref.threadId,
+    runId: RunId.make("preview-run"),
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 2,
+    status: "running",
+    title: null,
+    startedAt: null,
+    completedAt: null,
+    updatedAt: v2Now,
+    type: "assistant_message",
+    messageId: MessageId.make("preview-message"),
+    text: "New reply preview",
+    streaming: true,
+  };
+  const prompt = {
+    ...preview,
+    id: TurnItemId.make("prompt"),
+    messageId: MessageId.make("prompt-message"),
+    type: "user_message" as const,
+    ordinal: 26_000_001,
+    text: "The triggering prompt",
+    createdBy: "user" as const,
+    creationSource: "web" as const,
+    inputIntent: "turn_start" as const,
+    attachments: [],
+  };
+  const earlier = {
+    ...preview,
+    id: TurnItemId.make("earlier-reply"),
+    messageId: MessageId.make("earlier-message"),
+    ordinal: 26_000_002,
+    text: "An earlier completed reply",
+    streaming: false,
+    status: "completed" as const,
+  };
+  const projection = {
+    ...v2Projection,
+    turnItems: [prompt, earlier],
+    visibleTurnItems: [prompt, earlier].map((item, position) => ({
+      position,
+      visibility: "local" as const,
+      sourceThreadId: ref.threadId,
+      sourceItemId: item.id,
+      item,
+    })),
+  };
+  const source = Atom.make(
+    AsyncResult.success({
+      data: Option.some(projection),
+      status: "live" as const,
+      error: Option.none(),
+      history: EMPTY_THREAD_HISTORY_META,
+      assistantPreviews: [preview],
+    }),
+  );
+  const details = createEnvironmentThreadDetailAtoms(() => source);
+  const registry = AtomRegistry.make();
+  try {
+    expect(registry.get(details.visibleTurnItemsAtom(ref)).map((row) => row.item.id)).toEqual([
+      prompt.id,
+      earlier.id,
+      preview.id,
+    ]);
+    expect(projection.turnItems).toEqual([prompt, earlier]);
+  } finally {
+    registry.dispose();
+  }
 });

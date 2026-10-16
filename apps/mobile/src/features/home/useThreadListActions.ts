@@ -5,13 +5,22 @@ import {
   threadMoveUndoParticipants,
 } from "@t3tools/client-runtime/operations";
 import { runAtomCommand, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, VcsStatusLocalResult } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  type VcsStatusLocalResult,
+  AuthOrchestrationOperateScope,
+} from "@t3tools/contracts";
 import { environmentProjects, projectEnvironment } from "../../state/projects";
 import { allowUnpinnedReorderAtom } from "../../state/preferences";
-import type { ThreadMoveDestination } from "../threads/threadOrder";
+import {
+  type ThreadMoveDestination,
+  createPendingThreadOrder,
+  createThreadMovePlanner,
+  threadDropLifecycle,
+} from "../threads/threadOrder";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
-import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
+
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
@@ -35,11 +44,7 @@ import {
   getPendingThreadOrder,
   threadDropBusyAtom,
 } from "../../state/thread-order";
-import {
-  createPendingThreadOrder,
-  createThreadMovePlanner,
-  threadDropLifecycle,
-} from "../threads/threadOrder";
+
 import { getThreadListV2OrderedSection } from "../threads/threadListV2";
 import { threadCanArchive } from "./threadArchive";
 import { threadShellIsIdleForWorktreeCleanup } from "@t3tools/client-runtime/state/models";
@@ -334,7 +339,7 @@ function useThreadActionExecutor(
           const canDelete = owners.length === 1 && threadCanArchive(thread.runtime);
           const status = await readWorktreeStatus({
             environmentId: thread.environmentId,
-            input: { cwd: thread.worktreePath },
+            input: { cwd: thread.worktreePath, includeBranchChanges: false },
           });
           const preview = status._tag === "Success" ? status.value : null;
           const decision = await confirmSettlement(true, preview, canDelete, resourceNames);
@@ -552,7 +557,9 @@ export function useThreadListActions(): {
         if (!canSnooze(thread, { now: new Date().toISOString() })) {
           Alert.alert(
             "Could not snooze thread",
-            thread.hasPendingApprovals || thread.hasPendingUserInput
+            thread.hasPendingApprovals ||
+              thread.hasPendingUserInput ||
+              thread.pendingSubagentRequest != null
               ? "This thread is waiting on you. Respond to the pending request before snoozing it."
               : "This thread is still starting a turn. Try again once it's running.",
           );

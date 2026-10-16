@@ -50,7 +50,7 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
-import * as IdAllocator from "./IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
@@ -138,6 +138,122 @@ function threadCreatedEvent(input: {
     payload: input.thread,
   };
 }
+
+it.effect.each(["unchanged", "newer-model", "newer-provider-thread"] as const)(
+  "restores a failed start's source selection without overwriting %s state",
+  (scenario) =>
+    Effect.gen(function* () {
+      const sink = yield* EventSink.EventSinkV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:failed-switch");
+      const runId = RunId.make("run:failed-switch");
+      const attemptId = RunAttemptId.make("attempt:failed-switch");
+      const source = makeThread(threadId, now);
+      const destinationSelection = {
+        instanceId: ProviderInstanceId.make("claude"),
+        model: "destination",
+      };
+      const destinationThreadId = ProviderThreadId.make("provider-thread:failed-switch");
+      const current = {
+        ...source,
+        title: "Current title stays",
+        providerInstanceId: destinationSelection.instanceId,
+        modelSelection:
+          scenario === "newer-model"
+            ? { ...destinationSelection, model: "newer-choice" }
+            : destinationSelection,
+        activeProviderThreadId:
+          scenario === "newer-provider-thread"
+            ? ProviderThreadId.make("provider-thread:newer")
+            : destinationThreadId,
+      };
+      const run = {
+        id: runId,
+        threadId,
+        ordinal: 1,
+        providerInstanceId: destinationSelection.instanceId,
+        modelSelection: destinationSelection,
+        providerThreadId: destinationThreadId,
+        selectionBeforeStart: {
+          modelSelection: source.modelSelection,
+          activeProviderThreadId: source.activeProviderThreadId,
+        },
+        userMessageId: MessageId.make("message:failed-switch"),
+        rootNodeId: null,
+        activeAttemptId: attemptId,
+        status: "starting" as const,
+        requestedAt: now,
+        startedAt: null,
+        completedAt: null,
+        checkpointId: null,
+        contextHandoffId: null,
+      };
+      yield* sink.write({
+        events: [
+          threadCreatedEvent({ id: "failed-switch:thread", thread: current, now }),
+          {
+            id: EventId.make("failed-switch:run"),
+            type: "run.created",
+            threadId,
+            occurredAt: now,
+            payload: run,
+          },
+          {
+            id: EventId.make("failed-switch:message"),
+            type: "message.updated",
+            threadId,
+            occurredAt: now,
+            payload: {
+              id: run.userMessageId,
+              threadId,
+              runId,
+              nodeId: null,
+              role: "user",
+              text: "Summarize and switch",
+              attachments: [],
+              streaming: false,
+              createdBy: "user",
+              creationSource: "web",
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+        ],
+      });
+      const failed = { ...run, status: "failed" as const, completedAt: now };
+      const committed = yield* sink.writeIfRunCurrent({
+        threadId,
+        runId,
+        activeAttemptId: attemptId,
+        expectedStatus: "starting",
+        events: [
+          {
+            id: EventId.make("failed-switch:failure"),
+            type: "run.updated",
+            threadId,
+            occurredAt: now,
+            payload: failed,
+          },
+        ],
+      });
+      assert.isTrue(committed.committed);
+      const after = yield* projections.getThreadProjection(threadId);
+      assert.deepEqual(
+        after.thread.modelSelection,
+        scenario === "unchanged" ? source.modelSelection : current.modelSelection,
+      );
+      assert.equal(
+        after.thread.activeProviderThreadId,
+        scenario === "unchanged" ? source.activeProviderThreadId : current.activeProviderThreadId,
+      );
+      assert.equal(after.thread.title, "Current title stays");
+      assert.equal(after.messages[0]?.text, "Summarize and switch");
+      assert.equal(after.runs[0]?.status, "failed");
+      yield* (yield* ProjectionMaintenance.ProjectionMaintenanceV2).rebuild;
+      assert.deepEqual((yield* projections.getThreadProjection(threadId)).thread, after.thread);
+    }).pipe(Effect.provide(Layer.fresh(layerTest))),
+);
 
 it.effect("rebuilds event history one bounded page at a time", () =>
   Effect.gen(function* () {
@@ -445,6 +561,32 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         if (detail.type === "dynamic_tool") assert.deepEqual(detail.output, output);
       }),
     ),
+  );
+
+  it.effect("traces an event write and its transaction without its SQL statements", () =>
+    Effect.gen(function* () {
+      const sink = yield* EventSink.EventSinkV2;
+      const now = yield* DateTime.now;
+      const thread = makeThread(ThreadId.make("thread:untraced-write-statements"), now);
+      const names: Array<string> = [];
+      const tracer = Tracer.make({
+        span: (options) => {
+          names.push(options.name);
+          return new Tracer.NativeSpan(options);
+        },
+      });
+
+      yield* sink
+        .write({
+          events: [
+            threadCreatedEvent({ id: "event:untraced-write-statements:created", thread, now }),
+          ],
+        })
+        .pipe(Effect.withTracer(tracer));
+
+      // These two spans time a slow commit; the statements inside are not traced.
+      assert.deepEqual(names, ["orchestrationV2.EventSink.write", "sql.transaction"]);
+    }),
   );
 
   it.effect.each(["high-water", "replay"] as const)(
@@ -2084,6 +2226,37 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
     }),
   );
 
+  it.effect("wakes a settle waiter when its effect finishes", () =>
+    Effect.gen(function* () {
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const effectId = "effect:foundation-await-settled";
+      yield* outbox.enqueue([
+        {
+          id: effectId,
+          commandId: CommandId.make("command:foundation-await-settled"),
+          threadId: ThreadId.make("thread:foundation-await-settled"),
+          request: {
+            type: "provider-runtime.continue",
+            sourceRunId: RunId.make("run:foundation-await-settled"),
+          },
+        },
+      ]);
+      const waiter = yield* outbox.awaitSettled(effectId).pipe(Effect.forkChild);
+      const claimed = yield* outbox.claimNext({
+        workerId: "settle-worker",
+        leaseDurationMs: 30_000,
+      });
+      assert.isTrue(Option.isSome(claimed));
+      yield* Effect.yieldNow;
+      assert.isUndefined(waiter.pollUnsafe());
+
+      yield* outbox.succeed({ effectId, workerId: "settle-worker" });
+      yield* Fiber.join(waiter);
+      // A settled effect does not wait.
+      yield* outbox.awaitSettled(effectId);
+    }),
+  );
+
   it.effect("runs title generation beside critical work while serializing each lane", () =>
     Effect.gen(function* () {
       const outbox = yield* EffectOutbox.EffectOutboxV2;
@@ -2354,14 +2527,15 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
   it.effect("does not emit a SQL span for an empty safety claim", () =>
     Effect.gen(function* () {
       const outbox = yield* EffectOutbox.EffectOutboxV2;
-      const spans: Array<string> = [];
+      const statements: Array<unknown> = [];
       const tracer = Tracer.make({
         span: (options) => {
           const span = new Tracer.NativeSpan(options);
           const end = span.end.bind(span);
           span.end = (endTime, exit) => {
             end(endTime, exit);
-            spans.push(span.name);
+            const query = span.attributes.get("db.query.text");
+            if (query !== undefined) statements.push(query);
           };
           return span;
         },
@@ -2372,7 +2546,7 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         .pipe(Effect.withTracer(tracer));
 
       assert.isTrue(Option.isNone(claim));
-      assert.notInclude(spans, "sql.execute");
+      assert.deepEqual(statements, []);
     }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
   );
 
@@ -2778,6 +2952,8 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
             { id: sessionId, driver: "codex", providerInstanceId, status: "running" },
           ],
           providerTurns: [{ providerThreadId, runAttemptId: attemptId, status: "running" }],
+          runtimeRequests: [],
+          turnItems: [],
         } as unknown as OrchestrationV2ThreadProjection;
         const recovery = yield* ProviderRuntimeRecovery.make.pipe(
           Effect.provide(
@@ -3051,9 +3227,9 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         completedAt: null,
       });
       // The parent run settled while its background subagent kept working,
-      // then the server died. Recovery already cancels the parent's subagent
-      // item, entity, and node; the child's runless root turn lives on another
-      // thread and must be settled too.
+      // Stop ended the subagent's item, then the server died. Recovery cancels
+      // the parent's subagent entity and node; the child's runless root turn
+      // lives on another thread and must be settled too.
       yield* eventSink.commitCommand({
         commandId: CommandId.make("command:foundation-native-subagent"),
         threadId: parentId,
@@ -3185,7 +3361,7 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
               parentItemId: null,
               ordinal: 1,
               type: "subagent",
-              status: "running",
+              status: "interrupted",
               title: null,
               startedAt: now,
               completedAt: null,
@@ -3221,6 +3397,10 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
 
       const parentProjection = yield* projectionStore.getThreadProjection(parentId);
       assert.equal(parentProjection.subagents[0]?.status, "cancelled");
+      assert.equal(
+        parentProjection.nodes.find((node) => node.id === subagentId)?.status,
+        "cancelled",
+      );
       const childProjection = yield* projectionStore.getThreadProjection(childId);
       const childRoot = childProjection.nodes.find((candidate) => candidate.id === childRootId);
       assert.equal(childRoot?.status, "cancelled");

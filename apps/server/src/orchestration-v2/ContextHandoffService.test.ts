@@ -1,19 +1,23 @@
 import { assert, it } from "@effect/vitest";
 import {
   MessageId,
+  NodeId,
   ProviderInstanceId,
+  ProviderDriverKind,
   ProviderThreadId,
   RunId,
   ThreadId,
   TurnItemId,
   type OrchestrationV2TurnItem,
+  type OrchestrationV2ProviderThread,
+  type OrchestrationV2Run,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as ContextHandoffService from "./ContextHandoffService.ts";
-import * as IdAllocator from "./IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 
 const layerTest = ContextHandoffService.layer.pipe(Layer.provide(IdAllocator.layer));
 
@@ -162,3 +166,157 @@ it.layer(layerTest)("ContextHandoffService legacy import", (it) => {
     }),
   );
 });
+
+it.effect(
+  "recovery after a context reset excludes older history and retains subsequent replies",
+  () =>
+    Effect.gen(function* () {
+      const service = yield* ContextHandoffService.ContextHandoffServiceV2;
+      const now = DateTime.makeUnsafe("2026-01-02T00:00:00.000Z");
+      const threadId = ThreadId.make("thread:legacy-context");
+      const instanceId = ProviderInstanceId.make("codex");
+      const providerThreadId = ProviderThreadId.make("provider-thread:reset");
+      const runs = [1, 2, 3].map((ordinal) => ({
+        id: RunId.make(`run:reset:${ordinal}`),
+        threadId,
+        ordinal,
+        providerInstanceId: instanceId,
+        modelSelection: { instanceId, model: "gpt-5.4" },
+        providerThreadId,
+        userMessageId: MessageId.make(`message:reset:${ordinal}`),
+        rootNodeId: NodeId.make(`node:reset:${ordinal}`),
+        activeAttemptId: null,
+        status: "completed" as const,
+        requestedAt: now,
+        startedAt: now,
+        completedAt: now,
+        checkpointId: null,
+        contextHandoffId: null,
+      }));
+      const input = {
+        threadId,
+        targetRunId: RunId.make("run:reset:4"),
+        transferId: null,
+        fromProviderThreadIds: [providerThreadId],
+        toProviderThreadId: providerThreadId,
+        fromProviderInstanceId: instanceId,
+        toProviderInstanceId: instanceId,
+        coveredRunOrdinals: { from: 1, to: 3 },
+        strategy: "full_thread_summary" as const,
+        runs,
+        contextResetRunOrdinal: 2,
+        items: [
+          importedItem({
+            role: "assistant",
+            id: "legacy-secret",
+            text: "LEGACY-SECRET",
+            ordinal: 1,
+          }),
+          ...["BEFORE-RESET-SECRET", "/clear", "AFTER-RESET-REPLY"].map((text, i) => ({
+            ...importedItem({ role: "assistant", id: `reset:${i}`, text, ordinal: i + 2 }),
+            runId: runs[i]!.id,
+          })),
+        ],
+        createdAt: now,
+      };
+      const handoff = yield* service.prepareProviderHandoff(input);
+      assert.notInclude(handoff.summaryText, "BEFORE-RESET-SECRET");
+      assert.notInclude(handoff.summaryText, "LEGACY-SECRET");
+      assert.notInclude(handoff.summaryText, "/clear");
+      assert.include(handoff.summaryText, "AFTER-RESET-REPLY");
+      const ordinary = yield* service.prepareProviderHandoff({
+        ...input,
+        contextResetRunOrdinal: undefined,
+      });
+      assert.include(ordinary.summaryText, "BEFORE-RESET-SECRET");
+      assert.include(ordinary.summaryText, "LEGACY-SECRET");
+    }).pipe(Effect.provide(layerTest)),
+);
+
+it.each([
+  {
+    name: "completed root reset",
+    child: false,
+    rolledBack: false,
+    earlierReset: false,
+    expected: 2,
+  },
+  { name: "child reset", child: true, rolledBack: false, earlierReset: false, expected: undefined },
+  {
+    name: "rolled-back root reset",
+    child: false,
+    rolledBack: true,
+    earlierReset: false,
+    expected: undefined,
+  },
+  {
+    name: "earlier reset survives rollback of a later reset",
+    child: false,
+    rolledBack: true,
+    earlierReset: true,
+    expected: 1,
+  },
+])(
+  "uses only an effective root reset boundary: $name",
+  ({ child, rolledBack, earlierReset, expected }) => {
+    const now = DateTime.makeUnsafe("2026-01-02T00:00:00.000Z");
+    const threadId = ThreadId.make("thread:reset-boundary");
+    const instanceId = ProviderInstanceId.make("codex");
+    const providerThreadId = ProviderThreadId.make("provider-thread:reset-boundary");
+    const rootNodeId = NodeId.make("node:reset-boundary");
+    const providerThread: OrchestrationV2ProviderThread = {
+      id: providerThreadId,
+      driver: ProviderDriverKind.make("codex"),
+      providerInstanceId: instanceId,
+      providerSessionId: null,
+      appThreadId: threadId,
+      ownerNodeId: child ? rootNodeId : null,
+      nativeThreadRef: null,
+      nativeConversationHeadRef: null,
+      status: "idle",
+      firstRunOrdinal: 1,
+      lastRunOrdinal: 2,
+      contextResetRunOrdinals: earlierReset ? [1, 2] : [2],
+      handoffIds: [],
+      forkedFrom: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const run: OrchestrationV2Run = {
+      id: RunId.make("run:reset-boundary"),
+      threadId,
+      ordinal: 2,
+      providerInstanceId: instanceId,
+      modelSelection: { instanceId, model: "gpt-5.4" },
+      providerThreadId,
+      userMessageId: MessageId.make("message:reset-boundary"),
+      rootNodeId,
+      activeAttemptId: null,
+      status: rolledBack ? "rolled_back" : "completed",
+      requestedAt: now,
+      startedAt: now,
+      completedAt: now,
+      checkpointId: null,
+      contextHandoffId: null,
+    };
+    assert.equal(
+      ContextHandoffService.contextResetRunOrdinal(
+        [providerThread],
+        [
+          ...(earlierReset
+            ? [
+                {
+                  ...run,
+                  id: RunId.make("run:earlier-reset"),
+                  ordinal: 1,
+                  status: "completed" as const,
+                },
+              ]
+            : []),
+          run,
+        ],
+      ),
+      expected,
+    );
+  },
+);

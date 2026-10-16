@@ -9,7 +9,8 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import type { ThreadId } from "@t3tools/contracts";
-import { RotatingFileSink } from "@t3tools/shared/logging";
+import { RotatingFileSink, makeAsyncRotatingFileSink } from "@t3tools/shared/logging";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { causeErrorTag, errorTag } from "@t3tools/shared/observability";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -272,12 +273,16 @@ function logWarning(message: string, context: Record<string, unknown>): Effect.E
 }
 
 const defaultSinkFactory: EventNdjsonSinkFactory = (input) => {
-  const sink = new RotatingFileSink({
-    ...input,
-    throwOnError: true,
-  });
+  let sink: Effect.Success<ReturnType<typeof makeAsyncRotatingFileSink>> | undefined;
   return {
-    write: (lines) => Effect.sync(() => sink.write(lines)),
+    write: (lines) =>
+      Effect.gen(function* () {
+        sink ??= yield* makeAsyncRotatingFileSink(input).pipe(
+          Effect.provide(NodeServices.layer),
+          Effect.orDie,
+        );
+        yield* sink.write(lines).pipe(Effect.orDie);
+      }),
   };
 };
 
@@ -308,6 +313,12 @@ export function shouldPersistProviderEvent(stream: EventNdjsonStream, event: unk
     const type = Reflect.get(event, "type");
     if (typeof type === "string" && transientCanonicalEventTypes.has(type)) {
       return false;
+    }
+    if (stream === "canonical" && (type === "turn_item.updated" || type === "message.updated")) {
+      const item = Reflect.get(event, type === "turn_item.updated" ? "turnItem" : "message");
+      if (typeof item === "object" && item !== null && Reflect.get(item, "streaming") === true) {
+        return false;
+      }
     }
     if (stream !== "native") return true;
 

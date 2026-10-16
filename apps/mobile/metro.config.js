@@ -184,19 +184,6 @@ module.exports = Promise.all([
         filePath: path.join(__dirname, "src/native/NativeScreensModule.web.ts"),
       };
     }
-    if (platform === "web" && moduleName === "@t3tools/mobile-markdown-text/primitive") {
-      return {
-        type: "sourceFile",
-        filePath: path.join(__dirname, "src/native/MarkdownTextPrimitive.web.tsx"),
-      };
-    }
-    if (
-      platform === "web" &&
-      (moduleName === "react-native-nitro-markdown" ||
-        moduleName === "react-native-nitro-markdown/headless")
-    ) {
-      return { type: "sourceFile", filePath: path.join(__dirname, "src/native/Markdown.web.tsx") };
-    }
     // RNW's own barrel must resolve raw primitives. Wrapping those exports with
     // Uniwind creates a cycle when a wrapper imports the RNW barrel in turn.
     // Preserve Uniwind's stylesheet hook so Tailwind retains cascade priority.

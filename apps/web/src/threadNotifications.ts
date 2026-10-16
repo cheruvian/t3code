@@ -22,7 +22,7 @@ export function hasDesktopNotifications(mode: NotificationMode) {
 let originalFavicon: HTMLLinkElement | undefined;
 let badgeFavicon: HTMLLinkElement | undefined;
 
-export function setNotificationBadge(count: number) {
+export function setNotificationBadge(count: number, persistUntilVisited = false) {
   const bridge = window.desktopBridge;
   let image: string | null = null;
   if (count > 0 && (!bridge || bridge.getClientPlatform?.() === "win32")) {
@@ -61,7 +61,7 @@ export function setNotificationBadge(count: number) {
       originalFavicon = undefined;
     }
   }
-  void bridge?.setNotificationBadge?.({ count, image }).catch(() => undefined);
+  void bridge?.setNotificationBadge?.({ count, image, persistUntilVisited }).catch(() => undefined);
 }
 
 let audioContext: AudioContext | undefined;

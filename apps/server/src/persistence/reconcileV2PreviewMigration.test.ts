@@ -9,7 +9,7 @@ import { migrationEntries, migrationManifest, runMigrations } from "./Migrations
 
 // These are the published upstream ids, deliberately independent of the fork ledger.
 const upstreamForkIds = [
-  45, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 60, 61, 62, 64, 65, 66,
+  45, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 60, 61, 62, 64, 65, 66, 68, 69, 70,
 ];
 const seedUpstream = (variant: "main" | "preview53" | "preview54" | "preview54Indexes") =>
   Effect.gen(function* () {

@@ -24,13 +24,14 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as T3ProjectFileLoader from "./T3ProjectFileLoader.ts";
 import * as ServerConfig from "../config.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
-import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as LegacyV1ThreadImporter from "../orchestration-v2/legacy/LegacyV1ThreadImporter.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as ProjectEnrichmentService from "./ProjectEnrichmentService.ts";
 import * as ProjectFaviconResolver from "./ProjectFaviconResolver.ts";
@@ -73,6 +74,7 @@ const layerTestFor = (
     Layer.provideMerge(layerWorkspacePaths),
     Layer.provideMerge(projectMetadataLayer),
     Layer.provideMerge(SqlitePersistence.layerMemory),
+    Layer.provideMerge(ServerSettings.layerTest()),
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "project-service-test-" })),
     Layer.provide(NodeServices.layer),
   );
@@ -94,6 +96,7 @@ const layerProjectServiceDependencies = Layer.mergeAll(
   Layer.provideMerge(layerWorkspacePaths),
   Layer.provideMerge(layerMetadata),
   Layer.provideMerge(SqlitePersistence.layerMemory),
+  Layer.provideMerge(ServerSettings.layerTest()),
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "project-service-race-" })),
   Layer.provide(NodeServices.layer),
 );
@@ -900,6 +903,148 @@ const canonicalResource: ProjectScript = {
     releasePrompt: "",
   },
 };
+
+it.effect("keeps the checkout cleanup snapshot through edits and ignores stale completions", () =>
+  Effect.gen(function* () {
+    const service = yield* ProjectService.make;
+    const projectId = ProjectId.make("resource:snapshot");
+    const owner = ThreadId.make("resource:snapshot-owner");
+    const other = ThreadId.make("resource:snapshot-other");
+    let sequence = 0;
+    const nextId = () => CommandId.make(`snapshot:${++sequence}`);
+    yield* service.create({
+      commandId: nextId(),
+      projectId,
+      title: "Resources",
+      workspaceRoot: "/work/snapshot",
+      scripts: [canonicalResource],
+    });
+    const sink = yield* EventSink.EventSinkV2;
+    yield* sink.write({
+      events: [nativeThreadCreated(projectId, owner), nativeThreadCreated(projectId, other)],
+    });
+    const request = (
+      action: "checkout" | "release",
+      threadId = owner,
+      script = canonicalResource,
+    ) => service.resourceRequest({ commandId: nextId(), projectId, threadId, script, action });
+    const checkout = (yield* request("checkout")).resourceLocks![0]!;
+    assert.instanceOf(
+      yield* request("checkout", other).pipe(Effect.flip),
+      ProjectService.ProjectOperationError,
+    );
+    yield* service.resourceComplete({
+      commandId: nextId(),
+      projectId,
+      operationId: checkout.operationId,
+    });
+    const edited = {
+      ...canonicalResource,
+      resource: { ...canonicalResource.resource!, releaseCommand: "different-cleanup" },
+    };
+    yield* service.update({ commandId: nextId(), projectId, scripts: [edited] });
+    const release = (yield* request("release", owner, edited)).resourceLocks![0]!;
+    assert.equal(release.phase, "release");
+    assert.equal(release.script.resource?.releaseCommand, "cleanup");
+    yield* service.resourceComplete({
+      commandId: nextId(),
+      projectId,
+      operationId: checkout.operationId,
+      error: "stale failure",
+    });
+    assert.deepEqual(Option.getOrThrow(yield* service.getById(projectId)).resourceLocks, [release]);
+    yield* service.resourceComplete({
+      commandId: nextId(),
+      projectId,
+      operationId: release.operationId,
+    });
+    assert.deepEqual(Option.getOrThrow(yield* service.getById(projectId)).resourceLocks, []);
+    assert.equal((yield* request("checkout", other, edited)).resourceLocks![0]!.threadId, other);
+  }).pipe(Effect.provide(layerProjectServiceDependencies)),
+);
+
+it.effect("retains failed ownership and only releases or takes over the confirmed operation", () =>
+  Effect.gen(function* () {
+    const service = yield* ProjectService.make;
+    const projectId = ProjectId.make("resource:confirmed");
+    const owner = ThreadId.make("resource:confirmed-owner");
+    const other = ThreadId.make("resource:confirmed-other");
+    let sequence = 0;
+    const nextId = () => CommandId.make(`confirmed:${++sequence}`);
+    yield* service.create({
+      commandId: nextId(),
+      projectId,
+      title: "Resources",
+      workspaceRoot: "/work/confirmed",
+      scripts: [canonicalResource],
+    });
+    const sink = yield* EventSink.EventSinkV2;
+    yield* sink.write({
+      events: [nativeThreadCreated(projectId, owner), nativeThreadCreated(projectId, other)],
+    });
+    const request = (
+      action: "checkout" | "takeover" | "force-release" | "release",
+      threadId: ThreadId,
+      expectedOperationId?: CommandId,
+    ) =>
+      service.resourceRequest({
+        commandId: nextId(),
+        projectId,
+        threadId,
+        script: canonicalResource,
+        action,
+        ...(expectedOperationId ? { expectedOperationId } : {}),
+      });
+    const checkout = (yield* request("checkout", owner)).resourceLocks![0]!;
+    assert.instanceOf(
+      yield* request("takeover", other, checkout.operationId).pipe(Effect.flip),
+      ProjectService.ProjectOperationError,
+    );
+    yield* service.resourceComplete({
+      commandId: nextId(),
+      projectId,
+      operationId: checkout.operationId,
+    });
+    assert.instanceOf(
+      yield* request("takeover", other).pipe(Effect.flip),
+      ProjectService.ProjectOperationError,
+    );
+    const takeover = (yield* request("takeover", other, checkout.operationId)).resourceLocks![0]!;
+    assert.equal(takeover.threadId, other);
+    assert.equal(takeover.phase, "checkout");
+    yield* service.resourceComplete({
+      commandId: nextId(),
+      projectId,
+      operationId: checkout.operationId,
+      error: "stale failure",
+    });
+    assert.deepEqual(Option.getOrThrow(yield* service.getById(projectId)).resourceLocks, [
+      takeover,
+    ]);
+    yield* service.resourceComplete({
+      commandId: nextId(),
+      projectId,
+      operationId: takeover.operationId,
+      error: "cleanup failed",
+    });
+    const failed = Option.getOrThrow(yield* service.getById(projectId)).resourceLocks!;
+    assert.equal(failed[0]!.phase, "failed");
+    assert.equal(failed[0]!.error, "cleanup failed");
+    assert.instanceOf(
+      yield* request("release", owner).pipe(Effect.flip),
+      ProjectService.ProjectOperationError,
+    );
+    assert.instanceOf(
+      yield* request("force-release", other, checkout.operationId).pipe(Effect.flip),
+      ProjectService.ProjectOperationError,
+    );
+    assert.deepEqual(Option.getOrThrow(yield* service.getById(projectId)).resourceLocks, failed);
+    assert.deepEqual(
+      (yield* request("force-release", other, takeover.operationId)).resourceLocks,
+      [],
+    );
+  }).pipe(Effect.provide(layerProjectServiceDependencies)),
+);
 
 it.effect(
   "reserves only canonical project, file and global resources and rejects stale or disabled actions",

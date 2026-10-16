@@ -46,8 +46,6 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
   const { selectedThread } = useThreadSelection();
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const { height: windowHeight } = useWindowDimensions();
-  const gitActions = useSelectedThreadGitActions();
-  const { canWriteSourceControl, canChangeThreadBranch } = gitActions;
 
   const params = props.route.params;
 
@@ -75,6 +73,8 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
           },
     surface: "confirm",
   });
+  const gitActions = useSelectedThreadGitActions({ active: gitStatus.target !== null });
+  const { canWriteSourceControl, canChangeThreadBranch } = gitActions;
   const confirmationReady = canRunConfirmedGitAction({
     confirmAction,
     expectedBranch: branchName,
@@ -177,6 +177,7 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
 
       <MaterialScreenContent fitToContents>
         <ScrollView
+          nestedScrollEnabled
           className="android:shrink android:grow-0 ios:flex-1"
           showsVerticalScrollIndicator={false}
           contentContainerClassName="android:gap-2 android:p-2"

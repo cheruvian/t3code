@@ -28,12 +28,25 @@ vi.mock("../state/use-atom-query-runner", () => {
   return { useAtomQueryRunner: () => query };
 });
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
+vi.mock("../state/query", () => ({
+  useEnvironmentQuery: () => ({
+    data: null,
+    dataUpdatedAt: 0,
+    error: null,
+    failure: null,
+    isPending: false,
+    isSuccess: true,
+    refresh: vi.fn(),
+  }),
+}));
 vi.mock("../state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/session")>()),
+  useEnvironmentScope: () => true,
   usePreparedConnection: () => ({ _tag: "Loading" }),
 }));
 vi.mock("../state/entities", () => ({
   readThreadShell: () => null,
+  readEnvironmentSupportsServerBrowser: () => false,
   useProjects: () => [],
   useServerConfigs: () => new Map(),
 }));

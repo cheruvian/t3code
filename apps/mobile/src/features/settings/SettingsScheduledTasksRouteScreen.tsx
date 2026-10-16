@@ -1,16 +1,16 @@
 import { useAtomValue } from "@effect/atom-react";
-import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
-import { readEnvironmentScope } from "../../state/session";
-import type {
-  EnvironmentId,
-  ProjectId,
-  ScheduledTask,
-  ScheduledTaskUpsertInput,
-} from "@t3tools/contracts";
 import {
+  AuthOrchestrationOperateScope,
+  resolveProjectProviderInstanceEnabled,
+  type EnvironmentId,
+  type ProjectId,
+  type ScheduledTask,
+  type ScheduledTaskUpsertInput,
   MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
+import { readEnvironmentScope, usePreparedConnection } from "../../state/session";
+
 import type { MenuAction } from "@react-native-menu/menu";
 import { DateTimePicker } from "@expo/ui/community/datetime-picker";
 import {
@@ -49,7 +49,7 @@ import { SegmentedControl } from "../../components/SegmentedControl";
 import { ThemedSwitch } from "../../components/ThemedSwitch";
 import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
-import { usePreparedConnection } from "../../state/session";
+
 import { buildModelOptions } from "../../lib/modelOptions";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects, useEnvironmentServerConfig } from "../../state/entities";
@@ -582,7 +582,10 @@ function TaskForm({
   );
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
   const config = useEnvironmentServerConfig(environmentId);
-  const modelOptions = useMemo(() => buildModelOptions(config, null), [config]);
+  const modelOptions = useMemo(
+    () => buildModelOptions(config, null, undefined, draft.projectId),
+    [config, draft.projectId],
+  );
   const canOperate = useAtomValue(
     serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
   );
@@ -757,14 +760,24 @@ function TaskForm({
           }))}
           onSelect={(id) => {
             const project = projects.find((item) => item.id === id);
-            if (project)
-              setDraft({
-                ...draft,
-                projectId: project.id,
-                modelSelection: draft.modelSelectionIsExplicit
-                  ? draft.modelSelection
-                  : scheduledTaskDefaultModel(config, project),
-              });
+            if (!project) return;
+            const keepsExplicitModel =
+              draft.modelSelectionIsExplicit &&
+              (draft.modelSelection === null ||
+                !config?.settings ||
+                resolveProjectProviderInstanceEnabled(
+                  config.settings,
+                  project.id,
+                  draft.modelSelection.instanceId,
+                ));
+            setDraft({
+              ...draft,
+              projectId: project.id,
+              modelSelection: keepsExplicitModel
+                ? draft.modelSelection
+                : scheduledTaskDefaultModel(config, project),
+              modelSelectionIsExplicit: keepsExplicitModel,
+            });
           }}
         />
         <PickerRow

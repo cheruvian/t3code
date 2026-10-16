@@ -23,6 +23,9 @@ const upstreamNames = [
   "ScheduledTaskWebhooks",
   "WebhookRelayDeliveries",
   "McpAppModelContext",
+  "ThreadSnapshotWindowIndexes",
+  "PullRequestReviewGuides",
+  "ThreadFailureLookupIndex",
 ];
 
 /** Reconcile known upstream ledgers atomically; never renumber a published fork ledger. */
@@ -50,6 +53,10 @@ export const reconcileV2PreviewMigration = <E, R>(
               row.migration_id === index + 1 && names.get(row.migration_id) === row.name,
           );
         if (matches(forkNames)) return [];
+        // A fork ledger keeps its published IDs, including extensions written by
+        // later builds. The runner validates required fork IDs before migrating.
+        if (history.some((row) => row.migration_id === 41 && row.name === forkNames.get(41)))
+          return [];
         const upstream = new Map(
           entries.filter(([id]) => id <= 40).map(([id, name]) => [id, name]),
         );
@@ -59,7 +66,12 @@ export const reconcileV2PreviewMigration = <E, R>(
         const preview54 = new Map([...upstream].filter(([id]) => id <= 53));
         preview54.set(54, "OrchestrationV2");
         preview54.set(55, "RemoveRedundantProjectionIndexes");
-        if (![upstream, preview53, preview54].some(matches)) {
+        const earlyFork = new Map(
+          entries.filter(([id]) => id <= 38).map(([id, name]) => [id, name]),
+        );
+        earlyFork.set(39, "ProviderSessionGenerations");
+        earlyFork.set(40, "ServerDrainState");
+        if (![upstream, preview53, preview54, earlyFork].some(matches)) {
           return yield* new Migrator.MigrationError({
             kind: "BadState",
             message:

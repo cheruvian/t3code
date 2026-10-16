@@ -1,8 +1,12 @@
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stdio from "effect/Stdio";
 import * as Stream from "effect/Stream";
 
@@ -34,7 +38,63 @@ const decodeConsumeRateLimitResetCreditResponse = Schema.decodeUnknownEffect(
   CodexRpc.CLIENT_REQUEST_RESPONSES["account/rateLimitResetCredit/consume"],
 );
 
+const decodeThreadResumeResponse = Schema.decodeUnknownEffect(
+  CodexRpc.CLIENT_REQUEST_RESPONSES["thread/resume"],
+);
+const decodeServerSubAgentActivityKind = Schema.decodeUnknownEffect(
+  CodexSchema.ServerNotification__SubAgentActivityKind,
+);
+const decodeThreadResumeSubAgentActivityKind = Schema.decodeUnknownEffect(
+  CodexSchema.V2ThreadResumeResponse__SubAgentActivityKind,
+);
+
 it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
+  it.effect("decodes completed sub-agent activity in thread resume history", () =>
+    Effect.gen(function* () {
+      const response = {
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+        cwd: "/workspace",
+        model: "gpt-5.3-codex",
+        modelProvider: "openai",
+        sandbox: { type: "workspaceWrite" },
+        thread: {
+          cliVersion: "0.150.1",
+          createdAt: 1,
+          cwd: "/workspace",
+          ephemeral: false,
+          id: "thread-1",
+          modelProvider: "openai",
+          preview: "delegate work",
+          projectId: null,
+          sessionId: "session-1",
+          source: "appServer",
+          status: { type: "idle" },
+          turns: [
+            {
+              id: "turn-4",
+              items: [
+                {
+                  id: "item-28",
+                  type: "subAgentActivity",
+                  agentPath: "/root/reviewer",
+                  agentThreadId: "child-1",
+                  kind: "completed",
+                },
+              ],
+              status: "completed",
+            },
+          ],
+          updatedAt: 2,
+        },
+      } as const;
+
+      assert.deepEqual(yield* decodeThreadResumeResponse(response), response);
+      assert.equal(yield* decodeServerSubAgentActivityKind("completed"), "completed");
+      assert.equal(yield* decodeThreadResumeSubAgentActivityKind("completed"), "completed");
+    }),
+  );
+
   it.effect("maps account usage responses to the upstream token usage schema", () =>
     Effect.gen(function* () {
       assert.strictEqual(
@@ -647,6 +707,90 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       assert.strictEqual(pendingFailure, failure);
 
       yield* Deferred.succeed(releaseFinalizer, undefined);
+    }),
+  );
+
+  it.effect("settles pending requests on scope close without awaiting a live process exit", () =>
+    Effect.gen(function* () {
+      const { stdio, output } = yield* makeInMemoryStdio();
+      const protocolScope = yield* Scope.make();
+      yield* Effect.addFinalizer(() => Scope.close(protocolScope, Exit.void));
+      const processExit = yield* Deferred.make<CodexError.CodexAppServerError>();
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        terminationError: Deferred.await(processExit),
+      }).pipe(Effect.provideService(Scope.Scope, protocolScope));
+      const notifications = yield* transport.incomingNotifications.pipe(
+        Stream.runDrain,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      const requests = yield* transport.incomingRequests.pipe(
+        Stream.runDrain,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      const pending = yield* transport
+        .request("test/pending-on-close")
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* Queue.take(output);
+
+      yield* Scope.close(protocolScope, Exit.void);
+      yield* Fiber.join(notifications);
+      yield* Fiber.join(requests);
+
+      const exit = yield* Fiber.await(pending);
+      assert.isTrue(Exit.isFailure(exit));
+      if (Exit.isFailure(exit)) {
+        assert.instanceOf(Cause.squash(exit.cause), CodexError.CodexAppServerInputStreamEndedError);
+      }
+      assert.isFalse(yield* Deferred.isDone(processExit));
+    }),
+  );
+
+  it.effect("finishes in-flight termination when the protocol scope closes", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const protocolScope = yield* Scope.make();
+      yield* Effect.addFinalizer(() => Scope.close(protocolScope, Exit.void));
+
+      const terminationStarted = yield* Deferred.make<void>();
+      const finishTermination = yield* Deferred.make<void>();
+      yield* Effect.addFinalizer(() => Deferred.succeed(finishTermination, undefined));
+      const terminationCalls = yield* Ref.make(0);
+      const terminationError = new CodexError.CodexAppServerProcessExitedError({ code: 23 });
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        terminationError: Deferred.succeed(terminationStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(finishTermination)),
+          Effect.as(terminationError),
+        ),
+        onTermination: () => Ref.update(terminationCalls, (current) => current + 1),
+      }).pipe(Effect.provideService(Scope.Scope, protocolScope));
+
+      const pendingRequest = yield* transport
+        .request("test/pending-during-termination")
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      assert.deepEqual(yield* decodeJson(yield* Queue.take(output)), {
+        id: 1,
+        method: "test/pending-during-termination",
+      });
+
+      yield* Queue.end(input);
+      yield* Deferred.await(terminationStarted);
+      const lateSend = yield* Effect.exit(transport.notify("test/late-notification"));
+      assert.isTrue(Exit.isFailure(lateSend));
+      const closeFiber = yield* Scope.close(protocolScope, Exit.void).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(finishTermination, undefined);
+      yield* Fiber.join(closeFiber);
+
+      const pendingExit = pendingRequest.pollUnsafe();
+      assert.exists(pendingExit);
+      assert.isTrue(Exit.isFailure(pendingExit));
+      if (pendingExit && Exit.isFailure(pendingExit)) {
+        assert.strictEqual(Cause.squash(pendingExit.cause), terminationError);
+      }
+      assert.equal(yield* Ref.get(terminationCalls), 1);
     }),
   );
 

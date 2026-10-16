@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off -- Tests exercise local calendar snooze boundaries.
-import { ThreadId } from "@t3tools/contracts";
-import { TurnId } from "@t3tools/contracts";
+import { ThreadId, TurnId } from "@t3tools/contracts";
+
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -186,6 +186,12 @@ describe("canSnooze", () => {
     expect(
       canSnooze(
         { ...makeShell({ pending: "user-input" }), latestUserMessageAt: null },
+        { now: NOW },
+      ),
+    ).toBe(false);
+    expect(
+      canSnooze(
+        { ...makeShell({}), latestUserMessageAt: null, pendingSubagentRequest: "approval" },
         { now: NOW },
       ),
     ).toBe(false);

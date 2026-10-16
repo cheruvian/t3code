@@ -1,4 +1,7 @@
-import { HostProcessArguments, HostProcessIsExecutable } from "@t3tools/shared/hostProcess";
+import {
+  Arguments as HostProcessArguments,
+  IsExecutable as HostProcessIsExecutable,
+} from "@t3tools/shared/HostProcess";
 import * as Crypto from "effect/Crypto";
 import * as Option from "effect/Option";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
@@ -89,7 +92,7 @@ export const bindToolCall = (
 
     // The UUID names this exact handler invocation and its cancellable fiber.
     // Thread/session/run/workspace come from authenticated server state, never shell labels.
-    const toolCallId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+    const toolCallId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
     const sequence = yield* context.threads
       .getThreadEventSequence(thread.threadId)
       .pipe(Effect.mapError(unavailable));

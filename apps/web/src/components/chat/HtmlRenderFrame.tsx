@@ -1,11 +1,11 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import {
   HTML_RENDER_COLUMN_WIDTH,
   htmlRenderFileName,
   htmlRenderFrameHeight,
   type HtmlRenderReference,
 } from "@t3tools/shared/htmlRender";
-import { PanelRightOpenIcon } from "lucide-react";
+import { Maximize2Icon, PanelRightOpenIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
@@ -14,6 +14,10 @@ import { useClientSettings } from "~/hooks/useSettings";
 
 import { HtmlRenderDocument } from "../files/BrowserDocumentFrame";
 import { Button } from "../ui/button";
+import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { HtmlRenderDialog } from "./HtmlRenderDialog";
+import { observeResize } from "~/lib/observeResize";
 
 // A frame may load its URL a little after mounting.
 const MIN_URL_LIFE_MS = 5 * 60_000;
@@ -27,7 +31,9 @@ const MIN_URL_LIFE_MS = 5 * 60_000;
 export function HtmlRenderFrame(props: {
   readonly environmentId: EnvironmentId;
   readonly htmlRender: HtmlRenderReference;
-  readonly onOpen: (attachment: ChatFileAttachment) => void;
+  readonly threadRef: ScopedThreadRef | undefined;
+  readonly onOpen?: (attachment: ChatFileAttachment) => void;
+  readonly onFullscreenChange?: (fullscreen: boolean) => void;
 }) {
   const { attachmentId, title } = props.htmlRender;
   const defaultMode = useClientSettings((settings) => settings.htmlPreviewDefaultMode);
@@ -41,11 +47,9 @@ export function HtmlRenderFrame(props: {
     const box = boxRef.current;
     if (!box) return;
     setWidth(box.clientWidth);
-    const observer = new ResizeObserver(([entry]) => {
+    return observeResize(box, ([entry]) => {
       if (entry) setWidth(entry.contentRect.width);
     });
-    observer.observe(box);
-    return () => observer.disconnect();
   }, []);
   // Client fonts can wrap a page taller than the server measured it; a frame
   // left short would scroll inside the thread and take the reader's scroll.
@@ -66,6 +70,13 @@ export function HtmlRenderFrame(props: {
   // page again; one near expiry is minted afresh, since a frame cannot report a
   // failed load. The page keeps its first URL for its lifetime.
   const [src, setSrc] = useState<string | null>(null);
+  const [expandedSrc, setExpandedSrc] = useState<string | null>(null);
+  const { onFullscreenChange } = props;
+  useEffect(() => {
+    if (expandedSrc === null) return;
+    onFullscreenChange?.(true);
+    return () => onFullscreenChange?.(false);
+  }, [expandedSrc, onFullscreenChange]);
   const [failed, setFailed] = useState(false);
   const assetUrl = useAssetUrlState(
     !collapsed && src === null ? props.environmentId : null,
@@ -98,7 +109,7 @@ export function HtmlRenderFrame(props: {
   }, [cacheFailed, cachedExpiresAt, cachedUrl, collapsed, refresh, src]);
 
   const openPreview = () => {
-    props.onOpen({
+    props.onOpen?.({
       type: "file",
       id: attachmentId,
       name: fileName,
@@ -127,20 +138,59 @@ export function HtmlRenderFrame(props: {
             Show inline
           </Button>
         ) : null}
-        <Button variant="outline" size="xs" onClick={openPreview}>
-          <PanelRightOpenIcon />
-          Open preview
-        </Button>
+        {props.onOpen ? (
+          <Button variant="outline" size="xs" onClick={openPreview}>
+            <PanelRightOpenIcon />
+            Open preview
+          </Button>
+        ) : null}
       </div>
       {collapsed ? null : (
         <div className="relative" style={{ height }}>
           {src !== null ? (
-            <HtmlRenderDocument
-              src={src}
-              title={title}
-              className="block size-full"
-              onContentHeight={setContentHeight}
-            />
+            <>
+              <HtmlRenderDocument
+                src={src}
+                title={title}
+                threadRef={props.threadRef}
+                className="block size-full"
+                onContentHeight={setContentHeight}
+              />
+              <div className="absolute end-2 top-2 flex gap-1 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/html-render:opacity-100 pointer-coarse:opacity-100">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        aria-label="Open full screen"
+                        size="icon-xs"
+                        variant="glass"
+                        onClick={async () => {
+                          const url = await refresh().catch(() => null);
+                          if (url !== null) setExpandedSrc(url);
+                          else
+                            toastManager.add({
+                              type: "error",
+                              title: "Page unavailable",
+                              description: "Reconnect to the environment and try again.",
+                            });
+                        }}
+                      />
+                    }
+                  >
+                    <Maximize2Icon className="size-3.5" />
+                  </TooltipTrigger>
+                  <TooltipPopup side="left">Open full screen</TooltipPopup>
+                </Tooltip>
+              </div>
+              {expandedSrc !== null ? (
+                <HtmlRenderDialog
+                  src={expandedSrc}
+                  title={title}
+                  threadRef={props.threadRef}
+                  onClose={() => setExpandedSrc(null)}
+                />
+              ) : null}
+            </>
           ) : failed ? (
             <p className="flex size-full items-center justify-center text-muted-foreground text-xs">
               Unable to load {title}

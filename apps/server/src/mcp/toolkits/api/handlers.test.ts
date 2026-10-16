@@ -1,3 +1,13 @@
+import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
+import * as ThreadMoveTransferService from "../../../orchestration-v2/ThreadMoveTransferService.ts";
+import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
+import * as SourceControlRepositoryService from "../../../sourceControl/SourceControlRepositoryService.ts";
+import * as ServerSecretStore from "../../../auth/ServerSecretStore.ts";
+import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
+import * as PreviewManager from "../../../preview/Manager.ts";
+import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
+import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
+import * as CredentialBroker from "../../../secrets/CredentialBroker.ts";
 import { ScheduledTaskService } from "../../../scheduledTasks/ScheduledTaskService.ts";
 import { VcsStatusBroadcaster } from "../../../vcs/VcsStatusBroadcaster.ts";
 import { ProjectSetupScriptRunner } from "../../../project/ProjectSetupScriptRunner.ts";
@@ -105,6 +115,16 @@ const client = McpSchema.McpServerClient.of({
 });
 
 const unusedServicesLayer = Layer.mergeAll(
+  Layer.mock(CredentialBroker.CredentialBroker)({}),
+  Layer.mock(GitVcsDriver.GitVcsDriver)({}),
+  Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
+  Layer.mock(PreviewManager.PreviewManager)({}),
+  Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
+  Layer.mock(ServerSecretStore.ServerSecretStore)({}),
+  Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
+  Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+  Layer.mock(ThreadMoveTransferService.ThreadMoveTransferService)({}),
+  Layer.mock(ThreadSearch.ThreadSearch)({}),
   Layer.mock(SecretRequests.SecretRequests)({}),
   Layer.mock(PreviewBrowser.PreviewBrowser)({}),
   McpToolAccessTestkit.liveThreadsLayer,
@@ -128,6 +148,7 @@ const unusedServicesLayer = Layer.mergeAll(
   Layer.succeed(
     WorkspaceFileSystem.WorkspaceFileSystem,
     WorkspaceFileSystem.WorkspaceFileSystem.of({
+      getMetadata: () => Effect.die("unused"),
       readFile: () => Effect.die("unused"),
       writeFile: () => Effect.die("unused"),
     }),

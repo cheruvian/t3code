@@ -1,130 +1,134 @@
-import { ChevronUpIcon, ChevronDownIcon, XIcon } from "lucide-react";
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
-import { Button } from "~/components/ui/button";
-import { Input } from "~/components/ui/input";
-import type { TimelineEntry } from "~/session-logic";
+import { useEffect, useRef, type KeyboardEvent } from "react";
+import { ChevronDownIcon, ChevronUpIcon, XIcon } from "lucide-react";
+import { Button } from "../ui/button";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
+import { cn } from "~/lib/utils";
+import { formatThreadFindCount } from "./threadFind";
+import { THREAD_DETAILS_CARD_GAP } from "./threadDetailsCardLayout";
 
-export function ThreadFindBar({
-  entries,
-  onSelect,
-  onClose,
-}: {
-  entries: ReadonlyArray<TimelineEntry>;
-  onClose: () => void;
-  onSelect: (entry: Extract<TimelineEntry, { kind: "message" }>) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [index, setIndex] = useState(0);
-  const input = useRef<HTMLInputElement>(null);
-  const previousFocus = useRef<HTMLElement | null>(null);
-  const matches = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase();
-    return needle
-      ? entries.filter(
-          (entry): entry is Extract<TimelineEntry, { kind: "message" }> =>
-            entry.kind === "message" && entry.message.text.toLocaleLowerCase().includes(needle),
-        )
-      : [];
-  }, [entries, query]);
-  const currentIndex = matches.length ? index % matches.length : 0;
-  const selected = matches[currentIndex];
-  const selectedId = selected?.id;
-  const selectMatch = useEffectEvent(() => {
-    if (selected) onSelect(selected);
-  });
+interface ThreadFindBarProps {
+  readonly open: boolean;
+  readonly query: string;
+  readonly matchCount: number;
+  readonly counting?: boolean;
+  readonly status: "loading" | "error" | null;
+  readonly onRetry: () => void;
+  readonly activeIndex: number;
+  readonly focusRequestId: number;
+  readonly onQueryChange: (query: string) => void;
+  readonly onNext: () => void;
+  readonly onPrevious: () => void;
+  readonly onClose: () => void;
+}
+
+/**
+ * Room the open bar takes at the top of the chat canvas: its `h-9` height plus
+ * the shared 12px gap below it, so the details card starts on the same rhythm.
+ */
+export const THREAD_FIND_BAR_RESERVED_HEIGHT = 36 + THREAD_DETAILS_CARD_GAP;
+
+export function ThreadFindBar(props: ThreadFindBarProps) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
   useEffect(() => {
-    if (open && selectedId) selectMatch();
-  }, [open, selectedId]);
-  const close = () => {
-    setOpen(false);
-    onClose();
-    previousFocus.current?.focus({ preventScroll: true });
-  };
-  useEffect(() => {
-    const handle = (event: globalThis.KeyboardEvent) => {
-      if (
-        event.defaultPrevented ||
-        !(event.ctrlKey || event.metaKey) ||
-        event.altKey ||
-        event.key.toLowerCase() !== "f"
-      )
-        return;
-      // A streamed page owns its own find shortcut.
-      if (event.target instanceof Element && event.target.closest("[data-server-browser-surface]"))
-        return;
+    if (!props.open) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [props.focusRequestId, props.open]);
+
+  if (!props.open) return null;
+
+  const hasQuery = props.query.trim().length > 0;
+  const noResults = hasQuery && !props.status && props.matchCount === 0;
+  let label = "";
+  if (hasQuery) {
+    label = props.counting ? "1/…" : formatThreadFindCount(props.activeIndex, props.matchCount);
+  }
+  if (props.status === "loading") label = "Searching…";
+  if (props.status === "error") label = "Search failed";
+  const navigationDisabled =
+    props.matchCount === 0 || props.status === "loading" || props.counting === true;
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+    if (event.key === "Escape") {
       event.preventDefault();
-      if (!input.current && document.activeElement instanceof HTMLElement) {
-        previousFocus.current = document.activeElement;
-      }
-      setOpen(true);
-      input.current?.select();
-    };
-    document.addEventListener("keydown", handle);
-    return () => document.removeEventListener("keydown", handle);
-  }, []);
-  if (!open) return null;
-  const move = (delta: number) =>
-    setIndex((current) =>
-      matches.length ? (current + delta + matches.length) % matches.length : 0,
-    );
+      event.stopPropagation();
+      props.onClose();
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.shiftKey) props.onPrevious();
+      else props.onNext();
+    }
+  };
+
   return (
+    // Fades in while the details popover slides out from under it.
     <div
-      role="search"
-      aria-label="Find in thread"
-      className="absolute inset-x-2 top-2 z-30 flex items-center gap-2 rounded-lg border border-border bg-background p-2 shadow-md"
+      data-thread-find-bar
+      className="absolute top-3 right-3 z-40 w-[min(var(--thread-details-panel-width),calc(100%-1.5rem))] transition-opacity duration-150 ease-out starting:opacity-0 motion-reduce:transition-none"
     >
-      <Input
-        ref={input}
-        autoFocus
-        aria-label="Find in loaded messages"
-        placeholder="Find in thread"
-        value={query}
-        onChange={(event) => {
-          setQuery(event.target.value);
-          setIndex(0);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            event.preventDefault();
-            event.stopPropagation();
-            close();
-          }
-          if (event.key === "Enter") {
-            event.preventDefault();
-            event.stopPropagation();
-            move(event.shiftKey ? -1 : 1);
-          }
-        }}
-      />
-      <span role="status" className="shrink-0 text-xs text-muted-foreground">
-        {query
-          ? matches.length
-            ? `${currentIndex + 1}/${matches.length} messages`
-            : "No matches"
-          : "Loaded messages"}
-      </span>
-      <Button
-        size="xs"
-        variant="outline"
-        aria-label="Previous match"
-        disabled={!matches.length}
-        onClick={() => move(-1)}
+      <InputGroup
+        variant="popover"
+        size="lg"
+        onContextMenu={(event) => event.stopPropagation()}
+        role="search"
+        aria-label="Find in thread"
+        aria-busy={props.status === "loading" || props.counting === true}
+        className="w-full"
       >
-        <ChevronUpIcon />
-      </Button>
-      <Button
-        size="xs"
-        variant="outline"
-        aria-label="Next match"
-        disabled={!matches.length}
-        onClick={() => move(1)}
-      >
-        <ChevronDownIcon />
-      </Button>
-      <Button size="xs" variant="ghost" aria-label="Close find" onClick={close}>
-        <XIcon />
-      </Button>
+        <InputGroupInput
+          ref={inputRef}
+          type="search"
+          size="sm"
+          value={props.query}
+          aria-label="Find in thread"
+          placeholder="Find in thread"
+          maxLength={200}
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(event) => props.onQueryChange(event.target.value)}
+          onKeyDown={handleKeyDown}
+        />
+        <InputGroupAddon align="inline-end" inset="pill">
+          <span
+            aria-live="polite"
+            className={cn(
+              "min-w-10 text-center text-xs tabular-nums",
+              noResults ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {label}
+          </span>
+          {props.status === "error" ? (
+            <Button size="xs" variant="ghost" onClick={props.onRetry}>
+              Retry
+            </Button>
+          ) : null}
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-label="Previous match"
+            disabled={navigationDisabled}
+            onClick={props.onPrevious}
+          >
+            <ChevronUpIcon />
+          </Button>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-label="Next match"
+            disabled={navigationDisabled}
+            onClick={props.onNext}
+          >
+            <ChevronDownIcon />
+          </Button>
+          <Button size="icon-xs" variant="ghost" aria-label="Close find" onClick={props.onClose}>
+            <XIcon />
+          </Button>
+        </InputGroupAddon>
+      </InputGroup>
     </div>
   );
 }

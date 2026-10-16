@@ -3,7 +3,11 @@ import {
   subscribeThreadMoves,
   threadMoveUndoParticipants,
 } from "@t3tools/client-runtime/operations";
-import { EnvironmentId as MoveEnvironmentId } from "@t3tools/contracts";
+import {
+  EnvironmentId as MoveEnvironmentId,
+  AuthOrchestrationOperateScope,
+  type EnvironmentMachineKind,
+} from "@t3tools/contracts";
 import { threadResourceColor } from "@t3tools/shared/resourceActions";
 import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import {
@@ -24,7 +28,7 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
-import { AuthOrchestrationOperateScope, type EnvironmentMachineKind } from "@t3tools/contracts";
+
 import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import type { MenuAction } from "@react-native-menu/menu";
 import {
@@ -40,7 +44,7 @@ import { Alert, Pressable, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
-import { SymbolView } from "../../components/AppSymbol";
+import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
@@ -66,6 +70,7 @@ import {
   type ThreadListV2Status,
 } from "./threadListV2";
 import { QueuedMessageIcon } from "./queued-message-icon";
+import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 
 /**
@@ -78,16 +83,62 @@ import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 // Status hues follow the system-wide convention set by sidebar v1 and the
 // Live Activity/widgets (amber approval, indigo input, sky working) so a
 // thread reads the same color everywhere it surfaces.
-const STATUS_LABEL_BY_STATUS: Partial<
-  Record<ThreadListV2Status, { label: string; className: string }>
-> = {
-  approval: { label: "Approval", className: "text-warning-foreground" },
-  input: { label: "Input", className: "text-adaptive-indigo-600-300" },
-  working: { label: "Working", className: "text-adaptive-sky-600-400" },
-  // Calm, hue-free: something still runs but the agent is done (matches web).
-  monitoring: { label: "Monitoring", className: "text-foreground" },
-  failed: { label: "Failed", className: "text-danger-foreground" },
-  limited: { label: "Limited", className: "text-warning-foreground" },
+// Icons match the web sidebar's status glyphs.
+interface StatusLabel {
+  readonly label: string;
+  readonly icon: AppSymbolName;
+  readonly className: string;
+  readonly iconTintClassName: string;
+}
+const STATUS_LABEL_BY_STATUS: Partial<Record<ThreadListV2Status, StatusLabel>> = {
+  approval: {
+    label: "Approval",
+    icon: "exclamationmark.shield",
+    className: "text-warning-foreground",
+    iconTintClassName: "accent-warning-foreground",
+  },
+  input: {
+    label: "Input",
+    icon: "questionmark.bubble",
+    className: "text-adaptive-indigo-600-300",
+    iconTintClassName: "accent-adaptive-indigo-600-300",
+  },
+  working: {
+    label: "Working",
+    icon: "circle.dashed",
+    className: "text-adaptive-sky-600-400",
+    iconTintClassName: "accent-adaptive-sky-600-400",
+  },
+  monitoring: {
+    label: "Monitoring",
+    icon: "circle.dashed.inset.filled",
+    className: "text-foreground",
+    iconTintClassName: "accent-foreground",
+  },
+  waiting: {
+    label: "Waiting",
+    icon: "circle.dashed.inset.filled",
+    className: "text-foreground-muted",
+    iconTintClassName: "accent-foreground-muted",
+  },
+  failed: {
+    label: "Failed",
+    icon: "exclamationmark.circle",
+    className: "text-danger-foreground",
+    iconTintClassName: "accent-danger-foreground",
+  },
+  limited: {
+    label: "Limited",
+    icon: "exclamationmark.circle",
+    className: "text-warning-foreground",
+    iconTintClassName: "accent-warning-foreground",
+  },
+};
+const DONE_STATUS_LABEL: StatusLabel = {
+  label: "Done",
+  icon: "checkmark.circle",
+  className: "text-adaptive-emerald-700-300",
+  iconTintClassName: "accent-adaptive-emerald-700-300",
 };
 
 // Menus keep lifecycle and title regeneration together. Archive keeps its
@@ -603,7 +654,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   }, [thread, props.providers]);
 
   const providerInstance = props.providerInstance;
-  const pr = useThreadPr(thread);
+  const pr = useThreadPr(thread, !dormant);
 
   const theme = useUniwindTheme();
   const sidebarPane = props.pane === "sidebar";
@@ -620,8 +671,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     // A native /goal keeps the agent going across turns until it is met.
     (status === "working" && workingLabel !== undefined && thread.goal?.status === "active"
       ? { ...workingLabel, label: "Goal" }
-      : workingLabel) ??
-    (isUnread ? { label: "Done", className: "text-adaptive-emerald-700-300" } : undefined);
+      : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
+  const recede = shouldRecedeThreadRow({ status, selected });
   // The timestamp is precomputed on the list item (same stamps the settled
   // tail sorts by) so a minute tick only re-renders rows that draw it.
   const timeLabel = props.timeLabel;
@@ -1031,21 +1082,44 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             type="monochrome"
           />
         ) : null}
-        <Text
-          className={cn(
-            "text-xs tabular-nums",
-            statusLabel?.className ??
-              (selected
+        {statusLabel ? (
+          <View className="flex-row items-center gap-1">
+            <SymbolView
+              name={statusLabel.icon}
+              size={13}
+              tintColorClassName={
+                selected ? selectedThreadRowColors.iconTintClassName : statusLabel.iconTintClassName
+              }
+              type="monochrome"
+              weight="semibold"
+            />
+            <Text
+              className={cn(
+                "text-xs font-t3-bold",
+                selected ? selectedThreadRowColors.foregroundClassName : statusLabel.className,
+              )}
+            >
+              {statusLabel.label}
+            </Text>
+          </View>
+        ) : (
+          <Text
+            className={cn(
+              "text-xs tabular-nums",
+              selected
                 ? selectedThreadRowColors.foregroundClassName
-                : rowAppearance.tertiaryForegroundClassName),
-          )}
-        >
-          {statusLabel?.label ?? timeLabel}
-        </Text>
+                : rowAppearance.tertiaryForegroundClassName,
+            )}
+          >
+            {timeLabel}
+          </Text>
+        )}
       </View>
       <Text
         className={cn(
-          "mt-1 text-base font-t3-medium",
+          "mt-1 text-base",
+          // Background work recedes to regular weight, matching web.
+          !recede && "font-t3-medium",
           selected
             ? selectedThreadRowColors.foregroundClassName
             : rowAppearance.foregroundClassName,
@@ -1187,6 +1261,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     </>
   );
 
+  // Background work fades as a whole, status label included, so it takes
+  // less attention than rows that need a human (input, approval, done).
+  const fadedCardContent = recede ? (
+    <View style={{ opacity: 0.55 }}>{cardContent}</View>
+  ) : (
+    cardContent
+  );
+
   const rowContent = (close: () => void) =>
     variant === "card" ? (
       <RowPressable
@@ -1215,14 +1297,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         ]}
       >
         {sidebarPane ? (
-          cardContent
+          fadedCardContent
         ) : (
           /* Flat native list rows: no tonal containers — colored status
              labels and text hierarchy carry state, an inset hairline
              separates rows. The opaque screen background stays so swipe
              actions reveal behind the row. */
           <View>
-            <View className={THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME}>{cardContent}</View>
+            <View className={THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME}>{fadedCardContent}</View>
             {THREAD_LIST_V2_ROW_DIVIDERS && props.showTrailingDivider !== false ? (
               <View className="ml-5 h-px bg-border-subtle" />
             ) : null}

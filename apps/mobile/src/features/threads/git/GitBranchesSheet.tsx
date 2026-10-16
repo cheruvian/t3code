@@ -43,8 +43,8 @@ export function GitBranchesSheet(props: GitBranchesSheetProps) {
           },
     surface: "branches",
   });
+  const gitActions = useSelectedThreadGitActions({ active: gitStatus.target !== null });
   const gitState = useSelectedThreadGitState({ refsEnabled: gitStatus.target !== null });
-  const gitActions = useSelectedThreadGitActions();
   const { canChangeThreadBranch } = gitActions;
 
   const currentBranchLabel = gitStatus.data?.refName ?? selectedThread?.branch ?? "Detached HEAD";
@@ -90,6 +90,7 @@ export function GitBranchesSheet(props: GitBranchesSheetProps) {
       ) : null}
       <MaterialScreenContent fitToContents>
         <ScrollView
+          nestedScrollEnabled
           className="android:shrink android:grow-0 ios:flex-1"
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}

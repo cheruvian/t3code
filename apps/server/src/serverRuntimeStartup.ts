@@ -61,6 +61,10 @@ export class ServerRuntimeStartupError extends Schema.TaggedError<ServerRuntimeS
     mode: ServerConfig.RuntimeMode,
     host: Schema.NullOr(Schema.String),
     port: Schema.Number,
+    phase: Schema.optionalKey(Schema.String),
+    operation: Schema.optionalKey(Schema.String),
+    failureKind: Schema.optionalKey(Schema.String),
+    affectedThreadIds: Schema.optionalKey(Schema.Array(ThreadId)),
     cause: Schema.Defect(),
   },
 ) {
@@ -68,6 +72,26 @@ export class ServerRuntimeStartupError extends Schema.TaggedError<ServerRuntimeS
     return "Server runtime startup failed before command readiness.";
   }
 }
+
+export const makeServerRuntimeStartupError = (input: {
+  readonly mode: ServerConfig.RuntimeMode;
+  readonly host: string | null;
+  readonly port: number;
+  readonly cause: Cause.Cause<unknown>;
+}) => {
+  const cause = Cause.squash(input.cause);
+  return new ServerRuntimeStartupError({
+    ...input,
+    ...(Schema.is(ProviderRuntimeRecovery.ProviderRuntimeRecoveryError)(cause)
+      ? {
+          phase: "orchestration-v2.recovery",
+          operation: cause.operation,
+          failureKind: "recovery-failed",
+          affectedThreadIds: cause.threadId === undefined ? [] : [cause.threadId],
+        }
+      : {}),
+  });
+};
 
 export class ServerRuntimeStartup extends Context.Service<
   ServerRuntimeStartup,
@@ -261,8 +285,8 @@ export const ensureT3CodeMetaprojectRegistered = Effect.fn("ensureT3CodeMetaproj
     const crypto = yield* Crypto.Crypto;
     const projects = yield* ProjectService.ProjectService;
     yield* projects.bootstrap({
-      commandId: CommandId.make(yield* crypto.randomUUIDv4),
-      projectId: ProjectId.make(yield* crypto.randomUUIDv4),
+      commandId: CommandId.make(yield* crypto.randomUUIDv4()),
+      projectId: ProjectId.make(yield* crypto.randomUUIDv4()),
       title: T3_CHAT_HELPER_TITLE,
       workspaceRoot,
     });
@@ -271,7 +295,7 @@ export const ensureT3CodeMetaprojectRegistered = Effect.fn("ensureT3CodeMetaproj
 
 const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
-  const randomUUID = crypto.randomUUIDv4;
+  const randomUUID = crypto.randomUUIDv4();
   const serverConfig = yield* ServerConfig.ServerConfig;
   const projects = yield* ProjectService.ProjectService;
   const threads = yield* ThreadManagement.ThreadManagementService;
@@ -360,8 +384,10 @@ const maybeOpenBrowser = (target: string) =>
 
 const runStartupPhase = <A, E, R>(phase: string, effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
-    Effect.annotateSpans({ "startup.phase": phase }),
-    Effect.withSpan(`server.startup.${phase}`),
+    // Attributes on the span itself, not annotateSpans: an annotation follows
+    // every fiber forked inside the phase, such as the effect worker, for the
+    // life of the server.
+    Effect.withSpan(`server.startup.${phase}`, { attributes: { "startup.phase": phase } }),
   );
 
 interface StartupOptions {
@@ -598,8 +624,9 @@ const make = (options?: StartupOptions) =>
         Effect.gen(function* () {
           yield* Effect.logDebug("startup phase: recording startup heartbeat");
           yield* recordStartupHeartbeat.pipe(
-            Effect.annotateSpans({ "startup.phase": "heartbeat.record" }),
-            Effect.withSpan("server.startup.heartbeat.record"),
+            Effect.withSpan("server.startup.heartbeat.record", {
+              attributes: { "startup.phase": "heartbeat.record" },
+            }),
             Effect.ignoreCause({ log: true }),
           );
           if (serverConfig.startupPresentation === "headless") {
@@ -670,19 +697,22 @@ const make = (options?: StartupOptions) =>
       yield* Effect.logDebug("startup phase: complete");
       yield* flushCompileCache;
     }).pipe(
-      Effect.annotateSpans({
-        "server.mode": serverConfig.mode,
-        "server.port": serverConfig.port,
-        "server.host": serverConfig.host ?? "default",
+      Effect.withSpan("server.startup", {
+        kind: "server",
+        root: true,
+        attributes: {
+          "server.mode": serverConfig.mode,
+          "server.port": serverConfig.port,
+          "server.host": serverConfig.host ?? "default",
+        },
       }),
-      Effect.withSpan("server.startup", { kind: "server", root: true }),
     );
 
     yield* Effect.forkScoped(
       Effect.exit(startup).pipe(
         Effect.flatMap((startupExit) => {
           if (Exit.isSuccess(startupExit)) return Effect.void;
-          const error = new ServerRuntimeStartupError({
+          const error = makeServerRuntimeStartupError({
             mode: serverConfig.mode,
             host: serverConfig.host ?? null,
             port: serverConfig.port,
@@ -690,6 +720,12 @@ const make = (options?: StartupOptions) =>
           });
           return Effect.logError("server runtime startup failed", {
             cause: Cause.pretty(startupExit.cause),
+            ...(error.phase === undefined ? {} : { phase: error.phase }),
+            ...(error.operation === undefined ? {} : { operation: error.operation }),
+            ...(error.failureKind === undefined ? {} : { failureKind: error.failureKind }),
+            ...(error.affectedThreadIds === undefined
+              ? {}
+              : { affectedThreadIds: error.affectedThreadIds }),
           }).pipe(
             Effect.andThen(commandGate.failCommandReady(error)),
             Effect.andThen(options?.abort?.(error) ?? Effect.void),

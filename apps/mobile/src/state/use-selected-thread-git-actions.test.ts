@@ -26,6 +26,7 @@ vi.mock("react", () => ({
   useCallback: (callback: unknown) => callback,
   useMemo: (factory: () => unknown) => factory(),
   useEffect: () => {},
+  useEffectEvent: (callback: unknown) => callback,
 }));
 vi.mock("./session", () => ({
   useEnvironmentScope: (environmentId: unknown, scope: string) =>
@@ -157,7 +158,7 @@ describe("thread Git mutation permissions", () => {
     async (operation) => {
       const actions = useSelectedThreadGitActions();
       if (operation === "create") {
-        expect(await actions.onCreateSelectedThreadBranch("feature")).toBeNull();
+        expect(await actions.onCreateSelectedThreadBranch("feature")).toBe(false);
       }
       if (operation === "checkout")
         expect(await actions.onCheckoutSelectedThreadBranch("feature")).toBeNull();
@@ -200,7 +201,7 @@ describe("thread Git mutation permissions", () => {
       state.afterGitAction = () => state.scopes.delete(AuthOrchestrationOperateScope);
       const actions = useSelectedThreadGitActions();
       if (operation === "create")
-        expect(await actions.onCreateSelectedThreadBranch("feature")).toBeNull();
+        expect(await actions.onCreateSelectedThreadBranch("feature")).toBe(false);
       if (operation === "checkout")
         expect(await actions.onCheckoutSelectedThreadBranch("feature")).toBeNull();
       if (operation === "worktree")
@@ -262,7 +263,9 @@ describe("thread Git mutation permissions", () => {
       expect(result).toEqual(
         operation === "worktree"
           ? { worktree: { path: "/repo-worktree", refName: "feature/task" } }
-          : { refName: "feature/task" },
+          : operation === "create"
+            ? true
+            : { refName: "feature/task" },
       );
       expect(state.thread.branch).toBe("feature/task");
       expect(state.metadataRequests).toHaveLength(1);

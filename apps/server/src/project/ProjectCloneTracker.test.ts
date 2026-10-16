@@ -1,9 +1,11 @@
-import { describe, expect, it } from "@effect/vitest";
 import {
+  SourceControlProviderKind,
   OrchestrationDispatchCommandError,
   ProjectId,
   SourceControlRepositoryError,
 } from "@t3tools/contracts";
+import { describe, expect, it } from "@effect/vitest";
+
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -116,7 +118,7 @@ describe("ProjectCloneTracker", () => {
             ? Effect.fail(
                 new SourceControlRepositoryError({
                   operation: "cloneRepository",
-                  provider: "unknown",
+                  provider: SourceControlProviderKind.make("unknown"),
                   detail: "fatal: repository not found",
                 }),
               )
@@ -255,7 +257,7 @@ describe("ProjectCloneTracker", () => {
             Effect.fail(
               new SourceControlRepositoryError({
                 operation: "cloneRepository",
-                provider: "unknown",
+                provider: SourceControlProviderKind.make("unknown"),
                 detail: "Destination path already exists and is not empty.",
               }),
             ),

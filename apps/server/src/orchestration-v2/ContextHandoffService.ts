@@ -2,6 +2,7 @@ import {
   OrchestrationV2ContextHandoff,
   type OrchestrationV2TurnItem,
   type OrchestrationV2Run,
+  type OrchestrationV2ProviderThread,
   ProviderInstanceId,
   ProviderThreadId,
   RunId,
@@ -20,8 +21,8 @@ import {
   historicalMessage,
   renderHistory,
   selectHistory,
-} from "./ContextHandoffBudget.ts";
-import * as IdAllocator from "./IdAllocator.ts";
+} from "@t3tools/provider-core/server/handoffBudget";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 
 export class ContextHandoffPrepareError extends Schema.TaggedError<ContextHandoffPrepareError>()(
   "ContextHandoffPrepareError",
@@ -79,6 +80,7 @@ export interface ContextHandoffServiceV2Shape {
     readonly toProviderInstanceId: ProviderInstanceId;
     readonly coveredRunOrdinals: OrchestrationV2ContextHandoff["coveredRunOrdinals"];
     readonly runs?: ReadonlyArray<OrchestrationV2Run>;
+    readonly contextResetRunOrdinal?: number | undefined;
     readonly strategy: Extract<
       OrchestrationV2ContextHandoff["strategy"],
       "delta_since_target_last_seen" | "full_thread_summary"
@@ -419,6 +421,7 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
       readonly toProviderInstanceId: ProviderInstanceId;
       readonly coveredRunOrdinals: OrchestrationV2ContextHandoff["coveredRunOrdinals"];
       readonly runs?: ReadonlyArray<OrchestrationV2Run>;
+      readonly contextResetRunOrdinal?: number | undefined;
       readonly strategy: Extract<
         OrchestrationV2ContextHandoff["strategy"],
         "delta_since_target_last_seen" | "full_thread_summary"
@@ -445,9 +448,16 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
           ),
         );
       const runStatuses = new Map(input.runs?.map((run) => [run.id, run.status]));
+      const runOrdinals = new Map(input.runs?.map((run) => [run.id, run.ordinal]));
       const coverage = handoffCoverage(input);
       const selected = selectHistory({
         messages: input.items.flatMap((item) => {
+          if (
+            input.contextResetRunOrdinal !== undefined &&
+            (item.runId === null ||
+              (runOrdinals.get(item.runId) ?? 0) <= input.contextResetRunOrdinal)
+          )
+            return [];
           const message = historicalMessage(item);
           return message === null
             ? []
@@ -496,3 +506,29 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
 
 export const layer: Layer.Layer<ContextHandoffServiceV2, never, IdAllocator.IdAllocatorV2> =
   Layer.effect(ContextHandoffServiceV2, makeContextHandoffService());
+
+/** Root resets apply across provider switches and recovery until their run is rolled back. */
+export const contextResetRunOrdinals = (
+  threads: ReadonlyArray<OrchestrationV2ProviderThread>,
+  runs: ReadonlyArray<OrchestrationV2Run>,
+) => {
+  const rolledBackOrdinals = new Set(
+    runs.filter((run) => run.status === "rolled_back").map((run) => run.ordinal),
+  );
+  return Array.from(
+    new Set(
+      threads.flatMap((thread) =>
+        thread.ownerNodeId === null
+          ? (thread.contextResetRunOrdinals ?? []).filter(
+              (ordinal) => !rolledBackOrdinals.has(ordinal),
+            )
+          : [],
+      ),
+    ),
+  ).sort((left, right) => left - right);
+};
+
+export const contextResetRunOrdinal = (
+  threads: ReadonlyArray<OrchestrationV2ProviderThread>,
+  runs: ReadonlyArray<OrchestrationV2Run>,
+) => contextResetRunOrdinals(threads, runs).at(-1);

@@ -1492,6 +1492,36 @@ describe("incremental v2 timeline entries", () => {
     expect(restoredMessage.message.attachments?.[0]).not.toHaveProperty("previewUrl");
   });
 
+  it("matches cold derivation for each streamed prefix and after rollback truncation", () => {
+    const fixture = makeStreamingTimelineFixture("Partial");
+    let previous: ReturnType<typeof deriveTimelineEntriesFromVisibleTurnItemsWithState> | null =
+      null;
+    for (const length of [...fixture.visibleTurnItems.map((_, index) => index + 1), 2, 1, 0]) {
+      const input = {
+        visibleTurnItems: fixture.visibleTurnItems.slice(0, length),
+        optimisticMessages: [],
+      };
+      previous = deriveTimelineEntriesFromVisibleTurnItemsWithState(input, previous);
+      expect(previous.entries).toEqual(deriveTimelineEntriesFromVisibleTurnItems(input));
+    }
+  });
+
+  it("matches cold derivation when a caller replaces an item in the retained input array", () => {
+    const fixture = makeStreamingTimelineFixture("Partial");
+    const visibleTurnItems = [...fixture.visibleTurnItems];
+    const input = { visibleTurnItems, optimisticMessages: [] };
+    const previous = deriveTimelineEntriesFromVisibleTurnItemsWithState(input);
+    const last = visibleTurnItems.at(-1)!;
+    if (last.item.type !== "assistant_message") throw new Error("Expected assistant fixture");
+    visibleTurnItems[visibleTurnItems.length - 1] = {
+      ...last,
+      item: { ...last.item, text: "Replacement reply" },
+    };
+    const next = deriveTimelineEntriesFromVisibleTurnItemsWithState(input, previous);
+    expect(next.entries).toEqual(deriveTimelineEntriesFromVisibleTurnItems(input));
+    expect(previous.entries.at(-1)).toMatchObject({ message: { text: "Partial" } });
+  });
+
   it("appends committed items in canonical order even when their timestamps go backwards", () => {
     const fixture = makeStreamingTimelineFixture("Partial");
     const input = { visibleTurnItems: fixture.visibleTurnItems, optimisticMessages: [] };

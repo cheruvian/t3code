@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { collectMarkdownFilePaths, resolvedMarkdownFileHref } from "./markdownFileResolution.ts";
-import { parseMarkdownFileLink } from "./markdownLinks.ts";
+import { parseMarkdownFileLink } from "@t3tools/shared/markdownLinks";
 
 describe("render-time file resolution", () => {
   it("collects file references without sending message prose or fenced code", () => {
@@ -18,6 +18,13 @@ describe("render-time file resolution", () => {
     expect(
       collectMarkdownFilePaths(':codex-file-citation{path="tree/report.md" line_range_start="7"}'),
     ).toEqual(["tree/report.md"]);
+  });
+  it("collects authored Windows separators without sending fenced examples", () => {
+    expect(
+      collectMarkdownFilePaths(
+        "[Open](<C:\\repo\\.t3\\shot.png>)\n\n```md\n[hidden](<C:\\repo\\.t3\\hidden.png>)\n```",
+      ),
+    ).toEqual(["C:\\repo\\.t3\\shot.png"]);
   });
   const resolutions = new Map([
     [
@@ -40,4 +47,12 @@ describe("render-time file resolution", () => {
   it("does not guess a destination for missing or unresolved paths", () => {
     expect(resolvedMarkdownFileHref("missing/file.png", resolutions)).toBeNull();
   });
+});
+
+it("resolves authored file mentions in prose while excluding packages and code examples", () => {
+  expect(
+    collectMarkdownFilePaths(
+      'Inspect @src/Checkout.tsx. Use @t3tools/contracts and @"docs/my report.md" next.\n\n`@src/code.ts`\n\n```md\n@src/example.ts\n```',
+    ),
+  ).toEqual(["docs/my report.md", "src/Checkout.tsx"]);
 });

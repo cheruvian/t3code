@@ -1,6 +1,10 @@
-import type { GroupedResourceLock } from "@t3tools/client-runtime/state/resource-lock-grouping";
-import { resourceOwnersForAction } from "@t3tools/client-runtime/state/resource-lock-grouping";
+import {
+  type GroupedResourceLock,
+  resourceOwnersForAction,
+} from "@t3tools/client-runtime/state/resource-lock-grouping";
+
 import { resourceActionKey } from "@t3tools/shared/resourceActions";
+import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { createNativeHeaderMenu } from "../../components/nativeHeaderMenu.ios";
 import type { ScreenHeaderMenu } from "../../components/ScreenHeader.types";
 import {
@@ -120,6 +124,7 @@ function resourceScriptLabel(script: ProjectScript, props: ThreadGitControlsProp
 
 function useThreadGitControlModel(props: ThreadGitMenuProps) {
   const navigation = useNavigation();
+  const openPullRequest = useOpenPullRequest();
   const environmentId = props.environmentId;
   const canWriteSourceControl = useEnvironmentScope(
     environmentId ? EnvironmentId.make(String(environmentId)) : null,
@@ -175,10 +180,10 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
       Alert.alert("No open PR", "This branch does not have an open pull request.");
       return;
     }
-    if (!(await tryOpenExternalUrl(prUrl, "pull-request"))) {
+    if (!(await openPullRequest(prUrl))) {
       Alert.alert("Unable to open PR", "The pull request could not be opened.");
     }
-  }, [actionGitStatus]);
+  }, [actionGitStatus, openPullRequest]);
 
   const runActionWithPrompt = useCallback(
     async (input: GitActionRequestInput) => {

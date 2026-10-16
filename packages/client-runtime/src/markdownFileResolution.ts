@@ -1,33 +1,69 @@
+import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineTokens";
+import { formatFilePathPosition } from "@t3tools/shared/fileLinks";
 import type { ProjectResolvedFilePath } from "@t3tools/contracts";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
 
 import {
-  formatFilePathPosition,
+  extractMarkdownLinkHrefs,
+  isWindowsDrivePathHref,
   inlineCodeFilePathCandidate,
   parseMarkdownFileLink,
   normalizeMarkdownLinkDestination,
   splitMarkdownLinkSearchAndHash,
-} from "./markdownLinks.ts";
+} from "@t3tools/shared/markdownLinks";
 
-import { renderCodexFileCitationsAsMarkdown } from "./codexMarkdownDirectives.ts";
+import { renderCodexInlineDirectivesAsMarkdown } from "@t3tools/shared/codexMarkdownDirectives";
 
 const parser = unified().use(remarkParse);
 export type MarkdownFileResolutions = ReadonlyMap<string, ProjectResolvedFilePath>;
 
-/** Collect paths for the visible markdown, excluding fenced code and prose. */
+/** File mentions retain authored copy text and leave scoped package references alone. */
+export function markdownFileMentionRanges(text: string) {
+  return collectComposerInlineTokens(`${text} `).flatMap((token) => {
+    if (token.type !== "mention" || !token.source.startsWith("@")) return [];
+    const href = token.source.startsWith('@"') ? token.value : token.value.replace(/[.,;!?]+$/, "");
+    if (!parseMarkdownFileLink(href)) return [];
+    const end = token.end - (token.value.length - href.length);
+    return [{ start: token.start, end, href, source: text.slice(token.start, end) }];
+  });
+}
+
+/** Collect paths for the visible markdown, excluding fenced code and ordinary prose. */
 export function collectMarkdownFilePaths(markdown: string): string[] {
   const paths = new Set<string>();
-  const tree = parser.parse(renderCodexFileCitationsAsMarkdown(markdown));
+  const rendered = renderCodexInlineDirectivesAsMarkdown(markdown);
+  const tree = parser.parse(rendered);
   function visit(
-    node: { type: string; value?: string; url?: string; children?: readonly (typeof node)[] },
+    node: {
+      type: string;
+      value?: string;
+      url?: string;
+      position?:
+        | { start: { offset?: number | undefined }; end: { offset?: number | undefined } }
+        | undefined;
+      children?: readonly (typeof node)[];
+    },
     inLink = false,
   ) {
-    const href =
+    if (node.type === "text" && !inLink) {
+      for (const mention of markdownFileMentionRanges(node.value ?? "")) {
+        const target = parseMarkdownFileLink(mention.href);
+        if (target && target.path.length <= 4096 && !/^~[\\/]/.test(target.path))
+          paths.add(target.path);
+      }
+    }
+    let href =
       node.url ??
       (node.type === "inlineCode" && !inLink
         ? inlineCodeFilePathCandidate(node.value ?? "")
         : null);
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (href && isWindowsDrivePathHref(href) && start !== undefined && end !== undefined) {
+      href =
+        extractMarkdownLinkHrefs(rendered.slice(start, end)).find(isWindowsDrivePathHref) ?? href;
+    }
     const target = href ? parseMarkdownFileLink(href) : null;
     if (
       target &&

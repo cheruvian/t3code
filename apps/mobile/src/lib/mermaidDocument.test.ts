@@ -1,7 +1,7 @@
 import * as NodeVM from "node:vm";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { mermaidDocument } from "../../modules/t3-markdown-text/src/mermaidDocument";
+import { mermaidDocument } from "../native/mermaidDocument";
 
 describe("mobile Mermaid document", () => {
   it("preserves authored code without letting it terminate the script, and reports rendered height", async () => {

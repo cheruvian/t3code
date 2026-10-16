@@ -1,7 +1,11 @@
 import { EnvironmentId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { createInboxReturnTracker, sortWorkingThreadsBySend } from "./threadInbox.ts";
+import {
+  createInboxReturnTracker,
+  isThreadWorking,
+  sortWorkingThreadsBySend,
+} from "./threadInbox.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
 
@@ -83,4 +87,30 @@ describe("sortWorkingThreadsBySend", () => {
       sortWorkingThreadsBySend([launched, sentFirst, sentLast]).map((thread) => thread.id),
     ).toEqual(["sent-last", "sent-first", "launched"]);
   });
+});
+
+it("keeps an unseen completed monitor in the inbox until its completion is visited", () => {
+  const monitored = {
+    ...thread("monitor", true),
+    lastVisitedAt: "2026-06-01T00:00:00.000Z",
+    runtime: { ...thread("monitor", true).runtime!, status: "idle" as const },
+    latestRun: {
+      runId: RunId.make("run:monitor"),
+      status: "completed" as const,
+      requestedAt: "2026-06-01T00:01:00.000Z",
+      startedAt: "2026-06-01T00:01:00.000Z",
+      completedAt: "2026-06-01T00:02:00.000Z",
+      assistantMessageId: null,
+    },
+  };
+  expect(isThreadWorking(monitored)).toBe(false);
+  expect(isThreadWorking({ ...monitored, lastVisitedAt: "2026-06-01T00:03:00.000Z" })).toBe(true);
+  const { lastVisitedAt: _lastVisitedAt, ...withoutVisitHistory } = monitored;
+  expect(isThreadWorking(withoutVisitHistory)).toBe(true);
+  expect(
+    isThreadWorking({
+      ...monitored,
+      latestRun: { ...monitored.latestRun, status: "running", completedAt: null },
+    }),
+  ).toBe(true);
 });

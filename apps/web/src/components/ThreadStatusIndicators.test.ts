@@ -2,15 +2,12 @@ import {
   EnvironmentId,
   type VcsStatusResult,
   type VcsStatusAccumulatedResult,
+  ProjectId,
+  type PullRequestSummary,
+  SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { resolveVisibleVcsStatusTarget } from "./ThreadStatusIndicators";
-import { ProjectId, type PullRequestSummary } from "@t3tools/contracts";
-import { describe, expect, it } from "@effect/vitest";
-import * as Effect from "effect/Effect";
-import { AtomRegistry } from "effect/reactivity";
-import type { AnimationEvent } from "react";
-
 import {
+  resolveVisibleVcsStatusTarget,
   ChangeRequestStatusIcon,
   nextThreadChangeRequestSnapshot,
   prStatusIndicator,
@@ -23,6 +20,12 @@ import {
   resolveThreadPullRequestBadgePresentation,
   synchronizeTerminalPulse,
 } from "./ThreadStatusIndicators";
+
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import { AtomRegistry } from "effect/reactivity";
+import type { AnimationEvent } from "react";
+
 import { newestPullRequestSummary } from "../state/pullRequests";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 
@@ -102,7 +105,7 @@ function pullRequestSummary(
   updatedAt: string,
 ): PullRequestSummary {
   return {
-    provider: "github",
+    provider: SourceControlProviderKind.make("github"),
     projectId: ProjectId.make("project-1"),
     repository: "pingdotgg/t3code",
     number: 42,
@@ -188,7 +191,7 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
     url: "https://github.com/pingdotgg/t3code/pull/42",
   };
   const provider = {
-    kind: "github" as const,
+    kind: SourceControlProviderKind.make("github"),
     name: "GitHub",
     baseUrl: "https://github.com",
   };

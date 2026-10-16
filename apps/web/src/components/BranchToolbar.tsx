@@ -73,6 +73,7 @@ import { useComposerMenuProps } from "./chat/composerEventScope";
 import { measureRestingComposerControls } from "./chat/restingComposerControlsMeasurement";
 import { resolveRestingComposerControlsNaturalWidth } from "./composerFooterLayout";
 import { cn } from "~/lib/utils";
+import { observeResize } from "~/lib/observeResize";
 
 export interface BranchToolbarHandle {
   openBranchPicker: () => void;
@@ -581,11 +582,11 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
     const mutationObserver = new MutationObserver(measure);
     resizeObserver.observe(element);
     mutationObserver.observe(element, { childList: true, characterData: true, subtree: true });
+    const stopObserving = observeResize(element, measure);
     document.fonts.addEventListener("loadingdone", measure);
     measure();
     return () => {
-      resizeObserver.disconnect();
-      mutationObserver.disconnect();
+      stopObserving();
       document.fonts.removeEventListener("loadingdone", measure);
     };
   }, [element, measure]);

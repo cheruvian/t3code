@@ -24,6 +24,7 @@ function prepareCompiler() {
   const compiler = NodePath.join(sdk, NodePath.basename(source));
   if (
     NodeFS.existsSync(compiler) &&
+    NodeFS.existsSync(NodePath.join(sdk, "lib.d.ts")) &&
     NodeFS.existsSync(marker) &&
     NodeFS.readFileSync(marker, "utf8") === source
   )
@@ -32,6 +33,15 @@ function prepareCompiler() {
   const temporary = `${compiler}.${process.pid}.tmp`;
   const temporaryMarker = `${marker}.${process.pid}.tmp`;
   try {
+    // The native compiler resolves standard libraries beside its executable.
+    for (const entry of NodeFS.readdirSync(NodePath.dirname(source))) {
+      if (!/^lib(?:\..*)?\.d\.ts$/.test(entry)) continue;
+      NodeFS.copyFileSync(
+        NodePath.join(NodePath.dirname(source), entry),
+        NodePath.join(sdk, entry),
+        NodeFS.constants.COPYFILE_FICLONE,
+      );
+    }
     NodeFS.copyFileSync(source, temporary, NodeFS.constants.COPYFILE_FICLONE);
     NodeFS.writeFileSync(temporaryMarker, source);
     NodeFS.renameSync(temporary, compiler);

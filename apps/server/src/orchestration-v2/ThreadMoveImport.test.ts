@@ -466,7 +466,16 @@ async function fixture(options?: {
     return ManagedRuntime.make(
       Layer.mergeAll(Transfer.layer.pipe(Layer.provide(dependencies)), dependencies).pipe(
         Layer.provide(layerMemory),
-        Layer.provide(Settings.layerTest({ providers: { claudeAgent: { homePath: home } } })),
+        Layer.provide(
+          Settings.layerTest({
+            providerInstances: {
+              [ProviderInstanceId.make("claudeAgent")]: {
+                driver: ProviderDriverKind.make("claudeAgent"),
+                config: { homePath: home },
+              },
+            },
+          }),
+        ),
         Layer.provideMerge(
           Config.layerTest(repositoryRoot, { prefix: `t3-move-${environmentId}-` }),
         ),

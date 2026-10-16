@@ -1,5 +1,7 @@
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
+  ORCHESTRATION_PROTOCOL_QUERY_PARAM,
+  ORCHESTRATION_PROTOCOL_VERSION,
   ORCHESTRATION_V2_WS_METHODS,
   WsRpcGroup,
   type AuthSessionId,
@@ -34,6 +36,10 @@ export const withEnvironmentRpc = <A, E, R>(
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.pathname = "/ws";
     url.searchParams.set("wsTicket", ticket.ticket);
+    url.searchParams.set(
+      ORCHESTRATION_PROTOCOL_QUERY_PARAM,
+      String(ORCHESTRATION_PROTOCOL_VERSION),
+    );
     const protocolLayer = RpcClient.layerProtocolSocket().pipe(
       Layer.provide(
         Socket.layerWebSocket(url.toString()).pipe(

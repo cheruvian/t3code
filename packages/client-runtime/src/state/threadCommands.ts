@@ -4,16 +4,16 @@ import {
   type MoveThreadInput,
   type UndoThreadMoveInput,
 } from "../operations/threadMove.ts";
-import type { ThreadId } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
-import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-import { Atom } from "effect/reactivity";
 import {
+  type ThreadId,
   WS_METHODS,
   type EnvironmentId,
   type OrchestrationV2ShellSnapshot,
 } from "@t3tools/contracts";
+import * as Crypto from "effect/Crypto";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import { Atom } from "effect/reactivity";
 
 import { createOptimisticThreadLifecycle } from "./threadLifecycle.ts";
 import * as DateTime from "effect/DateTime";
@@ -103,6 +103,7 @@ import * as ThreadHistoryController from "./threadHistoryController.ts";
 
 export type LoadEarlierThreadHistoryInput = {
   readonly threadId: ThreadId;
+  readonly throughEntryId?: string;
 };
 
 export type {
@@ -405,6 +406,7 @@ export function createThreadEnvironmentAtoms<R, E>(
           return yield* controller.value.loadEarlier(
             supervisor.target.environmentId,
             input.threadId,
+            input.throughEntryId,
           );
         }),
       scheduler,

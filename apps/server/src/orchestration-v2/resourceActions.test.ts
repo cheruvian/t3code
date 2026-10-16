@@ -12,7 +12,10 @@ import {
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import {
+  Environment as HostProcessEnvironment,
+  Platform as HostProcessPlatform,
+} from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -52,6 +55,7 @@ const harness = (
     block?: boolean;
     fail?: boolean;
     prompt?: "completed" | "failed";
+    holdPrompt?: boolean;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -60,10 +64,12 @@ const harness = (
     const scripts = yield* Queue.unbounded<ProcessRunInput>();
     const completed = yield* Queue.unbounded<string | undefined>();
     const interrupted = yield* Queue.unbounded<void>();
+    const promptStarted = yield* Queue.unbounded<void>();
+    const terminalEvents = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+    const calls: string[] = [];
     let locks = options.restart ? [lock] : [];
     let resumed = 0;
     const prompts: unknown[] = [];
-    const terminalEvents: OrchestrationV2StoredEvent[] = [];
     const shell = () =>
       ({
         id: projectId,
@@ -90,7 +96,7 @@ const harness = (
       }),
       Layer.mock(EventSinkV2)({
         latestSequence: () => Effect.succeed(0),
-        stream: () => Stream.fromIterable(terminalEvents),
+        stream: () => Stream.fromQueue(terminalEvents),
         write: (input) =>
           Effect.gen(function* () {
             for (const event of input.events)
@@ -106,12 +112,19 @@ const harness = (
       Layer.mock(OrchestratorV2)({
         resumeQueuedRuns: Effect.sync(() => ++resumed),
         dispatch: (command) =>
-          Effect.sync(() => {
+          Effect.gen(function* () {
             prompts.push(command);
+            if (command.type === "run.interrupt") {
+              return { sequence: 1, storedEvents: [] };
+            }
+            calls.push("prompt");
+            yield* Queue.offer(promptStarted, undefined);
             const run = { id: RunId.make("resource-run"), status: options.prompt ?? "completed" };
-            terminalEvents.push({
-              event: { type: "run.updated", payload: run },
-            } as OrchestrationV2StoredEvent);
+            if (!options.holdPrompt) {
+              yield* Queue.offer(terminalEvents, {
+                event: { type: "run.updated", payload: run },
+              } as OrchestrationV2StoredEvent);
+            }
             return {
               sequence: 1,
               storedEvents: [
@@ -123,6 +136,7 @@ const harness = (
       Layer.mock(ProcessRunner)({
         run: (input) =>
           Effect.gen(function* () {
+            calls.push("script");
             yield* Queue.offer(scripts, input);
             if (options.block) {
               input.onStdoutChunk?.(new TextEncoder().encode("x".repeat(20000)));
@@ -163,6 +177,12 @@ const harness = (
       logs,
       interrupted,
       prompts,
+      promptStarted,
+      calls,
+      finishPrompt: (status: "completed" | "failed") =>
+        Queue.offer(terminalEvents, {
+          event: { type: "run.updated", payload: { id: RunId.make("resource-run"), status } },
+        } as OrchestrationV2StoredEvent),
       resumed: () => resumed,
     };
   });
@@ -212,6 +232,60 @@ it.layer(NodeServices.layer)("resource action reactor V2", (it) => {
       yield* h.publish({ ...lock, phase: "release" });
       expect((yield* Queue.take(h.scripts)).args).toContain("release-device");
       expect(yield* Queue.take(h.completed)).toContain("exited with 1");
+    }),
+  );
+  it.effect("runs release script before its prompt and waits for the prompt result", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ holdPrompt: true });
+      yield* h.reactor.start();
+      yield* h.publish({
+        ...lock,
+        phase: "release",
+        script: {
+          ...lock.script,
+          resource: { ...lock.script.resource!, releasePrompt: "Clean up device" },
+        },
+      });
+      yield* Queue.take(h.promptStarted);
+      expect(h.calls).toEqual(["script", "prompt"]);
+      expect((yield* Queue.take(h.scripts)).args).toContain("release-device");
+      expect(h.prompts[0]).toMatchObject({ text: "Clean up device" });
+      expect(yield* Queue.size(h.completed)).toBe(0);
+      expect(h.resumed()).toBe(0);
+      yield* h.finishPrompt("completed");
+      expect(yield* Queue.take(h.completed)).toBeUndefined();
+      yield* h.reactor.drain;
+      expect(h.resumed()).toBe(1);
+    }),
+  );
+  it.effect("aborts a pending resource prompt through its provider run interrupt", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ holdPrompt: true });
+      const promptLock = {
+        ...lock,
+        script: {
+          ...lock.script,
+          command: "",
+          resource: { ...lock.script.resource!, checkoutPrompt: "Prepare device" },
+        },
+      };
+      yield* h.reactor.start();
+      yield* h.publish(promptLock);
+      yield* Queue.take(h.promptStarted);
+      yield* h.publish({ ...promptLock, cancelRequested: true }, CommandId.make("abort-prompt"));
+      expect(yield* Queue.take(h.completed)).toContain("aborted");
+      expect(h.prompts[1]).toMatchObject({
+        type: "run.interrupt",
+        threadId,
+        runId: "resource-run",
+        holdQueue: true,
+      });
+      yield* h.reactor.drain;
+      const logs = yield* Queue.takeAll(h.logs);
+      expect(logs.at(-1)).toMatchObject({
+        status: "failed",
+        error: expect.stringContaining("aborted"),
+      });
     }),
   );
   it.effect("bounds live output and aborts shell execution", () =>

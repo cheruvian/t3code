@@ -6,12 +6,13 @@ import {
   pullRequestDetailToVcsStatus,
 } from "@t3tools/client-runtime/state/pull-requests";
 import { Atom } from "effect/reactivity";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useContext, useEffect, useMemo } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "./atom-registry";
 import { serverEnvironment } from "./server";
 import { useEnvironmentQuery } from "./query";
+import { ThreadPrVisibilityContext } from "./thread-pr-visibility";
 import {
   resolveThreadPrSource,
   presentThreadPr,
@@ -43,7 +44,11 @@ export {
  * Linked PRs use server snapshots. Branch fallback and legacy references share
  * a live summary request across visible rows in the same environment.
  */
-export function useThreadPr(thread: EnvironmentThreadShell): ThreadPrPresentation | null {
+export function useThreadPr(
+  thread: EnvironmentThreadShell,
+  enabled = true,
+): ThreadPrPresentation | null {
+  const visible = useContext(ThreadPrVisibilityContext) && enabled;
   const supportsLinks = useAtomValue(
     serverEnvironment.configValueAtom(thread.environmentId),
     (config) => config?.environment.capabilities.threadPullRequests === true,
@@ -72,7 +77,7 @@ export function useThreadPr(thread: EnvironmentThreadShell): ThreadPrPresentatio
   );
   const snapshot = snapshotEntry?.identity === snapshotIdentity ? snapshotEntry.presentation : null;
   const pullRequestSummary = useEnvironmentQuery(
-    pullRequestRef === null
+    pullRequestRef === null || !visible
       ? null
       : pullRequestSummaryAtom({
           environmentId: thread.environmentId,

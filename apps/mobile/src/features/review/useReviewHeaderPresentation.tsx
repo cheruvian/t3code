@@ -30,7 +30,6 @@ export function useReviewHeaderPresentation(props: {
 }): ReviewHeaderPresentation {
   const { selectedThread } = useThreadSelection();
   const gitState = useSelectedThreadGitState();
-  const gitActions = useSelectedThreadGitActions();
   const isFocused = useIsFocused();
   const gitStatusQuery = useMobileGitStatus({
     active: true,
@@ -47,6 +46,7 @@ export function useReviewHeaderPresentation(props: {
           },
     surface: "review",
   });
+  const gitActions = useSelectedThreadGitActions({ active: gitStatusQuery.target !== null });
   // The selection-based git hooks only apply when this review belongs to the
   // selected thread (it always does when reached from the thread's toolbar).
   const gitMenuAvailable =

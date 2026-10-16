@@ -1,5 +1,6 @@
 import type { ResponseStreamingMode } from "@t3tools/contracts";
-import type { ProviderAdapterV2Event } from "./ProviderAdapter.ts";
+import * as DateTime from "effect/DateTime";
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 // An opening fence may sit at any indentation, since fences inside list
 // items are indented past the marker. A closing fence may be indented at most
@@ -91,7 +92,12 @@ export function splitBufferedAssistantText(text: string): { ready: string; rest:
 /** Buffer assistant messages and reasoning alike, keeping unfinished markdown out of the read model. */
 export function makeAssistantStreamingFilter(mode: ResponseStreamingMode) {
   const delivered = new Map<string, { text: string; at: number }>();
-  return (event: ProviderAdapterV2Event, now: number): ProviderAdapterV2Event | null => {
+  const pending = new Map<string, ProviderAdapter.ProviderAdapterV2Event>();
+  const filter = (
+    event: ProviderAdapter.ProviderAdapterV2Event,
+    now: number,
+  ): ProviderAdapter.ProviderAdapterV2Event | null => {
+    if (mode === "token") return event;
     if (
       event.type === "node.updated" &&
       event.node.kind === "assistant_message" &&
@@ -108,9 +114,11 @@ export function makeAssistantStreamingFilter(mode: ResponseStreamingMode) {
     if (!message) return event;
     const key = `${event.type}:${message.id}`;
     if (!message.streaming) {
+      pending.delete(key);
       delivered.delete(key);
       return event;
     }
+    pending.set(key, event);
     if (mode === "turn") return null;
     const previous = delivered.get(key);
     if (previous && now - previous.at < 400) return null;
@@ -126,4 +134,40 @@ export function makeAssistantStreamingFilter(mode: ResponseStreamingMode) {
       return { ...event, turnItem: { ...event.turnItem, text: ready } };
     return event;
   };
+  return Object.assign(filter, {
+    flush: (
+      now: number,
+      providerTurnId?: string,
+      status: "completed" | "interrupted" | "failed" | "cancelled" = "interrupted",
+    ) => {
+      const events: ProviderAdapter.ProviderAdapterV2Event[] = [];
+      for (const [key, event] of pending) {
+        if (
+          event.type === "turn_item.updated" &&
+          (event.turnItem.type === "assistant_message" || event.turnItem.type === "reasoning")
+        ) {
+          if (providerTurnId !== undefined && event.turnItem.providerTurnId !== providerTurnId)
+            continue;
+          events.push({
+            ...event,
+            turnItem: {
+              ...event.turnItem,
+              streaming: false,
+              status,
+              completedAt: DateTime.makeUnsafe(now),
+              updatedAt: DateTime.makeUnsafe(now),
+            },
+          });
+        } else if (event.type === "message.updated") {
+          events.push({
+            ...event,
+            message: { ...event.message, streaming: false, updatedAt: DateTime.makeUnsafe(now) },
+          });
+        }
+        pending.delete(key);
+        delivered.delete(key);
+      }
+      return events;
+    },
+  });
 }

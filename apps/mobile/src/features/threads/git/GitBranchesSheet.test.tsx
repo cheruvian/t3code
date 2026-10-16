@@ -26,6 +26,7 @@ vi.mock("react-native", () => ({
 }));
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({ goBack: () => state.navigations++ }),
+  useIsFocused: () => true,
 }));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ bottom: 0 }),
@@ -35,10 +36,15 @@ vi.mock("../../../components/AndroidScreenHeader", () => ({
 }));
 vi.mock("../../../components/AppText", () => ({ AppText: "Text", AppTextInput: "TextInput" }));
 vi.mock("./gitSheetComponents", () => ({ SheetActionButton: "SheetActionButton" }));
-vi.mock("../../../state/query", () => ({
-  useEnvironmentQuery: () => ({ data: { refName: "main" } }),
+vi.mock("../../../state/queries", () => ({
+  useMobileGitStatus: () => ({ data: { refName: "main" }, target: { input: { cwd: "/repo" } } }),
 }));
-vi.mock("../../../state/vcs", () => ({ vcsEnvironment: { status: () => null } }));
+vi.mock("../../../components/MaterialScreenContent", () => ({
+  MaterialScreenContent: "MaterialScreenContent",
+}));
+vi.mock("../../../native/StackHeader", () => ({
+  NativeStackScreenOptions: "NativeStackScreenOptions",
+}));
 vi.mock("../../../state/use-thread-selection", () => ({
   useThreadSelection: () => ({ selectedThread: { environmentId: "environment", branch: "main" } }),
 }));

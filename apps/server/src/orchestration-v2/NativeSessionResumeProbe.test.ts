@@ -14,7 +14,7 @@ import * as Stream from "effect/Stream";
 import * as NativeSessionResumeProbe from "./NativeSessionResumeProbe.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
-import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
+import type { ProviderAdapterV2Shape } from "@t3tools/provider-core/server/ProviderAdapter";
 
 const threadId = ThreadId.make("thread-move-probe");
 const instanceId = ProviderInstanceId.make("destination-codex");
