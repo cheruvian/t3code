@@ -84,11 +84,12 @@ import Migration0064 from "./Migrations/057_ScheduledTaskWebhooks.ts";
 import Migration0065 from "./Migrations/058_WebhookRelayDeliveries.ts";
 import Migration0066 from "./Migrations/059_McpAppModelContext.ts";
 import Migration0067 from "./Migrations/067_BackgroundThreadLookupIndexes.ts";
-import Migration0068 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
-import Migration0069 from "./Migrations/061_PullRequestReviewGuides.ts";
-import Migration0071 from "./Migrations/071_AssistantMessageShellIndex.ts";
-import Migration0072 from "./Migrations/072_TurnItemWirePayload.ts";
-import Migration0070 from "./Migrations/062_ThreadFailureLookupIndex.ts";
+import Migration0068 from "./Migrations/068_ThreadShellReadCosts.ts";
+import Migration0069 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
+import Migration0070 from "./Migrations/061_PullRequestReviewGuides.ts";
+import Migration0071 from "./Migrations/062_ThreadFailureLookupIndex.ts";
+import Migration0072 from "./Migrations/071_AssistantMessageShellIndex.ts";
+import Migration0073 from "./Migrations/072_TurnItemWirePayload.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -173,11 +174,12 @@ export const migrationEntries = [
   [65, "WebhookRelayDeliveries", Migration0065],
   [66, "McpAppModelContext", Migration0066],
   [67, "BackgroundThreadLookupIndexes", Migration0067],
-  [68, "ThreadSnapshotWindowIndexes", Migration0068],
-  [69, "PullRequestReviewGuides", Migration0069],
-  [70, "ThreadFailureLookupIndex", Migration0070],
-  [71, "AssistantMessageShellIndex", Migration0071],
-  [72, "TurnItemWirePayload", Migration0072],
+  [68, "ThreadShellReadCosts", Migration0068],
+  [69, "ThreadSnapshotWindowIndexes", Migration0069],
+  [70, "PullRequestReviewGuides", Migration0070],
+  [71, "ThreadFailureLookupIndex", Migration0071],
+  [72, "AssistantMessageShellIndex", Migration0072],
+  [73, "TurnItemWirePayload", Migration0073],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

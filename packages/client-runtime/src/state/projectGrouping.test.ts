@@ -120,6 +120,52 @@ function settings(
 }
 
 describe("buildProjectGroups", () => {
+  it("groups built-in helpers across environments while retaining every project reference", () => {
+    const projects = [
+      makeProject("helper-sven", "/Users/ryan/t3-runtime/production/home/t3code", {
+        environmentId: EnvironmentId.make("sven"),
+        title: "T3 Chat Helper",
+        repositoryIdentity: null,
+        isT3ChatHelper: true,
+      }),
+      makeProject(
+        "helper-heihei",
+        "/srv/heihei/Storage/Development/t3-runtime/production/home/t3code",
+        {
+          environmentId: EnvironmentId.make("heihei"),
+          title: "T3 Chat Helper",
+          repositoryIdentity: null,
+          isT3ChatHelper: true,
+        },
+      ),
+      makeProject("helper-local", "/Users/cheruvian/t3-runtime/production/home/t3code", {
+        environmentId: EnvironmentId.make("local"),
+        title: "T3 Code",
+        repositoryIdentity: null,
+        isT3ChatHelper: true,
+      }),
+      makeProject("source", "/work/t3code", { title: "T3 Chat Helper" }),
+    ];
+    for (const mode of ["repository", "repository_path"] as const) {
+      const groups = buildProjectGroups({ projects, settings: settings(mode) });
+      expect(groups).toHaveLength(2);
+      const helpers = groups.find((group) => group.key === "builtin:t3-chat-helper");
+      expect(helpers?.label).toBe("T3 Chat Helper");
+      expect(helpers?.members.map((member) => member.project.id)).toEqual([
+        "helper-sven",
+        "helper-heihei",
+        "helper-local",
+      ]);
+      expect(helpers?.memberProjectRefs).toEqual(
+        projects.slice(0, 3).map((project) => ({
+          environmentId: project.environmentId,
+          projectId: project.id,
+        })),
+      );
+    }
+    expect(buildProjectGroups({ projects, settings: settings("separate") })).toHaveLength(4);
+  });
+
   it.each(["repository", "repository_path", "separate"] as const)(
     "keeps scratch project ownership separate by default in %s mode",
     (mode) => {

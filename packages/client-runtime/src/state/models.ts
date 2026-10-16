@@ -24,6 +24,7 @@ export interface EnvironmentProject extends OrchestrationProjectShell {
   readonly environmentId: EnvironmentId;
   /** Derived from the environment's configured scratch root, never persisted. */
   readonly isScratch?: true;
+  readonly isT3ChatHelper?: boolean;
 }
 
 /**

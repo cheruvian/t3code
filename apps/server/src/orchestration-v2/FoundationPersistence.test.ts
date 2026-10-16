@@ -3541,6 +3541,7 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       });
       const afterUpdate = yield* projectionStore.getThreadProjection(threadId);
       assert.equal(afterUpdate.turnItems[0]?.ordinal, ordinals[0]);
+      assert.equal((yield* projectionStore.getThreadShell(threadId))?.itemCount, 151);
       assert.equal((yield* maintenance.verify).valid, true);
 
       yield* sql`
@@ -3555,6 +3556,10 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       const rebuilt = yield* maintenance.rebuild;
       assert.isTrue(rebuilt.valid);
       assert.lengthOf((yield* projectionStore.getThreadProjection(threadId)).turnItems, 151);
+      assert.equal((yield* projectionStore.getThreadShell(threadId))?.itemCount, 151);
+      // Repeated rebuilds must replace counts rather than accumulating the replayed items.
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      assert.equal((yield* projectionStore.getThreadShell(threadId))?.itemCount, 151);
     }),
   );
 });

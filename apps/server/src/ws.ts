@@ -1,4 +1,5 @@
 import * as AssistantPreviewBus from "./orchestration-v2/AssistantPreviewBus.ts";
+import * as ManagedDeployment from "./cloud/ManagedDeployment.ts";
 import * as CredentialBroker from "./secrets/CredentialBroker.ts";
 import {
   THREAD_MOVE_RPC,
@@ -1330,6 +1331,7 @@ const layerWsRpc = (
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const providerAuth = yield* ProviderAuthService.ProviderAuthService;
       const providerInstallation = yield* makeProviderInstallation();
+      const managedDeployment = yield* ManagedDeployment.ManagedDeployment;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
@@ -2147,6 +2149,8 @@ const layerWsRpc = (
             Effect.andThen(scheduledTasks.getWebhookDelivery(input)),
           ),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
+        [WS_METHODS.serverDeploymentSubscribe]: () => managedDeployment.changes,
+        [WS_METHODS.serverDeploymentAction]: (input) => managedDeployment.action(input),
         [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({ usageLimitsCommand: false }),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>
           acpRegistryCatalog

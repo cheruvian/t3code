@@ -1009,6 +1009,15 @@ export function createServerEnvironmentAtoms<R, E>(
     updateStateAtom,
     settingsValueAtom,
     providersValueAtom,
+    deploymentState: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:deployment-state",
+      tag: WS_METHODS.serverDeploymentSubscribe,
+      idleTtlMs: 0,
+    }),
+    deploymentAction: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:deployment-action",
+      tag: WS_METHODS.serverDeploymentAction,
+    }),
     providerAuthState: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:provider:auth-state",
       tag: WS_METHODS.providerAuthSubscribe,

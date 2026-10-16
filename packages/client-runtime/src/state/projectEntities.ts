@@ -6,6 +6,7 @@ import type {
   ScopedProjectRef,
   ServerConfig,
 } from "@t3tools/contracts";
+import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import { Atom } from "effect/reactivity";
 
 import { type EnvironmentProject, scopeProject } from "./models.ts";
@@ -24,7 +25,9 @@ export function createEnvironmentProjectAtoms(input: {
   ) => Atom.Atom<OrchestrationV2ShellSnapshot | null>;
   readonly serverConfigValueAtom?: (
     environmentId: EnvironmentId,
-  ) => Atom.Atom<Pick<ServerConfig, "scratchWorkspaceRoot"> | null>;
+  ) => Atom.Atom<
+    (Pick<ServerConfig, "scratchWorkspaceRoot"> & Partial<Pick<ServerConfig, "environment">>) | null
+  >;
 }) {
   const environmentProjectsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make(
@@ -63,27 +66,35 @@ export function createEnvironmentProjectAtoms(input: {
     let previousSource: OrchestrationProjectShell | null = null;
     let previousIsScratch = false;
     let previousValue: EnvironmentProject | null = null;
+    let previousIsT3ChatHelper = false;
     return Atom.make((get) => {
       const source = get(environmentProjectIndexAtom(ref.environmentId)).get(ref.projectId) ?? null;
-      const scratch =
+      const config = input.serverConfigValueAtom
+        ? get(input.serverConfigValueAtom(ref.environmentId))
+        : null;
+      const scratch = source !== null && isScratchProject(source, config?.scratchWorkspaceRoot);
+      const helperRoot = config?.environment?.t3CodeProjectRoot;
+      const isT3ChatHelper =
         source !== null &&
-        isScratchProject(
-          source,
-          input.serverConfigValueAtom
-            ? get(input.serverConfigValueAtom(ref.environmentId))?.scratchWorkspaceRoot
-            : null,
-        );
-      if (source === previousSource && scratch === previousIsScratch) {
+        helperRoot !== undefined &&
+        normalizeProjectPathForComparison(source.workspaceRoot) ===
+          normalizeProjectPathForComparison(helperRoot);
+      if (
+        source === previousSource &&
+        scratch === previousIsScratch &&
+        isT3ChatHelper === previousIsT3ChatHelper
+      )
         return previousValue;
-      }
       previousSource = source;
       previousIsScratch = scratch;
+      previousIsT3ChatHelper = isT3ChatHelper;
       previousValue =
         source === null
           ? null
           : {
               ...scopeProject(ref.environmentId, source),
               ...(scratch ? { isScratch: true as const } : {}),
+              isT3ChatHelper,
             };
       return previousValue;
     }).pipe(Atom.withLabel(`environment-project:${key}`));

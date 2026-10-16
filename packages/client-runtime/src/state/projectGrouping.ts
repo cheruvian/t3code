@@ -129,7 +129,7 @@ function deriveRepositoryScopedKey(
 export function deriveLogicalProjectKey(
   project: Pick<
     EnvironmentProject,
-    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity" | "isScratch"
+    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity" | "isScratch" | "isT3ChatHelper"
   >,
   options?: {
     readonly groupingMode?: SidebarProjectGroupingMode;
@@ -141,6 +141,7 @@ export function deriveLogicalProjectKey(
   if (groupingMode === "separate") {
     return derivePhysicalProjectKey(project);
   }
+  if (project.isT3ChatHelper) return "builtin:t3-chat-helper";
 
   return (
     deriveRepositoryScopedKey(project, groupingMode) ??
@@ -152,7 +153,7 @@ export function deriveLogicalProjectKey(
 export function deriveLogicalProjectKeyFromSettings(
   project: Pick<
     EnvironmentProject,
-    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity" | "isScratch"
+    "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity" | "isScratch" | "isT3ChatHelper"
   >,
   settings: ProjectGroupingSettings,
   options?: { readonly groupScratchProjects?: boolean },
@@ -361,8 +362,9 @@ export function buildProjectGroups<TProject extends EnvironmentProject>(input: {
         : null) ?? members[0]!.project;
     return {
       key,
-      label:
-        input.groupScratchProjects && representative.isScratch
+      label: representative.isT3ChatHelper
+        ? "T3 Chat Helper"
+        : input.groupScratchProjects && representative.isScratch
           ? "No project"
           : members.length > 1
             ? deriveProjectGroupLabel({

@@ -1,3 +1,4 @@
+import { ManagedDeploymentNotice } from "./ManagedDeploymentNotice";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import {
@@ -227,6 +228,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
             {notice ? <Text className="px-2 text-sm text-foreground-muted">{notice}</Text> : null}
             {config ? (
               <>
+                <ManagedDeploymentNotice environmentId={environmentId} />
                 <SettingsSection title="T3 Code">
                   <View className="gap-1 p-4">
                     <Text className="text-base text-foreground">Version {version}</Text>

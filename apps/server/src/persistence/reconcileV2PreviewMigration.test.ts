@@ -9,7 +9,7 @@ import { migrationEntries, migrationManifest, runMigrations } from "./Migrations
 
 // These are the published upstream ids, deliberately independent of the fork ledger.
 const upstreamForkIds = [
-  45, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 60, 61, 62, 64, 65, 66, 68, 69, 70,
+  45, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 60, 61, 62, 64, 65, 66, 69, 70, 71,
 ];
 const seedUpstream = (variant: "main" | "preview53" | "preview54" | "preview54Indexes") =>
   Effect.gen(function* () {
@@ -115,3 +115,20 @@ describe("upstream ledger upgrades", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });
+
+it.effect(
+  "preserves the published fork shell-cost migration id when appending upstream migrations",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 68 });
+      const before =
+        yield* sql`SELECT migration_id, name, created_at FROM effect_sql_migrations ORDER BY migration_id`;
+      assert.deepStrictEqual(before.at(-1)?.name, "ThreadShellReadCosts");
+      yield* runMigrations();
+      const after =
+        yield* sql`SELECT migration_id, name, created_at FROM effect_sql_migrations WHERE migration_id <= 68 ORDER BY migration_id`;
+      assert.deepStrictEqual(after, before);
+      assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);

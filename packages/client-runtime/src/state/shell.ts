@@ -97,6 +97,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     Option.none(),
   );
   const persistence = yield* Queue.sliding<OrchestrationV2ShellSnapshot>(1);
+  const attemptedProjectRepairs = new Set<string>();
 
   const persistenceLock = yield* Semaphore.make(1);
   let lastPersisted: OrchestrationV2ShellSnapshot | undefined;
@@ -226,6 +227,41 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         error: Option.none(),
       };
     }
+    // A missed project delta can leave a visible thread permanently unable to
+    // send. Resume/enrichment frames only patch identities, so repair from an
+    // authoritative snapshot rather than trusting the otherwise valid cursor.
+    if (!waiting && Option.isSome(next.snapshot)) {
+      const snapshot = next.snapshot.value;
+      const projects = new Set(snapshot.projects.map((project) => project.id));
+      for (const projectId of projects) attemptedProjectRepairs.delete(projectId);
+      const checkAllThreads = items.some(
+        (item) =>
+          item.kind === "snapshot" ||
+          item.kind === "synchronized" ||
+          item.kind === "project.removed",
+      );
+      const candidates = checkAllThreads
+        ? snapshot.threads
+        : items.flatMap((item) => (item.kind === "thread.updated" ? [item.thread] : []));
+      const missing = candidates.filter(
+        (thread) =>
+          !projects.has(thread.projectId) && !attemptedProjectRepairs.has(thread.projectId),
+      );
+      if (missing.length > 0) {
+        const prepared = yield* SubscriptionRef.get(supervisor.prepared);
+        if (Option.isSome(prepared)) {
+          for (const thread of missing) attemptedProjectRepairs.add(thread.projectId);
+          const repaired = yield* snapshotLoader.load(prepared.value);
+          if (Option.isSome(repaired)) {
+            next = {
+              ...next,
+              snapshot: Option.some(mergeShellSnapshotProjects(snapshot, repaired.value)),
+            };
+            receivedSnapshot = true;
+          }
+        }
+      }
+    }
     yield* Ref.set(awaitingCompletion, waiting);
     if (next === initial) return;
     if (pendingLinkIds !== undefined && Option.isSome(next.snapshot)) {
@@ -333,6 +369,9 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     subscribeDynamic(
       ORCHESTRATION_V2_WS_METHODS.subscribeShell,
       Effect.fn("EnvironmentShellState.makeSubscribeInput")(function* (session) {
+        if ((yield* Ref.get(activeSubscriptionSession)) !== session) {
+          attemptedProjectRepairs.clear();
+        }
         yield* Ref.set(activeSubscriptionSession, session);
         const supportsCompletionMarker = yield* session.initialConfig.pipe(
           Effect.map((config) => config.shellResumeCompletionMarker === true),

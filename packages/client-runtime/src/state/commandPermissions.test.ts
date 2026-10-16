@@ -10,6 +10,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthAccessWriteScope,
   AuthSettingsWriteScope,
+  AuthEnvironmentMaintainScope,
   AuthSourceControlWriteScope,
   ThreadId,
   EnvironmentId,
@@ -121,6 +122,30 @@ describe("command permissions", () => {
         expect(denied._tag).toBe("EnvironmentAuthorizationError");
       }),
     ),
+  );
+  it.effect(
+    "requires the destination environment maintenance grant for queued deployment actions",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const registry = yield* setup;
+          const deployment = createCommandPermissions(runtime, WS_METHODS.serverDeploymentAction);
+          registry.set(sessions(env), AsyncResult.success(grant(true)));
+          expect(registry.get(deployment.permissionAtom(env))).toBe(false);
+          const maintenance = {
+            ...grant(false),
+            scopes: [AuthEnvironmentMaintainScope],
+            permissions: [AuthEnvironmentMaintainScope],
+          };
+          registry.set(sessions(env), AsyncResult.success(maintenance));
+          expect(registry.get(deployment.permissionAtom(env))).toBe(true);
+          yield* deployment.authorize(registry, env);
+          registry.set(sessions(other), AsyncResult.success(grant(true)));
+          expect(registry.get(deployment.permissionAtom(other))).toBe(false);
+          const denied = yield* deployment.authorize(registry, other).pipe(Effect.flip);
+          expect(denied._tag).toBe("EnvironmentAuthorizationError");
+        }),
+      ),
   );
   it.effect("waits for an initial grant", () =>
     Effect.scoped(

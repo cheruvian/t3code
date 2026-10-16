@@ -4431,7 +4431,10 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         );
         assert.lengthOf(errorLookups, marker.includes("blocking") ? 2 : 1, marker);
         for (const errorLookup of errorLookups) {
-          assert.include(errorLookup, "turn_items_failed_error_idx");
+          assert.match(
+            errorLookup,
+            /USING (?:COVERING )?INDEX orchestration_v2_(?:items_latest_failure_idx|projection_turn_items_failed_error_idx)/,
+          );
           assert.include(errorLookup, "(thread_id=? AND run_id=? AND node_id=?)");
         }
       }
@@ -6599,4 +6602,122 @@ it.effect(
       );
       assert.deepEqual(yield* store.getTurnItem({ threadId, itemId: item.id }), changed);
     }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
+  "shell reads skip foreground output but retain background work after the run settles",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = yield* addRolledBackRecoveryCandidate("shell-foreground-output");
+      const run = (yield* store.getThreadProjection(threadId)).runs[0]!;
+      const output = "output".repeat(50_000);
+      yield* sql`UPDATE orchestration_v2_projection_turn_items
+      SET payload_json = json_set(payload_json, '$.output', ${output})
+      WHERE thread_id = ${threadId}`;
+
+      for (const status of ["preparing", "starting", "running", "waiting", "completed"] as const) {
+        yield* store.apply({
+          id: EventId.make(`event:shell-foreground-output:${status}`),
+          type: "run.updated",
+          threadId,
+          runId: run.id,
+          occurredAt: yield* DateTime.now,
+          payload: { ...run, status },
+        });
+        const queries: Array<readonly [string, ReadonlyArray<unknown>]> = [];
+        const record: Statement.Transformer = (statement) =>
+          Effect.sync(() => {
+            queries.push(statement.compile());
+            return statement;
+          });
+        const snapshot = yield* store
+          .getShellSnapshot()
+          .pipe(Effect.provideService(Statement.CurrentTransformer, record));
+        const shell = yield* store
+          .getThreadShell(threadId)
+          .pipe(Effect.provideService(Statement.CurrentTransformer, record));
+        const foreground = status !== "waiting" && status !== "completed";
+        assert.lengthOf(shell?.pendingBackgroundTasks ?? [], foreground ? 0 : 1);
+        assert.deepEqual(
+          snapshot.threads.find((thread) => thread.id === threadId)?.pendingBackgroundTasks,
+          shell?.pendingBackgroundTasks,
+        );
+        const pendingQueries = queries.filter(([text]) =>
+          text.includes("i.type IN ('command_execution', 'dynamic_tool', 'subagent')"),
+        );
+        assert.lengthOf(pendingQueries, 2);
+        for (const [query, parameters] of pendingQueries) {
+          const rows = yield* sql.unsafe<{ payload_json: string }>(query, parameters);
+          // This is the worker/main-thread boundary: hidden foreground output must not cross it.
+          assert.lengthOf(rows, foreground ? 0 : 1);
+          for (const row of rows) assert.isBelow(Buffer.byteLength(row.payload_json), 2_000);
+        }
+      }
+      const item = yield* store.getTurnItem({
+        threadId,
+        itemId: TurnItemId.make("item:shell-foreground-output:rolled-back"),
+      });
+      assert.equal(item?.type === "command_execution" ? item.output : null, output);
+    }).pipe(Effect.provide(Layer.fresh(layerTest))),
+);
+
+it.effect("shells count retained items without scanning transcript or idle run histories", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const sql = yield* SqlClient.SqlClient;
+    const threadId = yield* addRolledBackRecoveryCandidate("shell-counts");
+    const run = (yield* store.getThreadProjection(threadId)).runs[0]!;
+    yield* sql`
+        INSERT INTO orchestration_v2_projection_turn_items
+          (turn_item_id, thread_id, run_id, ordinal, type, status, updated_at, payload_json)
+        WITH RECURSIVE items(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM items WHERE n < 256)
+        SELECT 'shell-count-item:' || n, ${threadId}, ${run.id}, n + 1,
+          'assistant_message', 'completed', '2026-10-15', '{}' FROM items
+      `;
+    assert.equal((yield* store.getThreadShell(threadId))?.itemCount, 0);
+    yield* store.apply({
+      id: EventId.make("event:shell-counts:restore"),
+      type: "run.updated",
+      threadId,
+      runId: run.id,
+      occurredAt: yield* DateTime.now,
+      payload: { ...run, status: "completed" },
+    });
+
+    const queries: Array<readonly [string, ReadonlyArray<unknown>]> = [];
+    const record: Statement.Transformer = (statement) =>
+      Effect.sync(() => {
+        queries.push(statement.compile());
+        return statement;
+      });
+    const snapshot = yield* store
+      .getShellSnapshot()
+      .pipe(Effect.provideService(Statement.CurrentTransformer, record));
+    assert.equal(snapshot.threads.find((thread) => thread.id === threadId)?.itemCount, 257);
+    assert.equal((yield* store.getThreadShell(threadId))?.itemCount, 257);
+    assert.isFalse(
+      queries.some(
+        ([text]) =>
+          text.includes("COUNT(*)") && text.includes("orchestration_v2_projection_turn_items"),
+      ),
+    );
+    const query = queries.find(([text]) => text.includes("AS active_run_id"))!;
+    const plan = yield* sql.unsafe<{ detail: string }>(`EXPLAIN QUERY PLAN ${query[0]}`, query[1]);
+    assert.equal(
+      plan.filter((row) => row.detail.includes("orchestration_v2_runs_current_idx")).length,
+      3,
+    );
+    assert.isTrue(
+      plan.some((row) => row.detail.includes("orchestration_v2_messages_latest_authored_idx")),
+    );
+    assert.equal(
+      plan.filter((row) => row.detail.includes("orchestration_v2_items_latest_failure_idx")).length,
+      2,
+    );
+    assert.isTrue(
+      plan.some((row) => row.detail.includes("orchestration_v2_items_waiting_secret_idx")),
+    );
+  }).pipe(Effect.provide(Layer.fresh(layerTest))),
 );
