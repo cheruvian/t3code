@@ -1946,13 +1946,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             }
           >
             {accessibleTitle}
-            {/* Restore the project icon whenever the row is highlighted. */}
+            {/* Keep unread and prominent conversations in color, alongside highlighted rows. */}
             {props.project ? (
               <span
                 className={cn(
                   "inline-flex size-4 shrink-0 items-center justify-center transition-opacity",
-                  !props.isActive &&
-                    !isSelected &&
+                  shouldRecede &&
+                    !isUnread &&
+                    !unreadState.hasUnreadCompletion &&
+                    !isWoke &&
                     props.sweepAction === null &&
                     !isFileDragOver &&
                     "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
