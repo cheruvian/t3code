@@ -324,8 +324,9 @@ export const ClientSettingsSchema = Schema.Struct({
   notificationMode: NotificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed("off" as const)),
   ),
-  appIconUnreadBadgeEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  sessionFinishSoundEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // Reserved values round-trip for reversible notification policies; notificationMode controls signals.
+  appIconUnreadBadgeEnabled: Schema.optionalKey(Schema.Boolean),
+  sessionFinishSoundEnabled: Schema.optionalKey(Schema.Boolean),
   inAppNotificationsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   diffColorScheme: DiffColorScheme.pipe(
     Schema.withDecodingDefault(Effect.succeed("red-green" as const)),

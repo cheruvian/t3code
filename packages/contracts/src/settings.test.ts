@@ -1340,14 +1340,15 @@ describe("server model preferences", () => {
   });
 });
 
-describe("completion attention preferences", () => {
-  it("defaults both signals on and preserves explicit opt-outs in snapshots and patches", () => {
-    expect(decodeClientSettings({})).toMatchObject({
-      appIconUnreadBadgeEnabled: true,
-      sessionFinishSoundEnabled: true,
-    });
-    const disabled = { appIconUnreadBadgeEnabled: false, sessionFinishSoundEnabled: false };
-    expect(encodeClientSettings(decodeClientSettings(disabled))).toMatchObject(disabled);
-    expect(decodeClientSettingsPatch(disabled)).toEqual(disabled);
+describe("notification policy compatibility", () => {
+  it("defaults notifications off while preserving reserved preferences for a policy rollback", () => {
+    expect(decodeClientSettings({}).notificationMode).toBe("off");
+    for (const enabled of [false, true]) {
+      const reserved = { appIconUnreadBadgeEnabled: enabled, sessionFinishSoundEnabled: enabled };
+      const decoded = decodeClientSettings(reserved);
+      expect(decoded.notificationMode).toBe("off");
+      expect(encodeClientSettings(decoded)).toMatchObject(reserved);
+      expect(decodeClientSettingsPatch(reserved)).toEqual(reserved);
+    }
   });
 });

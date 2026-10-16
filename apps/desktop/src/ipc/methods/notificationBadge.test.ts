@@ -118,19 +118,6 @@ it.effect("validates IPC and clears on native focus, quit, and disposal", () =>
         expect(native.webContents.send).toHaveBeenCalledTimes(2);
         native.getFocusedWindow.mockReturnValue(null);
         yield* Effect.promise(() => Promise.resolve(handler(event, badge)));
-        yield* Effect.promise(() =>
-          Promise.resolve(handler(event, { ...badge, persistUntilVisited: true })),
-        );
-        native.getFocusedWindow.mockReturnValue({});
-        native.listeners.get("browser-window-focus")!();
-        expect(native.setBadgeCount).toHaveBeenLastCalledWith(2);
-        yield* Effect.promise(() =>
-          Promise.resolve(handler(event, { count: 0, image: null, persistUntilVisited: true })),
-        );
-        expect(native.setBadgeCount).toHaveBeenLastCalledWith(0);
-        yield* Effect.promise(() =>
-          Promise.resolve(handler(event, { ...badge, persistUntilVisited: true })),
-        );
         native.listeners.get("before-quit")!();
         expect(native.setBadgeCount).toHaveBeenLastCalledWith(0);
       }),
@@ -155,11 +142,3 @@ it.effect("validates IPC and clears on native focus, quit, and disposal", () =>
     expect(handlers.size).toBe(0);
   }),
 );
-
-it("keeps unread completion counts while focused until the renderer acknowledges visits", () => {
-  native.getFocusedWindow.mockReturnValue({});
-  applyNotificationBadge("darwin", { ...badge, persistUntilVisited: true });
-  expect(native.setBadgeCount).toHaveBeenLastCalledWith(2);
-  applyNotificationBadge("darwin", { count: 0, image: null, persistUntilVisited: true });
-  expect(native.setBadgeCount).toHaveBeenLastCalledWith(0);
-});

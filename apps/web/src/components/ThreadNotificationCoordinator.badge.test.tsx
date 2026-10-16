@@ -228,7 +228,7 @@ it("removes alerts only from environments that leave the client", async () => {
   expect(retained!.close).toHaveBeenCalledOnce();
 });
 
-it("closes delivered notifications without overwriting the desktop unread completion badge", async () => {
+it("counts delivered desktop notifications and clears them with the native badge", async () => {
   let clear: (() => void) | undefined;
   const unsubscribe = vi.fn();
   Object.assign(window, {
@@ -242,17 +242,18 @@ it("closes delivered notifications without overwriting the desktop unread comple
   await render();
   complete();
   await render();
+  expect(state.badge).toHaveBeenLastCalledWith(1);
   clear!();
   expect(TestNotification.sent[0]!.close).toHaveBeenCalledOnce();
-  expect(state.badge).not.toHaveBeenCalled();
+  expect(state.badge).toHaveBeenLastCalledWith(0);
   complete("two");
   await render();
-  expect(state.badge).not.toHaveBeenCalled();
+  expect(state.badge).toHaveBeenLastCalledWith(1);
   expect(TestNotification.sent).toHaveLength(2);
   await act(async () => renderer!.unmount());
   renderer = undefined;
   expect(unsubscribe).toHaveBeenCalledOnce();
-  expect(state.badge).not.toHaveBeenCalled();
+  expect(state.badge).toHaveBeenLastCalledWith(0);
 });
 
 it.each(["off", "sound", "focused", "denied", "archived"])(

@@ -420,19 +420,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["notification sound alert completion input approval desktop"],
   },
   {
-    id: "session-finish-sound",
-    title: "Completion sound",
-    to: "/settings/general",
-    searchTerms: ["session finish chime sound notification"],
-  },
-  {
-    id: "app-icon-unread-badge",
-    title: "Unread completion badge",
-    to: "/settings/general",
-    desktopOnly: true,
-    searchTerms: ["dock app icon done unread badge count"],
-  },
-  {
     id: "in-app-notifications",
     title: "In-app notifications",
     to: "/settings/general",

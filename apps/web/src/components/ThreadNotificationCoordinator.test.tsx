@@ -127,7 +127,7 @@ vi.mock("../hooks/useSettings", () => ({
       settings: Pick<ClientSettings, "notificationMode" | "inAppNotificationsEnabled">,
     ) => unknown,
   ) => select({ notificationMode: state.mode, inAppNotificationsEnabled: state.inApp }),
-  getClientSettings: () => ({ notificationMode: state.mode }),
+  getClientSettings: () => ({ notificationMode: state.mode, sessionFinishSoundEnabled: false }),
 }));
 vi.mock("../state/environments", () => ({
   useEnvironmentIds: () => ["env-1"],
@@ -201,6 +201,22 @@ afterEach(async () => {
 });
 
 describe("thread notifications", () => {
+  it.each(["off", "sound"] as const)(
+    "notificationMode controls completion audio with a reserved opt-out (%s)",
+    async (mode) => {
+      state.mode = mode;
+      await render();
+      await complete();
+      if (mode === "off") expect(state.sound).not.toHaveBeenCalled();
+      else {
+        expect(state.sound).toHaveBeenCalledExactlyOnceWith("completion", expect.any(Function));
+        const enabled = state.sound.mock.calls[0]?.[1];
+        expect(enabled).toBeTypeOf("function");
+        if (typeof enabled === "function") expect(enabled()).toBe(true);
+      }
+    },
+  );
+
   it.each([true, false])("keeps subagents silent with focus=%s", async (focused) => {
     state.subagent = true;
     state.focused = focused;

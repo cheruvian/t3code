@@ -40,7 +40,7 @@ export function ThreadNotificationCoordinator() {
   const onNotification = useCallback((environmentId: EnvironmentId, notification: Notification) => {
     pending.current.get(notification.tag)?.notification.close();
     pending.current.set(notification.tag, { environmentId, notification });
-    if (!window.desktopBridge) setNotificationBadge(pending.current.size);
+    setNotificationBadge(pending.current.size);
   }, []);
 
   useEffect(() => {
@@ -51,15 +51,14 @@ export function ThreadNotificationCoordinator() {
       notification.close();
       pending.current.delete(tag);
     }
-    if (count !== pending.current.size)
-      if (!window.desktopBridge) setNotificationBadge(pending.current.size);
+    if (count !== pending.current.size) setNotificationBadge(pending.current.size);
   }, [environmentIds]);
 
   useEffect(() => {
     const clear = () => {
       for (const { notification } of pending.current.values()) notification.close();
       pending.current.clear();
-      if (!window.desktopBridge) setNotificationBadge(0);
+      setNotificationBadge(0);
     };
     clear();
     if (!hasDesktopNotifications(mode)) return;
@@ -180,15 +179,9 @@ function EnvironmentNotifications({
               : status === "failed"
                 ? "Thread failed"
                 : "Input needed";
-      if (
-        hasNotificationSound(mode) &&
-        (kind !== "completion" || getClientSettings().sessionFinishSoundEnabled !== false)
-      ) {
-        void playNotificationSound(
-          kind,
-          () =>
-            hasNotificationSound(getClientSettings().notificationMode) &&
-            (kind !== "completion" || getClientSettings().sessionFinishSoundEnabled !== false),
+      if (hasNotificationSound(mode)) {
+        void playNotificationSound(kind, () =>
+          hasNotificationSound(getClientSettings().notificationMode),
         );
       }
       if (
