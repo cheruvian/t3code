@@ -10,7 +10,6 @@ import {
   groupKeybindingRows,
   keybindingConflictLabels,
   keybindingFromKeyboardEvent,
-  shouldSkipKeybindingCapture,
   keybindingSearchFromKeyboardEvent,
   parseWhenExpressionDraft,
   shortcutToKeybindingInput,
@@ -275,7 +274,7 @@ describe("KeybindingsSettings.logic", () => {
     expect(keybindingFromKeyboardEvent({ key, code, ...noModifiers }, "MacIntel")).toBe(expected);
   });
 
-  it("preserves plain Tab navigation while capturing modified Tab chords", () => {
+  it("captures plain and modified Tab shortcuts", () => {
     const plain = {
       key: "Tab",
       code: "Tab",
@@ -284,10 +283,9 @@ describe("KeybindingsSettings.logic", () => {
       altKey: false,
       shiftKey: false,
     };
-    expect(shouldSkipKeybindingCapture(plain)).toBe(true);
+    expect(keybindingFromKeyboardEvent(plain, "MacIntel")).toBe("tab");
     for (const modifier of ["metaKey", "ctrlKey", "altKey", "shiftKey"] as const) {
       const modified = { ...plain, [modifier]: true };
-      expect(shouldSkipKeybindingCapture(modified)).toBe(false);
       expect(keybindingFromKeyboardEvent(modified, "MacIntel")).toMatch(/\+tab$/);
     }
   });

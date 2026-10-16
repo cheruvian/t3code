@@ -67,7 +67,6 @@ import {
   keybindingFromKeyboardEvent,
   keybindingSearchFromKeyboardEvent,
   parseWhenExpressionDraft,
-  shouldSkipKeybindingCapture,
   groupKeybindingRows,
   type KeybindingCommandOption,
   type KeybindingGroup,
@@ -758,7 +757,6 @@ function useKeybindingRowEditor({
   };
 
   const captureKeybinding = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (shouldSkipKeybindingCapture(event)) return;
     event.preventDefault();
     if (event.key === "Escape") {
       setDraft({ keyDraft: row.key, isRecording: false });
@@ -1073,7 +1071,6 @@ function useNewKeybindingDraft({
   };
 
   const captureKeybinding = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (shouldSkipKeybindingCapture(event)) return;
     event.preventDefault();
     if (event.key === "Escape") {
       setDraft({ keyDraft: "", isRecording: false });

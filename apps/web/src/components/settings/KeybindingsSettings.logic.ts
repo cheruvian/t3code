@@ -478,11 +478,3 @@ export function keybindingFromKeyboardEvent(
   parts.push(keyToken);
   return parts.join("+");
 }
-
-export function shouldSkipKeybindingCapture(
-  event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">,
-): boolean {
-  return (
-    event.key === "Tab" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
-  );
-}
