@@ -58,7 +58,6 @@ import * as ThreadMoveTransfer from "./ThreadMoveTransferService.ts";
 import * as ThreadMove from "./ThreadMoveService.ts";
 import * as NativeSessionResumeProbe from "./NativeSessionResumeProbe.ts";
 
-/** The shared application event log and its command receipts. */
 export const layerEventInfrastructure = Layer.mergeAll(
   OrchestrationEventStore.layer,
   OrchestrationCommandReceipts.layer,

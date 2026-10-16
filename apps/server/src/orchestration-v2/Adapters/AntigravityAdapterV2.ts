@@ -64,7 +64,6 @@ export interface AntigravityAdapterV2Options {
   readonly globalCustomInstructions?: Effect.Effect<string>;
   readonly instanceId: ProviderInstanceId;
   readonly selfInvocation: SelfInvocation;
-  /** Spawns the official agent with the instance's Google profile. */
   readonly makeRuntime: (
     input: Omit<AntigravityAcpRuntimeInput, "spawn" | "childProcessSpawner">,
   ) => Effect.Effect<
@@ -72,9 +71,7 @@ export interface AntigravityAdapterV2Options {
     EffectAcpErrors.AcpError | ProviderSetupError,
     Scope.Scope
   >;
-  /** Serialises process ownership against sign-in and sign-out. */
   readonly withProcess: AntigravityAuth["withProcess"];
-  /** Model to select for the provider default alias, from the manifest. */
   readonly defaultModel: Effect.Effect<string | undefined>;
   readonly onSessionStarted?: (
     started: AcpSessionRuntime.AcpSessionRuntimeStartResult,
@@ -86,9 +83,8 @@ export interface AntigravityAdapterV2Options {
 }
 
 /**
- * ACP 1.1.1 exposes subagent invocations as ordinary `start_subagent` tools
- * without child session ids. Project them as subagent items keyed by the tool
- * call so the timeline shows them as delegated work.
+ * ACP 1.1.1 exposes subagent invocations as ordinary `start_subagent` tools without child
+ * session ids.
  */
 const extractAntigravitySubagentUpdate: NonNullable<AcpAdapterV2Flavor["extractSubagentUpdate"]> = (
   toolCall,
@@ -113,7 +109,6 @@ const extractAntigravitySubagentUpdate: NonNullable<AcpAdapterV2Flavor["extractS
   };
 };
 
-/** The services the Antigravity flavor runs its runtime and session files with. */
 interface AntigravityFlavorServices {
   readonly crypto: Crypto.Crypto;
   readonly fileSystem: FileSystem.FileSystem;
@@ -124,15 +119,10 @@ interface AntigravityFlavorServices {
 export function makeAntigravityAcpAdapterFlavor(
   options: AntigravityAdapterV2Options & AntigravityFlavorServices,
 ): AcpAdapterV2Flavor {
-  // The attachments dir grant lets the agent read pasted files at the paths
-  // the turn text references. It is a leaf directory of uploads. A session
-  // without a workspace gets no workspace root rather than the server's cwd.
   const antigravityClientFileRoots = (cwd: string | null) =>
     cwd === null ? [options.host.paths.attachmentsDir] : [cwd, options.host.paths.attachmentsDir];
   const makeRuntime = (input: AcpAdapterV2RuntimeInput) =>
     Effect.gen(function* () {
-      // AcpAdapterV2 owns the runtime scope; sign-in and sign-out stop the
-      // process by closing a child of it, and the adapter respawns on the next turn.
       const scope = yield* Scope.fork(yield* Effect.scope);
       const runtime = yield* options
         .withProcess(

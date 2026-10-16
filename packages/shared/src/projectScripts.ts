@@ -13,12 +13,6 @@ type ProjectScriptSettings = Pick<
   | "projectSettingsFolded"
 >;
 
-/**
- * The project's override wins, then environment defaults. Until the legacy
- * fields have been folded into `projectSettingsOverrides`, the old map (null
- * there meant "reset to machine defaults") and the aggregate's own scripts
- * still count, so a server that has not run the fold yet behaves as before.
- */
 export function resolveProjectScripts(
   settings: ProjectScriptSettings,
   project: { id: ProjectId; scripts: readonly ProjectScript[] },
@@ -125,7 +119,6 @@ export function resolveInheritedProjectScripts(
   return resolved;
 }
 
-/** Menu label naming the lifecycle roles a script runs in, e.g. "Clean (on settle)". */
 export function projectScriptMenuLabel(script: ProjectScript): string {
   const roles = [
     ...(script.runOnWorktreeCreate ? ["setup"] : []),
