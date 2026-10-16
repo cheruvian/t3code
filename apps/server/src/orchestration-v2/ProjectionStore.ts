@@ -5007,16 +5007,20 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
               json_extract(presented.payload_json, '$.startedAt') AS latest_run_started_at,
               presented.completed_at AS latest_run_completed_at,
               (
+                -- Share the current-run index while keeping waiting runs non-interruptible.
                 SELECT r.run_id
                 FROM orchestration_v2_projection_runs r
+                  INDEXED BY orchestration_v2_runs_current_idx
                 WHERE r.thread_id = t.thread_id
-                  AND r.status IN ('preparing', 'starting', 'running')
+                  AND r.status IN ('preparing', 'starting', 'running', 'waiting')
+                  AND r.status <> 'waiting'
                 ORDER BY r.ordinal DESC, r.run_id DESC
                 LIMIT 1
               ) AS active_run_id,
               (
                 SELECT r.status
                 FROM orchestration_v2_projection_runs r
+                  INDEXED BY orchestration_v2_runs_current_idx
                 WHERE r.thread_id = t.thread_id
                   AND r.status IN ('preparing', 'starting', 'running', 'waiting')
                 ORDER BY r.ordinal DESC, r.run_id DESC
@@ -5030,6 +5034,7 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
                   r.requested_at
                 )
                 FROM orchestration_v2_projection_runs r
+                  INDEXED BY orchestration_v2_runs_current_idx
                 WHERE r.thread_id = t.thread_id
                   AND r.status IN ('preparing', 'starting', 'running', 'waiting')
                 ORDER BY r.ordinal DESC, r.run_id DESC
@@ -5048,7 +5053,7 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
               (
                 SELECT item.payload_json
                 FROM orchestration_v2_projection_turn_items item
-                  INDEXED BY orchestration_v2_projection_turn_items_thread_run_idx
+                  INDEXED BY orchestration_v2_items_latest_failure_idx
                 INNER JOIN orchestration_v2_projection_runs r ON r.run_id = item.run_id
                 WHERE r.run_id = presented.run_id
                   AND r.status = 'failed'
@@ -5065,7 +5070,7 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
               (
                 SELECT item.payload_json
                 FROM orchestration_v2_projection_turn_items item
-                  INDEXED BY orchestration_v2_projection_turn_items_thread_run_idx
+                  INDEXED BY orchestration_v2_items_latest_failure_idx
                 WHERE item.thread_id = t.thread_id
                   AND item.run_id = blocked.run_id
                   AND item.type = 'error' AND item.status = 'failed'
@@ -5086,7 +5091,7 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
                 -- Keep runs outermost so completed history is never scanned for a pending secret.
                 FROM orchestration_v2_projection_runs r
                 CROSS JOIN orchestration_v2_projection_turn_items secret
-                  INDEXED BY orchestration_v2_projection_turn_items_thread_run_idx
+                  INDEXED BY orchestration_v2_items_waiting_secret_idx
                 WHERE r.thread_id = t.thread_id
                   AND r.status IN ('preparing', 'starting', 'running', 'waiting')
                   AND secret.thread_id = t.thread_id AND secret.run_id = r.run_id
@@ -5105,6 +5110,7 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
               (
                 SELECT message.updated_at
                 FROM orchestration_v2_projection_messages message
+                  INDEXED BY orchestration_v2_messages_latest_authored_idx
                 WHERE message.thread_id = t.thread_id
                   AND message.role = 'user'
                   AND json_extract(message.payload_json, '$.createdBy') = 'user'
@@ -5118,23 +5124,18 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
                   AND plan.kind = 'proposed_plan'
                   AND plan.status = 'active'
               ) AS has_actionable_proposed_plan,
-              -- Count per run on the covering (thread_id, run_id) index, then
-              -- look up each run once, instead of one run lookup per item.
+              -- Counts are maintained with item membership; shell reads never recount transcripts.
               (
                 SELECT COALESCE(SUM(per_run.item_count), 0)
-                FROM (
-                  SELECT i.run_id, COUNT(*) AS item_count
-                  FROM orchestration_v2_projection_turn_items i
-                  WHERE i.thread_id = t.thread_id
-                  GROUP BY i.run_id
-                ) per_run
+                FROM orchestration_v2_projection_item_counts per_run
                 LEFT JOIN orchestration_v2_projection_runs r
                   ON r.run_id = per_run.run_id
-                WHERE per_run.run_id IS NULL OR r.status <> 'rolled_back'
+                WHERE per_run.thread_id = t.thread_id
+                  AND (per_run.run_id IS NULL OR r.status <> 'rolled_back')
               ) AS item_count,
               (
-                SELECT COUNT(*)
-                FROM orchestration_v2_projection_turn_items i
+                SELECT COALESCE(SUM(i.item_count), 0)
+                FROM orchestration_v2_projection_item_counts i
                 WHERE i.thread_id = t.thread_id
                   AND i.run_id IS NULL
               ) AS runless_item_count
@@ -5194,17 +5195,15 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
     const selectShellRunItemCounts = (threadIds?: ReadonlyArray<ThreadId>) =>
       threadIds === undefined
         ? sql<ShellRunItemCountRow>`
-            SELECT thread_id, run_id, COUNT(*) AS item_count
-            FROM orchestration_v2_projection_turn_items
+            SELECT thread_id, run_id, item_count
+            FROM orchestration_v2_projection_item_counts
             WHERE run_id IS NOT NULL
-            GROUP BY thread_id, run_id
           `
         : sql<ShellRunItemCountRow>`
-            SELECT thread_id, run_id, COUNT(*) AS item_count
-            FROM orchestration_v2_projection_turn_items
+            SELECT thread_id, run_id, item_count
+            FROM orchestration_v2_projection_item_counts
             WHERE run_id IS NOT NULL
               AND thread_id IN ${sql.in(threadIds)}
-            GROUP BY thread_id, run_id
           `;
 
     const selectShellProviderThreadRows = (threadIds?: ReadonlyArray<ThreadId>) =>
@@ -5220,27 +5219,44 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
             WHERE thread_id IN ${sql.in(threadIds)}
           `;
 
+    // Background descriptions need identity and input, never command/tool output.
     const selectShellPendingTurnItemRows = (threadIds?: ReadonlyArray<ThreadId>) =>
       threadIds === undefined
         ? sql<PayloadRow & { readonly thread_id: string }>`
-            SELECT i.thread_id, i.payload_json
+            SELECT i.thread_id, json_remove(i.payload_json, '$.output') AS payload_json
             FROM orchestration_v2_projection_turn_items i
             LEFT JOIN orchestration_v2_projection_runs r
               ON r.run_id = i.run_id
             WHERE i.type IN ('command_execution', 'dynamic_tool', 'subagent')
               AND i.status NOT IN ('completed', 'interrupted', 'failed', 'cancelled')
+              -- Foreground work suppresses this roster; do not materialize its output.
+              AND NOT EXISTS (
+                SELECT 1 FROM orchestration_v2_projection_runs active
+                  INDEXED BY orchestration_v2_runs_current_idx
+                WHERE active.thread_id = i.thread_id
+                  AND active.status IN ('preparing', 'starting', 'running', 'waiting')
+                  AND active.status <> 'waiting'
+              )
               -- A rolled-back run's items are abandoned, not pending. Without
               -- this the shell reports Waiting for work no one will finish,
               -- matching the item_count query's exclusion above.
               AND (i.run_id IS NULL OR r.status <> 'rolled_back')
           `
         : sql<PayloadRow & { readonly thread_id: string }>`
-            SELECT i.thread_id, i.payload_json
+            SELECT i.thread_id, json_remove(i.payload_json, '$.output') AS payload_json
             FROM orchestration_v2_projection_turn_items i
             LEFT JOIN orchestration_v2_projection_runs r
               ON r.run_id = i.run_id
             WHERE i.type IN ('command_execution', 'dynamic_tool', 'subagent')
               AND i.status NOT IN ('completed', 'interrupted', 'failed', 'cancelled')
+              -- Foreground work suppresses this roster; do not materialize its output.
+              AND NOT EXISTS (
+                SELECT 1 FROM orchestration_v2_projection_runs active
+                  INDEXED BY orchestration_v2_runs_current_idx
+                WHERE active.thread_id = i.thread_id
+                  AND active.status IN ('preparing', 'starting', 'running', 'waiting')
+                  AND active.status <> 'waiting'
+              )
               AND (i.run_id IS NULL OR r.status <> 'rolled_back')
               AND i.thread_id IN ${sql.in(threadIds)}
           `;

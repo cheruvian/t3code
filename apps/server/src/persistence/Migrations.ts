@@ -84,6 +84,7 @@ import Migration0064 from "./Migrations/057_ScheduledTaskWebhooks.ts";
 import Migration0065 from "./Migrations/058_WebhookRelayDeliveries.ts";
 import Migration0066 from "./Migrations/059_McpAppModelContext.ts";
 import Migration0067 from "./Migrations/067_BackgroundThreadLookupIndexes.ts";
+import Migration0068 from "./Migrations/068_ThreadShellReadCosts.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -168,6 +169,7 @@ export const migrationEntries = [
   [65, "WebhookRelayDeliveries", Migration0065],
   [66, "McpAppModelContext", Migration0066],
   [67, "BackgroundThreadLookupIndexes", Migration0067],
+  [68, "ThreadShellReadCosts", Migration0068],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
