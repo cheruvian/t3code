@@ -2,11 +2,7 @@ import {
   applyThreadPullRequestLinkUpdate,
   threadPullRequestsOf,
 } from "@t3tools/shared/threadPullRequests";
-import {
-  projectThreadProjectionForWire,
-  TURN_ITEM_WIRE_PAYLOAD_VERSION,
-  projectTurnItemForWire,
-} from "./WireProjection.ts";
+import { projectThreadProjectionForWire, projectTurnItemForWire } from "./WireProjection.ts";
 import * as Stream from "effect/Stream";
 import { makeThreadFind, findProjectedThreadItems } from "./ThreadFind.ts";
 import {
@@ -615,7 +611,7 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadSnapshotWindow: (
     threadId: ThreadId,
     options: {
-      /** Use persisted compact tool payloads only for client-facing snapshots. */
+      /** Trim tool payloads for client-facing snapshots after selecting history rows. */
       readonly wireOnly?: boolean;
       /** Row fallback for histories without turn starts. */
       readonly rowLimit: number;
@@ -2643,10 +2639,6 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
           case "turn-item.updated": {
             const payloadJson = yield* encodeTurnItemPayload(event.payload);
             const payload = parseEncodedPayload(payloadJson);
-            const wireItem = projectTurnItemForWire(event.payload);
-            const wireJson =
-              wireItem === event.payload ? payloadJson : yield* encodeTurnItemPayload(wireItem);
-            const compactJson = wireJson.length < payloadJson.length ? wireJson : null;
             yield* sql`
               INSERT INTO orchestration_v2_projection_turn_items (
                 turn_item_id,
@@ -2660,9 +2652,7 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
                 type,
                 status,
                 updated_at,
-                payload_json,
-                payload_wire_json,
-                payload_wire_version
+                payload_json
               )
               VALUES (
                 ${event.payload.id},
@@ -2676,9 +2666,7 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
                 ${event.payload.type},
                 ${event.payload.status},
                 ${stringField(payload, "updatedAt")},
-                ${payloadJson},
-                ${compactJson},
-                ${TURN_ITEM_WIRE_PAYLOAD_VERSION}
+                ${payloadJson}
               )
               ON CONFLICT(turn_item_id)
               DO UPDATE SET
@@ -2692,9 +2680,7 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
                 type = excluded.type,
                 status = excluded.status,
                 updated_at = excluded.updated_at,
-                payload_json = excluded.payload_json,
-                payload_wire_json = excluded.payload_wire_json,
-                payload_wire_version = excluded.payload_wire_version
+                payload_json = excluded.payload_json
               WHERE orchestration_v2_projection_turn_items.thread_id = excluded.thread_id
             `;
             break;
@@ -2925,8 +2911,6 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
         ),
       );
 
-    const wirePayload = sql`CASE WHEN item.payload_wire_version = ${TURN_ITEM_WIRE_PAYLOAD_VERSION} THEN COALESCE(item.payload_wire_json, item.payload_json) ELSE item.payload_json END`;
-
     const readCanonicalProjection = (
       threadId: ThreadId,
       window?: {
@@ -2957,7 +2941,7 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
             ? []
             : window === undefined
               ? yield* sql<PayloadRow>`
-                SELECT ${wireOnly ? wirePayload : sql`item.payload_json`} AS payload_json
+                SELECT item.payload_json
                 FROM orchestration_v2_projection_turn_items AS item
                 WHERE thread_id = ${threadId}
                   ${filter?.turnItemTypes === undefined ? sql`` : sql`AND type IN (SELECT value FROM json_each(${encodeIdList(filter.turnItemTypes)}))`}
@@ -3134,7 +3118,7 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
                 -- CROSS JOIN keeps the sorted IDs as the outer loop, so SQLite
                 -- skips sorting again once the payloads are attached. Carry the
                 -- rowid through selection to avoid a second string-key index lookup.
-                SELECT ${wireOnly ? wirePayload : sql`item.payload_json`} AS payload_json
+                SELECT item.payload_json
                 FROM retained
                 CROSS JOIN orchestration_v2_projection_turn_items AS item
                   ON item.rowid = retained.item_rowid
@@ -5326,7 +5310,7 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
               turn_item_id: string;
               payload_json: string;
             }>`
-          SELECT item.thread_id, item.turn_item_id, ${wirePayload} AS payload_json
+          SELECT item.thread_id, item.turn_item_id, item.payload_json
           FROM orchestration_v2_projection_turn_items item JOIN json_each(${sources}) wanted
           ON item.thread_id = json_extract(wanted.value, '$.threadId')
             AND item.turn_item_id = json_extract(wanted.value, '$.id')`;

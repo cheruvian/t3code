@@ -11,9 +11,6 @@ import {
   toolOutputIndicatesFailure,
 } from "@t3tools/shared/toolOutput";
 
-/** Bump whenever client payload projection rules change; stale cache rows fall back to full data. */
-export const TURN_ITEM_WIRE_PAYLOAD_VERSION = 1;
-
 const MAX_DETAIL_STRING_BYTES = 32_768;
 const MAX_DYNAMIC_VALUE_BYTES = 16_384;
 const MAX_ON_DEMAND_BYTES = 256 * 1024;

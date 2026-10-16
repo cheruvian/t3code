@@ -41,10 +41,7 @@ import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as EventStore from "./EventStore.ts";
 import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
-import {
-  projectThreadProjectionForWire,
-  TURN_ITEM_WIRE_PAYLOAD_VERSION,
-} from "./WireProjection.ts";
+import { projectThreadProjectionForWire } from "./WireProjection.ts";
 import {
   buildBoundedThreadProjection,
   decodeThreadHistoryCursor,
@@ -6491,117 +6488,112 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
   );
 });
 
-it.effect(
-  "reads compact turn payloads for wire snapshots while keeping full control and detail reads",
-  () =>
-    Effect.gen(function* () {
-      const store = yield* ProjectionStore.ProjectionStoreV2;
-      const now = yield* DateTime.now;
-      const threadId = ThreadId.make("thread:wire-payload-cache");
-      yield* store.apply({
-        id: EventId.make("event:wire-cache:thread"),
-        type: "thread.created",
-        threadId,
-        occurredAt: now,
-        payload: {
-          id: threadId,
-          projectId: ProjectId.make("project:wire-cache"),
-          title: "Wire payload cache",
-          providerInstanceId,
-          modelSelection,
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          branch: null,
-          worktreePath: null,
-          activeProviderThreadId: null,
-          lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
-          forkedFrom: null,
-          createdBy: "user",
-          creationSource: "web",
-          createdAt: now,
-          updatedAt: now,
-          archivedAt: null,
-          settledOverride: null,
-          settledAt: null,
-          lastVisitedAt: null,
-          deletedAt: null,
-        },
-      });
-      const item = {
-        id: TurnItemId.make("item:wire-cache:command"),
-        threadId,
-        runId: null,
-        nodeId: null,
-        providerThreadId: null,
-        providerTurnId: null,
-        nativeItemRef: null,
-        parentItemId: null,
-        ordinal: 1,
-        status: "completed" as const,
-        title: "Large output",
-        startedAt: now,
-        completedAt: now,
+it.effect("trims tool output on read without a stored copy and preserves full detail", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const now = yield* DateTime.now;
+    const threadId = ThreadId.make("thread:wire-read-trimming");
+    yield* store.apply({
+      id: EventId.make("event:wire-trimming:thread"),
+      type: "thread.created",
+      threadId,
+      occurredAt: now,
+      payload: {
+        id: threadId,
+        projectId: ProjectId.make("project:wire-trimming"),
+        title: "Wire read trimming",
+        providerInstanceId,
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
+        forkedFrom: null,
+        createdBy: "user",
+        creationSource: "web",
+        createdAt: now,
         updatedAt: now,
-        type: "command_execution" as const,
-        input: "print output",
-        output: "x".repeat(512 * 1024),
-        exitCode: 0,
-      };
-      yield* store.apply({
-        id: EventId.make("event:wire-cache:item"),
-        type: "turn-item.updated",
-        threadId,
-        occurredAt: now,
-        payload: item,
-      });
-      const sql = yield* SqlClient.SqlClient;
-      const cached = yield* sql<{
-        full_bytes: number;
-        wire_bytes: number;
-        version: number;
-      }>`SELECT length(payload_json) AS full_bytes, length(payload_wire_json) AS wire_bytes, payload_wire_version AS version FROM orchestration_v2_projection_turn_items WHERE turn_item_id = ${item.id}`;
-      assert.isAbove(cached[0]!.full_bytes, 512 * 1024);
-      assert.isBelow(cached[0]!.wire_bytes, 2000);
-      assert.equal(cached[0]!.version, TURN_ITEM_WIRE_PAYLOAD_VERSION);
-      const wire = yield* store.getThreadSnapshotWindow(threadId, { rowLimit: 10, wireOnly: true });
-      assert.isBelow(JSON.stringify(wire.projection.turnItems).length, 2000);
-      const full = yield* store.getTurnItem({ threadId, itemId: item.id });
-      assert.deepEqual(full, item);
-      assert.deepEqual((yield* store.getThreadSnapshot(threadId)).projection.turnItems, [item]);
-      const fullSnapshot = yield* store.getThreadSnapshot(threadId);
-      assert.deepEqual(
-        (yield* store.getThreadSnapshot(threadId, true)).projection,
-        projectThreadProjectionForWire(fullSnapshot.projection),
-      );
-      yield* sql`UPDATE orchestration_v2_projection_turn_items SET payload_wire_json = 'invalid stale cache', payload_wire_version = 0 WHERE turn_item_id = ${item.id}`;
-      assert.deepEqual(
-        (yield* store.getThreadSnapshotWindow(threadId, { rowLimit: 10, wireOnly: true }))
-          .projection,
-        wire.projection,
-      );
-      const changed = {
-        ...item,
-        input: "new command",
-        output: "Error: failed command",
-        exitCode: 1,
-      };
-      yield* store.apply({
-        id: EventId.make("event:wire-cache:item-updated"),
-        type: "turn-item.updated",
-        threadId,
-        occurredAt: now,
-        payload: changed,
-      });
-      const refreshed = yield* store.getThreadSnapshotWindow(threadId, {
-        rowLimit: 10,
-        wireOnly: true,
-      });
-      assert.deepEqual(
-        refreshed.projection,
-        projectThreadProjectionForWire((yield* store.getThreadSnapshot(threadId)).projection),
-      );
-      assert.deepEqual(yield* store.getTurnItem({ threadId, itemId: item.id }), changed);
-    }).pipe(Effect.provide(layerTest)),
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+      },
+    });
+    const item = {
+      id: TurnItemId.make("item:wire-trimming:command"),
+      threadId,
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed" as const,
+      title: "Large output",
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+      type: "command_execution" as const,
+      input: "print output",
+      output: "x".repeat(512 * 1024),
+      exitCode: 0,
+    };
+    yield* store.apply({
+      id: EventId.make("event:wire-trimming:item"),
+      type: "turn-item.updated",
+      threadId,
+      occurredAt: now,
+      payload: item,
+    });
+    const sql = yield* SqlClient.SqlClient;
+    const columns = yield* sql<{
+      name: string;
+    }>`PRAGMA table_info(orchestration_v2_projection_turn_items)`;
+    assert.notInclude(
+      columns.map((column) => column.name),
+      "payload_wire_json",
+    );
+    const stored = yield* sql<{
+      full_bytes: number;
+    }>`SELECT length(payload_json) AS full_bytes FROM orchestration_v2_projection_turn_items WHERE turn_item_id = ${item.id}`;
+    assert.isAbove(stored[0]!.full_bytes, 512 * 1024);
+    const wire = yield* store.getThreadSnapshotWindow(threadId, { rowLimit: 10, wireOnly: true });
+    assert.isBelow(JSON.stringify(wire.projection.turnItems).length, 2000);
+    const full = yield* store.getTurnItem({ threadId, itemId: item.id });
+    assert.deepEqual(full, item);
+    assert.deepEqual((yield* store.getThreadSnapshot(threadId)).projection.turnItems, [item]);
+    const fullSnapshot = yield* store.getThreadSnapshot(threadId);
+    assert.deepEqual(
+      (yield* store.getThreadSnapshot(threadId, true)).projection,
+      projectThreadProjectionForWire(fullSnapshot.projection),
+    );
+    const changed = {
+      ...item,
+      input: "new command",
+      output: "Error: failed command",
+      exitCode: 1,
+    };
+    yield* store.apply({
+      id: EventId.make("event:wire-trimming:item-updated"),
+      type: "turn-item.updated",
+      threadId,
+      occurredAt: now,
+      payload: changed,
+    });
+    const refreshed = yield* store.getThreadSnapshotWindow(threadId, {
+      rowLimit: 10,
+      wireOnly: true,
+    });
+    assert.deepEqual(
+      refreshed.projection,
+      projectThreadProjectionForWire((yield* store.getThreadSnapshot(threadId)).projection),
+    );
+    assert.deepEqual(yield* store.getTurnItem({ threadId, itemId: item.id }), changed);
+  }).pipe(Effect.provide(layerTest)),
 );
 
 it.effect(
