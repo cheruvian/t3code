@@ -5,7 +5,11 @@ import {
   formatComposerContextHref,
   formatComposerContextReference,
 } from "@t3tools/shared/composerContextReferences";
-import { markdownWithAuthoredImagePaths, markdownWithHtml } from "../lib/markdownDocument";
+import {
+  markdownWithAuthoredImagePaths,
+  markdownWithHtml,
+  markdownWithTableBreaks,
+} from "../lib/markdownDocument";
 import type { Definition, RootContent } from "mdast";
 import { enrichedMermaidBlocks, hasMermaid, mermaidNodeMarkdown } from "../lib/enrichedMermaid";
 import { enrichedFileLinks } from "../lib/enrichedFileLinks";
@@ -152,7 +156,7 @@ function EnrichedMarkdownDocument(
 ) {
   const { renderImage, resolveImageSource } = props;
   const markdown = useMemo(() => {
-    const content = markdownWithHtml(props.markdown);
+    const content = markdownWithTableBreaks(markdownWithHtml(props.markdown));
     return props.authoredImagePaths ? markdownWithAuthoredImagePaths(content) : content;
   }, [props.markdown, props.authoredImagePaths]);
   const mermaid = useMemo(
