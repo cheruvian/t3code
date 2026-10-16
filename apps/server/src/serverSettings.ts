@@ -1170,8 +1170,8 @@ const make = Effect.gen(function* () {
     const readSignature = fs.stat(settingsPath).pipe(
       Effect.map((info) =>
         JSON.stringify([
-          info.dev,
-          Option.getOrUndefined(info.ino),
+          String(info.dev),
+          Option.getOrUndefined(info.ino.pipe(Option.map(String))),
           Option.getOrUndefined(info.mtime)?.getTime(),
           String(info.size),
         ]),
