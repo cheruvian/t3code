@@ -4,11 +4,11 @@ import { Platform, Pressable, ScrollView, useWindowDimensions, View } from "reac
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AndroidSheetHeader } from "../../../components/AndroidScreenHeader";
-import { SymbolView } from "../../../components/AppSymbol";
-import { MaterialScreenContent } from "../../../components/MaterialScreenContent";
+import { AndroidSheetHeader } from "../../../components/ui/AndroidScreenHeader";
+import { SymbolView } from "../../../components/ui/AppSymbol";
+import { ScreenContent } from "../../../components/ui/ScreenContent";
 import { NativeStackScreenOptions } from "../../../native/StackHeader";
-import { AppText as Text, AppTextInput as TextInput } from "../../../components/AppText";
+import { AppText as Text, AppTextInput as TextInput } from "../../../components/ui/AppText";
 import { cn } from "../../../lib/cn";
 import { useMobileGitStatus } from "../../../state/queries";
 import { useThreadSelection } from "../../../state/use-thread-selection";
@@ -107,7 +107,7 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
           hideBottomBorder
         />
       ) : null}
-      <MaterialScreenContent fitToContents>
+      <ScreenContent fitToContents>
         <ScrollView
           nestedScrollEnabled
           className="android:shrink android:grow-0 ios:flex-1"
@@ -308,7 +308,7 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
             </View>
           </View>
         </ScrollView>
-      </MaterialScreenContent>
+      </ScreenContent>
     </View>
   );
 }

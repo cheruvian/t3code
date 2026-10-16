@@ -232,7 +232,7 @@ const config: ExpoConfig = {
     ? { experiments: { baseUrl: "/native" } }
     : {}),
   scheme: variant.scheme,
-  version: "2.0.0",
+  version: repoEnv.T3CODE_MOBILE_VERSION ?? "2.0.0",
   runtimeVersion: {
     // Development manifests resolve on every launch, so avoid fingerprint's
     // expensive native-project calculation there. Preview and production stay

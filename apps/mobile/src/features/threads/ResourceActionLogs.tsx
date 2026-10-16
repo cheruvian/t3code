@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, View } from "react-native";
 import type { OrchestrationV2TurnItem } from "@t3tools/contracts";
 import { resourceActionLogs, formatResourceActionLog } from "@t3tools/shared/resourceActions";
-import { AppText } from "../../components/AppText";
+import { AppText } from "../../components/ui/AppText";
 
 export function ResourceActionLogs({
   turnItems,

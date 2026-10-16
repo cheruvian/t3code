@@ -3,7 +3,7 @@ import { getProviderOutageIncidents } from "@t3tools/client-runtime/provider-out
 import { Alert, Pressable } from "react-native";
 
 import { environmentServerConfigsAtom } from "../state/server";
-import { SymbolView } from "./AppSymbol";
+import { SymbolView } from "./ui/AppSymbol";
 
 export function ProviderOutageIcon() {
   const configs = useAtomValue(environmentServerConfigsAtom);

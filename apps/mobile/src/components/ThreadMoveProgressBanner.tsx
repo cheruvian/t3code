@@ -2,7 +2,7 @@ import { getActiveThreadMoves, subscribeThreadMoves } from "@t3tools/client-runt
 import { useSyncExternalStore } from "react";
 import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { AppText } from "./AppText";
+import { AppText } from "./ui/AppText";
 
 /** Remains visible while navigating between threads during a client-mediated move. */
 export function ThreadMoveProgressBanner() {

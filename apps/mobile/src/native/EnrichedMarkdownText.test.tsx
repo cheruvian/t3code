@@ -25,14 +25,12 @@ vi.mock("./useEnrichedLinkVariants", () => ({ useEnrichedLinkVariants: () => ({}
 vi.mock("../features/settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({ themeAppearance: "dark" }),
 }));
-vi.mock("../components/AndroidAnchoredMenu", () => ({
-  AndroidAnchoredMenu: "AndroidAnchoredMenu",
-}));
+vi.mock("../components/ui/Menu", () => ({ Menu: "Menu" }));
 vi.mock("../lib/copyTextWithHaptic", () => ({ copyTextWithHaptic: harness.copy }));
 vi.mock("../features/threads/markdownCodeHighlightState", () => ({
   useMarkdownCodeHighlight: () => null,
 }));
-vi.mock("../components/CopyTextButton", async () => {
+vi.mock("../features/threads/CopyTextButton", async () => {
   const { createElement } = await import("react");
   return {
     CopyTextButton: ({ text }: { text: string }) =>

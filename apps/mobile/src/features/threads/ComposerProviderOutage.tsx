@@ -2,8 +2,8 @@ import { getProviderOutageBannerKey } from "@t3tools/client-runtime/provider-out
 import type { ServerProvider } from "@t3tools/contracts";
 import { Linking, Pressable, View } from "react-native";
 
-import { AppText as Text } from "../../components/AppText";
-import { SymbolView } from "../../components/AppSymbol";
+import { AppText as Text } from "../../components/ui/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
 
 const DRIVER_LABEL: Partial<Record<string, string>> = {
   codex: "Codex",

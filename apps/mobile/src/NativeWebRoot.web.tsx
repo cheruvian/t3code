@@ -1,6 +1,6 @@
 import { Component, lazy, Suspense, type ReactNode } from "react";
 import { Pressable, View } from "react-native";
-import { AppText as Text } from "./components/AppText";
+import { AppText as Text } from "./components/ui/AppText";
 
 const NativeApp = lazy(() => import("./App"));
 

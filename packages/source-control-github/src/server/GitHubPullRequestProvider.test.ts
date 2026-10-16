@@ -10,7 +10,7 @@ import {
   type GitHubPullRequestCore,
   type GitHubReviewThreadComments,
 } from "./gitHubPullRequestJson.ts";
-import * as GitHubApi from "./GitHubApi.ts";
+import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
 
@@ -379,7 +379,7 @@ describe("gitHubViewerPermissions", () => {
             number: 7,
           })
           .pipe(
-            Effect.provideService(GitHubApi.PinnedGitHubCredential, {
+            Effect.provideService(GitHubRequestPolicy.PinnedGitHubCredential, {
               host: "github.com",
               token: Redacted.make("credential"),
               credentialFingerprint: fingerprint,
@@ -426,7 +426,7 @@ describe("gitHubViewerPermissions", () => {
               commits: [],
             }).pipe(
               Effect.flatMap((detail) =>
-                GitHubApi.PinnedGitHubCredential.pipe(
+                GitHubRequestPolicy.PinnedGitHubCredential.pipe(
                   Effect.map((credential) => ({
                     ...detail,
                     viewerAccess: {
@@ -714,7 +714,7 @@ it.effect("propagates workflow discovery rate limits", () =>
         getPullRequestDetail: () => Effect.succeed(openDetail),
         listWorkflowRunsRequiringApproval: () =>
           Effect.fail(
-            new GitHubApi.GitHubApiRateLimitError({
+            new GitHubRequestPolicy.GitHubApiRateLimitError({
               host: "github.com",
               operation: "listWorkflowRunsRequiringApproval",
             }),

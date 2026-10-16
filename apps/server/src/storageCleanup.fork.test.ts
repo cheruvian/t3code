@@ -348,6 +348,18 @@ describe.each(["confirmed", "settled"] as const)("%s worktree removal", (mode) =
             }),
             Layer.mock(ProjectStore.ProjectStoreV2)({
               listShells: () => Effect.succeed([project]),
+              list: () =>
+                Effect.succeed([
+                  {
+                    ...project,
+                    projectId: project.id,
+                    defaultThreadEnvMode: null,
+                    autoPull: false,
+                    faviconPath: null,
+                    projectIcon: null,
+                    deletedAt: null,
+                  },
+                ]),
             }),
             Layer.mock(ProjectionStore.ProjectionStoreV2)({
               getThreadWorktreePaths: () =>

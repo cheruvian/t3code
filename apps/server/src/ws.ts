@@ -124,6 +124,7 @@ import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
+import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
@@ -185,7 +186,7 @@ import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
-
+import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -561,6 +562,13 @@ const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 // Middleware added later wraps middleware added earlier, so instrumentation wraps authorization.
 const ServerWsRpcGroup = WsRpcGroup.middleware(RpcInstrumentation);
+const CoreWsRpcGroup = ServerWsRpcGroup.omit(
+  WS_METHODS.serverDeploymentSubscribe,
+  WS_METHODS.serverDeploymentAction,
+  WS_METHODS.serverGetDatabaseStorage,
+  ORCHESTRATION_V2_WS_METHODS.subscribeCommandOutput,
+);
+
 // When a resuming client's cursor is more than this many events behind the
 // current head, skip the per-event catch-up replay and send a fresh shell
 // snapshot instead. Replaying each intervening event costs a shell refetch;
@@ -1229,14 +1237,14 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
   },
 );
 
-const layerWsRpc = (
+const layerCoreWsRpc = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   clientOrigin: OrchestrationClientOrigin,
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
 ) =>
-  ServerWsRpcGroup.toLayer(
+  CoreWsRpcGroup.toLayer(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const sql = yield* SqlClient.SqlClient;
@@ -1331,7 +1339,6 @@ const layerWsRpc = (
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const providerAuth = yield* ProviderAuthService.ProviderAuthService;
       const providerInstallation = yield* makeProviderInstallation();
-      const managedDeployment = yield* ManagedDeployment.ManagedDeployment;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
@@ -1875,7 +1882,7 @@ const layerWsRpc = (
         return result;
       });
 
-      const handlers = ServerWsRpcGroup.of({
+      const handlers = CoreWsRpcGroup.of({
         [WS_METHODS.credentialBrokerSubscribe]: (input) =>
           credentialBroker.subscribe(currentSessionId, input.viewId),
         [WS_METHODS.credentialBrokerAction]: (input) =>
@@ -2149,8 +2156,6 @@ const layerWsRpc = (
             Effect.andThen(scheduledTasks.getWebhookDelivery(input)),
           ),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
-        [WS_METHODS.serverDeploymentSubscribe]: () => managedDeployment.changes,
-        [WS_METHODS.serverDeploymentAction]: (input) => managedDeployment.action(input),
         [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({ usageLimitsCommand: false }),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>
           acpRegistryCatalog
@@ -3136,6 +3141,37 @@ const layerWsRpc = (
       return handlers;
     }),
   );
+
+// Keep service-owned handlers in small layers so RPC schema inference stays bounded.
+// All handlers retain the full group's authorization and instrumentation middleware.
+const layerServiceWsRpc = Layer.mergeAll(
+  ServerWsRpcGroup.toLayerHandler(
+    WS_METHODS.serverDeploymentSubscribe,
+    Effect.map(ManagedDeployment.ManagedDeployment, (service) => () => service.changes),
+  ),
+  ServerWsRpcGroup.toLayerHandler(
+    WS_METHODS.serverDeploymentAction,
+    Effect.map(ManagedDeployment.ManagedDeployment, (service) => service.action),
+  ),
+  ServerWsRpcGroup.toLayerHandler(
+    WS_METHODS.serverGetDatabaseStorage,
+    Effect.map(DatabaseStorage.DatabaseStorage, (service) => () => service.status),
+  ),
+  ServerWsRpcGroup.toLayerHandler(
+    ORCHESTRATION_V2_WS_METHODS.subscribeCommandOutput,
+    Effect.map(
+      CommandOutputHub.CommandOutputHub,
+      (service) => (input) =>
+        Stream.unwrap(
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.as(service.subscribe(input)),
+          ),
+        ),
+    ),
+  ),
+);
+const layerWsRpc = (...args: Parameters<typeof layerCoreWsRpc>) =>
+  Layer.mergeAll(layerCoreWsRpc(...args), layerServiceWsRpc);
 
 // A defect in a handler's effect fails only its own request. RpcServer's default
 // sends a socket-level Defect frame instead, and the client ends every pending

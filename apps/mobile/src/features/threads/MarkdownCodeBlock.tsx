@@ -2,7 +2,7 @@ import { MermaidDiagram, MermaidViewToggle } from "../../native/MermaidDiagram";
 import { useState } from "react";
 import { Platform, ScrollView, Text as NativeText, View, type ColorValue } from "react-native";
 
-import { CopyTextButton } from "../../components/CopyTextButton";
+import { CopyTextButton } from "./CopyTextButton";
 import type { ReviewDiffTheme } from "../review/shikiReviewHighlighter";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 

@@ -1,3 +1,4 @@
+import * as Dialog from "../components/ui/Dialog";
 import {
   AuthOrchestrationOperateScope,
   CommandId,
@@ -24,7 +25,6 @@ import {
   threadRuntimeHasInterruptibleRun,
 } from "@t3tools/client-runtime/state/thread-execution";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert } from "react-native";
 
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import { clampFileAttachmentUploadBytes } from "@t3tools/client-runtime/state/attachments";
@@ -132,7 +132,7 @@ export function appendReviewCommentToDraft(input: {
       reidentifyComposerContext(upgraded.text, upgraded.records, uuidv4),
     )
   ) {
-    Alert.alert("Too many context items", "Remove some context from the draft and try again.");
+    Dialog.alert("Too many context items", "Remove some context from the draft and try again.");
     return;
   }
   if (input.attachments && input.attachments.length > 0) {
@@ -185,6 +185,7 @@ export function useThreadComposerState() {
   const {
     selectedThread: selectedThreadShell,
     selectedThreadCreation,
+    selectedThreadDetailRef,
     selectedEnvironmentRuntime,
   } = useThreadSelection();
   const selectedThreadProjection = useSelectedThreadProjection();
@@ -314,12 +315,9 @@ export function useThreadComposerState() {
   // Steering needs a live provider turn the adapter can interrupt; the queue
   // workflow already derives that from the session's capabilities.
   const queueWorkflow = useAtomValue(
-    selectedThreadShell === null
+    selectedThreadDetailRef === null
       ? EMPTY_QUEUE_WORKFLOW_ATOM
-      : environmentThreadDetails.queueWorkflowAtom({
-          environmentId: selectedThreadShell.environmentId,
-          threadId: selectedThreadShell.id,
-        }),
+      : environmentThreadDetails.queueWorkflowAtom(selectedThreadDetailRef),
   );
   const canSteerActiveTurn = queueWorkflow?.canPromoteToSteer === true;
   const queuedRunEdit = useQueuedRunEdit(selectedThreadKey);
@@ -520,14 +518,14 @@ export function useThreadComposerState() {
     const text = draft.text.trim();
     if (text.length === 0) {
       // The server rejects an empty queued message, attachments or not.
-      Alert.alert("Add a message", "A queued message cannot be left empty.");
+      Dialog.alert("Add a message", "A queued message cannot be left empty.");
       return;
     }
     if (
       edit.existingAttachments.length + draft.attachments.length >
       PROVIDER_SEND_TURN_MAX_ATTACHMENTS
     ) {
-      Alert.alert(
+      Dialog.alert(
         "Too many attachments",
         `Remove attachments until there are at most ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS}.`,
       );
@@ -563,7 +561,7 @@ export function useThreadComposerState() {
         },
       });
       if (result._tag !== "Success") {
-        Alert.alert(
+        Dialog.alert(
           "Could not save the queued message",
           "It may have already started. Your edit is still in the composer.",
         );
@@ -628,7 +626,7 @@ export function useThreadComposerState() {
       // would enqueue a message that outbox recovery rejects forever, so block
       // here until the user removes attachments.
       if (attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
-        Alert.alert(
+        Dialog.alert(
           "Too many attachments",
           `Remove attachments until there are at most ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS}.`,
         );
@@ -637,7 +635,7 @@ export function useThreadComposerState() {
 
       const contextBlockReason = composerContextSendBlockReason(draft.context);
       if (contextBlockReason) {
-        Alert.alert("Too much context", contextBlockReason);
+        Dialog.alert("Too much context", contextBlockReason);
         return null;
       }
 
@@ -652,7 +650,7 @@ export function useThreadComposerState() {
           modelSelection,
           thread.projectId,
         );
-        Alert.alert(title, detail);
+        Dialog.alert(title, detail);
         return null;
       }
       const provider = serverConfig?.providers.find(
@@ -666,7 +664,7 @@ export function useThreadComposerState() {
         if (!readEnvironmentScope(selectedThreadShell.environmentId, AuthOrchestrationOperateScope))
           return null;
         if (thread.activeProviderThreadId === null) {
-          Alert.alert("Start a Codex thread first", "Send a message before you submit feedback.");
+          Dialog.alert("Start a Codex thread first", "Send a message before you submit feedback.");
           return null;
         }
         const metadata = makeQueuedMessageMetadata();
@@ -824,7 +822,7 @@ export function useThreadComposerState() {
         : []),
     ];
     if (problems.length > 0) {
-      Alert.alert("Could not attach photo or video", problems.join("\n\n"));
+      Dialog.alert("Could not attach photo or video", problems.join("\n\n"));
     }
   }, [composerDrafts, selectedEnvironmentRuntime?.serverConfig, selectedThreadShell]);
 
@@ -836,7 +834,7 @@ export function useThreadComposerState() {
       selectedEnvironmentRuntime?.serverConfig?.environment.capabilities.fileAttachments
         ?.maxUploadBytes;
     if (maxBytes === undefined) {
-      Alert.alert("Could not attach file", "This server does not support file attachments.");
+      Dialog.alert("Could not attach file", "This server does not support file attachments.");
       return;
     }
 
@@ -860,7 +858,7 @@ export function useThreadComposerState() {
         : []),
     ];
     if (problems.length > 0) {
-      Alert.alert("Could not attach file", problems.join("\n\n"));
+      Dialog.alert("Could not attach file", problems.join("\n\n"));
     }
   }, [composerDrafts, selectedEnvironmentRuntime?.serverConfig, selectedThreadShell]);
 
@@ -1070,7 +1068,7 @@ export function useThreadComposerState() {
               currentProvider?.requiresNewThreadForModelChange)))
       ) {
         const thread = selectedThreadShell;
-        Alert.alert(
+        Dialog.alert(
           "Summarize and switch?",
           "The current agent session will stop. Running tasks and monitors will not transfer. The new agent will read this conversation, summarize it, and continue in the same workspace.",
           [

@@ -1,13 +1,4 @@
-import {
-  stripInlineContextReferences,
-  appendInlineContextReference,
-  type ComposerContextReference,
-  ensureInlineContextReferences,
-  formatInlineContextReference,
-  removeInlineContextReference,
-  toComposerContextId,
-  toKindScopedComposerContextId,
-} from "./lib/composerContextReferences";
+import { stripInlineContextReferences } from "./lib/composerContextReferences";
 import { elementContextToPreviewAnnotation } from "./lib/elementContext";
 import {
   ElementContextDetails,
@@ -63,7 +54,13 @@ import {
   migrateLegacyTerminalContextPlaceholders,
   normalizeTerminalContextText,
 } from "./lib/terminalContext";
-
+import {
+  appendInlineContextReference,
+  type ComposerContextReference,
+  ensureInlineContextReferences,
+  formatInlineContextReference,
+  removeInlineContextReference,
+} from "./lib/composerContextReferences";
 import {
   fileContextReference,
   previewAnnotationContextId,
@@ -78,7 +75,11 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 import { useShallow } from "zustand/react/shallow";
 import { createDeferredStorage, createMemoryStorage } from "./lib/storage";
 import { getDefaultServerModel } from "./providerModels";
-import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
+import {
+  replaceComposerContextReferences,
+  toComposerContextId,
+  toKindScopedComposerContextId,
+} from "@t3tools/shared/composerContextReferences";
 import { UnifiedSettings } from "@t3tools/contracts/settings";
 import { ReviewCommentContextSchema, type ReviewCommentContext } from "./reviewCommentContext";
 const isRuntimeMode = Schema.is(RuntimeMode);

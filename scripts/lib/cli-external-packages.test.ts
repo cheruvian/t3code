@@ -90,6 +90,7 @@ describe("selectCliRuntimeExternalDependencies", () => {
         "node-pty",
         "playwright-core",
         "zod",
+        "undici",
       ],
     );
   });

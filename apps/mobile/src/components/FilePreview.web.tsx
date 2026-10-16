@@ -1,5 +1,5 @@
 import { Image, Linking, Modal, Pressable, View } from "react-native";
-import { AppText as Text } from "./AppText";
+import { AppText as Text } from "./ui/AppText";
 import type { ResolvedFilePreviewSource } from "./FilePreviewModal.types";
 
 export function FilePreview(props: {

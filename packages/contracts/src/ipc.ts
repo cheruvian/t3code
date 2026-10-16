@@ -81,7 +81,13 @@ export type DesktopUpdateStatus =
 export type DesktopRuntimeArch = "arm64" | "x64" | "other";
 export type DesktopTheme = "light" | "dark" | "system";
 export type DesktopUpdateChannel = "latest" | "nightly";
-export type DesktopAppStageLabel = "Alpha" | "Dev" | "Nightly" | "Candidate" | "Production";
+export type DesktopAppStageLabel =
+  | "Alpha"
+  | "Beta"
+  | "Dev"
+  | "Nightly"
+  | "Candidate"
+  | "Production";
 
 export const DesktopUpdateStatusSchema = Schema.Literals([
   "disabled",
@@ -98,6 +104,7 @@ export const DesktopThemeSchema = Schema.Literals(["light", "dark", "system"]);
 export const DesktopUpdateChannelSchema = Schema.Literals(["latest", "nightly"]);
 export const DesktopAppStageLabelSchema = Schema.Literals([
   "Alpha",
+  "Beta",
   "Dev",
   "Nightly",
   "Candidate",

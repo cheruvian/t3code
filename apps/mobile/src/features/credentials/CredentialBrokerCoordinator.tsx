@@ -10,8 +10,8 @@ import { AsyncResult } from "effect/reactivity";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, Modal, ScrollView, TextInput, View, useWindowDimensions } from "react-native";
 import * as Crypto from "expo-crypto";
-import { AppText as Text } from "../../components/AppText";
-import { MaterialButton } from "../../components/MaterialButton";
+import { AppText as Text } from "../../components/ui/AppText";
+import { Button } from "../../components/ui/Button";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentScope } from "../../state/session";
 import { credentialBroker } from "../../state/credentialBroker";
@@ -128,7 +128,7 @@ function EnvironmentBroker({
   };
   return (
     <>
-      <MaterialButton
+      <Button
         label={"Credential access · " + environmentLabel}
         onPress={() => {
           select();
@@ -190,7 +190,7 @@ function EnvironmentBroker({
                 accessibilityLabel="Bitwarden CLI executable"
                 className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
               />
-              <MaterialButton
+              <Button
                 label="Unlock vault"
                 disabled={!canAct || state.status === "unlocking"}
                 onPress={() => {
@@ -220,12 +220,12 @@ function EnvironmentBroker({
               <Text className="text-xs text-foreground-muted">
                 Notice available until {new Date(notice.expiresAt).toLocaleTimeString()}
               </Text>
-              <MaterialButton
+              <Button
                 label="Dismiss"
                 disabled={!canAct}
                 onPress={() => void act({ type: "dismiss", noticeId: notice.noticeId })}
               />
-              <MaterialButton
+              <Button
                 label="Revoke & stop"
                 tone="danger"
                 disabled={!canAct || notice.revoked}
@@ -243,7 +243,7 @@ function EnvironmentBroker({
                 <Text className="text-foreground">
                   {request.site} · {request.state}
                 </Text>
-                <MaterialButton
+                <Button
                   label="Stop"
                   tone="danger"
                   disabled={!canAct}
@@ -268,7 +268,7 @@ function EnvironmentBroker({
                   2,
                 )}
               </Text>
-              <MaterialButton
+              <Button
                 label="Revoke & stop"
                 tone="danger"
                 disabled={!canAct}
@@ -277,7 +277,7 @@ function EnvironmentBroker({
             </View>
           ))}
           {state?.status === "ready" && (
-            <MaterialButton
+            <Button
               label="Lock vault & stop access"
               disabled={!canAct}
               onPress={() => void act({ type: "lock" })}
@@ -288,7 +288,7 @@ function EnvironmentBroker({
             copied secrets or end an established website session.
           </Text>
           {!pending.length && !state?.notices.length && (
-            <MaterialButton label="Close" onPress={() => setOpen(false)} />
+            <Button label="Close" onPress={() => setOpen(false)} />
           )}
         </ScrollView>
       </Modal>
@@ -323,7 +323,7 @@ function Approval({
       </Text>
       <Text className="text-foreground-muted">Saved login</Text>
       {request.candidates.map((c) => (
-        <MaterialButton
+        <Button
           key={c.id}
           label={(selection === c.id ? "✓ " : "") + c.name + " · " + c.hosts.join(", ")}
           disabled={disabled}
@@ -350,13 +350,13 @@ function Approval({
         Always allow scopes this login to the thread, provider, workspace, exact command,
         fingerprints, fields, and maximum lifetime.
       </Text>
-      <MaterialButton
+      <Button
         label="Deny"
         tone="text"
         disabled={disabled}
         onPress={() => void act({ type: "decide", requestId: request.requestId, decision: "deny" })}
       />
-      <MaterialButton
+      <Button
         label="Allow once"
         disabled={disabled || !selection}
         onPress={() =>
@@ -368,7 +368,7 @@ function Approval({
           })
         }
       />
-      <MaterialButton
+      <Button
         label="Always allow"
         tone="primary"
         disabled={disabled || !selection || !request.origin}

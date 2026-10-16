@@ -2,7 +2,7 @@ import type { SavedPrompt } from "@t3tools/contracts";
 import { STARTER_SAVED_PROMPTS } from "@t3tools/shared/savedPrompts";
 import { useState } from "react";
 import { View } from "react-native";
-import { AppText as Text, AppTextInput } from "../../../components/AppText";
+import { AppText as Text, AppTextInput } from "../../../components/ui/AppText";
 import { uuidv4 } from "../../../lib/uuid";
 import { SettingsActionRow } from "./SettingsActionRow";
 import { SettingsSection } from "./SettingsSection";

@@ -6,8 +6,8 @@ import {
 } from "@t3tools/client-runtime/connection";
 import { useState } from "react";
 import { Alert, Pressable, View } from "react-native";
-import { AppText as Text } from "../../components/AppText";
-import { MaterialButton } from "../../components/MaterialButton";
+import { AppText as Text } from "../../components/ui/AppText";
+import { Button } from "../../components/ui/Button";
 import { environmentCatalog } from "../../connection/catalog";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsSection } from "../settings/components/SettingsSection";
@@ -78,7 +78,7 @@ export function ConnectionTimingSettings() {
           </View>
         ))}
         <View className="p-4">
-          <MaterialButton
+          <Button
             label="Reset defaults"
             disabled={saving}
             onPress={() => void save(DEFAULT_CONNECTION_TIMING)}

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { BackHandler, FlatList, Pressable, ScrollView, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import { AppText as Text } from "../../components/AppText";
-import { SymbolView } from "../../components/AppSymbol";
+import { AppText as Text } from "../../components/ui/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { ComposerToolbarButton } from "../../components/ComposerToolbar";
 import type { ComposerCommandItem } from "./ComposerCommandPopover";
 import {
