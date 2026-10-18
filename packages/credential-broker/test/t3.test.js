@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, readdir, rm, stat, chmod, unlink } from "node:fs/promises";
 import { watch } from "node:fs";
 import { join } from "node:path";
 import { Broker } from "../src/broker.js";
@@ -95,6 +95,50 @@ function visible(broker, viewId = "view") {
   const detach = broker.subscribe("human", viewId, () => {});
   return broker.action("human", { type: "presenter", viewId, visible: true }).then(() => detach);
 }
+test("missing consumer executable fails before vault search, approval, or credential delivery", async (t) => {
+  const provider = new DemoProvider();
+  let searches = 0;
+  provider.search = async () => {
+    searches++;
+    throw new Error("fake-secret");
+  };
+  const { broker, caller, input, runtime } = await setup(t, { provider });
+  for (const change of [
+    { argv: [join(runtime, "missing-uv"), "run", "python", "import.py"] },
+    { cwd: join(runtime, "missing-workspace") },
+  ]) {
+    await assert.rejects(broker.execute(caller, { ...input, ...change }), {
+      code: "consumer_unavailable",
+    });
+  }
+  const notExecutable = join(runtime, "not-executable");
+  await writeFile(notExecutable, "fake-secret", { mode: 0o600 });
+  await chmod(notExecutable, 0o600);
+  await assert.rejects(broker.execute(caller, { ...input, argv: [notExecutable] }), {
+    code: "consumer_unavailable",
+  });
+  assert.equal(searches, 0);
+  assert.deepEqual(broker.state().requests, []);
+  assert.deepEqual(await readdir(join(runtime, "leases")), []);
+});
+test("consumer disappearing after approval selection returns a safe startup failure reason", async (t) => {
+  const { broker, caller, input, runtime } = await setup(t);
+  const executable = join(runtime, "vanishing-consumer");
+  await writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  const { execution, request } = await pending(broker, caller, { ...input, argv: [executable] });
+  await unlink(executable);
+  await broker.action("human", {
+    type: "decide",
+    requestId: request.requestId,
+    decision: "once",
+    candidateId: DEMO_ITEM,
+  });
+  const result = await execution;
+  assert.equal(result.state, "failed");
+  assert.equal(result.failureCode, "consumer_start_failed");
+  assert.ok(!JSON.stringify(result).includes(DEMO_PASSWORD));
+  assert.deepEqual(await readdir(join(runtime, "leases")), []);
+});
 test("locked vault reports a safe actionable code before requesting access", async () => {
   const broker = new T3CredentialBroker({ runtime: "/unused" });
   await assert.rejects(broker.execute(origin, { site: "heihei" }), { code: "vault_locked" });
@@ -455,6 +499,8 @@ test("a failed host worker does not settle the tool before credential cleanup", 
     releaseCleanup();
   }
   await approval;
-  assert.equal((await execution).state, "failed");
+  const result = await execution;
+  assert.equal(result.state, "failed");
+  assert.equal(result.failureCode, "supervisor_start_failed");
   assert.deepEqual(await readdir(join(runtime, "leases")), []);
 });

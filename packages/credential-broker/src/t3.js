@@ -1,6 +1,8 @@
 import { Broker } from "./broker.js";
 import { BitwardenProvider } from "./providers.js";
-import { BrokerError } from "./common.js";
+import { BrokerError, parseRequest } from "./common.js";
+import { access, stat } from "node:fs/promises";
+import { constants } from "node:fs";
 import runnerProgram from "./runner-program.js";
 import watchdogProgram from "./watchdog-program.js";
 
@@ -232,7 +234,7 @@ export class T3CredentialBroker {
     else throw new BrokerError("Unknown operator operation.");
     this.#publish();
   }
-  execute(origin, input, signal) {
+  async execute(origin, input, signal) {
     const broker = this.#broker;
     if (signal?.aborted)
       return Promise.reject(
@@ -250,21 +252,36 @@ export class T3CredentialBroker {
           this.#status === "unlocking" ? "vault_unlocking" : "vault_locked",
         ),
       );
-    const request = broker.request(
-      {
-        kind: "exec",
-        site: input.site,
-        field: input.field,
-        label: input.label,
-        reason: input.reason,
-        client: "T3 agent (identity supplied by server)",
-        ttl_seconds: input.ttlSeconds,
-        argv: input.argv,
-        cwd: input.cwd ?? origin.workspace,
-        file_env: "CB_CREDENTIAL_FILE",
-      },
-      origin,
-    );
+    const parsed = parseRequest({
+      kind: "exec",
+      site: input.site,
+      field: input.field,
+      label: input.label,
+      reason: input.reason,
+      client: "T3 agent (identity supplied by server)",
+      ttl_seconds: input.ttlSeconds,
+      argv: input.argv,
+      cwd: input.cwd ?? origin.workspace,
+      file_env: "CB_CREDENTIAL_FILE",
+    });
+    // Check on the server that will actually run the command, before searching
+    // the vault or asking the human to authorize an unusable consumer.
+    try {
+      const [executable, directory] = await Promise.all([stat(parsed.argv[0]), stat(parsed.cwd)]);
+      if (!executable.isFile() || !directory.isDirectory()) throw new Error();
+      await access(parsed.argv[0], constants.X_OK);
+    } catch {
+      throw new BrokerError(
+        "Consumer unavailable: check the absolute executable and working directory on this environment.",
+        400,
+        "consumer_unavailable",
+      );
+    }
+    if (signal?.aborted)
+      throw new BrokerError("Credential caller was cancelled.", 409, "caller_cancelled");
+    if (this.#closing || this.#broker !== broker || this.#status !== "ready")
+      throw new BrokerError("Broker unavailable.", 503, "broker_unavailable");
+    const request = broker.request(parsed, origin);
     return new Promise((resolve, reject) => {
       const finish = (r) => {
         this.#executions.delete(request.request_id);
@@ -276,6 +293,7 @@ export class T3CredentialBroker {
           ...(r.expires_at ? { expiresAt: r.expires_at } : {}),
           ...(r.exit_code !== undefined ? { exitCode: r.exit_code } : {}),
           ...(r.signal !== undefined ? { signal: r.signal } : {}),
+          ...(r.failure_code ? { failureCode: r.failure_code } : {}),
         });
       };
       const abort = () => {

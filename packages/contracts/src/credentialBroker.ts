@@ -24,12 +24,18 @@ export const CredentialExecInput = Schema.Struct({
   cwd: Schema.optional(Schema.String),
 });
 export type CredentialExecInput = typeof CredentialExecInput.Type;
+export const CredentialExecutionFailureCode = Schema.Literals([
+  "consumer_start_failed",
+  "supervisor_start_failed",
+  "credential_cleanup_failed",
+]);
 export const CredentialExecution = Schema.Struct({
   requestId: Schema.String,
   state: Schema.String,
   expiresAt: Schema.optional(Schema.Number),
   exitCode: Schema.optional(Schema.NullOr(Schema.Number)),
   signal: Schema.optional(Schema.NullOr(Schema.String)),
+  failureCode: Schema.optional(CredentialExecutionFailureCode),
 });
 export type CredentialExecution = typeof CredentialExecution.Type;
 export const CredentialApproval = Schema.Struct({
@@ -110,6 +116,7 @@ export const CredentialBrokerFailureCode = Schema.Literals([
   "vault_unlocking",
   "unsupported_platform",
   "invalid_request",
+  "consumer_unavailable",
   "caller_cancelled",
   "broker_unavailable",
 ]);
@@ -127,6 +134,8 @@ export class CredentialBrokerError extends Schema.TaggedError<CredentialBrokerEr
         return "Credential Broker unsupported_platform: this host's security adapters are unavailable.";
       case "invalid_request":
         return "Credential Broker invalid_request: use a valid hostname, an absolute executable and working directory, and an integer lifetime of 5–300 seconds.";
+      case "consumer_unavailable":
+        return "Credential Broker consumer_unavailable: check that the absolute executable is executable and the working directory exists on this environment. No vault search or approval was started.";
       case "caller_cancelled":
         return "Credential Broker caller_cancelled: the originating tool call or turn ended; no further access is authorized.";
       default:

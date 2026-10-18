@@ -8,7 +8,7 @@ let child;
 let finished = false;
 let timer;
 
-async function finish(state, exit_code = null, signal = null) {
+async function finish(state, exit_code = null, signal = null, failure_code) {
   if (finished) return;
   finished = true;
   clearTimeout(timer);
@@ -20,10 +20,15 @@ async function finish(state, exit_code = null, signal = null) {
   try {
     await unlink(file);
   } catch (error) {
-    if (error.code !== "ENOENT") state = "failed";
+    if (error.code !== "ENOENT") {
+      state = "failed";
+      failure_code = "credential_cleanup_failed";
+    }
   }
   if (process.connected) {
-    process.send({ state, exit_code, signal }, () => process.disconnect());
+    process.send({ state, exit_code, signal, ...(failure_code ? { failure_code } : {}) }, () =>
+      process.disconnect(),
+    );
   }
 }
 
@@ -48,8 +53,8 @@ try {
   child.once("spawn", () => {
     if (!finished && process.connected) process.send({ state: "running" });
   });
-  child.once("error", () => finish("failed"));
+  child.once("error", () => finish("failed", null, null, "consumer_start_failed"));
   child.once("exit", (code, signal) => finish("completed", code, signal));
 } catch {
-  finish("failed");
+  finish("failed", null, null, "consumer_start_failed");
 }

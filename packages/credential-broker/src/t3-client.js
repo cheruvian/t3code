@@ -1,6 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { BrokerError } from "./common.js";
 
+const failureMessages = {
+  consumer_unavailable:
+    "Credential Broker consumer_unavailable: check the executable and working directory on this environment. No vault search or approval was started.",
+  vault_locked: "Credential Broker vault_locked: unlock the vault privately in T3.",
+  vault_unlocking:
+    "Credential Broker vault_unlocking: wait for the private vault unlock to finish.",
+  unsupported_platform:
+    "Credential Broker unsupported_platform: this host's security adapters are unavailable.",
+  invalid_request:
+    "Credential Broker invalid_request: check the hostname, absolute executable, working directory, and 5–300 second lifetime.",
+  caller_cancelled: "Credential Broker caller_cancelled: the originating tool call or turn ended.",
+  broker_unavailable:
+    "Credential Broker broker_unavailable: review access and vault status privately in T3.",
+};
+
 /** Request-only MCP compatibility transport; never accepts an operator capability. */
 export async function executeInT3(
   input,
@@ -62,7 +77,25 @@ export async function executeInT3(
       name: "credential_broker_exec",
       arguments: input,
     });
-    if (envelope.error || envelope.result?.isError) throw new Error();
+    if (envelope.error || envelope.result?.isError) {
+      // MCP encodes typed failures as JSON text. Recognize only known codes
+      // and rebuild the message locally; never echo a foreign error string.
+      for (const block of envelope.result?.content ?? []) {
+        if (block.type !== "text") continue;
+        let failure;
+        try {
+          failure = JSON.parse(block.text);
+        } catch {
+          continue;
+        }
+        if (failure?.code !== "credential_broker_error" || typeof failure.message !== "string")
+          continue;
+        const code = /^Credential Broker ([a-z_]+):/.exec(failure.message)?.[1];
+        if (Object.hasOwn(failureMessages, code ?? ""))
+          throw new BrokerError(failureMessages[code], 400, code);
+      }
+      throw new Error();
+    }
     const result =
       envelope.result?.structuredContent ??
       JSON.parse(envelope.result?.content?.find((c) => c.type === "text")?.text ?? "{}");
@@ -75,8 +108,21 @@ export async function executeInT3(
       ...(typeof result.expiresAt === "number" ? { expires_at: result.expiresAt } : {}),
       ...(typeof result.exitCode === "number" ? { exit_code: result.exitCode } : {}),
       ...(typeof result.signal === "string" ? { signal: result.signal } : {}),
+      ...([
+        "consumer_start_failed",
+        "supervisor_start_failed",
+        "credential_cleanup_failed",
+      ].includes(result.failureCode)
+        ? { failure_code: result.failureCode }
+        : {}),
     };
-  } catch {
+  } catch (error) {
+    if (
+      !signal?.aborted &&
+      error instanceof BrokerError &&
+      Object.hasOwn(failureMessages, error.code ?? "")
+    )
+      throw new BrokerError(failureMessages[error.code], 400, error.code);
     if (signal?.aborted)
       await rpc(undefined, "notifications/cancelled", { requestId: callId }, null).catch(() => {});
     throw new BrokerError(

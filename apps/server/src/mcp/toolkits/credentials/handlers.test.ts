@@ -50,6 +50,13 @@ it("forwards only known broker failure codes and suppresses arbitrary provider e
   const locked = CredentialBroker.safeBrokerFailure({ code: "vault_locked", message: marker });
   expect(locked.code).toBe("vault_locked");
   expect(locked.message).toContain("unlock the vault privately");
+  const unavailable = CredentialBroker.safeBrokerFailure({
+    code: "consumer_unavailable",
+    message: marker,
+  });
+  expect(unavailable.code).toBe("consumer_unavailable");
+  expect(unavailable.message).toContain("No vault search or approval was started");
+  expect(unavailable.message).not.toContain(marker);
   for (const error of [new Error(marker), { code: marker, message: marker }]) {
     const failure = CredentialBroker.safeBrokerFailure(error);
     expect(failure.code).toBe("broker_unavailable");

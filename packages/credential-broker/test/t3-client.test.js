@@ -84,3 +84,60 @@ test("CLI interruption sends request cancellation without echoing transport erro
   assert.equal(calls.at(-1).params.requestId, call.id);
   assert.match(call.id, /^[a-f0-9-]{36}$/);
 });
+
+test("CLI preserves safe admission diagnostics and terminal failure codes without foreign output", async () => {
+  for (const code of ["consumer_unavailable", "vault_locked", "unknown"]) {
+    await assert.rejects(
+      executeInT3(input, {
+        endpoint: "https://fake.invalid/mcp",
+        authorization: "Bearer fake-request-only",
+        fetchImplementation: async (_url, options) => {
+          const body = JSON.parse(options.body);
+          if (body.method === "initialize") return Response.json({ result: {} });
+          if (body.method === "notifications/initialized")
+            return new Response(null, { status: 202 });
+          return Response.json({
+            result: {
+              isError: true,
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    code: "credential_broker_error",
+                    message: `Credential Broker ${code}: fake-secret`,
+                  }),
+                },
+              ],
+            },
+          });
+        },
+      }),
+      (error) =>
+        !error.message.includes("fake-secret") &&
+        (code === "unknown" ? !error.code : error.code === code),
+    );
+  }
+  for (const failureCode of ["consumer_start_failed", "fake-secret"]) {
+    const result = await executeInT3(input, {
+      endpoint: "https://fake.invalid/mcp",
+      authorization: "Bearer fake-request-only",
+      fetchImplementation: async (_url, options) => {
+        const body = JSON.parse(options.body);
+        if (body.method === "initialize") return Response.json({ result: {} });
+        if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+        return Response.json({
+          result: {
+            structuredContent: {
+              requestId: "request",
+              state: "failed",
+              failureCode,
+              password: "fake-secret",
+            },
+          },
+        });
+      },
+    });
+    assert.equal(result.failure_code, failureCode === "fake-secret" ? undefined : failureCode);
+    assert.ok(!JSON.stringify(result).includes("fake-secret"));
+  }
+});

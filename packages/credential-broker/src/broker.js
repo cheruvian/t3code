@@ -320,6 +320,7 @@ export class Broker {
       if (request.exit_code !== undefined) result.exit_code = request.exit_code;
       if (request.signal) result.signal = request.signal;
     }
+    if (request.failure_code) result.failure_code = request.failure_code;
     if (error) result.error = error;
     return result;
   }
@@ -571,12 +572,14 @@ export class Broker {
         if (["preparing", "running"].includes(request.state)) {
           request.cleanup_pending = true;
           request.state = "failed";
+          request.failure_code = "supervisor_start_failed";
           request.error =
             "Approved command failed to start or supervise; child output is withheld.";
           request.cleanupPromise = (async () => {
             try {
               await this.remove(request);
             } catch {
+              request.failure_code = "credential_cleanup_failed";
               request.error = "Credential cleanup failed; manual cleanup required.";
             } finally {
               await request.runnerExit;
@@ -599,8 +602,15 @@ export class Broker {
           if (message.state !== "running") {
             request.exit_code = Number.isInteger(message.exit_code) ? message.exit_code : null;
             request.signal = typeof message.signal === "string" ? message.signal : null;
-            if (message.state === "failed")
+            if (message.state === "failed") {
               request.error = "Approved command failed. Child output is withheld.";
+              if (
+                ["consumer_start_failed", "credential_cleanup_failed"].includes(
+                  message.failure_code,
+                )
+              )
+                request.failure_code = message.failure_code;
+            }
             await this.remove(request).catch(() => {});
           }
         } else if (runner.connected) runner.disconnect();
