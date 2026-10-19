@@ -215,6 +215,7 @@ const make = Effect.gen(function* () {
       fields.usernameSelector,
       fields.passwordSelector,
       fields.submitSelector,
+      ...(fields.usernameSubmitSelector ? [fields.usernameSubmitSelector] : []),
     ],
   });
   const browserCalls = new Map<

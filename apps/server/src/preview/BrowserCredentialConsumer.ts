@@ -1,10 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off - Private browser/process adapter, outside instrumented RPCs.
 import * as NodeHttp from "node:http";
 import * as NodeCrypto from "node:crypto";
-import type { Page, CDPSession } from "playwright-core";
+import type { Page, CDPSession, Locator } from "playwright-core";
 
 export interface BrowserLoginFields {
   readonly usernameSelector: string;
+  readonly usernameSubmitSelector?: string | undefined;
   readonly passwordSelector: string;
   readonly submitSelector: string;
 }
@@ -40,6 +41,7 @@ export async function consumeBrowserLogin(input: {
     )
       throw new Error();
     privatePage = await input.page.context().newPage();
+    const signInPage = privatePage;
     if (input.signal.aborted) throw new Error();
     cdp = await input.page.context().newCDPSession(privatePage);
     await cdp.send("Network.setBypassServiceWorker", { bypass: true });
@@ -70,42 +72,67 @@ export async function consumeBrowserLogin(input: {
     await privatePage.goto(original.href, { waitUntil: "domcontentloaded", timeout: 15_000 });
     if (new URL(privatePage.url()).origin !== original.origin || !input.checkTarget())
       throw new Error();
-    const username = privatePage.locator(input.fields.usernameSelector);
-    const password = privatePage.locator(input.fields.passwordSelector);
-    const submit = privatePage.locator(input.fields.submitSelector);
-    if (
-      (await username.count()) !== 1 ||
-      (await password.count()) !== 1 ||
-      (await submit.count()) !== 1
-    )
-      throw new Error();
+    const checkTarget = () => {
+      if (
+        input.signal.aborted ||
+        !input.checkTarget() ||
+        new URL(signInPage.url()).origin !== original.origin
+      )
+        throw new Error();
+    };
+    const visible = async (selector: string) => {
+      const locator = signInPage.locator(selector).filter({ visible: true });
+      await locator.waitFor({ state: "visible", timeout: 15_000 });
+      if ((await locator.count()) !== 1) throw new Error();
+      return locator;
+    };
+    const protectForm = async (field: Locator, submit: Locator) => {
+      checkTarget();
+      const form = field.locator("xpath=ancestor::form[1]");
+      for (const action of [
+        (await form.count()) ? await form.getAttribute("action") : null,
+        await submit.getAttribute("formaction"),
+      ]) {
+        if (new URL(action ?? signInPage.url(), signInPage.url()).origin !== original.origin)
+          throw new Error();
+      }
+      if (await form.count()) {
+        // Prevent credentials entering a native GET URL; SPA submit handlers still run.
+        await form.evaluate((element) =>
+          element.addEventListener(
+            "submit",
+            (event: { preventDefault: () => void }) => {
+              if (element.getAttribute("method")?.toLowerCase() !== "post") event.preventDefault();
+            },
+            { capture: true },
+          ),
+        );
+      }
+    };
+    const username = await visible(input.fields.usernameSelector);
+    if (input.fields.usernameSubmitSelector) {
+      const next = await visible(input.fields.usernameSubmitSelector);
+      await protectForm(username, next);
+      filled = true;
+      await username.fill(login.username, { timeout: 5000 });
+      checkTarget();
+      await next.click({ timeout: 5000 });
+    }
+    const password = await visible(input.fields.passwordSelector);
+    const submit = await visible(input.fields.submitSelector);
     const passwordType = await password.getAttribute("type");
     if (passwordType?.toLowerCase() !== "password") throw new Error();
-    const form = password.locator("xpath=ancestor::form[1]");
-    if (await form.count()) {
-      const action = await form.getAttribute("action");
-      if (new URL(action ?? privatePage.url(), privatePage.url()).origin !== original.origin)
-        throw new Error();
-      // Prevent credentials entering a native GET URL; SPA submit handlers still run.
-      await form.evaluate((element) =>
-        element.addEventListener(
-          "submit",
-          (event: { preventDefault: () => void }) => {
-            if (element.getAttribute("method")?.toLowerCase() !== "post") event.preventDefault();
-          },
-          { capture: true },
-        ),
-      );
-    }
-    if (input.signal.aborted || !input.checkTarget()) throw new Error();
+    await protectForm(password, submit);
     filled = true;
-    await username.fill(login.username, { timeout: 5000 });
-    if (input.signal.aborted || !input.checkTarget()) throw new Error();
+    if (!input.fields.usernameSubmitSelector) {
+      await username.fill(login.username, { timeout: 5000 });
+    }
+    checkTarget();
     await password.fill(login.password, { timeout: 5000 });
-    if (input.signal.aborted || !input.checkTarget()) throw new Error();
+    checkTarget();
     await submit.click({ timeout: 5000 });
     await password.waitFor({ state: "hidden", timeout: 15_000 });
-    if (input.signal.aborted || !input.checkTarget()) throw new Error();
+    checkTarget();
     await privatePage.close();
     privatePage = undefined;
     // The working tab never receives the filled form or its diagnostic buffers.

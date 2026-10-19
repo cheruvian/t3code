@@ -31,6 +31,9 @@ export type CredentialExecInput = typeof CredentialExecInput.Type;
 export const CredentialBrowserLoginInput = Schema.Struct({
   tabId: PreviewTabId,
   usernameSelector: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
+  usernameSubmitSelector: Schema.optional(
+    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
+  ),
   passwordSelector: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
   submitSelector: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
   reason: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2048)),

@@ -26,6 +26,12 @@ Use an authenticated, encrypted remote connection for vault unlock. Agents never
 need an operator token. If no connected human client can visibly show an automatic
 use notice, access requires manual approval.
 
+For sign-in through the integrated browser, choose a saved login or enter one
+privately in the approval form. A username page followed by a password page uses
+one approval; the password is filled only after its field becomes visible.
+Both steps must stay on the approved origin. MFA and cross-origin SSO still need
+human sign-in. Revoking access does not sign out an established website session.
+
 Credentials go directly to the approved consumer through a private temporary
 file. Child output is discarded. Approval is not a sandbox: approve only programs
 you trust, and do not use browser snapshots, tracing, recordings, or logs while

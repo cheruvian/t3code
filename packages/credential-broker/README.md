@@ -57,7 +57,11 @@ from T3 snapshots, recordings, and diagnostics. Saved permissions include the
 browser origin, profile, and form selectors. Temporary tab storage lasts only as
 long as that tab's context; persistent profiles retain their website sessions.
 
-This flow supports same-origin username/password forms in server-backed tabs.
+This flow supports same-origin username/password forms in server-backed tabs,
+including a username step followed by a password step under one private approval.
+For staged sign-in, agents supply `usernameSubmitSelector` for the first step's
+Next button and selectors for the password field and final submit control on the
+second step. The password field need not be visible on the first step.
 Desktop-attached tabs, cross-origin SSO, and interactive MFA need a separate
 human sign-in workflow. Revoking broker permission does not sign out a website.
 
