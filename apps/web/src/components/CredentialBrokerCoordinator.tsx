@@ -453,6 +453,14 @@ function ApprovalCard({
               </Select>
             </div>
           )}
+          {request.browser ? (
+            <p className="text-xs text-muted-foreground">
+              Browser · {request.browser.origin} · {request.browser.profile}
+            </p>
+          ) : null}
+          {request.browser ? (
+            <ManualBrowserLogin request={request} disabled={disabled} act={act} />
+          ) : null}
           <details className="space-y-2 text-xs">
             <summary className="cursor-pointer text-muted-foreground">
               Command, workspace & permission scope
@@ -609,5 +617,67 @@ function AutomaticNotice({
         </Button>
       </div>
     </div>
+  );
+}
+
+function ManualBrowserLogin({
+  request,
+  disabled,
+  act,
+}: {
+  request: CredentialApproval;
+  disabled: boolean;
+  act: (input: CredentialBrokerAction) => Promise<void>;
+}) {
+  const username = useRef<HTMLInputElement>(null);
+  const password = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  return (
+    <details className="space-y-2 text-sm">
+      <summary className="cursor-pointer">Enter a login privately</summary>
+      <p className="text-xs text-muted-foreground">
+        Use once in this browser profile: {request.browser?.profile}. Values stay out of chat and
+        are not saved in Bitwarden.
+      </p>
+      <form
+        className="grid gap-2 sm:grid-cols-2"
+        autoComplete="off"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const login = {
+            username: username.current?.value ?? "",
+            password: password.current?.value ?? "",
+          };
+          if (!login.username || !login.password || disabled || busy) return;
+          if (username.current) username.current.value = "";
+          if (password.current) password.current.value = "";
+          setBusy(true);
+          void act({ type: "browserManual", requestId: request.requestId, ...login }).finally(() =>
+            setBusy(false),
+          );
+        }}
+      >
+        <Input
+          ref={username}
+          aria-label="Private browser username"
+          placeholder="Username or email"
+          autoComplete="off"
+          disabled={disabled || busy}
+          required
+        />
+        <Input
+          ref={password}
+          aria-label="Private browser password"
+          placeholder="Password"
+          type="password"
+          autoComplete="new-password"
+          disabled={disabled || busy}
+          required
+        />
+        <Button type="submit" disabled={disabled || busy}>
+          {busy ? "Signing in…" : "Sign in once"}
+        </Button>
+      </form>
+    </details>
   );
 }
