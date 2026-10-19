@@ -71,6 +71,7 @@ function EnvironmentBroker({
   const canAct = useAtomValue(credentialBroker.action.permissionAtom(environmentId));
   const state = AsyncResult.isSuccess(result) ? result.value : undefined;
   const [open, setOpen] = useState(false);
+  const [managementOpen, setManagementOpen] = useState(false);
   const nativeVisible = useRef(false);
   const noticeViews = useRef(new Map<string, ViewInstance>());
   const { height } = useWindowDimensions();
@@ -155,8 +156,12 @@ function EnvironmentBroker({
           scrollEventThrottle={100}
           contentContainerClassName="gap-4 bg-screen px-5 pb-8 pt-16"
         >
-          <Text className="text-2xl font-t3-semibold text-foreground">Access, on your terms.</Text>
-          <Text className="text-sm text-foreground-muted">{environmentLabel}</Text>
+          <Text className="text-2xl font-t3-semibold text-foreground">
+            {pending.length ? "Credential request" : "Credential access"}
+          </Text>
+          {pending.length === 0 && (
+            <Text className="text-sm text-foreground-muted">{environmentLabel}</Text>
+          )}
           <Text className="text-sm text-foreground-muted">
             Credentials go directly to the approved program.
           </Text>
@@ -235,7 +240,13 @@ function EnvironmentBroker({
             </View>
           ))}
           {pending.map((request) => (
-            <Approval key={request.requestId} request={request} disabled={!canAct} act={act} />
+            <Approval
+              key={request.requestId}
+              request={request}
+              environmentLabel={environmentLabel}
+              disabled={!canAct}
+              act={act}
+            />
           ))}
           {state?.requests
             .filter((r) => ["running", "preparing"].includes(r.state))
@@ -252,42 +263,57 @@ function EnvironmentBroker({
                 />
               </View>
             ))}
-          {state?.grants.map((grant) => (
-            <View key={grant.grantId} className="gap-2 rounded-xl border border-border p-4">
-              <Text className="text-foreground">
-                {grant.site} · {grant.field} · {grant.maxTtl}s maximum
-              </Text>
-              <Text selectable className="text-xs text-foreground-muted">
-                {JSON.stringify(
-                  {
-                    thread: grant.threadId,
-                    executable: grant.argv[0],
-                    arguments: grant.argv.slice(1),
-                    directory: grant.cwd,
-                  },
-                  null,
-                  2,
-                )}
-              </Text>
-              <Button
-                label="Revoke & stop"
-                tone="danger"
-                disabled={!canAct}
-                onPress={() => void act({ type: "revoke", grantId: grant.grantId })}
-              />
-            </View>
-          ))}
-          {state?.status === "ready" && (
+          {pending.length > 0 && (
             <Button
-              label="Lock vault & stop access"
-              disabled={!canAct}
-              onPress={() => void act({ type: "lock" })}
+              label={
+                managementOpen
+                  ? "Hide access management"
+                  : `Manage access · ${state?.grants.length ?? 0} saved permissions`
+              }
+              tone="text"
+              onPress={() => setManagementOpen(!managementOpen)}
             />
           )}
-          <Text className="text-xs text-foreground-muted">
-            Revocation stops supervised programs and deletes credential files. It cannot erase
-            copied secrets or end an established website session.
-          </Text>
+          {(managementOpen || pending.length === 0) && (
+            <>
+              {state?.grants.map((grant) => (
+                <View key={grant.grantId} className="gap-2 rounded-xl border border-border p-4">
+                  <Text className="text-foreground">
+                    {grant.site} · {grant.field} · {grant.maxTtl}s maximum
+                  </Text>
+                  <Text selectable className="text-xs text-foreground-muted">
+                    {JSON.stringify(
+                      {
+                        thread: grant.threadId,
+                        executable: grant.argv[0],
+                        arguments: grant.argv.slice(1),
+                        directory: grant.cwd,
+                      },
+                      null,
+                      2,
+                    )}
+                  </Text>
+                  <Button
+                    label="Revoke & stop"
+                    tone="danger"
+                    disabled={!canAct}
+                    onPress={() => void act({ type: "revoke", grantId: grant.grantId })}
+                  />
+                </View>
+              ))}
+              {state?.status === "ready" && (
+                <Button
+                  label="Lock vault & stop access"
+                  disabled={!canAct}
+                  onPress={() => void act({ type: "lock" })}
+                />
+              )}
+              <Text className="text-xs text-foreground-muted">
+                Revocation stops supervised programs and deletes credential files. It cannot erase
+                copied secrets or end an established website session.
+              </Text>
+            </>
+          )}
           {!pending.length && !state?.notices.length && (
             <Button label="Close" onPress={() => setOpen(false)} />
           )}
@@ -298,62 +324,102 @@ function EnvironmentBroker({
 }
 function Approval({
   request,
+  environmentLabel,
   disabled,
   act,
 }: {
   request: CredentialApproval;
+  environmentLabel: string;
   disabled: boolean;
   act: (input: CredentialBrokerAction) => Promise<void>;
 }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [selection, setSelection] = useState<string | undefined>(
     request.candidates.length === 1 ? request.candidates[0]!.id : undefined,
   );
   return (
     <View className="gap-3 rounded-2xl border border-border p-4">
-      <Text className="text-xl font-t3-semibold text-foreground">{request.site}</Text>
-      <Text className="text-foreground">
-        {request.origin ? "Verified by T3" : "Unverified CLI caller"}: {request.origin?.threadTitle}{" "}
-        · {request.origin?.agent ?? request.clientClaim}
-      </Text>
-      <Text className="text-sm text-foreground-muted">
-        {request.origin?.workspace ?? request.cwd}
-      </Text>
-      <Text className="text-foreground">
-        {request.field} · {request.ttlSeconds}s after delivery.{" "}
-        {request.state === "awaiting_unlock"
-          ? "Waiting for you to unlock the vault. Unlocking does not approve access."
-          : request.approvalDeadline === null
-            ? "Waiting for your decision. This permission request does not time out."
-            : `Approval expires ${new Date(request.approvalDeadline).toLocaleTimeString()}`}
-      </Text>
-      <Text className="text-foreground-muted">Saved login</Text>
-      {request.candidates.map((c) => (
-        <Button
-          key={c.id}
-          label={(selection === c.id ? "✓ " : "") + c.name + " · " + c.hosts.join(", ")}
-          disabled={disabled}
-          onPress={() => setSelection(c.id)}
-        />
-      ))}
-      <Text className="text-sm text-foreground-muted">
-        Purpose · caller supplied: {request.reason}
-      </Text>
-      <Text selectable className="text-xs text-foreground">
-        {JSON.stringify(
-          {
-            executable: request.argv[0],
-            arguments: request.argv.slice(1),
-            directory: request.cwd,
-            labelClaim: request.label,
-            origin: request.origin,
-          },
-          null,
-          2,
-        )}
-      </Text>
       <Text className="text-xs text-foreground-muted">
-        Always allow scopes this login to the thread, provider, workspace, exact command,
-        fingerprints, fields, and maximum lifetime.
+        {request.field === "login"
+          ? "Username + password"
+          : request.field === "password"
+            ? "Password"
+            : "Username"}{" "}
+        requested for
+      </Text>
+      <Text className="text-xl font-t3-semibold text-foreground">{request.site}</Text>
+      <Text className="text-xs text-foreground-muted">
+        Available to the program for {request.ttlSeconds} seconds after approval
+      </Text>
+      <View className="gap-2 rounded-xl bg-card p-3">
+        <Text className="text-xs text-foreground-muted">
+          {request.origin ? "Caller verified by T3" : "Unverified caller"}
+        </Text>
+        <Text className="text-foreground">
+          Thread: {request.origin?.threadTitle || "No verified T3 thread"}
+        </Text>
+        <Text className="text-foreground">
+          Agent:{" "}
+          {request.origin
+            ? `${request.origin.agent} · ${request.origin.providerInstanceId}`
+            : "Not verified"}
+        </Text>
+        <Text className="text-foreground">Environment: {environmentLabel}</Text>
+        <Text className="text-foreground">Program: {request.argv[0]?.split(/[\\/]/).at(-1)}</Text>
+      </View>
+      <Text className="text-sm text-foreground-muted">Reason supplied by agent</Text>
+      <Text numberOfLines={2} className="text-foreground">
+        {request.reason}
+      </Text>
+      {request.state === "awaiting_unlock" ? (
+        <Text className="text-foreground-muted">
+          Unlock the vault to choose a login. Access still needs your approval.
+        </Text>
+      ) : (
+        <>
+          <Text className="text-foreground-muted">Saved login</Text>
+          {request.candidates.map((c) => (
+            <Button
+              key={c.id}
+              label={(selection === c.id ? "✓ " : "") + c.name + " · " + c.hosts.join(", ")}
+              disabled={disabled}
+              onPress={() => setSelection(c.id)}
+            />
+          ))}
+        </>
+      )}
+      <Button
+        label={detailsOpen ? "Hide command & scope" : "Command, workspace & permission scope"}
+        tone="text"
+        onPress={() => setDetailsOpen(!detailsOpen)}
+      />
+      {detailsOpen && (
+        <>
+          <Text selectable className="text-xs text-foreground">
+            {JSON.stringify(
+              {
+                executable: request.argv[0],
+                arguments: request.argv.slice(1),
+                directory: request.cwd,
+                labelClaim: request.label,
+                reason: request.reason,
+                callerClaim: request.clientClaim,
+                origin: request.origin,
+              },
+              null,
+              2,
+            )}
+          </Text>
+          <Text className="text-xs text-foreground-muted">
+            Always allow scopes this login to the thread, provider, workspace, exact command,
+            fingerprints, fields, and maximum lifetime. Review or revoke it under Manage access.
+          </Text>
+        </>
+      )}
+      <Text className="text-xs text-foreground-muted">
+        {request.approvalDeadline === null
+          ? "Waits for your decision · no approval timeout"
+          : `Approval expires ${new Date(request.approvalDeadline).toLocaleTimeString()}`}
       </Text>
       <Button
         label="Deny"
@@ -363,7 +429,8 @@ function Approval({
       />
       <Button
         label="Allow once"
-        disabled={disabled || !selection}
+        tone="primary"
+        disabled={disabled || request.state === "awaiting_unlock" || !selection}
         onPress={() =>
           void act({
             type: "decide",
@@ -375,8 +442,7 @@ function Approval({
       />
       <Button
         label="Always allow"
-        tone="primary"
-        disabled={disabled || !selection || !request.origin}
+        disabled={disabled || request.state === "awaiting_unlock" || !selection || !request.origin}
         onPress={() =>
           void act({
             type: "decide",

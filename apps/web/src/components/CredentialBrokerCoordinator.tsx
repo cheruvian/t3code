@@ -138,11 +138,14 @@ function EnvironmentBroker({
       <Dialog open={focused && (open || pending.length > 0)} onOpenChange={setOpen}>
         <DialogPopup showCloseButton={pending.length === 0}>
           <DialogHeader>
-            <DialogTitle>Access, on your terms.</DialogTitle>
-            <p className="text-sm text-muted-foreground">{environmentLabel}</p>
+            <DialogTitle>{pending.length ? "Credential request" : "Credential access"}</DialogTitle>
+            {pending.length === 0 && (
+              <p className="text-sm text-muted-foreground">{environmentLabel}</p>
+            )}
             <DialogDescription>
-              Choose the saved login an agent may use. Credentials go directly to the approved
-              program.
+              {pending.length
+                ? "Review who is asking and choose what to share."
+                : "Manage your vault and saved permissions."}
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
@@ -177,6 +180,7 @@ function EnvironmentBroker({
                 <ApprovalCard
                   key={request.requestId}
                   request={request}
+                  environmentLabel={environmentLabel}
                   disabled={!canAct}
                   act={act}
                 />
@@ -204,54 +208,60 @@ function EnvironmentBroker({
                   </Button>
                 </div>
               ))}
-              {!!state?.grants.length && <h3 className="text-sm font-medium">Always allowed</h3>}
-              {state?.grants.map((grant) => (
-                <div key={grant.grantId} className="space-y-2 rounded-xl border p-3 text-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <span>
-                      {grant.site} · {grant.field} · {grant.maxTtl}s maximum
-                    </span>
-                    <Button
-                      variant="destructive-outline"
-                      size="sm"
-                      disabled={!canAct}
-                      onClick={() => void act({ type: "revoke", grantId: grant.grantId })}
-                    >
-                      Revoke &amp; stop
-                    </Button>
+              <details open={pending.length === 0} className="space-y-3 border-t pt-3">
+                <summary className="cursor-pointer text-sm text-muted-foreground">
+                  Manage access
+                  {state?.grants.length ? ` · ${state.grants.length} saved permissions` : ""}
+                </summary>
+                {!!state?.grants.length && <h3 className="text-sm font-medium">Always allowed</h3>}
+                {state?.grants.map((grant) => (
+                  <div key={grant.grantId} className="space-y-2 rounded-xl border p-3 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <span>
+                        {grant.site} · {grant.field} · {grant.maxTtl}s maximum
+                      </span>
+                      <Button
+                        variant="destructive-outline"
+                        size="sm"
+                        disabled={!canAct}
+                        onClick={() => void act({ type: "revoke", grantId: grant.grantId })}
+                      >
+                        Revoke &amp; stop
+                      </Button>
+                    </div>
+                    <details>
+                      <summary className="cursor-pointer text-muted-foreground">
+                        Permission scope
+                      </summary>
+                      <pre className="mt-2 overflow-auto whitespace-pre-wrap break-all text-xs">
+                        {JSON.stringify(
+                          {
+                            thread: grant.threadId,
+                            executable: grant.argv[0],
+                            arguments: grant.argv.slice(1),
+                            directory: grant.cwd,
+                          },
+                          null,
+                          2,
+                        )}
+                      </pre>
+                    </details>
                   </div>
-                  <details>
-                    <summary className="cursor-pointer text-muted-foreground">
-                      Permission scope
-                    </summary>
-                    <pre className="mt-2 overflow-auto whitespace-pre-wrap break-all text-xs">
-                      {JSON.stringify(
-                        {
-                          thread: grant.threadId,
-                          executable: grant.argv[0],
-                          arguments: grant.argv.slice(1),
-                          directory: grant.cwd,
-                        },
-                        null,
-                        2,
-                      )}
-                    </pre>
-                  </details>
-                </div>
-              ))}
-              {state?.status === "ready" && (
-                <Button
-                  variant="outline"
-                  disabled={!canAct}
-                  onClick={() => void act({ type: "lock" })}
-                >
-                  Lock vault &amp; stop access
-                </Button>
-              )}
-              <p className="text-xs text-muted-foreground">
-                Revocation stops supervised programs and deletes active credential files. It cannot
-                erase copied secrets or end an established website session.
-              </p>
+                ))}
+                {state?.status === "ready" && (
+                  <Button
+                    variant="outline"
+                    disabled={!canAct}
+                    onClick={() => void act({ type: "lock" })}
+                  >
+                    Lock vault &amp; stop access
+                  </Button>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Revocation stops supervised programs and deletes active credential files. It
+                  cannot erase copied secrets or end an established website session.
+                </p>
+              </details>
             </div>
           </DialogPanel>
         </DialogPopup>
@@ -331,137 +341,176 @@ function VaultUnlock({
 }
 function ApprovalCard({
   request,
+  environmentLabel,
   disabled,
   act,
 }: {
   request: CredentialApproval;
+  environmentLabel: string;
   disabled: boolean;
   act: (input: CredentialBrokerAction) => Promise<void>;
 }) {
   const [selection, setSelection] = useState<string | null>(
     request.candidates.length === 1 ? request.candidates[0]!.id : null,
   );
+  const waitingForUnlock = request.state === "awaiting_unlock";
+  const fields =
+    request.field === "login"
+      ? "Username + password"
+      : request.field === "password"
+        ? "Password"
+        : "Username";
   return (
-    <section className="space-y-4 rounded-2xl border bg-muted/20 p-4">
-      <div className="flex items-center gap-3">
-        <ShieldCheckIcon className="size-6 text-primary" />
-        <h2 className="text-lg font-semibold">{request.site}</h2>
-      </div>
-      <div className="space-y-1 text-sm">
-        <p className="font-medium">{request.origin ? "Verified by T3" : "Unverified CLI caller"}</p>
-        <p>
-          {request.origin?.threadTitle} · {request.origin?.agent ?? request.clientClaim}
-        </p>
-        <p className="break-all text-muted-foreground">
-          {request.origin?.workspace ?? request.cwd}
-        </p>
-        <p className="break-all font-mono text-xs">{request.argv[0]}</p>
-        <p>
-          {request.field === "login" ? "Username + password" : request.field} · {request.ttlSeconds}{" "}
-          seconds after delivery
-        </p>
-        <p className="text-muted-foreground">
-          {request.state === "awaiting_unlock"
-            ? "Waiting for you to unlock the vault. Unlocking does not approve access."
-            : request.approvalDeadline === null
-              ? "Waiting for your decision. This permission request does not time out."
-              : `Approval expires ${new Date(request.approvalDeadline).toLocaleTimeString()}`}
+    <section className="space-y-4 rounded-xl border p-4">
+      <div className="space-y-1">
+        <p className="text-xs font-medium text-muted-foreground">{fields} requested for</p>
+        <h2 className="break-all text-xl font-semibold tracking-tight">{request.site}</h2>
+        <p className="text-xs text-muted-foreground">
+          Available to the program for {request.ttlSeconds} seconds after approval
         </p>
       </div>
-      <div className="space-y-2">
-        <p className="text-xs font-medium text-muted-foreground">SAVED LOGIN</p>
-        <Select
-          value={selection}
-          onValueChange={setSelection}
-          items={request.candidates.map((c) => ({
-            value: c.id,
-            label: c.name + " · " + c.hosts.join(", "),
-          }))}
-        >
-          <SelectTrigger>
-            <SelectValue placeholder="Choose a login" />
-          </SelectTrigger>
-          <SelectPopup>
-            {request.candidates.map((c) => (
-              <SelectItem key={c.id} value={c.id}>
-                {c.name} · {c.hosts.join(", ")}
-              </SelectItem>
-            ))}
-          </SelectPopup>
-        </Select>
+      <div className="space-y-3 rounded-lg bg-muted/40 p-3">
+        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+          <ShieldCheckIcon className="size-3.5" />
+          {request.origin ? "Caller verified by T3" : "Unverified caller"}
+        </div>
+        <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
+          <dt className="text-muted-foreground">Thread</dt>
+          <dd className="break-words font-medium">
+            {request.origin?.threadTitle || "No verified T3 thread"}
+          </dd>
+          <dt className="text-muted-foreground">Agent</dt>
+          <dd className="break-words">
+            {request.origin
+              ? `${request.origin.agent} · ${request.origin.providerInstanceId}`
+              : "Not verified"}
+          </dd>
+          <dt className="text-muted-foreground">Environment</dt>
+          <dd className="break-words font-medium">{environmentLabel}</dd>
+          <dt className="text-muted-foreground">Program</dt>
+          <dd className="break-all font-mono text-xs">{request.argv[0]?.split(/[\\/]/).at(-1)}</dd>
+        </dl>
       </div>
-      <div>
-        <p className="text-xs text-muted-foreground">PURPOSE · CALLER SUPPLIED</p>
-        <p className="mt-1 text-sm">{request.reason}</p>
+      <div className="space-y-1">
+        <p className="text-xs text-muted-foreground">Reason supplied by agent</p>
+        <p className="line-clamp-2 break-words text-sm">{request.reason}</p>
       </div>
-      <details className="text-xs">
+      {waitingForUnlock ? (
+        <p className="text-sm text-muted-foreground">
+          Unlock the vault to choose a login. Access still needs your approval.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-muted-foreground">Share this saved login</p>
+          <Select
+            value={selection}
+            onValueChange={setSelection}
+            items={request.candidates.map((c) => ({
+              value: c.id,
+              label: c.name + " · " + c.hosts.join(", "),
+            }))}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Choose a login" />
+            </SelectTrigger>
+            <SelectPopup>
+              {request.candidates.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name} · {c.hosts.join(", ")}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        </div>
+      )}
+      <details className="space-y-2 text-xs">
         <summary className="cursor-pointer text-muted-foreground">
-          Review exact command &amp; scope
+          Command, workspace & permission scope
         </summary>
-        <pre className="mt-2 overflow-auto whitespace-pre-wrap break-all">
+        <pre className="overflow-auto whitespace-pre-wrap break-all rounded-lg bg-muted/40 p-3">
           {JSON.stringify(
             {
               executable: request.argv[0],
               arguments: request.argv.slice(1),
               directory: request.cwd,
-              requestedLabel: request.label,
-              callerClaim: request.clientClaim,
+              workspace: request.origin?.workspace,
+              environment: request.origin?.environmentId,
               thread: request.origin?.threadId,
               provider: request.origin?.providerInstanceId,
               session: request.origin?.providerSessionId,
               toolCall: request.origin?.toolCallId,
               run: request.origin?.runId,
+              requestedLabel: request.label,
+              reason: request.reason,
+              callerClaim: request.clientClaim,
             },
             null,
             2,
           )}
         </pre>
+        <p className="text-muted-foreground">
+          Always allow saves permission for this thread, provider, workspace, login, fields, exact
+          command, executable and script fingerprints, and maximum lifetime. Review or revoke it
+          under Manage access.
+        </p>
+        <p className="text-muted-foreground">
+          Credentials go directly to this program. Revocation stops supervised programs and deletes
+          active credential files; it cannot erase copied secrets or end website sessions.
+        </p>
       </details>
-      <p className="text-xs text-muted-foreground">
-        Always allow remembers this thread, provider, workspace, login, fields, exact command,
-        executable and script fingerprints, and maximum lifetime.
-      </p>
-      <div className="flex flex-wrap justify-end gap-2">
-        <Button
-          variant="ghost"
-          disabled={disabled}
-          onClick={() =>
-            void act({ type: "decide", requestId: request.requestId, decision: "deny" })
-          }
-        >
-          Deny
-        </Button>
-        <Button
-          variant="outline"
-          disabled={disabled || !selection}
-          onClick={() =>
-            void act({
-              type: "decide",
-              requestId: request.requestId,
-              decision: "once",
-              candidateId: selection!,
-            })
-          }
-        >
-          Allow once
-        </Button>
-        <Button
-          disabled={disabled || !selection || !request.origin}
-          onClick={() =>
-            void act({
-              type: "decide",
-              requestId: request.requestId,
-              decision: "always",
-              candidateId: selection!,
-            })
-          }
-        >
-          Always allow
-        </Button>
+      <div className="space-y-3 border-t pt-3">
+        <p className="text-xs text-muted-foreground">
+          {request.approvalDeadline === null
+            ? "Waits for your decision · no approval timeout"
+            : `Approval expires ${new Date(request.approvalDeadline).toLocaleTimeString()}`}
+        </p>
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button
+            variant="ghost"
+            disabled={disabled}
+            onClick={() =>
+              void act({ type: "decide", requestId: request.requestId, decision: "deny" })
+            }
+          >
+            Deny
+          </Button>
+          {!waitingForUnlock && (
+            <>
+              <Button
+                variant="outline"
+                disabled={disabled || !selection || !request.origin}
+                onClick={() =>
+                  void act({
+                    type: "decide",
+                    requestId: request.requestId,
+                    decision: "always",
+                    candidateId: selection!,
+                  })
+                }
+              >
+                Always allow
+              </Button>
+              <Button
+                disabled={disabled || !selection}
+                onClick={() =>
+                  void act({
+                    type: "decide",
+                    requestId: request.requestId,
+                    decision: "once",
+                    candidateId: selection!,
+                  })
+                }
+              >
+                Allow once
+              </Button>
+            </>
+          )}
+        </div>
       </div>
     </section>
   );
 }
+
 function AutomaticNotice({
   notice,
   environmentLabel,
