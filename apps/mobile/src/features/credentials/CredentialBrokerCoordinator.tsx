@@ -322,7 +322,9 @@ function Approval({
         {request.field} · {request.ttlSeconds}s after delivery.{" "}
         {request.state === "awaiting_unlock"
           ? "Waiting for you to unlock the vault. Unlocking does not approve access."
-          : `Approval expires ${new Date(request.approvalDeadline).toLocaleTimeString()}`}
+          : request.approvalDeadline === null
+            ? "Waiting for your decision. This permission request does not time out."
+            : `Approval expires ${new Date(request.approvalDeadline).toLocaleTimeString()}`}
       </Text>
       <Text className="text-foreground-muted">Saved login</Text>
       {request.candidates.map((c) => (

@@ -47,7 +47,7 @@ export const CredentialApproval = Schema.Struct({
   reason: Schema.String,
   clientClaim: Schema.String,
   ttlSeconds: Schema.Number,
-  approvalDeadline: Schema.Number,
+  approvalDeadline: Schema.NullOr(Schema.Number),
   expiresAt: Schema.optional(Schema.Number),
   argv: Schema.Array(Schema.String),
   cwd: Schema.String,

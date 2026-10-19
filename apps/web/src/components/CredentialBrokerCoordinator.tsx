@@ -363,7 +363,9 @@ function ApprovalCard({
         <p className="text-muted-foreground">
           {request.state === "awaiting_unlock"
             ? "Waiting for you to unlock the vault. Unlocking does not approve access."
-            : `Approval expires ${new Date(request.approvalDeadline).toLocaleTimeString()}`}
+            : request.approvalDeadline === null
+              ? "Waiting for your decision. This permission request does not time out."
+              : `Approval expires ${new Date(request.approvalDeadline).toLocaleTimeString()}`}
         </p>
       </div>
       <div className="space-y-2">

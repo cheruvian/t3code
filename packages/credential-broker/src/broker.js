@@ -136,7 +136,7 @@ export class Broker {
       request_id: randomUUID(),
       state: data.site ? "searching" : "pending",
       created_at: this.now(),
-      approval_deadline: this.now() + this.approvalTimeout,
+      approval_deadline: this.approvalTimeout === null ? null : this.now() + this.approvalTimeout,
     };
     // Only the embedding host can supply origin; parseRequest rejects it on the CLI wire.
     if (origin) request.origin = Object.freeze({ ...origin });
@@ -510,6 +510,7 @@ export class Broker {
     for (const request of this.#requests.values()) {
       if (
         ["pending", "searching", "preparing"].includes(request.state) &&
+        request.approval_deadline !== null &&
         now >= request.approval_deadline
       ) {
         await this.release(request.request_id, "expired");

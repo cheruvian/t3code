@@ -45,7 +45,7 @@ export class T3CredentialBroker {
     provider,
     now = Date.now,
     watchdog = true,
-    approvalTimeout = 120000,
+    approvalTimeout = null,
     noticeTimeout = 10000,
     platform = process.platform,
     searchPath = process.env.PATH ?? "",
@@ -331,7 +331,7 @@ export class T3CredentialBroker {
             request_id: requestId,
             state: "awaiting_unlock",
             origin,
-            approval_deadline: 0,
+            approval_deadline: null,
           },
         });
         signal?.addEventListener("abort", abort, { once: true });

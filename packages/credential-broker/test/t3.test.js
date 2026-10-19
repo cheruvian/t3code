@@ -253,6 +253,37 @@ test("consumer disappearing after approval selection returns a safe startup fail
   assert.ok(!JSON.stringify(result).includes(DEMO_PASSWORD));
   assert.deepEqual(await readdir(join(runtime, "leases")), []);
 });
+test("T3 approval stays pending across a day and credential lifetime starts only after approval", async (t) => {
+  let now = Date.now();
+  let reads = 0;
+  const provider = new DemoProvider();
+  const get = provider.get.bind(provider);
+  provider.get = async (...args) => {
+    reads++;
+    return get(...args);
+  };
+  const { broker, caller, input, marker, runtime } = await setup(t, { provider, now: () => now });
+  const { execution, request } = await pending(broker, caller, input);
+  assert.equal(request.approvalDeadline, null);
+  now += 24 * 60 * 60 * 1000;
+  await broker.sweep();
+  assert.equal(broker.state().requests[0].state, "pending");
+  assert.equal(reads, 0);
+  assert.deepEqual(await readdir(join(runtime, "leases")), []);
+  await broker.action("human", {
+    type: "decide",
+    requestId: request.requestId,
+    decision: "once",
+    candidateId: DEMO_ITEM,
+  });
+  const result = await execution;
+  assert.equal(result.state, "completed");
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.expiresAt, now + input.ttlSeconds * 1000);
+  assert.equal(reads, 1);
+  const delivery = JSON.parse(await readFile(marker, "utf8"));
+  await assert.rejects(stat(delivery.path), { code: "ENOENT" });
+});
 test("locked requests publish trusted identity, survive failed unlock, and still require approval", async (t) => {
   const provider = new DemoProvider();
   let searches = 0;
@@ -454,9 +485,12 @@ test(
   },
 );
 
-test("denial and approval expiry never deliver credentials; late decisions fail", async (t) => {
+test("denial and an explicitly configured approval deadline never deliver credentials", async (t) => {
   let now = Date.now();
-  const { broker, caller, input, runtime } = await setup(t, { now: () => now });
+  const { broker, caller, input, runtime } = await setup(t, {
+    now: () => now,
+    approvalTimeout: 120000,
+  });
   const denied = await pending(broker, caller, input);
   await broker.action("human", {
     type: "decide",
