@@ -11,7 +11,7 @@ import { Platform, Pressable, View } from "react-native";
 import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
 
 import { AppText as Text } from "../../components/ui/AppText";
-import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
+import { EnvironmentIcon } from "../../components/EnvironmentIcon";
 import { Button } from "../../components/ui/Button";
 import { IconButton } from "../../components/ui/IconButton";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
@@ -101,7 +101,8 @@ export function ConnectionEnvironmentRow(props: {
               pulse={isRetrying}
               size={8}
             />
-            <EnvironmentMachineSymbol
+            <EnvironmentIcon
+              environmentId={props.environment.environmentId}
               kind={resolveEnvironmentMachineKind(serverConfig)}
               size={14}
               tintColorClassName="accent-foreground-muted"

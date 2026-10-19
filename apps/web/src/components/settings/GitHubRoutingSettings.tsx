@@ -69,6 +69,7 @@ export function GitHubRoutingSettings({
       </p>
       {environments.map((environment) => (
         <EnvironmentRow
+          environmentId={environment.environmentId}
           key={environment.environmentId}
           kind={resolveEnvironmentMachineKind(environment.serverConfig)}
           label={environment.label}

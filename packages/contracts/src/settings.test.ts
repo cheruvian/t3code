@@ -1114,6 +1114,15 @@ describe("ServerSettingsPatch string normalization", () => {
 });
 
 describe("ServerSettings environment icon", () => {
+  it("defaults project artwork off and preserves a selected project", () => {
+    expect(decodeServerSettings({}).environmentIconProjectId).toBeNull();
+    const settings = decodeServerSettings({ environmentIconProjectId: "heihei-project" });
+    expect(encodeServerSettings(settings).environmentIconProjectId).toBe("heihei-project");
+    expect(
+      decodeServerSettings({ environmentIconProjectId: null }).environmentIconProjectId,
+    ).toBeNull();
+  });
+
   it("defaults to null", () => {
     expect(decodeServerSettings({}).environmentIcon).toBeNull();
   });

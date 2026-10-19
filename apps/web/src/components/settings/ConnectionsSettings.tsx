@@ -138,7 +138,7 @@ import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { AnimatedHeight } from "../AnimatedHeight";
-import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { EnvironmentIcon } from "../EnvironmentIcon";
 import { Textarea } from "../ui/textarea";
 import { getPairingTokenFromUrl, setPairingTokenOnUrl } from "../../pairingUrl";
 import { readHostedPairingRequest } from "../../hostedPairing";
@@ -1591,6 +1591,7 @@ function SavedBackendListRow({
 
   return (
     <EnvironmentRow
+      environmentId={environment.environmentId}
       kind={machineKind}
       label={environment.label}
       dimmed={!enabled}
@@ -3511,7 +3512,8 @@ export function ConnectionsSettings() {
               primaryEnvironment?.label ?? (desktopBridge ? "This machine" : "Primary environment")
             }
             icon={
-              <EnvironmentMachineIcon
+              <EnvironmentIcon
+                environmentId={primaryEnvironmentId}
                 aria-hidden
                 kind={
                   primaryServerConfig

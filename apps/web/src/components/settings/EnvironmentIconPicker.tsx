@@ -7,6 +7,9 @@ import {
   type ServerConfig,
 } from "@t3tools/contracts";
 
+import { useProjects } from "../../state/entities";
+import { EnvironmentIcon } from "../EnvironmentIcon";
+import { ProjectFavicon } from "../ProjectFavicon";
 import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironmentScope } from "../../state/session";
 import { ENVIRONMENT_MACHINE_KIND_LABELS, EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
@@ -43,6 +46,8 @@ export function EnvironmentIconMenu({
   readonly environmentId: EnvironmentId;
   readonly serverConfig: ServerConfig | null;
 }) {
+  const projects = useProjects().filter((project) => project.environmentId === environmentId);
+  const projectId = serverConfig?.settings.environmentIconProjectId ?? null;
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const operateAccess = useEnvironmentScope(environmentId, AuthSettingsWriteScope)
     ? "granted"
@@ -54,7 +59,7 @@ export function EnvironmentIconMenu({
   return (
     <MenuSub>
       <MenuSubTrigger>
-        <EnvironmentMachineIcon kind={resolved} />
+        <EnvironmentIcon environmentId={environmentId} kind={resolved} />
         Icon
       </MenuSubTrigger>
       <MenuSubPopup>
@@ -67,10 +72,21 @@ export function EnvironmentIconMenu({
           </>
         ) : null}
         <MenuRadioGroup
-          value={resolved}
+          value={projectId ? `project:${projectId}` : resolved}
           onValueChange={(next) => {
-            if (lock !== null || !isEnvironmentMachineKind(next)) return;
-            updateSettings({ environmentIcon: next === detected ? null : next });
+            if (lock !== null) return;
+            const project = projects.find((project) => `project:${project.id}` === next);
+            if (project && serverConfig?.environment.capabilities.environmentIconProject) {
+              updateSettings({ environmentIconProjectId: project.id });
+              return;
+            }
+            if (!isEnvironmentMachineKind(next)) return;
+            updateSettings({
+              environmentIcon: next === detected ? null : next,
+              ...(serverConfig?.environment.capabilities.environmentIconProject
+                ? { environmentIconProjectId: null }
+                : {}),
+            });
           }}
         >
           {ENVIRONMENT_MACHINE_KINDS.map((kind) => (
@@ -88,6 +104,23 @@ export function EnvironmentIconMenu({
               </span>
             </MenuRadioItem>
           ))}
+          {serverConfig?.environment.capabilities.environmentIconProject ? (
+            <>
+              <MenuSeparator />
+              {projects.map((project) => (
+                <MenuRadioItem
+                  key={project.id}
+                  value={`project:${project.id}`}
+                  disabled={lock !== null}
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <ProjectFavicon project={project} className="size-3.5 shrink-0" />
+                    <span className="truncate">Use {project.title} icon</span>
+                  </span>
+                </MenuRadioItem>
+              ))}
+            </>
+          ) : null}
         </MenuRadioGroup>
       </MenuSubPopup>
     </MenuSub>

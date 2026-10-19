@@ -28,7 +28,7 @@ import {
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
-import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
+import { EnvironmentIcon } from "./EnvironmentIcon";
 import { useProject, useThreadShell, useThreadShellsForProjectRefs } from "../state/entities";
 import {
   type EnvMode,
@@ -244,7 +244,8 @@ const RunContextSelector = memo(function RunContextSelector({
               aria-hidden="true"
             />
           ) : (
-            <EnvironmentMachineIcon
+            <EnvironmentIcon
+              environmentId={environmentId}
               kind={activeEnvironment?.machine ?? "server"}
               className={isPanel ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0 mx-0!"}
             />
@@ -356,7 +357,11 @@ const RunContextSelector = memo(function RunContextSelector({
                     closeOnClick
                   >
                     <span className="flex min-w-0 items-center gap-1.5">
-                      <EnvironmentMachineIcon kind={env.machine} className="size-3" />
+                      <EnvironmentIcon
+                        environmentId={env.environmentId}
+                        kind={env.machine}
+                        className="size-3"
+                      />
                       <span className="min-w-0 truncate">{env.label}</span>
                     </span>
                   </MenuRadioItem>

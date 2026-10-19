@@ -61,7 +61,7 @@ import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/qu
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { WorktreeBaseBranchPicker } from "../WorktreeBaseBranchPicker";
-import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { EnvironmentIcon } from "../EnvironmentIcon";
 import { ConnectionStatusDot, connectionPhaseDotClassName } from "../ConnectionStatusDot";
 import { readEnvironmentScope } from "~/state/session";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -409,6 +409,7 @@ function ScheduledTaskEnvironmentList({
         return (
           <div key={environment.environmentId} className="divide-y divide-border/50">
             <EnvironmentRow
+              environmentId={environment.environmentId}
               kind={resolveEnvironmentMachineKind(environment.serverConfig)}
               label={primary}
               subtitle={
@@ -514,7 +515,8 @@ function ScheduledTaskEnvironmentSection({
       title={environment.label}
       hideTitle={!showEnvironmentHeading}
       icon={
-        <EnvironmentMachineIcon
+        <EnvironmentIcon
+          environmentId={environment.environmentId}
           kind={resolveEnvironmentMachineKind(environment.serverConfig)}
           className="size-3.5"
         />
@@ -1142,7 +1144,8 @@ function ScheduledTaskEditorDialog({
                 <SelectTrigger id="scheduled-task-environment" size="sm">
                   <SelectValue>
                     <span className="flex items-center gap-2">
-                      <EnvironmentMachineIcon
+                      <EnvironmentIcon
+                        environmentId={environment?.environmentId ?? null}
                         kind={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
                         className="size-4"
                       />
@@ -1163,7 +1166,8 @@ function ScheduledTaskEditorDialog({
                         label={entry.label}
                       >
                         <span className="flex min-w-0 items-center gap-2">
-                          <EnvironmentMachineIcon
+                          <EnvironmentIcon
+                            environmentId={entry.environmentId}
                             kind={resolveEnvironmentMachineKind(entry.serverConfig)}
                             className="size-4"
                           />

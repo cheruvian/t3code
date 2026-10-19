@@ -4,14 +4,18 @@ import {
   connectionRouteLabel,
   connectionRoutes,
 } from "@t3tools/client-runtime/connection";
-import type { DesktopSshEnvironmentTarget, EnvironmentMachineKind } from "@t3tools/contracts";
+import type {
+  DesktopSshEnvironmentTarget,
+  EnvironmentId,
+  EnvironmentMachineKind,
+} from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import type { ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import type { EnvironmentPresentation } from "~/state/environments";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
-import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { EnvironmentIcon } from "../EnvironmentIcon";
 
 export function formatDesktopSshTarget(target: DesktopSshEnvironmentTarget): string {
   const authority = target.username ? `${target.username}@${target.hostname}` : target.hostname;
@@ -49,6 +53,7 @@ export function environmentTransportLabel(
 }
 
 export function EnvironmentRow({
+  environmentId,
   kind,
   label,
   subtitle,
@@ -58,6 +63,7 @@ export function EnvironmentRow({
   className,
   children,
 }: {
+  readonly environmentId: EnvironmentId;
   readonly kind: EnvironmentMachineKind;
   readonly label: string;
   readonly subtitle: ReactNode;
@@ -75,7 +81,12 @@ export function EnvironmentRow({
         className,
       )}
     >
-      <EnvironmentMachineIcon aria-hidden kind={kind} className="size-4 text-muted-foreground" />
+      <EnvironmentIcon
+        environmentId={environmentId}
+        aria-hidden
+        kind={kind}
+        className="size-4 text-muted-foreground"
+      />
       <div className="min-w-0">
         <p className="truncate text-sm font-medium text-foreground">{label}</p>
         <div className="truncate text-xs text-muted-foreground">{subtitle}</div>

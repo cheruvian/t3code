@@ -13,7 +13,7 @@ import { AsyncResult } from "effect/reactivity";
 import { KeyRoundIcon, ShieldCheckIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ProjectFavicon } from "./ProjectFavicon";
-import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
+import { EnvironmentIcon } from "./EnvironmentIcon";
 import { useProject } from "../state/entities";
 import { credentialBroker } from "../state/credentialBroker";
 import { useEnvironmentIds, useEnvironment } from "../state/environments";
@@ -406,7 +406,8 @@ function ApprovalCard({
             </dd>
             <dt className="text-muted-foreground">Environment</dt>
             <dd className="flex min-w-0 items-center gap-1.5 font-medium">
-              <EnvironmentMachineIcon
+              <EnvironmentIcon
+                environmentId={request.origin?.environmentId ?? null}
                 aria-hidden
                 kind={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
                 className="size-3.5 shrink-0 text-muted-foreground"

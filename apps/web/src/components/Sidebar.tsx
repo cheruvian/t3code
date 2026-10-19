@@ -209,7 +209,7 @@ import type { SidebarThreadSummary } from "../types";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 
-import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
+import { EnvironmentIcon } from "./EnvironmentIcon";
 import { ProjectEnvironmentBadge } from "./ProjectEnvironmentBadge";
 import {
   buildDraftActionMenuItems,
@@ -514,7 +514,8 @@ function SidebarThreadTooltip({
         ) : null}
         {environmentLabel ? (
           <div className="flex min-w-0 items-center gap-2">
-            <EnvironmentMachineIcon
+            <EnvironmentIcon
+              environmentId={thread.environmentId}
               kind={environmentMachine}
               className="size-3 shrink-0 stroke-muted-foreground"
             />
@@ -2338,7 +2339,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 </>
               ) : showsScratchMachine ? (
                 <>
-                  <EnvironmentMachineIcon
+                  <EnvironmentIcon
+                    environmentId={thread.environmentId}
                     aria-hidden
                     kind={props.environmentMachine}
                     className="size-3 shrink-0 text-muted-foreground/40"
@@ -2368,7 +2370,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               >
                 {isRemote && !showsScratchMachine ? (
                   <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
-                    <EnvironmentMachineIcon
+                    <EnvironmentIcon
+                      environmentId={thread.environmentId}
                       aria-hidden
                       kind={props.environmentMachine}
                       className="size-3.5"

@@ -32,7 +32,7 @@ import {
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { useThreadShells, waitForProjectRemoval } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
-import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { EnvironmentIcon } from "../EnvironmentIcon";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
@@ -449,7 +449,8 @@ function ProjectDetail({
               key={member.physicalProjectKey}
               title={
                 <span className="inline-flex items-center gap-1.5">
-                  <EnvironmentMachineIcon
+                  <EnvironmentIcon
+                    environmentId={environmentId}
                     aria-hidden
                     kind={resolveEnvironmentMachineKind(
                       environmentById.get(environmentId)?.serverConfig ?? null,
@@ -475,7 +476,8 @@ function ProjectDetail({
             key={environmentId}
             title={
               <span className="inline-flex items-center gap-1.5">
-                <EnvironmentMachineIcon
+                <EnvironmentIcon
+                  environmentId={environmentId}
                   aria-hidden
                   kind={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
                   className="size-4 shrink-0 text-muted-foreground"

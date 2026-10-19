@@ -13,7 +13,7 @@ import { AppState, Modal, ScrollView, TextInput, View, useWindowDimensions } fro
 import * as Crypto from "expo-crypto";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
-import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
+import { EnvironmentIcon } from "../../components/EnvironmentIcon";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { useProject } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
@@ -247,6 +247,7 @@ function EnvironmentBroker({
             <Approval
               key={request.requestId}
               request={request}
+              environmentId={environmentId}
               environmentLabel={environmentLabel}
               disabled={!canAct}
               act={act}
@@ -327,11 +328,13 @@ function EnvironmentBroker({
   );
 }
 function Approval({
+  environmentId,
   request,
   environmentLabel,
   disabled,
   act,
 }: {
+  environmentId: EnvironmentId;
   request: CredentialApproval;
   environmentLabel: string;
   disabled: boolean;
@@ -393,7 +396,8 @@ function Approval({
         </Text>
         <View className="flex-row items-center gap-1.5">
           <Text className="text-foreground">Environment:</Text>
-          <EnvironmentMachineSymbol
+          <EnvironmentIcon
+            environmentId={environmentId}
             kind={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
             size={16}
             tintColorClassName="accent-icon"

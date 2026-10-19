@@ -45,6 +45,8 @@ const settingsSearchState = vi.hoisted(() => ({
   effects: [] as Array<() => void>,
 }));
 
+vi.mock("../EnvironmentIcon", () => ({ EnvironmentIcon: () => null }));
+
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
   const { reactHookHarness } = await import("../../test/reactHookHarness");

@@ -50,6 +50,7 @@ import {
   useToggleEnvironmentModelFavorite,
 } from "../../hooks/useSettings";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { EnvironmentIcon } from "../EnvironmentIcon";
 import { cn } from "../../lib/utils";
 import { resolveAppModelSelectionState } from "../../modelSelection";
 import {
@@ -256,7 +257,10 @@ function EnvironmentUnavailablePlaceholder({
     <ProviderSettingsPlaceholder
       deviceTabs={deviceTabs}
       icon={
-        <EnvironmentMachineIcon kind={resolveEnvironmentMachineKind(environment.serverConfig)} />
+        <EnvironmentIcon
+          environmentId={environment.environmentId}
+          kind={resolveEnvironmentMachineKind(environment.serverConfig)}
+        />
       }
       title={title}
       description={description}
@@ -385,7 +389,8 @@ function ProviderSettingsPanelContent(target: ProviderSettingsTarget) {
                 <TooltipTrigger
                   render={
                     <Toggle value={environment.environmentId}>
-                      <EnvironmentMachineIcon
+                      <EnvironmentIcon
+                        environmentId={environment.environmentId}
                         kind={machine}
                         className="size-3.5 shrink-0"
                         aria-hidden

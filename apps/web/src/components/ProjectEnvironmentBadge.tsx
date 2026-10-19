@@ -1,7 +1,7 @@
 import type { EnvironmentId, EnvironmentMachineKind } from "@t3tools/contracts";
 
 import type { SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
-import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
+import { EnvironmentIcon } from "./EnvironmentIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 export function ProjectEnvironmentBadge(props: {
@@ -32,7 +32,8 @@ export function ProjectEnvironmentBadge(props: {
           />
         }
       >
-        <EnvironmentMachineIcon
+        <EnvironmentIcon
+          environmentId={first.environmentId}
           aria-hidden
           kind={props.machineByEnvironmentId.get(first.environmentId) ?? "server"}
           className="size-3.5"

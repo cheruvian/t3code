@@ -5,7 +5,7 @@ import { Fragment, useState, type ReactNode } from "react";
 
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import { useEnvironments, type EnvironmentPresentation } from "../../state/environments";
-import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { EnvironmentIcon } from "../EnvironmentIcon";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { InlineButton } from "../ui/button";
 import {
@@ -234,7 +234,8 @@ function EnvironmentScopeMenu({
       ariaLabel="Environment scope"
       icon={
         selected ? (
-          <EnvironmentMachineIcon
+          <EnvironmentIcon
+            environmentId={selected.environmentId}
             aria-hidden
             kind={resolveEnvironmentMachineKind(selected.serverConfig)}
             className="size-3.5 shrink-0"
@@ -272,7 +273,8 @@ function EnvironmentScopeMenu({
               ? ""
               : secondary || settingsScopeEnvironmentAddress(environment),
           icon: (
-            <EnvironmentMachineIcon
+            <EnvironmentIcon
+              environmentId={environment.environmentId}
               aria-hidden
               kind={resolveEnvironmentMachineKind(environment.serverConfig)}
               className="size-3.5 shrink-0"

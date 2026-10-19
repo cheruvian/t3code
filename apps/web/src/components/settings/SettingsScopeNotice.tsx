@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 import { cn } from "../../lib/utils";
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import { useEnvironments, type EnvironmentPresentation } from "../../state/environments";
-import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { EnvironmentIcon } from "../EnvironmentIcon";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ITEM_ROW_CLASSNAME } from "./itemRows";
@@ -44,7 +44,8 @@ export function SettingsScopeNotice({
   const { environments } = useEnvironments();
   const environmentIcon = (environment: EnvironmentPresentation | undefined) =>
     environment ? (
-      <EnvironmentMachineIcon
+      <EnvironmentIcon
+        environmentId={environment.environmentId}
         aria-hidden
         kind={resolveEnvironmentMachineKind(environment.serverConfig)}
         className="size-4 shrink-0 text-muted-foreground"
