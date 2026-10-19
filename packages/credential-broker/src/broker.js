@@ -126,13 +126,14 @@ export class Broker {
       notices: this.notices(),
     };
   }
-  request(input, origin, consumerEnvironment) {
+  request(input, origin, consumerEnvironment, { allowManual = false } = {}) {
     if (this.#closing) throw new BrokerError("Broker is shutting down.", 503);
     const data = parseRequest(input);
     if ([...this.#requests.values()].filter((r) => !terminal.has(r.state)).length >= 100)
       throw new BrokerError("Too many open requests.", 429);
     const request = {
       ...data,
+      allow_manual: allowManual,
       request_id: randomUUID(),
       state: data.site ? "searching" : "pending",
       created_at: this.now(),
@@ -162,7 +163,7 @@ export class Broker {
       const candidates = await this.provider.search(request.site);
       await this.sweep();
       if (request.state !== "searching" || this.#closing) return;
-      if (!candidates.length) {
+      if (!candidates.length && !request.allow_manual) {
         request.state = "failed";
         request.error = "No matching login found for this site.";
       } else {
@@ -172,8 +173,14 @@ export class Broker {
       }
     } catch {
       if (request.state === "searching") {
-        request.state = "failed";
-        request.error = "Vault login search failed; provider output is withheld.";
+        if (request.allow_manual) {
+          request.candidates = [];
+          request.state = "pending";
+          this.offerApproval(request);
+        } else {
+          request.state = "failed";
+          request.error = "Vault login search failed; provider output is withheld.";
+        }
       }
     }
   }

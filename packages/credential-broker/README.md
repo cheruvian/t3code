@@ -48,7 +48,8 @@ node scripts/embed-programs.mjs. The check command detects stale embedded source
 Ask the agent to sign in to a page in the integrated browser. In the credential
 request, select a saved Bitwarden login or expand **Enter a login privately** to
 submit a username and password for one use. Manual entry works while Bitwarden
-is locked and does not save the login. Approval waits until you decide or the
+is locked, when no saved login matches, or when lookup fails, and does not save
+the login. Approval waits until you decide or the
 originating call stops; the credential lifetime starts after approval.
 
 Sign-in uses a private page in the working tab's storage context. It closes that

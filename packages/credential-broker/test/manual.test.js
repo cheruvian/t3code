@@ -118,6 +118,59 @@ function milestone(broker, predicate) {
   });
 }
 
+for (const outcome of ["empty", "failed"]) {
+  test(`browser manual entry remains available when vault search is ${outcome}`, async (t) => {
+    let delivered = 0;
+    let vaultReads = 0;
+    const { runtime, options, addCleanup } = await setup(t, async (request, response) => {
+      let body = "";
+      for await (const chunk of request) body += chunk;
+      assert.deepEqual(JSON.parse(body), options.login);
+      delivered++;
+      response.end("ok");
+    });
+    const provider = new DemoProvider();
+    provider.search = async () => {
+      if (outcome === "failed") throw new Error("private-provider-error");
+      return [];
+    };
+    provider.get = async () => {
+      vaultReads++;
+      throw new Error("No saved login should be read.");
+    };
+    const broker = new T3CredentialBroker({
+      runtime: join(runtime, "saved"),
+      workerEntrypoint: options.workerEntrypoint,
+      provider,
+      watchdog: false,
+    });
+    addCleanup(() => broker.close());
+    await broker.unlock();
+    const pending = milestone(broker, (s) => s.requests.some((r) => r.state === "pending"));
+    const execution = broker.execute(
+      options.origin,
+      options.input,
+      undefined,
+      options.consumerEnvironment,
+    );
+    const request = (await pending).requests.find((r) => r.state === "pending");
+    assert.deepEqual(request.candidates, []);
+    assert.equal(vaultReads, 0);
+    assert.equal(delivered, 0);
+    assert.ok(!JSON.stringify(broker.state()).includes("private-provider-error"));
+    const result = await executeManualCredential(options);
+    assert.equal(result.state, "completed");
+    assert.equal(result.exitCode, 0);
+    await broker.cancelCall(options.origin.toolCallId);
+    assert.equal((await execution).state, "released");
+    assert.equal(delivered, 1);
+    assert.equal(vaultReads, 0);
+    assert.equal(broker.state().grants.length, 0);
+    assert.deepEqual(await readdir(join(runtime, "manual")), []);
+    assert.deepEqual(await readdir(join(runtime, "saved", "leases")), []);
+  });
+}
+
 test(
   "saved browser delivery denies without reading, then allows, automatically uses, dismisses, and revokes",
   { timeout: 15000 },

@@ -345,7 +345,10 @@ export class T3CredentialBroker {
     const broker = this.#broker;
     if (this.#closing || !broker || this.#status !== "ready")
       throw new BrokerError("Broker unavailable.", 503, "broker_unavailable");
-    const request = broker.request(parsed, origin, consumerEnvironment);
+    const request = broker.request(parsed, origin, consumerEnvironment, {
+      // Only the host-created private browser bridge can accept a manually entered login.
+      allowManual: consumerEnvironment?.CB_BROWSER_ENDPOINT !== undefined,
+    });
     return new Promise((resolve, reject) => {
       const finish = (r) => {
         this.#executions.delete(request.request_id);
