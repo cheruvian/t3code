@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useAtomValue } from "@effect/atom-react";
 import {
   AuthAccessReadScope,
+  resolveEnvironmentMachineKind,
   type CredentialApproval,
   type CredentialBrokerAction,
   type CredentialNotice,
@@ -11,6 +12,9 @@ import {
 import { AsyncResult } from "effect/reactivity";
 import { KeyRoundIcon, ShieldCheckIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ProjectFavicon } from "./ProjectFavicon";
+import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
+import { useProject } from "../state/entities";
 import { credentialBroker } from "../state/credentialBroker";
 import { useEnvironmentIds, useEnvironment } from "../state/environments";
 import { useEnvironmentScope } from "../state/session";
@@ -356,6 +360,12 @@ function ApprovalCard({
   const [selection, setSelection] = useState<string | null>(
     request.candidates.length === 1 ? request.candidates[0]!.id : null,
   );
+  const project = useProject(
+    request.origin?.projectId
+      ? { environmentId: request.origin.environmentId, projectId: request.origin.projectId }
+      : null,
+  );
+  const environment = useEnvironment(request.origin?.environmentId ?? null);
   const waitingForUnlock = request.state === "awaiting_unlock";
   const fields =
     request.field === "login"
@@ -380,8 +390,9 @@ function ApprovalCard({
           </div>
           <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
             <dt className="text-muted-foreground">Project</dt>
-            <dd className="break-words font-medium">
-              {request.origin?.projectName || "Not available"}
+            <dd className="flex min-w-0 items-center gap-1.5 font-medium">
+              {project && <ProjectFavicon project={project} className="size-3.5 shrink-0" />}
+              <span className="break-words">{request.origin?.projectName || "Not available"}</span>
             </dd>
             <dt className="text-muted-foreground">Thread</dt>
             <dd className="break-words font-medium">
@@ -394,7 +405,14 @@ function ApprovalCard({
                 : "Not verified"}
             </dd>
             <dt className="text-muted-foreground">Environment</dt>
-            <dd className="break-words font-medium">{environmentLabel}</dd>
+            <dd className="flex min-w-0 items-center gap-1.5 font-medium">
+              <EnvironmentMachineIcon
+                aria-hidden
+                kind={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
+                className="size-3.5 shrink-0 text-muted-foreground"
+              />
+              <span className="break-words">{environmentLabel}</span>
+            </dd>
             <dt className="text-muted-foreground">Program</dt>
             <dd className="break-all font-mono text-xs">
               {request.argv[0]?.split(/[\\/]/).at(-1)}

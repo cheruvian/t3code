@@ -2,6 +2,7 @@ import { useComposerMenuState } from "../chat/useComposerMenuState";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import {
   AuthOrchestrationOperateScope,
+  resolveEnvironmentMachineKind,
   type EnvironmentId,
   type ProjectIconOverride,
 } from "@t3tools/contracts";
@@ -31,6 +32,7 @@ import {
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { useThreadShells, waitForProjectRemoval } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
+import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
@@ -439,15 +441,26 @@ function ProjectDetail({
     </Button>
   );
   const checkoutChoices = (
-    <SettingsSection title="Checkouts">
+    <SettingsSection title={hasMultipleCheckouts ? "Checkouts" : "Environment"}>
       {Array.from(checkoutsByEnvironment, ([environmentId, members]) => {
         if (checkoutsByEnvironment.size === 1) {
           return members.map((member) => (
             <SettingsRow
               key={member.physicalProjectKey}
-              title={member.environmentLabel ?? "Environment"}
+              title={
+                <span className="inline-flex items-center gap-1.5">
+                  <EnvironmentMachineIcon
+                    aria-hidden
+                    kind={resolveEnvironmentMachineKind(
+                      environmentById.get(environmentId)?.serverConfig ?? null,
+                    )}
+                    className="size-4 shrink-0 text-muted-foreground"
+                  />
+                  {member.environmentLabel ?? "Environment"}
+                </span>
+              }
               description={member.workspaceRoot}
-              control={checkoutRemoveButton(member)}
+              control={hasMultipleCheckouts ? checkoutRemoveButton(member) : undefined}
             />
           ));
         }
@@ -460,7 +473,16 @@ function ProjectDetail({
         return (
           <SettingsRow
             key={environmentId}
-            title={labels.primary}
+            title={
+              <span className="inline-flex items-center gap-1.5">
+                <EnvironmentMachineIcon
+                  aria-hidden
+                  kind={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
+                  className="size-4 shrink-0 text-muted-foreground"
+                />
+                {labels.primary}
+              </span>
+            }
             description={
               <>
                 {labels.secondary ? (
@@ -599,7 +621,7 @@ function ProjectDetail({
         </SettingsSection>
         <ProjectDefaultsSettings category="project" />
         <ProjectActionsSettings />
-        {hasMultipleCheckouts ? checkoutChoices : null}
+        {checkoutChoices}
         <SettingsSection title="Danger">
           <SettingsRow
             title={

@@ -2,6 +2,7 @@ import type { ViewInstance } from "react-native";
 import { useAtomValue } from "@effect/atom-react";
 import {
   AuthAccessReadScope,
+  resolveEnvironmentMachineKind,
   type CredentialApproval,
   type CredentialBrokerAction,
   type EnvironmentId,
@@ -12,6 +13,9 @@ import { AppState, Modal, ScrollView, TextInput, View, useWindowDimensions } fro
 import * as Crypto from "expo-crypto";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
+import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
+import { ProjectFavicon } from "../../components/ProjectFavicon";
+import { useProject } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentScope } from "../../state/session";
 import { credentialBroker } from "../../state/credentialBroker";
@@ -333,6 +337,13 @@ function Approval({
   disabled: boolean;
   act: (input: CredentialBrokerAction) => Promise<void>;
 }) {
+  const project = useProject(
+    request.origin?.projectId
+      ? { environmentId: request.origin.environmentId, projectId: request.origin.projectId }
+      : null,
+  );
+  const { environments } = useEnvironments();
+  const environment = environments.find((e) => e.environmentId === request.origin?.environmentId);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [selection, setSelection] = useState<string | undefined>(
     request.candidates.length === 1 ? request.candidates[0]!.id : undefined,
@@ -355,9 +366,22 @@ function Approval({
         <Text className="text-xs text-foreground-muted">
           {request.origin ? "Caller verified by T3" : "Unverified caller"}
         </Text>
-        <Text className="text-foreground">
-          Project: {request.origin?.projectName || "Not available"}
-        </Text>
+        <View className="flex-row items-center gap-1.5">
+          <Text className="text-foreground">Project:</Text>
+          {project && (
+            <ProjectFavicon
+              environmentId={project.environmentId}
+              projectTitle={project.title}
+              workspaceRoot={project.workspaceRoot}
+              faviconPath={project.faviconPath}
+              projectIcon={project.projectIcon}
+              size={16}
+            />
+          )}
+          <Text className="flex-1 text-foreground">
+            {request.origin?.projectName || "Not available"}
+          </Text>
+        </View>
         <Text className="text-foreground">
           Thread: {request.origin?.threadTitle || "No verified T3 thread"}
         </Text>
@@ -367,7 +391,15 @@ function Approval({
             ? `${request.origin.agent} · ${request.origin.providerInstanceId}`
             : "Not verified"}
         </Text>
-        <Text className="text-foreground">Environment: {environmentLabel}</Text>
+        <View className="flex-row items-center gap-1.5">
+          <Text className="text-foreground">Environment:</Text>
+          <EnvironmentMachineSymbol
+            kind={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
+            size={16}
+            tintColorClassName="accent-icon"
+          />
+          <Text className="flex-1 text-foreground">{environmentLabel}</Text>
+        </View>
         <Text className="text-foreground">Program: {request.argv[0]?.split(/[\\/]/).at(-1)}</Text>
       </View>
       <Text className="text-sm text-foreground-muted">Reason supplied by agent</Text>
