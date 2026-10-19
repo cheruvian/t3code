@@ -32,6 +32,7 @@ export function ThreadDetailsCard({
         container: canvas.container,
         lane: canvas.lane,
         frame: null,
+        side: "left",
         topInset: canvas.detailsCardTopInset,
       })
     : null;
@@ -41,6 +42,7 @@ export function ThreadDetailsCard({
         lane: canvas.lane,
         frame: canvas.layout.frame,
         overlapsDetailsCard: canvas.layout.overlapsDetailsCard,
+        side: "left",
         topInset: canvas.detailsCardTopInset,
       })
     : null;
@@ -161,7 +163,7 @@ export function ThreadDetailsCard({
                 "transition-[top] duration-150 ease-out motion-reduce:transition-none",
             )}
             style={{
-              right: placement.right,
+              left: placement.x,
               top: placement.y,
               width: placement.width,
               maxHeight: height,
