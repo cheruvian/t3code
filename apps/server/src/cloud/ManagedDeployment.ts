@@ -99,6 +99,7 @@ const make = Effect.gen(function* () {
     if (result?.status === "succeeded" || result?.status === "cancelled") return null;
     return { ...request, status: result?.status ?? request.status };
   });
+  // Input requests can survive provider recovery; settled runs no longer own live work.
   const activity = Effect.gen(function* () {
     const [row] = yield* sql<{ busyThreads: number; pendingEffects: number }>`
       SELECT
@@ -109,7 +110,13 @@ const make = Effect.gen(function* () {
                 SELECT 1 FROM orchestration_v2_projection_runs newer
                 WHERE newer.thread_id = r.thread_id AND newer.ordinal > r.ordinal
               ))
-          UNION SELECT thread_id FROM orchestration_v2_projection_runtime_requests WHERE status = 'pending'
+          UNION SELECT request.thread_id FROM orchestration_v2_projection_runtime_requests request
+            WHERE request.status = 'pending' AND NOT EXISTS (
+              SELECT 1 FROM orchestration_v2_projection_nodes node
+              JOIN orchestration_v2_projection_runs run ON run.run_id = node.run_id
+              WHERE node.node_id = request.node_id AND node.thread_id = request.thread_id
+                AND run.status IN ('completed', 'failed', 'cancelled', 'interrupted', 'rolled_back')
+            )
           UNION SELECT thread_id FROM orchestration_v2_projection_provider_threads
             WHERE status = 'active' OR json_array_length(payload_json, '$.pendingBackgroundTasks') > 0
           UNION SELECT thread_id FROM orchestration_v2_projection_turn_items

@@ -534,9 +534,10 @@ export interface ProjectionStoreV2Shape {
   readonly getRuntimeRecoveryProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<ProjectionRuntimeRecoveryState, ProjectionStoreV2Error>;
-  readonly getPendingNativeUserInputs: (
+  readonly getPendingUserInputs: (
     threadId: ThreadId,
     providerTurnId: ProviderTurnId,
+    options?: { readonly includeMessageResponses?: boolean },
   ) => Effect.Effect<ProjectionPendingUserInputs, ProjectionStoreV2Error>;
   readonly getPlan: (
     threadId: ThreadId,
@@ -4612,9 +4613,10 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
         ? cause
         : new ProjectionStoreReadError({ threadId, cause });
 
-    const getPendingNativeUserInputs: ProjectionStoreV2Shape["getPendingNativeUserInputs"] = (
+    const getPendingUserInputs: ProjectionStoreV2Shape["getPendingUserInputs"] = (
       threadId,
       providerTurnId,
+      options,
     ) =>
       sql
         .withTransaction(
@@ -4627,7 +4629,10 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
             const runtimeRequests = (yield* decodeRows(
               decodeRuntimeRequestPayload,
               threadId,
-            )(rows)).filter((request) => request.responseCapability.type !== "message");
+            )(rows)).filter(
+              (request) =>
+                options?.includeMessageResponses || request.responseCapability.type !== "message",
+            );
             if (runtimeRequests.length === 0) return { runtimeRequests, nodes: [], turnItems: [] };
             const nodeRows = yield* sql<PayloadRow>`
           SELECT payload_json FROM orchestration_v2_projection_nodes
@@ -6398,7 +6403,7 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
       getCheckpointCaptureContext,
       getRunMessage,
       canStartQueuedRun,
-      getPendingNativeUserInputs,
+      getPendingUserInputs,
       hasUnpairedRunInterruptRequest,
       isNodeStored,
       getMessageCount,
@@ -6702,7 +6707,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             .map((projection) => projection.thread.id);
         }),
       getUnreadableThreadIds: () => Effect.succeed([]),
-      getPendingNativeUserInputs: (threadId, providerTurnId) =>
+      getPendingUserInputs: (threadId, providerTurnId, options) =>
         Effect.gen(function* () {
           const projection = (yield* Ref.get(replayState)).projections.get(threadId);
           if (projection === undefined) return { runtimeRequests: [], nodes: [], turnItems: [] };
@@ -6711,7 +6716,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               request.providerTurnId === providerTurnId &&
               request.kind === "user_input" &&
               request.status === "pending" &&
-              request.responseCapability.type !== "message",
+              (options?.includeMessageResponses || request.responseCapability.type !== "message"),
           );
           const requestIds = new Set(runtimeRequests.map((request) => request.id));
           const nodeIds = new Set(runtimeRequests.map((request) => request.nodeId));

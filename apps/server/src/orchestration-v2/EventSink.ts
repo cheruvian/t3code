@@ -297,7 +297,7 @@ const layerBase: Layer.Layer<
             current?.status !== "pending" ||
             current.kind !== "user_input" ||
             current.providerTurnId !== event.payload.providerTurnId ||
-            current.responseCapability.type === "message"
+            (options.reopen && current.responseCapability.type === "message")
           ) {
             staleRequests.add(event.payload.id);
             staleNodes.add(event.payload.nodeId);

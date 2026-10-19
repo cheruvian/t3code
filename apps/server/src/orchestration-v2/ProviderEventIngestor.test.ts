@@ -1249,7 +1249,7 @@ layer("ProviderEventIngestorV2", (it) => {
     "control",
     "control-failed",
   ] as const)(
-    "settles native questions and keeps failed-turn questions answerable for %s",
+    "settles ended-turn questions and keeps failed-turn questions answerable for %s",
     (terminal) =>
       Effect.gen(function* () {
         const now = yield* DateTime.now;
@@ -1400,7 +1400,11 @@ layer("ProviderEventIngestorV2", (it) => {
         const stored = yield* ingestor.ingestNormalized(input);
         const projection = yield* projectionStore.getThreadProjection(threadId);
         for (const fixture of fixtures) {
-          const closed = fixture.key === "native" || fixture.key === "unavailable";
+          const failed = terminal === "failed" || terminal === "control-failed";
+          const closed =
+            fixture.key === "native" ||
+            fixture.key === "unavailable" ||
+            (fixture.key === "message" && !failed);
           const request = projection.runtimeRequests.find(
             (item) => item.id === fixture.request.id,
           )!;
@@ -1431,11 +1435,10 @@ layer("ProviderEventIngestorV2", (it) => {
         }
         assert.equal(
           stored.filter((entry) => entry.event.type === "runtime-request.updated").length,
-          2,
+          terminal === "failed" || terminal === "control-failed" ? 2 : 3,
         );
         assert.isEmpty(
-          (yield* projectionStore.getPendingNativeUserInputs(threadId, providerTurnId))
-            .runtimeRequests,
+          (yield* projectionStore.getPendingUserInputs(threadId, providerTurnId)).runtimeRequests,
         );
         const replayed = yield* eventStore.read({ threadId }).pipe(Stream.runCollect);
         assert.equal(
@@ -1444,18 +1447,19 @@ layer("ProviderEventIngestorV2", (it) => {
               entry.event.type === "runtime-request.updated" &&
               entry.event.payload.status === "cancelled",
           ).length,
-          terminal === "failed" || terminal === "control-failed" ? 0 : 2,
+          terminal === "failed" || terminal === "control-failed" ? 0 : 3,
         );
         const repeated = yield* ingestor.ingestNormalized(input);
         assert.isFalse(repeated.some((entry) => entry.event.type === "runtime-request.updated"));
       }),
   );
 
-  it.effect.each(["completed", "failed"] as const)(
+  it.effect.each(["completed", "failed", "completed-message"] as const)(
     "preserves an answer committed after %s terminal normalization reads a pending question",
-    (terminalStatus) =>
+    (terminalCase) =>
       Effect.scoped(
         Effect.gen(function* () {
+          const terminalStatus = terminalCase === "completed-message" ? "completed" : terminalCase;
           const eventSink = yield* EventSink.EventSinkV2;
           const eventStore = yield* EventStore.EventStoreV2;
           const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -1483,7 +1487,10 @@ layer("ProviderEventIngestorV2", (it) => {
             nativeRequestRef: null,
             kind: "user_input",
             status: "pending",
-            responseCapability: { type: "live", providerSessionId },
+            responseCapability:
+              terminalCase === "completed-message"
+                ? { type: "message" }
+                : { type: "live", providerSessionId },
             createdAt: now,
             resolvedAt: null,
           };

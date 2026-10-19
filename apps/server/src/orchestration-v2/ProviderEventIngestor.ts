@@ -349,14 +349,18 @@ export const layer: Layer.Layer<
         );
       });
 
-    const settleNativeUserInputs = Effect.fn("ProviderEventIngestor.settleNativeUserInputs")(
+    const settlePendingUserInputs = Effect.fn("ProviderEventIngestor.settlePendingUserInputs")(
       function* (
         input: ProviderEventIngestInput,
         providerTurnId: ProviderTurnId,
         threadId = input.threadId,
         reopen = false,
       ) {
-        const pending = yield* projections.getPendingNativeUserInputs(threadId, providerTurnId);
+        const pending = yield* projections.getPendingUserInputs(threadId, providerTurnId, {
+          // Failed turns keep questions answerable through a new message; terminal
+          // completion must dismiss those questions along with native callbacks.
+          includeMessageResponses: !reopen,
+        });
         const now = yield* DateTime.now;
         const events: Array<OrchestrationV2DomainEvent> = [];
         for (const request of pending.runtimeRequests) {
@@ -605,7 +609,7 @@ export const layer: Layer.Layer<
               ...(["completed", "interrupted", "failed", "cancelled"].includes(
                 input.event.providerTurn.status,
               )
-                ? yield* settleNativeUserInputs(
+                ? yield* settlePendingUserInputs(
                     input,
                     input.event.providerTurn.id,
                     input.event.threadId,
@@ -703,7 +707,7 @@ export const layer: Layer.Layer<
             // Live output is routed to the command output hub before ingestion.
             return [];
           case "turn.terminal":
-            const dismissed = yield* settleNativeUserInputs(
+            const dismissed = yield* settlePendingUserInputs(
               input,
               input.event.providerTurnId,
               undefined,
