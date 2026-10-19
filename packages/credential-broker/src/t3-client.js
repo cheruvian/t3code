@@ -3,14 +3,14 @@ import { BrokerError } from "./common.js";
 
 const failureMessages = {
   consumer_unavailable:
-    "Credential Broker consumer_unavailable: check the executable and working directory on this environment. No vault search or approval was started.",
+    "Credential Broker consumer_unavailable: check the command on this environment’s PATH (or the supplied absolute executable) and its working directory. No vault search or approval was started.",
   vault_locked: "Credential Broker vault_locked: unlock the vault privately in T3.",
   vault_unlocking:
     "Credential Broker vault_unlocking: wait for the private vault unlock to finish.",
   unsupported_platform:
     "Credential Broker unsupported_platform: this host's security adapters are unavailable.",
   invalid_request:
-    "Credential Broker invalid_request: check the hostname, absolute executable, working directory, and 5–300 second lifetime.",
+    "Credential Broker invalid_request: check the hostname, command name or absolute executable, absolute working directory, and 5–300 second lifetime.",
   caller_cancelled: "Credential Broker caller_cancelled: the originating tool call or turn ended.",
   broker_unavailable:
     "Credential Broker broker_unavailable: review access and vault status privately in T3.",

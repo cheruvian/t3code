@@ -28,7 +28,7 @@ export function siteHost(value) {
     throw new Error("Invalid site");
   return url.hostname;
 }
-export const requestSchema = z
+const requestBaseSchema = z
   .object({
     kind: z.enum(["file", "exec"]).default("file"),
     item_id: z.string().uuid().optional(),
@@ -68,33 +68,43 @@ export const requestSchema = z
       .regex(/^[A-Z_][A-Z0-9_]*$/)
       .optional(),
   })
-  .strict()
-  .superRefine((value, context) => {
-    if (!!value.item_id === !!value.site)
-      context.addIssue({ code: "custom", message: "Provide exactly one item UUID or site." });
-    if (value.kind === "exec") {
-      if (
-        !value.argv?.[0]?.startsWith("/") ||
-        !value.cwd?.startsWith("/") ||
-        value.cwd.includes("\0") ||
-        !value.file_env ||
-        ["PATH", "HOME", "NODE_OPTIONS", "NODE_PATH", "BW_SESSION", "BW_PASSWORD"].includes(
-          value.file_env,
-        )
-      ) {
-        context.addIssue({
-          code: "custom",
-          message:
-            "Exec requires an absolute executable, working directory, and a dedicated file environment variable.",
-        });
-      }
-    } else if (value.argv || value.cwd || value.file_env) {
+  .strict();
+
+function validateRequest(value, context, allowCommandName = false) {
+  if (!!value.item_id === !!value.site)
+    context.addIssue({ code: "custom", message: "Provide exactly one item UUID or site." });
+  if (value.kind === "exec") {
+    if (
+      !(
+        value.argv?.[0]?.startsWith("/") ||
+        (allowCommandName && value.argv?.[0] && !/[\\/]/.test(value.argv[0]))
+      ) ||
+      !value.cwd?.startsWith("/") ||
+      value.cwd.includes("\0") ||
+      !value.file_env ||
+      ["PATH", "HOME", "NODE_OPTIONS", "NODE_PATH", "BW_SESSION", "BW_PASSWORD"].includes(
+        value.file_env,
+      )
+    ) {
       context.addIssue({
         code: "custom",
-        message: "File leases cannot specify a command.",
+        message:
+          "Exec requires an absolute executable, working directory, and a dedicated file environment variable.",
       });
     }
-  });
+  } else if (value.argv || value.cwd || value.file_env) {
+    context.addIssue({
+      code: "custom",
+      message: "File leases cannot specify a command.",
+    });
+  }
+}
+export const requestSchema = requestBaseSchema.superRefine((value, context) =>
+  validateRequest(value, context),
+);
+const namedCommandSchema = requestBaseSchema.superRefine((value, context) =>
+  validateRequest(value, context, true),
+);
 
 export class BrokerError extends Error {
   constructor(message, status = 400, code) {
@@ -104,8 +114,8 @@ export class BrokerError extends Error {
   }
 }
 
-export function parseRequest(input) {
-  const result = requestSchema.safeParse(input);
+export function parseRequest(input, { allowCommandName = false } = {}) {
+  const result = (allowCommandName ? namedCommandSchema : requestSchema).safeParse(input);
   if (!result.success)
     throw new BrokerError(
       "Invalid request: provide exactly one item UUID or site, label, reason, field, and TTL of 5–300 seconds. Exec also requires an absolute executable, cwd, and dedicated file environment variable.",

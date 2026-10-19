@@ -209,11 +209,15 @@ async function main() {
     const cwd = await realpath(values.cwd).catch(() => {
       throw new BrokerError("Working directory does not exist.");
     });
+    const useT3 = values.t3 || (command === "exec" && !!process.env.T3_ACP_MCP_ENDPOINT);
     const argv =
       command === "exec"
-        ? [await executablePath(positionals[1], cwd), ...positionals.slice(2)]
+        ? [
+            useT3 ? positionals[1] : await executablePath(positionals[1], cwd),
+            ...positionals.slice(2),
+          ]
         : undefined;
-    if (values.t3 || (command === "exec" && process.env.T3_ACP_MCP_ENDPOINT)) {
+    if (useT3) {
       if (command !== "exec" || !values.site || values.item)
         throw new BrokerError(
           "T3 credential access requires exec with --site; separate file leases are standalone only.",

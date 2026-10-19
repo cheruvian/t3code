@@ -1,4 +1,5 @@
 import test from "node:test";
+import { createServer } from "node:http";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { execFile, spawn } from "node:child_process";
@@ -173,3 +174,53 @@ test(
     await recovered.close();
   },
 );
+
+test("T3 CLI forwards command names for broker-side lookup instead of resolving the CLI host PATH", async (t) => {
+  let requested;
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const rpc = JSON.parse(Buffer.concat(chunks).toString());
+    if (rpc.method === "notifications/initialized") {
+      response.writeHead(202);
+      response.end();
+      return;
+    }
+    let result = {};
+    if (rpc.method === "tools/call") {
+      requested = rpc.params.arguments;
+      result = {
+        structuredContent: { requestId: "fake-request", state: "completed", exitCode: 0 },
+      };
+    }
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const program = "t3-broker-test-only-remote-command";
+  const { stdout } = await execute(
+    process.execPath,
+    [
+      cli,
+      "exec",
+      "--t3",
+      "--site",
+      "example.com",
+      "--reason",
+      "Verify host lookup",
+      "--",
+      program,
+      "--consumer-option",
+    ],
+    {
+      env: {
+        ...process.env,
+        T3_ACP_MCP_ENDPOINT: `http://127.0.0.1:${server.address().port}`,
+        T3_ACP_MCP_AUTHORIZATION: "Bearer fake-request-only",
+      },
+    },
+  );
+  assert.deepEqual(requested.argv, [program, "--consumer-option"]);
+  assert.equal(JSON.parse(stdout).state, "completed");
+});

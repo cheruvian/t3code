@@ -7,8 +7,11 @@ The original CLI and Electron interface remain available as standalone consumers
 
 ## T3
 
-Agents call credential_broker_exec with a site hostname and an absolute executable
-plus arguments. T3 supplies the authenticated environment, thread, provider
+Agents call credential_broker_exec with a site hostname and a command name such
+as `uv` or an absolute executable path, plus arguments. The broker resolves names
+using the server's PATH, ignoring empty and relative PATH entries. It resolves
+symlinks before approval and uses that exact path for approval, grant scope, and
+execution; no shell aliases or functions are evaluated. T3 supplies the authenticated environment, thread, provider
 session, active run, model, workspace, and a server-generated invocation ID.
 Caller labels cannot replace this identity. The ID binds the waiting Effect
 fiber to its broker request; it is not the provider's native tool-call ID.

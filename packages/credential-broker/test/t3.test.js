@@ -1,8 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, readFile, readdir, rm, stat, chmod, unlink } from "node:fs/promises";
+import {
+  mkdtemp,
+  writeFile,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  chmod,
+  unlink,
+  mkdir,
+  symlink,
+  realpath,
+} from "node:fs/promises";
 import { watch } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { Broker } from "../src/broker.js";
 import { T3CredentialBroker } from "../src/t3.js";
 import { DemoProvider, DEMO_PASSWORD, DEMO_ITEM } from "../src/providers.js";
@@ -95,6 +107,108 @@ function visible(broker, viewId = "view") {
   const detach = broker.subscribe("human", viewId, () => {});
   return broker.action("human", { type: "presenter", viewId, visible: true }).then(() => detach);
 }
+test("host lookup pins the executable shown for approval even if its PATH symlink changes", async (t) => {
+  const { caller, input, runtime, marker } = await setup(t, { searchPath: "" });
+  const bin = join(runtime, "bin");
+  await mkdir(bin);
+  const alias = join(bin, "uv");
+  await symlink(process.execPath, alias);
+  // This is host configuration, never request input or a caller-supplied PATH.
+  const hostRuntime = await mkdtemp("/tmp/t3-command-host-");
+  const host = new T3CredentialBroker({
+    runtime: hostRuntime,
+    provider: new DemoProvider(),
+    watchdog: false,
+    searchPath: bin,
+  });
+  t.after(async () => {
+    await host.close();
+    await rm(hostRuntime, { recursive: true, force: true });
+  });
+  await host.unlock();
+  const named = { ...input, argv: ["uv", ...input.argv.slice(1)] };
+  const { execution, request } = await pending(host, caller, named);
+  assert.equal(request.argv[0], await realpath(process.execPath));
+  assert.equal(named.argv[0], "uv");
+  const replacement = join(runtime, "replacement");
+  await writeFile(replacement, "#!/bin/sh\nexit 73\n", { mode: 0o700 });
+  await unlink(alias);
+  await symlink(replacement, alias);
+  await host.action("human", {
+    type: "decide",
+    requestId: request.requestId,
+    decision: "always",
+    candidateId: DEMO_ITEM,
+  });
+  const result = await execution;
+  assert.equal(result.state, "completed");
+  assert.equal(result.exitCode, 0);
+  assert.equal(JSON.parse(await readFile(marker, "utf8")).received, true);
+  assert.equal(host.state().grants[0].argv[0], request.argv[0]);
+  await visible(host);
+  const changed = await pending(host, caller, named);
+  assert.equal(changed.request.argv[0], await realpath(replacement));
+  assert.equal(host.state().notices.length, 0);
+  await host.action("human", {
+    type: "decide",
+    requestId: changed.request.requestId,
+    decision: "deny",
+  });
+  assert.equal((await changed.execution).state, "denied");
+  await assert.rejects(stat(JSON.parse(await readFile(marker, "utf8")).path), { code: "ENOENT" });
+});
+
+test("host lookup skips nonexecutable PATH entries and refuses missing names and relative paths before vault search", async (t) => {
+  const provider = new DemoProvider();
+  let searches = 0;
+  provider.search = async () => {
+    searches++;
+    return [];
+  };
+  const { broker, caller, input, runtime } = await setup(t, {
+    provider,
+    searchPath: "relative::/missing-path",
+  });
+  await writeFile(join(runtime, "missing-uv"), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  broker.searchPath = `${relative(process.cwd(), runtime)}::/missing-path`;
+  for (const program of ["missing-uv", "./uv", "bin/uv", "bin\\uv"]) {
+    await assert.rejects(broker.execute(caller, { ...input, argv: [program] }), {
+      code:
+        program.includes("/") || program.includes("\\")
+          ? "invalid_request"
+          : "consumer_unavailable",
+    });
+  }
+  assert.equal(searches, 0);
+  assert.deepEqual(broker.state().requests, []);
+  const bin = join(runtime, "bin");
+  const fallback = join(runtime, "fallback");
+  await mkdir(bin);
+  await mkdir(fallback);
+  await writeFile(join(bin, "uv"), "not executable", { mode: 0o600 });
+  await symlink(process.execPath, join(fallback, "uv"));
+  const hostRuntime = await mkdtemp("/tmp/t3-command-host-");
+  const host = new T3CredentialBroker({
+    runtime: hostRuntime,
+    provider: new DemoProvider(),
+    watchdog: false,
+    searchPath: `${bin}:${fallback}`,
+  });
+  t.after(async () => {
+    await host.close();
+    await rm(hostRuntime, { recursive: true, force: true });
+  });
+  await host.unlock();
+  const next = await pending(host, caller, { ...input, argv: ["uv", ...input.argv.slice(1)] });
+  assert.equal(next.request.argv[0], await realpath(process.execPath));
+  await host.action("human", {
+    type: "decide",
+    requestId: next.request.requestId,
+    decision: "deny",
+  });
+  assert.equal((await next.execution).state, "denied");
+});
+
 test("missing consumer executable fails before vault search, approval, or credential delivery", async (t) => {
   const provider = new DemoProvider();
   let searches = 0;

@@ -1,10 +1,29 @@
 import { Broker } from "./broker.js";
 import { BitwardenProvider } from "./providers.js";
 import { BrokerError, parseRequest } from "./common.js";
-import { access, stat } from "node:fs/promises";
+import { access, stat, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
+import { delimiter, isAbsolute, join } from "node:path";
 import runnerProgram from "./runner-program.js";
 import watchdogProgram from "./watchdog-program.js";
+
+async function resolveExecutable(program, searchPath) {
+  const candidates = isAbsolute(program)
+    ? [program]
+    : searchPath
+        .split(delimiter)
+        .filter(isAbsolute)
+        .map((directory) => join(directory, program));
+  for (const candidate of candidates) {
+    try {
+      const canonical = await realpath(candidate);
+      if (!(await stat(canonical)).isFile()) continue;
+      await access(canonical, constants.X_OK);
+      return canonical;
+    } catch {}
+  }
+  throw new Error("Executable unavailable.");
+}
 
 const terminal = new Set(["denied", "expired", "released", "failed", "completed", "revoked"]);
 
@@ -27,7 +46,9 @@ export class T3CredentialBroker {
     approvalTimeout = 120000,
     noticeTimeout = 10000,
     platform = process.platform,
+    searchPath = process.env.PATH ?? "",
   }) {
+    this.searchPath = searchPath;
     this.runtime = runtime;
     this.workerEntrypoint = workerEntrypoint;
     this.provider = provider;
@@ -252,27 +273,35 @@ export class T3CredentialBroker {
           this.#status === "unlocking" ? "vault_unlocking" : "vault_locked",
         ),
       );
-    const parsed = parseRequest({
-      kind: "exec",
-      site: input.site,
-      field: input.field,
-      label: input.label,
-      reason: input.reason,
-      client: "T3 agent (identity supplied by server)",
-      ttl_seconds: input.ttlSeconds,
-      argv: input.argv,
-      cwd: input.cwd ?? origin.workspace,
-      file_env: "CB_CREDENTIAL_FILE",
-    });
+    const parsed = parseRequest(
+      {
+        kind: "exec",
+        site: input.site,
+        field: input.field,
+        label: input.label,
+        reason: input.reason,
+        client: "T3 agent (identity supplied by server)",
+        ttl_seconds: input.ttlSeconds,
+        argv: input.argv,
+        cwd: input.cwd ?? origin.workspace,
+        file_env: "CB_CREDENTIAL_FILE",
+      },
+      { allowCommandName: true },
+    );
     // Check on the server that will actually run the command, before searching
     // the vault or asking the human to authorize an unusable consumer.
     try {
-      const [executable, directory] = await Promise.all([stat(parsed.argv[0]), stat(parsed.cwd)]);
-      if (!executable.isFile() || !directory.isDirectory()) throw new Error();
-      await access(parsed.argv[0], constants.X_OK);
+      const [executable, directory] = await Promise.all([
+        resolveExecutable(parsed.argv[0], this.searchPath),
+        stat(parsed.cwd),
+      ]);
+      if (!directory.isDirectory()) throw new Error();
+      // Approval, grant fingerprinting, and spawning all use this same path.
+      // Changing PATH or retargeting its symlink cannot select another binary.
+      parsed.argv = [executable, ...parsed.argv.slice(1)];
     } catch {
       throw new BrokerError(
-        "Consumer unavailable: check the absolute executable and working directory on this environment.",
+        "Consumer unavailable: check that the command is installed on this environment’s PATH and its working directory exists.",
         400,
         "consumer_unavailable",
       );
