@@ -128,6 +128,8 @@ it.effect(
             ...invocation.thread,
             environmentId: invocation.environmentId,
             threadTitle: caller.title,
+            projectId: caller.projectId,
+            projectName: "Project",
             runId: caller.activeRunId,
             workspace: "/actual/worktree",
             agent: "gpt-5",

@@ -338,7 +338,7 @@ function Approval({
     request.candidates.length === 1 ? request.candidates[0]!.id : undefined,
   );
   return (
-    <View className="gap-3 rounded-2xl border border-border p-4">
+    <View className="gap-2 rounded-xl border border-border p-3">
       <Text className="text-xs text-foreground-muted">
         {request.field === "login"
           ? "Username + password"
@@ -349,11 +349,14 @@ function Approval({
       </Text>
       <Text className="text-xl font-t3-semibold text-foreground">{request.site}</Text>
       <Text className="text-xs text-foreground-muted">
-        Available to the program for {request.ttlSeconds} seconds after approval
+        {request.ttlSeconds}s access after approval
       </Text>
       <View className="gap-2 rounded-xl bg-card p-3">
         <Text className="text-xs text-foreground-muted">
           {request.origin ? "Caller verified by T3" : "Unverified caller"}
+        </Text>
+        <Text className="text-foreground">
+          Project: {request.origin?.projectName || "Not available"}
         </Text>
         <Text className="text-foreground">
           Thread: {request.origin?.threadTitle || "No verified T3 thread"}

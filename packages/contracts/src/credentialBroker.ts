@@ -1,11 +1,13 @@
 import * as Schema from "effect/Schema";
 import { ProviderInstanceId } from "./providerInstance.ts";
-import { EnvironmentId, ThreadId } from "./baseSchemas.ts";
+import { EnvironmentId, ThreadId, ProjectId } from "./baseSchemas.ts";
 
 export const CredentialCaller = Schema.Struct({
   environmentId: EnvironmentId,
   threadId: ThreadId,
   threadTitle: Schema.String,
+  projectId: Schema.optional(ProjectId),
+  projectName: Schema.optional(Schema.String),
   providerInstanceId: ProviderInstanceId,
   providerSessionId: Schema.String,
   runId: Schema.String,

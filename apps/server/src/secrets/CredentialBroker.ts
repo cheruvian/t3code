@@ -129,6 +129,8 @@ export const bindToolCall = (
         environmentId: context.scope.environmentId,
         ...thread,
         threadTitle: caller.title,
+        projectId: caller.projectId,
+        projectName: project.value.title,
         runId: caller.activeRunId,
         toolCallId,
         workspace: caller.worktreePath ?? project.value.workspaceRoot,

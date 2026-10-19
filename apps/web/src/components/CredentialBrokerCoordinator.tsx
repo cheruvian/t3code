@@ -136,7 +136,10 @@ function EnvironmentBroker({
         </Button>
       </div>
       <Dialog open={focused && (open || pending.length > 0)} onOpenChange={setOpen}>
-        <DialogPopup showCloseButton={pending.length === 0}>
+        <DialogPopup
+          size={pending.length ? "wide" : "default"}
+          showCloseButton={pending.length === 0}
+        >
           <DialogHeader>
             <DialogTitle>{pending.length ? "Credential request" : "Credential access"}</DialogTitle>
             {pending.length === 0 && (
@@ -361,107 +364,119 @@ function ApprovalCard({
         ? "Password"
         : "Username";
   return (
-    <section className="space-y-4 rounded-xl border p-4">
-      <div className="space-y-1">
-        <p className="text-xs font-medium text-muted-foreground">{fields} requested for</p>
-        <h2 className="break-all text-xl font-semibold tracking-tight">{request.site}</h2>
-        <p className="text-xs text-muted-foreground">
-          Available to the program for {request.ttlSeconds} seconds after approval
-        </p>
-      </div>
-      <div className="space-y-3 rounded-lg bg-muted/40 p-3">
-        <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <ShieldCheckIcon className="size-3.5" />
-          {request.origin ? "Caller verified by T3" : "Unverified caller"}
+    <section className="space-y-3 rounded-xl border p-3">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+        <div>
+          <p className="text-xs text-muted-foreground">{fields} requested for</p>
+          <h2 className="break-all text-lg font-semibold">{request.site}</h2>
         </div>
-        <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
-          <dt className="text-muted-foreground">Thread</dt>
-          <dd className="break-words font-medium">
-            {request.origin?.threadTitle || "No verified T3 thread"}
-          </dd>
-          <dt className="text-muted-foreground">Agent</dt>
-          <dd className="break-words">
-            {request.origin
-              ? `${request.origin.agent} · ${request.origin.providerInstanceId}`
-              : "Not verified"}
-          </dd>
-          <dt className="text-muted-foreground">Environment</dt>
-          <dd className="break-words font-medium">{environmentLabel}</dd>
-          <dt className="text-muted-foreground">Program</dt>
-          <dd className="break-all font-mono text-xs">{request.argv[0]?.split(/[\\/]/).at(-1)}</dd>
-        </dl>
+        <p className="text-xs text-muted-foreground">{request.ttlSeconds}s access after approval</p>
       </div>
-      <div className="space-y-1">
-        <p className="text-xs text-muted-foreground">Reason supplied by agent</p>
-        <p className="line-clamp-2 break-words text-sm">{request.reason}</p>
-      </div>
-      {waitingForUnlock ? (
-        <p className="text-sm text-muted-foreground">
-          Unlock the vault to choose a login. Access still needs your approval.
-        </p>
-      ) : (
-        <div className="space-y-2">
-          <p className="text-xs font-medium text-muted-foreground">Share this saved login</p>
-          <Select
-            value={selection}
-            onValueChange={setSelection}
-            items={request.candidates.map((c) => ({
-              value: c.id,
-              label: c.name + " · " + c.hosts.join(", "),
-            }))}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Choose a login" />
-            </SelectTrigger>
-            <SelectPopup>
-              {request.candidates.map((c) => (
-                <SelectItem key={c.id} value={c.id}>
-                  {c.name} · {c.hosts.join(", ")}
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-2 rounded-lg bg-muted/40 p-3">
+          <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            <ShieldCheckIcon className="size-3.5" />
+            {request.origin ? "Caller verified by T3" : "Unverified caller"}
+          </div>
+          <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
+            <dt className="text-muted-foreground">Project</dt>
+            <dd className="break-words font-medium">
+              {request.origin?.projectName || "Not available"}
+            </dd>
+            <dt className="text-muted-foreground">Thread</dt>
+            <dd className="break-words font-medium">
+              {request.origin?.threadTitle || "No verified T3 thread"}
+            </dd>
+            <dt className="text-muted-foreground">Agent</dt>
+            <dd className="break-words">
+              {request.origin
+                ? `${request.origin.agent} · ${request.origin.providerInstanceId}`
+                : "Not verified"}
+            </dd>
+            <dt className="text-muted-foreground">Environment</dt>
+            <dd className="break-words font-medium">{environmentLabel}</dd>
+            <dt className="text-muted-foreground">Program</dt>
+            <dd className="break-all font-mono text-xs">
+              {request.argv[0]?.split(/[\\/]/).at(-1)}
+            </dd>
+          </dl>
         </div>
-      )}
-      <details className="space-y-2 text-xs">
-        <summary className="cursor-pointer text-muted-foreground">
-          Command, workspace & permission scope
-        </summary>
-        <pre className="overflow-auto whitespace-pre-wrap break-all rounded-lg bg-muted/40 p-3">
-          {JSON.stringify(
-            {
-              executable: request.argv[0],
-              arguments: request.argv.slice(1),
-              directory: request.cwd,
-              workspace: request.origin?.workspace,
-              environment: request.origin?.environmentId,
-              thread: request.origin?.threadId,
-              provider: request.origin?.providerInstanceId,
-              session: request.origin?.providerSessionId,
-              toolCall: request.origin?.toolCallId,
-              run: request.origin?.runId,
-              requestedLabel: request.label,
-              reason: request.reason,
-              callerClaim: request.clientClaim,
-            },
-            null,
-            2,
+        <div className="min-w-0 space-y-3">
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground">Reason supplied by agent</p>
+            <p className="line-clamp-2 break-words text-sm">{request.reason}</p>
+          </div>
+          {waitingForUnlock ? (
+            <p className="text-sm text-muted-foreground">
+              Unlock the vault to choose a login. Access still needs your approval.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">Share this saved login</p>
+              <Select
+                value={selection}
+                onValueChange={setSelection}
+                items={request.candidates.map((c) => ({
+                  value: c.id,
+                  label: c.name + " · " + c.hosts.join(", "),
+                }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose a login" />
+                </SelectTrigger>
+                <SelectPopup>
+                  {request.candidates.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name} · {c.hosts.join(", ")}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </div>
           )}
-        </pre>
-        <p className="text-muted-foreground">
-          Always allow saves permission for this thread, provider, workspace, login, fields, exact
-          command, executable and script fingerprints, and maximum lifetime. Review or revoke it
-          under Manage access.
-        </p>
-        <p className="text-muted-foreground">
-          Credentials go directly to this program. Revocation stops supervised programs and deletes
-          active credential files; it cannot erase copied secrets or end website sessions.
-        </p>
-      </details>
-      <div className="space-y-3 border-t pt-3">
+          <details className="space-y-2 text-xs">
+            <summary className="cursor-pointer text-muted-foreground">
+              Command, workspace & permission scope
+            </summary>
+            <pre className="overflow-auto whitespace-pre-wrap break-all rounded-lg bg-muted/40 p-3">
+              {JSON.stringify(
+                {
+                  executable: request.argv[0],
+                  arguments: request.argv.slice(1),
+                  directory: request.cwd,
+                  workspace: request.origin?.workspace,
+                  environment: request.origin?.environmentId,
+                  project: request.origin?.projectId,
+                  thread: request.origin?.threadId,
+                  provider: request.origin?.providerInstanceId,
+                  session: request.origin?.providerSessionId,
+                  toolCall: request.origin?.toolCallId,
+                  run: request.origin?.runId,
+                  requestedLabel: request.label,
+                  reason: request.reason,
+                  callerClaim: request.clientClaim,
+                },
+                null,
+                2,
+              )}
+            </pre>
+            <p className="text-muted-foreground">
+              Always allow saves permission for this thread, provider, workspace, login, fields,
+              exact command, executable and script fingerprints, and maximum lifetime. Review or
+              revoke it under Manage access.
+            </p>
+            <p className="text-muted-foreground">
+              Credentials go directly to this program. Revocation stops supervised programs and
+              deletes active credential files; it cannot erase copied secrets or end website
+              sessions.
+            </p>
+          </details>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
         <p className="text-xs text-muted-foreground">
           {request.approvalDeadline === null
-            ? "Waits for your decision · no approval timeout"
+            ? "No approval timeout"
             : `Approval expires ${new Date(request.approvalDeadline).toLocaleTimeString()}`}
         </p>
         <div className="flex flex-wrap justify-end gap-2">
