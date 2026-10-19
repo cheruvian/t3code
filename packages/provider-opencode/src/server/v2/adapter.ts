@@ -4208,6 +4208,21 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
                 }),
           ),
         ),
+      stopBackgroundProcesses: ({ providerThread }) =>
+        Effect.gen(function* () {
+          const nativeId = providerThread.nativeThreadRef?.nativeId;
+          const state = nativeId == null ? undefined : threads.get(nativeId);
+          if (state !== undefined) yield* stopBackground(state);
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapter.ProviderAdapterProtocolError({
+                driver,
+                detail: "Could not stop OpenCode background work.",
+                cause,
+              }),
+          ),
+        ),
       unloadThread: ({ providerThread }) =>
         Effect.gen(function* () {
           const nativeId = providerThread.nativeThreadRef?.nativeId;

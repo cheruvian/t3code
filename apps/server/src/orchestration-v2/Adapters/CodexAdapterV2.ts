@@ -6959,6 +6959,74 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }),
               ),
             ),
+          stopBackgroundProcesses: ({ providerThread }) =>
+            Effect.gen(function* () {
+              const nativeThreadId = yield* getNativeThreadId(providerThread);
+              const contexts = [
+                ...(yield* Ref.get(activeTurns)).values(),
+                ...(yield* Ref.get(settledTurns)).values(),
+              ];
+              const runningItems = yield* Ref.get(runningCommandItemsByTurn);
+              const hasTrackedProcesses = contexts.some(
+                (context) =>
+                  context.providerThread.id === providerThread.id &&
+                  Array.from(runningItems.get(context.nativeTurnId)?.values() ?? []).some(
+                    (item) => item.processId !== undefined,
+                  ),
+              );
+              const processIds = new Set<string>();
+              let cursor: string | null = null;
+              do {
+                const response: unknown = yield* client.raw
+                  .request("thread/backgroundTerminals/list", {
+                    threadId: nativeThreadId,
+                    ...(cursor === null ? {} : { cursor }),
+                  })
+                  .pipe(
+                    Effect.catchTags({
+                      CodexAppServerRequestError: (error) =>
+                        !hasTrackedProcesses &&
+                        error.code === -32600 &&
+                        error.errorMessage.startsWith("thread not found:")
+                          ? Effect.succeed({ data: [], nextCursor: null })
+                          : Effect.fail(error),
+                    }),
+                  );
+                const page: CodexBackgroundTerminalsListPage =
+                  yield* decodeCodexBackgroundTerminalsListResponse(response);
+                for (const terminal of page.data) processIds.add(terminal.processId);
+                cursor = page.nextCursor;
+              } while (cursor !== null);
+              yield* Effect.forEach(
+                processIds,
+                (processId) => terminateBackgroundTerminal(nativeThreadId, processId),
+                { concurrency: 1, discard: true },
+              );
+
+              const now = yield* DateTime.now;
+              for (const context of contexts) {
+                if ((yield* getNativeThreadId(context.providerThread)) !== nativeThreadId) continue;
+                yield* terminalizeRunningCommandItems(
+                  context,
+                  context.nativeTurnId,
+                  "interrupted",
+                  now,
+                );
+                const items = (yield* Ref.get(runningCommandItemsByTurn)).get(context.nativeTurnId);
+                for (const item of items?.values() ?? []) {
+                  yield* clearRunningCommandItem(context.nativeTurnId, item.id);
+                }
+              }
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapter.ProviderAdapterProtocolError({
+                    driver: CODEX_PROVIDER,
+                    detail: `Failed to stop background processes for provider thread ${providerThread.id}`,
+                    cause: normalizeCodexCause(cause),
+                  }),
+              ),
+            ),
           // Dropping this connection's subscription lets the shared app-server
           // shut the native thread (and its MCP servers) down once it is idle.
           // `notLoaded` / `notSubscribed` mean there is nothing left to unload.

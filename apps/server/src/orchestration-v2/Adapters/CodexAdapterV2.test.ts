@@ -5015,6 +5015,78 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     });
   };
 
+  it.effect("settlement terminates background commands before unloading a completed thread", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const stopped = yield* Deferred.make<void>();
+        const transcript = makeCodexReplayTranscript({
+          scenario: "settle-background-process",
+          entries: [
+            ...backgroundExecTranscript.entries.slice(0, -1),
+            {
+              type: "expect_outbound",
+              frame: {
+                id: 4,
+                method: "thread/backgroundTerminals/list",
+                params: { threadId: BG_NATIVE_THREAD },
+              },
+            },
+            {
+              type: "emit_inbound",
+              frame: { id: 4, result: { data: [{ processId: "4242" }], nextCursor: null } },
+            },
+            {
+              type: "expect_outbound",
+              frame: {
+                id: 5,
+                method: "thread/backgroundTerminals/terminate",
+                params: { threadId: BG_NATIVE_THREAD, processId: "4242" },
+              },
+            },
+            { type: "emit_inbound", frame: { id: 5, result: { terminated: true } } },
+            {
+              type: "expect_outbound",
+              frame: {
+                id: 6,
+                method: "thread/unsubscribe",
+                params: { threadId: BG_NATIVE_THREAD },
+              },
+            },
+            { type: "emit_inbound", frame: { id: 6, result: { status: "unsubscribed" } } },
+            backgroundExecTranscript.entries.at(-1)!,
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(transcript, (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "command_execution" &&
+          event.turnItem.status === "interrupted"
+            ? Deferred.succeed(stopped, undefined)
+            : Effect.void,
+        );
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-settle-bg"),
+            text: BG_PROMPT,
+          }),
+        );
+        yield* harness.firstTerminal;
+        assert.isTrue(yield* harness.hasPendingBackgroundWork);
+        yield* harness.runtime.stopBackgroundProcesses!({ providerThread: harness.providerThread });
+        yield* Deferred.await(stopped);
+        assert.isFalse(yield* harness.hasPendingBackgroundWork);
+        yield* harness.runtime.unloadThread!({ providerThread: harness.providerThread });
+        assert.equal(harness.terminalEvents()[0]?.status, "completed");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.effect.each(backgroundStopCases)(
     "stops a command after root completion when termination returns %s",
     (terminated) => {

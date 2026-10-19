@@ -2,6 +2,7 @@ import {
   ManagedDeploymentAction,
   ManagedDeploymentError,
   ManagedDeploymentRequest,
+  ThreadId,
   type ManagedDeploymentState,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -99,11 +100,15 @@ const make = Effect.gen(function* () {
     if (result?.status === "succeeded" || result?.status === "cancelled") return null;
     return { ...request, status: result?.status ?? request.status };
   });
-  // Input requests can survive provider recovery; settled runs no longer own live work.
+  const decodeBlockingThreads = Schema.decodeUnknownEffect(
+    Schema.fromJsonString(
+      Schema.Array(Schema.Struct({ threadId: ThreadId, title: Schema.String })),
+    ),
+  );
+  // Input requests can survive provider recovery; terminal runs no longer own live requests.
   const activity = Effect.gen(function* () {
-    const [row] = yield* sql<{ busyThreads: number; pendingEffects: number }>`
-      SELECT
-        (SELECT COUNT(DISTINCT thread_id) FROM (
+    const [row] = yield* sql<{ blockingThreadsJson: string; pendingEffects: number }>`
+      WITH busy AS (
           SELECT r.thread_id FROM orchestration_v2_projection_runs r
             WHERE r.status IN ('preparing', 'starting', 'running', 'waiting', 'queued')
               AND (r.status <> 'queued' OR NOT EXISTS (
@@ -121,11 +126,22 @@ const make = Effect.gen(function* () {
             WHERE status = 'active' OR json_array_length(payload_json, '$.pendingBackgroundTasks') > 0
           UNION SELECT thread_id FROM orchestration_v2_projection_turn_items
             WHERE type IN ('command_execution', 'dynamic_tool', 'subagent') AND status IN ('pending', 'running', 'waiting')
-        )) AS busyThreads,
+      )
+      SELECT
+        (SELECT json_group_array(json_object(
+          'threadId', busy.thread_id, 'title', COALESCE(thread.title, busy.thread_id)
+        )) FROM busy
+        LEFT JOIN orchestration_v2_projection_threads thread ON thread.thread_id = busy.thread_id
+        ORDER BY busy.thread_id) AS blockingThreadsJson,
         (SELECT COUNT(*) FROM orchestration_v2_effect_outbox
           WHERE status IN ('pending', 'running')) AS pendingEffects
     `;
-    return row ?? { busyThreads: 0, pendingEffects: 0 };
+    const blockingThreads = yield* decodeBlockingThreads(row?.blockingThreadsJson ?? "[]");
+    return {
+      blockingThreads,
+      busyThreads: blockingThreads.length,
+      pendingEffects: row?.pendingEffects ?? 0,
+    };
   });
   const encodeDecision = Schema.encodeEffect(
     Schema.fromJsonString(
@@ -258,6 +274,7 @@ const make = Effect.gen(function* () {
             b !== null &&
             a.id === b.id &&
             a.status === b.status &&
+            JSON.stringify(a.blockingThreads) === JSON.stringify(b.blockingThreads) &&
             a.busyThreads === b.busyThreads &&
             a.pendingEffects === b.pendingEffects),
       ),

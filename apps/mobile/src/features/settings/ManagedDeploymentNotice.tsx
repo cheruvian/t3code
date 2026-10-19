@@ -1,3 +1,4 @@
+import { useNavigation } from "@react-navigation/native";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
@@ -16,6 +17,7 @@ export function ManagedDeploymentNotice({ environmentId }: { environmentId: Envi
   ) : null;
 }
 function Notice({ environmentId }: { environmentId: EnvironmentId }) {
+  const navigation = useNavigation();
   const result = useAtomValue(serverEnvironment.deploymentState({ environmentId, input: {} }));
   const act = useAtomCommand(serverEnvironment.deploymentAction);
   const state = AsyncResult.isSuccess(result) ? result.value : null;
@@ -53,6 +55,19 @@ function Notice({ environmentId }: { environmentId: EnvironmentId }) {
           </Text>
         ) : null}
       </View>
+      {state.status === "queued"
+        ? state.blockingThreads?.map((thread) => (
+            <SettingsActionRow
+              key={thread.threadId}
+              icon="bubble.left.and.bubble.right"
+              label={thread.title}
+              description="Open blocking thread"
+              onPress={() =>
+                navigation.navigate("Thread", { environmentId, threadId: thread.threadId })
+              }
+            />
+          ))
+        : null}
       {state.status === "queued" ? (
         <SettingsActionRow icon="arrow.clockwise" label="Update now" onPress={apply} />
       ) : null}

@@ -130,6 +130,9 @@ export const layerExecutor: Layer.Layer<
                 ...(effect.request.revokeMcpCredential === undefined
                   ? {}
                   : { revokeMcpCredential: effect.request.revokeMcpCredential }),
+                ...(effect.request.stopRunningProcesses === undefined
+                  ? {}
+                  : { stopRunningProcesses: effect.request.stopRunningProcesses }),
                 ...(effect.request.releaseIfUnused === undefined
                   ? {}
                   : { releaseIfUnused: effect.request.releaseIfUnused }),

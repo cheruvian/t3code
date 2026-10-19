@@ -88,6 +88,7 @@ export type DeleteThreadInput = ThreadCommandInput;
 export type ArchiveThreadInput = ThreadCommandInput;
 export type UnarchiveThreadInput = ThreadCommandInput;
 export interface SettleThreadInput extends ThreadCommandInput {
+  readonly stopRunningProcesses?: boolean;
   readonly removeAutomations?: boolean;
 }
 
@@ -439,6 +440,9 @@ export const settleThread = Effect.fn("EnvironmentCommands.settleThread")(functi
     type: "thread.settle",
     commandId,
     threadId: input.threadId,
+    ...(input.stopRunningProcesses === undefined
+      ? {}
+      : { stopRunningProcesses: input.stopRunningProcesses }),
     ...(input.removeAutomations === undefined
       ? {}
       : { removeAutomations: input.removeAutomations }),

@@ -26,6 +26,7 @@ import {
   retrySettleWorktreeDialog,
   subscribeSettleWorktreeDialog,
   setSettleDialogRemoveAutomations,
+  setSettleDialogStopRunningProcesses,
   setSettleDialogReleaseResources,
 } from "../settleWorktreeDialog";
 
@@ -201,6 +202,17 @@ export function ConfirmDialogHost() {
                 </>
               )}
 
+              <label className="flex items-center gap-2">
+                <Checkbox
+                  checked={settlePrompt.stopRunningProcesses}
+                  onCheckedChange={setSettleDialogStopRunningProcesses}
+                />
+                Stop running processes
+              </label>
+              <p className="text-muted-foreground">
+                Stop background commands and dev servers started by the agent. Reopening does not
+                restart them. Deleting the worktree always stops them.
+              </p>
               <label className="flex items-center gap-2">
                 <Checkbox
                   checked={settlePrompt.removeAutomations}

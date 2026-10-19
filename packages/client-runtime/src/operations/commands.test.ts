@@ -943,6 +943,7 @@ describe("V2 environment commands", () => {
         commandId: CommandId.make("settle-keep-automations"),
         threadId: ThreadId.make("thread-1"),
         removeAutomations: false,
+        stopRunningProcesses: false,
       }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
 
       expect(dispatched).toEqual([
@@ -962,6 +963,7 @@ describe("V2 environment commands", () => {
           commandId: "settle-keep-automations",
           threadId: "thread-1",
           removeAutomations: false,
+          stopRunningProcesses: false,
         },
       ]);
     }).pipe(Effect.provide(layerTestCrypto)),

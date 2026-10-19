@@ -7,6 +7,7 @@ import {
   respondToSettleWorktreeDialog,
   retrySettleWorktreeDialog,
   setSettleDialogRemoveAutomations,
+  setSettleDialogStopRunningProcesses,
   setSettleDialogReleaseResources,
 } from "./settleWorktreeDialog";
 
@@ -48,6 +49,7 @@ describe("settle worktree dialog", () => {
     expect(await first).toEqual({
       choice: "keep",
       releaseResources: false,
+      stopRunningProcesses: true,
       removeAutomations: true,
     });
 
@@ -57,6 +59,7 @@ describe("settle worktree dialog", () => {
     expect(await second).toEqual({
       choice: "keep",
       releaseResources: false,
+      stopRunningProcesses: true,
       removeAutomations: false,
     });
 
@@ -64,6 +67,23 @@ describe("settle worktree dialog", () => {
     expect(readSettleWorktreeDialog()?.removeAutomations).toBe(true);
     respondToSettleWorktreeDialog(null);
     expect(await third).toBeNull();
+  });
+  it("stops processes by default, preserves an opt-out, and forces cleanup when deleting", async () => {
+    unregister = registerSettleWorktreeDialog();
+    const first = requestSettleWorktreeDialog({ path: null, canDelete: false });
+    expect(readSettleWorktreeDialog()?.stopRunningProcesses).toBe(true);
+    setSettleDialogStopRunningProcesses(false);
+    respondToSettleWorktreeDialog("keep");
+    expect(await first).toMatchObject({ stopRunningProcesses: false });
+    const second = requestSettleWorktreeDialog({
+      path: "/worktree",
+      canDelete: true,
+      initialStatus: dirtyStatus,
+    });
+    expect(readSettleWorktreeDialog()?.stopRunningProcesses).toBe(true);
+    setSettleDialogStopRunningProcesses(false);
+    respondToSettleWorktreeDialog("delete");
+    expect(await second).toMatchObject({ stopRunningProcesses: true });
   });
   it("releases resources only when selected and resets the choice between threads", async () => {
     unregister = registerSettleWorktreeDialog();
@@ -77,6 +97,7 @@ describe("settle worktree dialog", () => {
     respondToSettleWorktreeDialog("keep");
     expect(await choice).toEqual({
       choice: "keep",
+      stopRunningProcesses: true,
       removeAutomations: true,
       releaseResources: true,
     });
@@ -107,6 +128,7 @@ describe("settle worktree dialog", () => {
       choice: "delete",
       status: dirtyStatus,
       releaseResources: false,
+      stopRunningProcesses: true,
       removeAutomations: true,
     });
   });
@@ -148,6 +170,7 @@ describe("settle worktree dialog", () => {
     expect(await choice).toEqual({
       choice: "keep",
       releaseResources: false,
+      stopRunningProcesses: true,
       removeAutomations: true,
     });
     expect(readSettleWorktreeDialog()).toBeNull();
@@ -176,6 +199,7 @@ describe("settle worktree dialog", () => {
       choice: "delete",
       status: cleanStatus,
       releaseResources: false,
+      stopRunningProcesses: true,
       removeAutomations: true,
     });
   });
@@ -194,6 +218,7 @@ describe("settle worktree dialog", () => {
     expect(await choice).toEqual({
       choice: "keep",
       releaseResources: false,
+      stopRunningProcesses: true,
       removeAutomations: true,
     });
   });

@@ -124,8 +124,13 @@ without deleting the conversation. **Un-settle thread** restores it to active wo
 and prevents automatic settlement until new activity resumes the usual rules.
 Manually settling an idle thread dismisses unanswered async questions without
 sending an answer or restarting the agent. Settling also closes the thread's
-terminals that wait at an idle prompt, and keeps their output. A terminal that
+terminals that wait at an idle prompt, and keeps their output. A terminal in the terminal drawer that
 runs a command, such as a dev server, stays open.
+
+**Stop running processes** is selected by default when settling. It stops background
+commands and dev servers started by the agent. Turn it off to keep them running
+while keeping the worktree. Deleting the worktree always stops agent processes.
+Reopening does not restart stopped processes.
 
 Settling removes automations bound to the conversation by default, including paused
 automations. To keep them active, turn off **Remove bound automations** in the

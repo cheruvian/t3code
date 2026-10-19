@@ -1,3 +1,4 @@
+import { ThreadId } from "@t3tools/contracts";
 import { assert, it, describe } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
@@ -18,6 +19,7 @@ const harness = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const config = yield* ServerConfig.ServerConfig;
   const sql = yield* SqlClient.SqlClient;
+  yield* sql`CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT PRIMARY KEY, title TEXT)`;
   yield* sql`CREATE TABLE orchestration_v2_projection_runs (thread_id TEXT, status TEXT, ordinal INTEGER DEFAULT 1, run_id TEXT)`;
   yield* sql`CREATE TABLE orchestration_v2_effect_outbox (status TEXT)`;
   yield* sql`CREATE TABLE orchestration_v2_projection_runtime_requests (thread_id TEXT, status TEXT, node_id TEXT)`;
@@ -72,6 +74,28 @@ describe("queued deployments", () => {
         assert.isTrue(yield* h.fs.exists(`${h.directory}/deployment-decision.json`));
         assert.isFalse(h.admission.enter());
       }).pipe(Effect.provide(layer)),
+  );
+  it.effect("identifies each blocking thread once, including commands after turn completion", () =>
+    Effect.gen(function* () {
+      const h = yield* harness;
+      yield* h.request();
+      yield* h.sql`INSERT INTO orchestration_v2_projection_threads VALUES ('thread', 'Background server')`;
+      yield* h.sql`INSERT INTO orchestration_v2_projection_runs (thread_id, status) VALUES ('thread', 'completed')`;
+      yield* h.sql`INSERT INTO orchestration_v2_projection_turn_items VALUES ('thread', 'command_execution', 'running')`;
+      yield* h.sql`INSERT INTO orchestration_v2_projection_provider_threads VALUES ('thread', 'idle', ${encode({ pendingBackgroundTasks: [{}] })})`;
+      const state = yield* h.service.state;
+      assert.equal(state?.busyThreads, 1);
+      assert.deepEqual(state?.blockingThreads, [
+        { threadId: ThreadId.make("thread"), title: "Background server" },
+      ]);
+      yield* h.service.reconcile;
+      assert.isFalse(yield* h.fs.exists(`${h.directory}/deployment-decision.json`));
+      yield* h.sql`UPDATE orchestration_v2_projection_turn_items SET status = 'completed'`;
+      yield* h.sql`DELETE FROM orchestration_v2_projection_provider_threads`;
+      assert.deepEqual((yield* h.service.state)?.blockingThreads, []);
+      yield* h.service.reconcile;
+      assert.equal((yield* h.service.state)?.status, "installing");
+    }).pipe(Effect.provide(layer)),
   );
   it.effect("ignores a queued run superseded by a completed turn and publishes completion", () =>
     Effect.gen(function* () {

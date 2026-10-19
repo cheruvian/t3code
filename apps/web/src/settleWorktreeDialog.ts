@@ -2,10 +2,16 @@ import type { VcsStatusLocalResult } from "@t3tools/contracts";
 
 export type SettleWorktreeChoice = "keep" | "delete" | null;
 export type SettleWorktreeDecision =
-  | { choice: "keep"; removeAutomations: boolean; releaseResources: boolean }
+  | {
+      choice: "keep";
+      stopRunningProcesses: boolean;
+      removeAutomations: boolean;
+      releaseResources: boolean;
+    }
   | {
       choice: "delete";
       status: VcsStatusLocalResult;
+      stopRunningProcesses: boolean;
       removeAutomations: boolean;
       releaseResources: boolean;
     }
@@ -26,6 +32,7 @@ export interface SettleWorktreeDialogState {
   status: VcsStatusLocalResult | null;
   resourceNames: readonly string[];
   releaseResources: boolean;
+  stopRunningProcesses: boolean;
   removeAutomations: boolean;
 }
 
@@ -110,6 +117,7 @@ export function requestSettleWorktreeDialog(prompt: SettleWorktreePrompt) {
         canDelete: prompt.canDelete,
         phase: prompt.initialStatus || !prompt.path ? "ready" : "loading",
         status: prompt.initialStatus ?? null,
+        stopRunningProcesses: true,
         removeAutomations: true,
         resourceNames: prompt.resourceNames ?? [],
         releaseResources: false,
@@ -141,6 +149,7 @@ export function respondToSettleWorktreeDialog(choice: SettleWorktreeChoice) {
   if (choice === "keep") {
     finish({
       choice: "keep",
+      stopRunningProcesses: active.state.stopRunningProcesses,
       removeAutomations: active.state.removeAutomations,
       releaseResources: active.state.releaseResources,
     });
@@ -150,6 +159,7 @@ export function respondToSettleWorktreeDialog(choice: SettleWorktreeChoice) {
   if (phase !== "ready" || !status || !canDelete) return;
   finish({
     choice: "delete",
+    stopRunningProcesses: true,
     status,
     removeAutomations: active.state.removeAutomations,
     releaseResources: active.state.releaseResources,
@@ -162,5 +172,11 @@ export function setSettleDialogReleaseResources(releaseResources: boolean) {
     ...active.state,
     releaseResources: releaseResources && active.state.resourceNames.length > 0,
   };
+  publish();
+}
+
+export function setSettleDialogStopRunningProcesses(stopRunningProcesses: boolean) {
+  if (!active) return;
+  active.state = { ...active.state, stopRunningProcesses };
   publish();
 }

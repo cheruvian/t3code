@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /** Local deployment runner's immutable release request. No executable paths cross the wire. */
 export const ManagedDeploymentRequest = Schema.Struct({
@@ -14,6 +14,9 @@ export const ManagedDeploymentState = Schema.NullOr(
     ...ManagedDeploymentRequest.fields,
     busyThreads: NonNegativeInt,
     pendingEffects: NonNegativeInt,
+    blockingThreads: Schema.optional(
+      Schema.Array(Schema.Struct({ threadId: ThreadId, title: Schema.String })),
+    ),
   }),
 );
 export type ManagedDeploymentState = typeof ManagedDeploymentState.Type;

@@ -181,6 +181,7 @@ export interface ProviderSessionManagerV2Shape {
     readonly revokeMcpCredential?: boolean;
     /** Settling releases an unused shared runtime instead of waiting for idle expiry. */
     readonly releaseIfUnused?: boolean;
+    readonly stopRunningProcesses?: boolean;
   }) => Effect.Effect<void, ProviderSessionManagerV2Error>;
 }
 
@@ -2368,6 +2369,26 @@ export const layerWithOptions = (
                   { concurrency: 1, discard: true },
                 );
               }
+            }
+            if (
+              input.stopRunningProcesses === true &&
+              currentEntry?.exposedRuntime.stopBackgroundProcesses
+            ) {
+              const stop = currentEntry.exposedRuntime.stopBackgroundProcesses;
+              const stopped = yield* threadAttachment.withLock(
+                threadAttachmentKey(input),
+                Effect.gen(function* () {
+                  const thread = yield* projectionStore.getThread(input.threadId);
+                  if (thread.settledOverride !== "settled") return false;
+                  yield* Effect.forEach(
+                    detachedProviderThreads,
+                    (providerThread) => stop({ providerThread }),
+                    { concurrency: 1, discard: true },
+                  );
+                  return true;
+                }),
+              );
+              if (!stopped) return;
             }
             const detachResult = yield* Ref.modify(sessions, (current) => {
               const entry = current.get(key);

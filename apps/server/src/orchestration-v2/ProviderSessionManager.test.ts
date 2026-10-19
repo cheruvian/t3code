@@ -182,6 +182,7 @@ interface TestProviderRuntimeState {
   readonly closeCount: number;
   readonly interruptCount: number;
   readonly resumeCount: number;
+  readonly stoppedNativeThreadIds: ReadonlyArray<string>;
   readonly unloadedNativeThreadIds: ReadonlyArray<string>;
   readonly eventQueues: ReadonlyMap<
     string,
@@ -194,6 +195,7 @@ const emptyState: TestProviderRuntimeState = {
   closeCount: 0,
   interruptCount: 0,
   resumeCount: 0,
+  stoppedNativeThreadIds: [],
   unloadedNativeThreadIds: [],
   eventQueues: new Map(),
 };
@@ -443,6 +445,14 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
             Ref.update(state, (current) => ({
               ...current,
               interruptCount: current.interruptCount + 1,
+            })),
+          stopBackgroundProcesses: ({ providerThread }) =>
+            Ref.update(state, (current) => ({
+              ...current,
+              stoppedNativeThreadIds: [
+                ...current.stoppedNativeThreadIds,
+                providerThread.nativeThreadRef?.nativeId ?? "",
+              ],
             })),
           unloadThread: ({ providerThread }) =>
             (options.beforeUnload ?? Effect.void).pipe(
@@ -2653,7 +2663,7 @@ it.effect("ProviderSessionManagerV2 terminal detach revokes the thread's MCP cre
   }),
 );
 
-it.effect.each(["unused", "shared"] as const)(
+it.effect.each(["unused", "shared", "keep-processes"] as const)(
   "settling stops an unused shared Codex runtime immediately: %s",
   (scenario) =>
     Effect.gen(function* () {
@@ -2685,21 +2695,47 @@ it.effect.each(["unused", "shared"] as const)(
           manager.open({ threadId: id, providerSessionId, modelSelection, runtimePolicy });
         yield* open(threadId);
         if (scenario === "shared") yield* open(otherThreadId);
+        const eventSink = yield* EventSink.EventSinkV2;
+        const allocator = yield* IdAllocator.IdAllocatorV2.pipe(Effect.provide(IdAllocator.layer));
+        const now = yield* DateTime.now;
+        const providerThread = makeProviderThread({
+          idAllocator: allocator,
+          threadId,
+          providerSessionId,
+          now,
+        });
+        yield* eventSink.write({
+          events: [
+            {
+              id: yield* allocator.allocate.event({ threadId }),
+              type: "provider-thread.updated",
+              threadId,
+              driver: CODEX_DRIVER,
+              occurredAt: now,
+              payload: providerThread,
+            },
+          ],
+        });
         assert.equal((yield* Ref.get(state)).openCount, 1);
 
         yield* orchestrator.dispatch({
           type: "thread.settle",
           commandId: CommandId.make(`settle:${threadId}`),
           threadId,
+          ...(scenario === "keep-processes" ? { stopRunningProcesses: false } : {}),
         });
         yield* worker.drain();
         assert.isTrue(
-          Option.isSome(yield* manager.get(providerSessionId)) === (scenario === "shared"),
+          Option.isSome(yield* manager.get(providerSessionId)) === (scenario !== "unused"),
         );
         const settled = yield* orchestrator.getThreadProjection(threadId);
         assert.isNotNull(settled.thread.settledAt);
-        assert.deepEqual(settled.providerSessions, []);
-        assert.equal((yield* Ref.get(state)).closeCount, scenario === "shared" ? 0 : 1);
+        assert.equal(settled.providerSessions.length, scenario === "keep-processes" ? 1 : 0);
+        assert.deepEqual(
+          (yield* Ref.get(state)).stoppedNativeThreadIds,
+          scenario === "keep-processes" ? [] : [providerThread.nativeThreadRef?.nativeId ?? ""],
+        );
+        assert.equal((yield* Ref.get(state)).closeCount, scenario !== "unused" ? 0 : 1);
 
         if (scenario === "shared") {
           yield* orchestrator.dispatch({
@@ -2718,7 +2754,7 @@ it.effect.each(["unused", "shared"] as const)(
           reason: "user",
         });
         yield* open(threadId);
-        assert.equal((yield* Ref.get(state)).openCount, 2);
+        assert.equal((yield* Ref.get(state)).openCount, scenario === "keep-processes" ? 1 : 2);
         assert.isTrue(Option.isSome(yield* manager.get(providerSessionId)));
       });
       yield* test.pipe(

@@ -40,6 +40,7 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     revokeMcpCredential: Schema.optional(Schema.Boolean),
     /** Stop a shared runtime immediately once no threads or turns use it. */
     releaseIfUnused: Schema.optional(Schema.Boolean),
+    stopRunningProcesses: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("provider-turn.start"),

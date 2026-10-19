@@ -2877,6 +2877,8 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     settledAt: Schema.optional(Schema.DateTimeUtc),
+    /** Omitted stops provider-owned background processes. */
+    stopRunningProcesses: Schema.optional(Schema.Boolean),
     /** Omitted removes automations bound to this thread. */
     removeAutomations: Schema.optional(Schema.Boolean),
   }),

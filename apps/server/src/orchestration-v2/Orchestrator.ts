@@ -3502,15 +3502,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
 
-    // Settle joins archive here: both mean "done with this
-    // thread", so a live provider session must not keep running background
-    // work (PR monitors, dev servers, subagent fleets) after any of them
-    // lands. The settle guard above already rejects active or blocked runs,
-    // so for settle this only ever stops an idle session; commands are
-    // decided serially against the projection, so a turn start that
-    // re-engages the thread cannot race this detach.
+    // Settlement can keep background processes when retaining the worktree.
+    // Cleanup detaches only this thread; a shared provider runtime stays alive
+    // while another thread uses it.
     const detachSessionIds = new Set(
-      command.type === "thread.archive" || command.type === "thread.settle"
+      command.type === "thread.archive" ||
+        (command.type === "thread.settle" && command.stopRunningProcesses !== false)
         ? (providerContext?.providerSessions ?? []).map((session) => session.id)
         : command.type === "thread.metadata.update" &&
             command.worktreePath !== undefined &&
@@ -3580,7 +3577,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 // detach reasons keep them so a re-attaching provider process
                 // stays authorized.
                 ...(command.type === "thread.archive" ? { revokeMcpCredential: true } : {}),
-                ...(command.type === "thread.settle" ? { releaseIfUnused: true } : {}),
+                ...(command.type === "thread.settle"
+                  ? { releaseIfUnused: true, stopRunningProcesses: true }
+                  : {}),
               },
             } satisfies PendingOrchestrationEffectV2;
             yield* Ref.update(effects, (existing) => [...existing, pendingEffect]);

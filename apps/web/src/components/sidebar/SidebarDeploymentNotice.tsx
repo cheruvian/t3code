@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { Link } from "@tanstack/react-router";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { useState } from "react";
@@ -62,6 +63,27 @@ function DeploymentNoticeContent({ environmentId }: { environmentId: Environment
             ? " · check deployment logs"
             : " · reconnecting shortly"}
       </p>
+      {state.status === "queued" && (state.blockingThreads?.length ?? 0) > 0 ? (
+        <ul className="mt-2 flex flex-col items-start gap-1">
+          {state.blockingThreads?.map((thread) => (
+            <li key={thread.threadId}>
+              <Button
+                size="xs"
+                variant="link"
+                render={
+                  <Link
+                    to="/$environmentId/$threadId"
+                    params={{ environmentId, threadId: thread.threadId }}
+                  />
+                }
+                aria-label={`Open blocking thread: ${thread.title}`}
+              >
+                {thread.title}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {state.status !== "installing" ? (
         <div className="mt-2 flex gap-2">
           {state.status === "queued" ? (

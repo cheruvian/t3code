@@ -216,6 +216,7 @@ function confirmSettlement(
 ) {
   return new Promise<{
     deleteWorktree: boolean;
+    stopRunningProcesses: boolean;
     removeAutomations: boolean;
     releaseResources: boolean;
   } | null>((resolve) => {
@@ -232,7 +233,7 @@ function confirmSettlement(
       : "";
     Dialog.confirm({
       title: "Settle this conversation?",
-      message: `${changes}${worktreeWarning}${resourceNames.length > 0 ? "\n\nResource release hooks must finish before settling. Reopening does not check them out again." : ""}\n\nRemoved automations stop running and are not restored when reopened. Turn this off to keep them active. Automations that create new conversations are kept.`,
+      message: `${changes}${worktreeWarning}${resourceNames.length > 0 ? "\n\nResource release hooks must finish before settling. Reopening does not check them out again." : ""}\n\nStopping processes ends background commands and dev servers started by the agent. Reopening does not restart them. Deleting the worktree always stops them.\n\nRemoved automations stop running and are not restored when reopened. Turn this off to keep them active. Automations that create new conversations are kept.`,
       confirmText: "Settle",
       options: [
         ...(resourceNames.length > 0
@@ -244,6 +245,7 @@ function confirmSettlement(
               },
             ]
           : []),
+        { id: "stopRunningProcesses", label: "Stop running processes", defaultChecked: true },
         { id: "removeAutomations", label: "Remove bound automations", defaultChecked: true },
         ...(canDelete && status
           ? [{ id: "deleteWorktree", label: "Delete worktree", defaultChecked: false }]
@@ -251,6 +253,8 @@ function confirmSettlement(
       ],
       onConfirm: (options) =>
         resolve({
+          stopRunningProcesses:
+            options.deleteWorktree === true || options.stopRunningProcesses !== false,
           releaseResources: options.releaseResources === true,
           removeAutomations: options.removeAutomations !== false,
           deleteWorktree: options.deleteWorktree === true,
@@ -313,6 +317,7 @@ function useThreadActionExecutor(
           return false;
         }
         let deleteWorktreePreview: VcsStatusLocalResult | null = null;
+        let stopRunningProcesses = true;
         let removeAutomations = true;
         let releaseResources = false;
         const resourceLocks = (
@@ -343,12 +348,14 @@ function useThreadActionExecutor(
           const preview = status._tag === "Success" ? status.value : null;
           const decision = await confirmSettlement(true, preview, canDelete, resourceNames);
           if (decision === null) return false;
+          stopRunningProcesses = decision.stopRunningProcesses;
           removeAutomations = decision.removeAutomations;
           releaseResources = decision.releaseResources;
           if (decision.deleteWorktree) deleteWorktreePreview = preview;
         } else if (action === "settle") {
           const decision = await confirmSettlement(false, null, false, resourceNames);
           if (decision === null) return false;
+          stopRunningProcesses = decision.stopRunningProcesses;
           removeAutomations = decision.removeAutomations;
           releaseResources = decision.releaseResources;
         }
@@ -378,7 +385,7 @@ function useThreadActionExecutor(
               : action === "settle"
                 ? await settleMutation({
                     environmentId: thread.environmentId,
-                    input: { threadId: thread.id, removeAutomations },
+                    input: { threadId: thread.id, removeAutomations, stopRunningProcesses },
                   })
                 : await (
                     action === "archive"
