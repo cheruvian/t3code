@@ -19,6 +19,10 @@
     "./worker": {
       "types": "./src/worker.d.ts",
       "default": "./src/worker.js"
+    },
+    "./manual": {
+      "types": "./src/manual.d.ts",
+      "default": "./src/manual.js"
     }
   },
   "scripts": {

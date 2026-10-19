@@ -43,6 +43,24 @@ T3 hosts them through its hidden worker command so Electron and single-executabl
 runtimes preserve IPC and cleanup. Direct package use embeds those programs. After changing either program, run
 node scripts/embed-programs.mjs. The check command detects stale embedded source.
 
+## Integrated browser sign-in
+
+Ask the agent to sign in to a page in the integrated browser. In the credential
+request, select a saved Bitwarden login or expand **Enter a login privately** to
+submit a username and password for one use. Manual entry works while Bitwarden
+is locked and does not save the login. Approval waits until you decide or the
+originating call stops; the credential lifetime starts after approval.
+
+Sign-in uses a private page in the working tab's storage context. It closes that
+page and reloads the working tab after submission. The filled page is excluded
+from T3 snapshots, recordings, and diagnostics. Saved permissions include the
+browser origin, profile, and form selectors. Temporary tab storage lasts only as
+long as that tab's context; persistent profiles retain their website sessions.
+
+This flow supports same-origin username/password forms in server-backed tabs.
+Desktop-attached tabs, cross-origin SSO, and interactive MFA need a separate
+human sign-in workflow. Revoking broker permission does not sign out a website.
+
 ## Standalone compatibility
 
 From this package directory:
