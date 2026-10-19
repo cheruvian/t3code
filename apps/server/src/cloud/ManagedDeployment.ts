@@ -103,8 +103,12 @@ const make = Effect.gen(function* () {
     const [row] = yield* sql<{ busyThreads: number; pendingEffects: number }>`
       SELECT
         (SELECT COUNT(DISTINCT thread_id) FROM (
-          SELECT thread_id FROM orchestration_v2_projection_runs
-            WHERE status IN ('preparing', 'starting', 'running', 'waiting', 'queued')
+          SELECT r.thread_id FROM orchestration_v2_projection_runs r
+            WHERE r.status IN ('preparing', 'starting', 'running', 'waiting', 'queued')
+              AND (r.status <> 'queued' OR NOT EXISTS (
+                SELECT 1 FROM orchestration_v2_projection_runs newer
+                WHERE newer.thread_id = r.thread_id AND newer.ordinal > r.ordinal
+              ))
           UNION SELECT thread_id FROM orchestration_v2_projection_runtime_requests WHERE status = 'pending'
           UNION SELECT thread_id FROM orchestration_v2_projection_provider_threads
             WHERE status = 'active' OR json_array_length(payload_json, '$.pendingBackgroundTasks') > 0

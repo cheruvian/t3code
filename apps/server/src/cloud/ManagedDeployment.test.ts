@@ -18,7 +18,7 @@ const harness = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const config = yield* ServerConfig.ServerConfig;
   const sql = yield* SqlClient.SqlClient;
-  yield* sql`CREATE TABLE orchestration_v2_projection_runs (thread_id TEXT, status TEXT)`;
+  yield* sql`CREATE TABLE orchestration_v2_projection_runs (thread_id TEXT, status TEXT, ordinal INTEGER DEFAULT 1)`;
   yield* sql`CREATE TABLE orchestration_v2_effect_outbox (status TEXT)`;
   yield* sql`CREATE TABLE orchestration_v2_projection_runtime_requests (thread_id TEXT, status TEXT)`;
   yield* sql`CREATE TABLE orchestration_v2_projection_provider_threads (thread_id TEXT, status TEXT, payload_json TEXT)`;
@@ -59,7 +59,7 @@ describe("queued deployments", () => {
       Effect.gen(function* () {
         const h = yield* harness;
         yield* h.request();
-        yield* h.sql`INSERT INTO orchestration_v2_projection_runs VALUES ('thread', 'running')`;
+        yield* h.sql`INSERT INTO orchestration_v2_projection_runs (thread_id, status) VALUES ('thread', 'running')`;
         yield* h.service.reconcile;
         assert.isFalse(yield* h.fs.exists(`${h.directory}/deployment-decision.json`));
         yield* h.sql`DELETE FROM orchestration_v2_projection_runs`;
@@ -71,6 +71,25 @@ describe("queued deployments", () => {
         assert.isTrue(yield* h.fs.exists(`${h.directory}/deployment-decision.json`));
         assert.isFalse(h.admission.enter());
       }).pipe(Effect.provide(layer)),
+  );
+  it.effect("ignores a queued run superseded by a completed turn and publishes completion", () =>
+    Effect.gen(function* () {
+      const h = yield* harness;
+      yield* h.request();
+      yield* h.sql`INSERT INTO orchestration_v2_projection_runs VALUES ('thread', 'queued', 1)`;
+      assert.equal((yield* h.service.state)?.busyThreads, 1);
+      yield* h.service.reconcile;
+      assert.isFalse(yield* h.fs.exists(`${h.directory}/deployment-decision.json`));
+      yield* h.sql`INSERT INTO orchestration_v2_projection_runs VALUES ('thread', 'completed', 2)`;
+      assert.equal((yield* h.service.state)?.busyThreads, 0);
+      yield* h.service.reconcile;
+      assert.equal((yield* h.service.state)?.status, "installing");
+      yield* h.fs.writeFileString(
+        `${h.directory}/deployment-result-${id}.json`,
+        encode({ status: "succeeded" }),
+      );
+      assert.isNull(yield* h.service.state);
+    }).pipe(Effect.provide(layer)),
   );
   it.effect("does not approve while an admitted command is still committing", () =>
     Effect.gen(function* () {
@@ -118,7 +137,7 @@ describe("queued deployments", () => {
       Effect.gen(function* () {
         const h = yield* harness;
         yield* h.request();
-        yield* h.sql`INSERT INTO orchestration_v2_projection_runs VALUES ('thread', 'running')`;
+        yield* h.sql`INSERT INTO orchestration_v2_projection_runs (thread_id, status) VALUES ('thread', 'running')`;
         yield* h.service.action({ id, action: "force" });
         assert.isFalse(h.admission.enter());
         yield* h.fs.writeFileString(
