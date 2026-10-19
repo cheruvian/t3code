@@ -114,7 +114,8 @@ function EnvironmentBroker({
       document.removeEventListener("visibilitychange", visible);
     };
   }, [state?.status, canAct, environmentId, run, viewId]);
-  const pending = state?.requests.filter((r) => r.state === "pending") ?? [];
+  const pending =
+    state?.requests.filter((r) => ["pending", "awaiting_unlock"].includes(r.state)) ?? [];
   const active = state?.requests.filter((r) => ["running", "preparing"].includes(r.state)) ?? [];
   useEffect(() => {
     report(environmentId, pending.length > 0);
@@ -360,7 +361,9 @@ function ApprovalCard({
           seconds after delivery
         </p>
         <p className="text-muted-foreground">
-          Approval expires {new Date(request.approvalDeadline).toLocaleTimeString()}
+          {request.state === "awaiting_unlock"
+            ? "Waiting for you to unlock the vault. Unlocking does not approve access."
+            : `Approval expires ${new Date(request.approvalDeadline).toLocaleTimeString()}`}
         </p>
       </div>
       <div className="space-y-2">

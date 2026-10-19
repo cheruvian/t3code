@@ -97,7 +97,8 @@ function EnvironmentBroker({
     const subscription = AppState.addEventListener("change", publish);
     return () => subscription.remove();
   }, [state?.status, canAct, environmentId, run, viewId]);
-  const pending = state?.requests.filter((r) => r.state === "pending") ?? [];
+  const pending =
+    state?.requests.filter((r) => ["pending", "awaiting_unlock"].includes(r.state)) ?? [];
   const hasAttention = pending.length > 0 || !!state?.notices.length;
   const shown = focused && (open || hasAttention);
   useEffect(() => {
@@ -318,8 +319,10 @@ function Approval({
         {request.origin?.workspace ?? request.cwd}
       </Text>
       <Text className="text-foreground">
-        {request.field} · {request.ttlSeconds}s after delivery. Approval expires{" "}
-        {new Date(request.approvalDeadline).toLocaleTimeString()}
+        {request.field} · {request.ttlSeconds}s after delivery.{" "}
+        {request.state === "awaiting_unlock"
+          ? "Waiting for you to unlock the vault. Unlocking does not approve access."
+          : `Approval expires ${new Date(request.approvalDeadline).toLocaleTimeString()}`}
       </Text>
       <Text className="text-foreground-muted">Saved login</Text>
       {request.candidates.map((c) => (

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Broker } from "./broker.js";
 import { BitwardenProvider } from "./providers.js";
 import { BrokerError, parseRequest } from "./common.js";
@@ -35,6 +36,7 @@ export class T3CredentialBroker {
   #views = new Map();
   #notices = new Map();
   #executions = new Map();
+  #waitingForUnlock = new Map();
   #error;
   #closing = false;
   constructor({
@@ -65,6 +67,7 @@ export class T3CredentialBroker {
       mode: this.#broker?.provider.mode ?? "bitwarden",
       ...(this.#error ? { error: this.#error } : {}),
       requests: [
+        ...[...this.#waitingForUnlock.values()].map((entry) => entry.request),
         ...snapshot.requests.filter((r) => r.kind === "exec" && !terminal.has(r.state)),
         ...snapshot.requests.filter((r) => r.kind === "exec" && terminal.has(r.state)).slice(0, 20),
       ].map((r) => ({
@@ -181,10 +184,12 @@ export class T3CredentialBroker {
       await broker.initialize();
       if (this.#closing) {
         await broker.close();
+        this.#status = "locked";
         return;
       }
       this.#broker = broker;
       this.#status = "ready";
+      for (const entry of this.#waitingForUnlock.values()) entry.finish();
     } catch {
       await provider.close().catch(() => {});
       this.#status = "locked";
@@ -240,6 +245,15 @@ export class T3CredentialBroker {
       this.#notices.get(input.noticeId)?.accept?.(key);
       return;
     }
+    const waiting = this.#waitingForUnlock.get(input.requestId);
+    if (waiting) {
+      if (input.type === "stop" || (input.type === "decide" && input.decision === "deny")) {
+        waiting.finish(input.type === "stop" ? "released" : "denied");
+        this.#publish();
+        return;
+      }
+      throw new BrokerError("Unlock the vault before approving access.");
+    }
     const broker = this.#broker;
     if (!broker) throw new BrokerError("Vault is locked.");
     if (input.type === "decide")
@@ -256,7 +270,6 @@ export class T3CredentialBroker {
     this.#publish();
   }
   async execute(origin, input, signal) {
-    const broker = this.#broker;
     if (signal?.aborted)
       return Promise.reject(
         new BrokerError("Credential caller was cancelled.", 409, "caller_cancelled"),
@@ -264,14 +277,6 @@ export class T3CredentialBroker {
     if (this.#status === "unsupported")
       return Promise.reject(
         new BrokerError("Platform security adapters are unavailable.", 503, "unsupported_platform"),
-      );
-    if (!broker || this.#status !== "ready")
-      return Promise.reject(
-        new BrokerError(
-          "Unlock the vault privately in T3 first.",
-          503,
-          this.#status === "unlocking" ? "vault_unlocking" : "vault_locked",
-        ),
       );
     const parsed = parseRequest(
       {
@@ -308,7 +313,37 @@ export class T3CredentialBroker {
     }
     if (signal?.aborted)
       throw new BrokerError("Credential caller was cancelled.", 409, "caller_cancelled");
-    if (this.#closing || this.#broker !== broker || this.#status !== "ready")
+    if (this.#closing) throw new BrokerError("Broker unavailable.", 503, "broker_unavailable");
+    if (this.#status !== "ready") {
+      const requestId = randomUUID();
+      const result = await new Promise((resolve) => {
+        const abort = () => finish("released");
+        const finish = (state) => {
+          this.#waitingForUnlock.delete(requestId);
+          signal?.removeEventListener("abort", abort);
+          resolve(state ? { requestId, state } : undefined);
+        };
+        this.#waitingForUnlock.set(requestId, {
+          origin,
+          finish,
+          request: {
+            ...parsed,
+            request_id: requestId,
+            state: "awaiting_unlock",
+            origin,
+            approval_deadline: 0,
+          },
+        });
+        signal?.addEventListener("abort", abort, { once: true });
+        if (signal?.aborted) abort();
+        this.#publish();
+      });
+      if (result) return result;
+    }
+    if (signal?.aborted)
+      throw new BrokerError("Credential caller was cancelled.", 409, "caller_cancelled");
+    const broker = this.#broker;
+    if (this.#closing || !broker || this.#status !== "ready")
       throw new BrokerError("Broker unavailable.", 503, "broker_unavailable");
     const request = broker.request(parsed, origin);
     return new Promise((resolve, reject) => {
@@ -342,12 +377,18 @@ export class T3CredentialBroker {
     this.#publish();
   }
   async cancelCall(toolCallId) {
+    for (const entry of this.#waitingForUnlock.values()) {
+      if (entry.origin.toolCallId === toolCallId) entry.finish("released");
+    }
     for (const [id, execution] of this.#executions) {
       if (execution.origin.toolCallId === toolCallId) await this.#broker.release(id);
     }
     this.#publish();
   }
   async cancelSession(providerSessionId) {
+    for (const entry of this.#waitingForUnlock.values()) {
+      if (entry.origin.providerSessionId === providerSessionId) entry.finish("released");
+    }
     for (const [id, execution] of this.#executions) {
       if (execution.origin.providerSessionId === providerSessionId) await this.#broker.release(id);
     }
@@ -356,6 +397,7 @@ export class T3CredentialBroker {
   async lock() {
     const broker = this.#broker;
     if (this.#status === "unlocking") throw new BrokerError("Unlock is in progress.");
+    for (const entry of this.#waitingForUnlock.values()) entry.finish("released");
     if (broker) {
       await broker.close();
       this.#publish(); // Resolve every still-waiting tool call before forgetting requests.
@@ -366,6 +408,8 @@ export class T3CredentialBroker {
   }
   async close() {
     this.#closing = true;
+    for (const entry of this.#waitingForUnlock.values()) entry.finish("released");
+    if (this.#status === "unlocking") return;
     await this.lock();
   }
 }

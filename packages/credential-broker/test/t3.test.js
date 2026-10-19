@@ -253,10 +253,137 @@ test("consumer disappearing after approval selection returns a safe startup fail
   assert.ok(!JSON.stringify(result).includes(DEMO_PASSWORD));
   assert.deepEqual(await readdir(join(runtime, "leases")), []);
 });
-test("locked vault reports a safe actionable code before requesting access", async () => {
-  const broker = new T3CredentialBroker({ runtime: "/unused" });
-  await assert.rejects(broker.execute(origin, { site: "heihei" }), { code: "vault_locked" });
+test("locked requests publish trusted identity, survive failed unlock, and still require approval", async (t) => {
+  const provider = new DemoProvider();
+  let searches = 0;
+  const search = provider.search.bind(provider);
+  provider.search = async (site) => {
+    searches++;
+    return search(site);
+  };
+  const { broker, caller, input, marker } = await setup(t, { provider });
+  await broker.lock();
+  const waiting = milestone(broker, (s) => s.requests.some((r) => r.state === "awaiting_unlock"));
+  const execution = broker.execute(caller, input);
+  const state = await waiting;
+  const queued = state.requests[0];
+  assert.deepEqual(queued.origin, caller);
+  assert.equal(state.status, "locked");
+  assert.deepEqual(queued.candidates, []);
+  assert.equal(searches, 0);
+  await assert.rejects(
+    broker.action("human", { type: "decide", requestId: queued.requestId, decision: "once" }),
+  );
+  provider.initialize = async () => {
+    throw new Error("fake unlock failure");
+  };
+  await assert.rejects(broker.unlock());
+  assert.equal(broker.state().requests[0].state, "awaiting_unlock");
+  provider.initialize = async () => {};
+  const ready = milestone(broker, (s) => s.requests.some((r) => r.state === "pending"));
+  await broker.unlock();
+  const request = (await ready).requests.find((r) => r.state === "pending");
+  await assert.rejects(stat(marker), { code: "ENOENT" });
+  await broker.action("human", {
+    type: "decide",
+    requestId: request.requestId,
+    decision: "once",
+    candidateId: DEMO_ITEM,
+  });
+  assert.equal((await execution).exitCode, 0);
+  assert.equal(JSON.parse(await readFile(marker, "utf8")).received, true);
 });
+test("requests arriving during unlock wait and then require a separate decision", async (t) => {
+  const { broker, caller, input } = await setup(t);
+  await broker.lock();
+  let finishUnlock;
+  let started;
+  const unlockStarted = new Promise((resolve) => {
+    started = resolve;
+  });
+  broker.provider.initialize = () =>
+    new Promise((resolve) => {
+      finishUnlock = resolve;
+      started();
+    });
+  const unlocking = broker.unlock();
+  await unlockStarted;
+  const waiting = milestone(broker, (s) => s.requests.some((r) => r.state === "awaiting_unlock"));
+  const execution = broker.execute(caller, input);
+  assert.equal((await waiting).status, "unlocking");
+  const ready = milestone(broker, (s) => s.requests.some((r) => r.state === "pending"));
+  finishUnlock();
+  await unlocking;
+  const request = (await ready).requests.find((r) => r.state === "pending");
+  await broker.action("human", { type: "decide", requestId: request.requestId, decision: "deny" });
+  assert.equal((await execution).state, "denied");
+});
+test("closing during unlock releases waiting callers and closes the eventual provider", async (t) => {
+  const { broker, caller, input } = await setup(t);
+  await broker.lock();
+  let started, finishUnlock;
+  const unlockStarted = new Promise((resolve) => {
+    started = resolve;
+  });
+  broker.provider.initialize = () =>
+    new Promise((resolve) => {
+      finishUnlock = resolve;
+      started();
+    });
+  const unlocking = broker.unlock();
+  await unlockStarted;
+  const waiting = milestone(broker, (s) => s.requests.some((r) => r.state === "awaiting_unlock"));
+  const execution = broker.execute(caller, input);
+  await waiting;
+  await broker.close();
+  assert.equal((await execution).state, "released");
+  finishUnlock();
+  await unlocking;
+  assert.equal(broker.state().status, "locked");
+  assert.deepEqual(broker.state().requests, []);
+});
+test("caller cancellation at unlock completion cannot start a vault search", async (t) => {
+  const { broker, caller, input } = await setup(t);
+  await broker.lock();
+  let searches = 0;
+  broker.provider.search = async () => {
+    searches++;
+    return [];
+  };
+  const controller = new AbortController();
+  const waiting = milestone(broker, (s) => s.requests.some((r) => r.state === "awaiting_unlock"));
+  const execution = broker.execute(caller, input, controller.signal);
+  const rejected = assert.rejects(execution, { code: "caller_cancelled" });
+  await waiting;
+  const detach = broker.subscribe("cancel-on-ready", "view", (s) => {
+    if (s.status === "ready") controller.abort();
+  });
+  await broker.unlock();
+  await rejected;
+  detach();
+  assert.equal(searches, 0);
+  assert.deepEqual(broker.state().requests, []);
+});
+for (const cancellation of ["deny", "stop", "abort", "call", "session", "lock", "close"]) {
+  test(`waiting for unlock is cancelled by ${cancellation} without vault access`, async (t) => {
+    const { broker, caller, input } = await setup(t);
+    await broker.lock();
+    const controller = new AbortController();
+    const waiting = milestone(broker, (s) => s.requests.some((r) => r.state === "awaiting_unlock"));
+    const execution = broker.execute(caller, input, controller.signal);
+    const requestId = (await waiting).requests[0].requestId;
+    if (cancellation === "deny")
+      await broker.action("human", { type: "decide", requestId, decision: "deny" });
+    if (cancellation === "stop") await broker.action("human", { type: "stop", requestId });
+    if (cancellation === "abort") controller.abort();
+    if (cancellation === "call") await broker.cancelCall(caller.toolCallId);
+    if (cancellation === "session") await broker.cancelSession(caller.providerSessionId);
+    if (cancellation === "lock") await broker.lock();
+    if (cancellation === "close") await broker.close();
+    assert.equal((await execution).state, cancellation === "deny" ? "denied" : "released");
+    assert.deepEqual(broker.state().requests, []);
+  });
+}
 test("a local hostname can be privately approved and delivered to its consumer", async (t) => {
   const provider = new DemoProvider();
   provider.search = async (site) => {
