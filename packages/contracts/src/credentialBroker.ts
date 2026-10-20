@@ -41,6 +41,8 @@ export const CredentialBrowserLoginInput = Schema.Struct({
 export type CredentialBrowserLoginInput = typeof CredentialBrowserLoginInput.Type;
 
 export const CredentialExecutionFailureCode = Schema.Literals([
+  "no_matching_login",
+  "vault_search_failed",
   "consumer_start_failed",
   "supervisor_start_failed",
   "credential_cleanup_failed",
@@ -55,6 +57,8 @@ export const CredentialExecution = Schema.Struct({
 });
 export type CredentialExecution = typeof CredentialExecution.Type;
 export const CredentialApproval = Schema.Struct({
+  canSave: Schema.optional(Schema.Boolean),
+  error: Schema.optional(Schema.String),
   requestId: Schema.String,
   state: Schema.String,
   site: Schema.String,
@@ -107,6 +111,12 @@ export const CredentialBrokerState = Schema.Struct({
 });
 export type CredentialBrokerState = typeof CredentialBrokerState.Type;
 export const CredentialBrokerAction = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("saveLogin"),
+    requestId: Schema.String,
+    username: Schema.String.check(Schema.isMaxLength(4096)),
+    password: Schema.String.check(Schema.isMaxLength(4096)),
+  }),
   Schema.Struct({
     type: Schema.Literal("browserManual"),
     requestId: Schema.String,

@@ -323,7 +323,10 @@ const make = Effect.gen(function* () {
         ? manualForRequest(input)
         : Effect.tryPromise({
             try: () => {
-              if (input.type === "decide" && input.decision !== "deny") {
+              if (
+                input.type === "saveLogin" ||
+                (input.type === "decide" && input.decision !== "deny")
+              ) {
                 const request = broker
                   .state()
                   .requests.find((request) => request.requestId === input.requestId);

@@ -11,6 +11,14 @@ thread, agent, workspace, program, arguments, fields, and access lifetime. Purpo
 and labels come from the caller. Choose the matching login, then deny access,
 allow it once, or always allow its exact scope.
 
+To add a login, choose **Enter and save a new login** in the request dialog.
+Enter the requested site's username and password, then choose
+**Save to Bitwarden & allow once**. This creates a new login for the site and
+shares it with the waiting program once. It doesn't replace existing logins or
+grant ongoing access. If lookup finds no matching login or fails, the dialog
+stays open so you can enter one. Unlock the vault before saving, and keep the
+site password separate from your Bitwarden master password.
+
 Always allow is limited to that thread, provider, workspace, login, site, fields,
 command, executable and direct-script fingerprints, and maximum lifetime.
 Changed commands require another approval. Every automatic use shows a notice

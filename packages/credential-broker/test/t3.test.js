@@ -779,3 +779,166 @@ test("a failed host worker does not settle the tool before credential cleanup", 
   assert.equal(result.failureCode, "supervisor_start_failed");
   assert.deepEqual(await readdir(join(runtime, "leases")), []);
 });
+
+for (const scenario of ["no_matching_login", "vault_search_failed"]) {
+  test(`vault lookup reports ${scenario} without waiting for another UI action`, async (t) => {
+    class SearchProvider extends DemoProvider {
+      async search() {
+        if (scenario === "vault_search_failed") throw new Error("private provider details");
+        return [];
+      }
+    }
+    const { broker, caller, input, runtime } = await setup(t, { provider: new SearchProvider() });
+    const result = await broker.execute(caller, input);
+    assert.equal(broker.state().status, "ready");
+    assert.equal(result.state, "failed");
+    assert.equal(result.failureCode, scenario);
+    assert.equal(result.exitCode, undefined);
+    assert.equal(JSON.stringify(result).includes("private provider details"), false);
+    assert.deepEqual(await readdir(join(runtime, "leases")), []);
+  });
+}
+
+class SavingProvider extends DemoProvider {
+  saved;
+  async search() {
+    return [];
+  }
+  async create(site, login) {
+    this.saved = { site, ...login };
+    return { item_id: DEMO_ITEM, name: "New login", hosts: [site] };
+  }
+  async get(item, field, site) {
+    assert.equal(item, DEMO_ITEM);
+    assert.equal(site, this.saved.site);
+    return field === "login"
+      ? JSON.stringify({ username: this.saved.username, password: this.saved.password })
+      : this.saved[field];
+  }
+}
+
+for (const searchFails of [false, true]) {
+  test(`private save and allow once handles ${searchFails ? "failed" : "empty"} lookup without exposing the login`, async (t) => {
+    const provider = new SavingProvider();
+    if (searchFails)
+      provider.search = async () => {
+        throw new Error("private-search-output");
+      };
+    const { broker, caller, input, marker } = await setup(t, { provider });
+    const { execution, request } = await pending(broker, caller, input);
+    assert.equal(request.canSave, true);
+    assert.match(request.error, searchFails ? /lookup failed/ : /No matching login/);
+    await broker.action("human", {
+      type: "saveLogin",
+      requestId: request.requestId,
+      username: "private-user",
+      password: "private-password",
+    });
+    const result = await execution;
+    assert.equal(result.state, "completed");
+    assert.equal(result.exitCode, 0);
+    assert.equal(JSON.parse(await readFile(marker, "utf8")).received, true);
+    assert.deepEqual(provider.saved, {
+      site: "example.com",
+      username: "private-user",
+      password: "private-password",
+    });
+    assert.equal(broker.state().grants.length, 0);
+    const metadata = JSON.stringify({ state: broker.state(), result });
+    for (const secret of ["private-user", "private-password", "private-search-output"])
+      assert.equal(metadata.includes(secret), false);
+    await assert.rejects(
+      broker.action("human", {
+        type: "saveLogin",
+        requestId: request.requestId,
+        username: "",
+        password: "retry",
+      }),
+      /no longer/,
+    );
+  });
+}
+
+test("save failure leaves a private actionable error and a request that can be denied", async (t) => {
+  const provider = new SavingProvider();
+  provider.create = async () => {
+    throw new Error("private-vault-error");
+  };
+  const { broker, caller, input, runtime } = await setup(t, { provider });
+  const { execution, request } = await pending(broker, caller, input);
+  await assert.rejects(
+    broker.action("human", {
+      type: "saveLogin",
+      requestId: request.requestId,
+      username: "user",
+      password: "password",
+    }),
+    /Could not save/,
+  );
+  assert.equal(broker.state().requests[0].state, "pending");
+  assert.match(broker.state().requests[0].error, /Check Bitwarden before retrying/);
+  assert.equal(JSON.stringify(broker.state()).includes("private-vault-error"), false);
+  assert.deepEqual(await readdir(join(runtime, "leases")), []);
+  await broker.action("human", { type: "decide", requestId: request.requestId, decision: "deny" });
+  assert.equal((await execution).state, "denied");
+});
+
+test("stop during a save prevents credential delivery and concurrent saves", async (t) => {
+  const provider = new SavingProvider();
+  let finishSave;
+  const saving = new Promise((resolve) => {
+    finishSave = resolve;
+  });
+  const create = provider.create.bind(provider);
+  provider.create = async (...args) => {
+    await saving;
+    return create(...args);
+  };
+  const { broker, caller, input, runtime, marker } = await setup(t, { provider });
+  const { execution, request } = await pending(broker, caller, input);
+  const savingState = milestone(broker, (s) => s.requests.some((r) => r.state === "saving"));
+  const action = {
+    type: "saveLogin",
+    requestId: request.requestId,
+    username: "user",
+    password: "password",
+  };
+  const save = broker.action("human", action);
+  await savingState;
+  await assert.rejects(broker.action("human", action), /no longer/);
+  await broker.action("human", { type: "stop", requestId: request.requestId });
+  assert.equal((await execution).state, "released");
+  finishSave();
+  await save;
+  assert.deepEqual(await readdir(join(runtime, "leases")), []);
+  await assert.rejects(stat(marker), { code: "ENOENT" });
+});
+
+test("password-only requests can save without a username but login requests require both fields", async (t) => {
+  const provider = new SavingProvider();
+  const { broker, caller, input } = await setup(t, { provider });
+  const first = await pending(broker, caller, input);
+  await assert.rejects(
+    broker.action("human", {
+      type: "saveLogin",
+      requestId: first.request.requestId,
+      username: "",
+      password: "password",
+    }),
+    /requested login fields/,
+  );
+  await broker.action("human", {
+    type: "decide",
+    requestId: first.request.requestId,
+    decision: "deny",
+  });
+  await first.execution;
+  const second = await pending(broker, caller, { ...input, field: "password" });
+  await broker.action("human", {
+    type: "saveLogin",
+    requestId: second.request.requestId,
+    username: "",
+    password: "password",
+  });
+  assert.equal((await second.execution).state, "completed");
+});

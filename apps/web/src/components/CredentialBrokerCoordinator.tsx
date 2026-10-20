@@ -119,8 +119,10 @@ function EnvironmentBroker({
     };
   }, [state?.status, canAct, environmentId, run, viewId]);
   const pending =
-    state?.requests.filter((r) => ["pending", "awaiting_unlock"].includes(r.state)) ?? [];
-  const active = state?.requests.filter((r) => ["running", "preparing"].includes(r.state)) ?? [];
+    state?.requests.filter((r) => ["pending", "awaiting_unlock", "searching"].includes(r.state)) ??
+    [];
+  const active =
+    state?.requests.filter((r) => ["running", "preparing", "saving"].includes(r.state)) ?? [];
   useEffect(() => {
     report(environmentId, pending.length > 0);
     return () => report(environmentId, false);
@@ -357,16 +359,19 @@ function ApprovalCard({
   disabled: boolean;
   act: (input: CredentialBrokerAction) => Promise<void>;
 }) {
-  const [selection, setSelection] = useState<string | null>(
-    request.candidates.length === 1 ? request.candidates[0]!.id : null,
-  );
+  const [chosenId, setSelection] = useState<string | null>(null);
+  const selection = request.candidates.some((candidate) => candidate.id === chosenId)
+    ? chosenId
+    : request.candidates.length === 1
+      ? request.candidates[0]!.id
+      : null;
   const project = useProject(
     request.origin?.projectId
       ? { environmentId: request.origin.environmentId, projectId: request.origin.projectId }
       : null,
   );
   const environment = useEnvironment(request.origin?.environmentId ?? null);
-  const waitingForUnlock = request.state === "awaiting_unlock";
+  const waitingForUnlock = request.state !== "pending";
   const fields =
     request.field === "login"
       ? "Username + password"
@@ -427,9 +432,11 @@ function ApprovalCard({
           </div>
           {waitingForUnlock ? (
             <p className="text-sm text-muted-foreground">
-              Unlock the vault to choose a login. Access still needs your approval.
+              {request.state === "searching"
+                ? "Looking for a saved login…"
+                : "Unlock the vault to choose a login. Access still needs your approval."}
             </p>
-          ) : (
+          ) : request.candidates.length > 0 ? (
             <div className="space-y-2">
               <p className="text-xs font-medium text-muted-foreground">Share this saved login</p>
               <Select
@@ -452,12 +459,20 @@ function ApprovalCard({
                 </SelectPopup>
               </Select>
             </div>
-          )}
+          ) : null}
           {request.browser ? (
             <p className="text-xs text-muted-foreground">
               Browser · {request.browser.origin} · {request.browser.profile}
             </p>
           ) : null}
+          {request.error && (
+            <p role="alert" className="text-sm text-destructive">
+              {request.error}
+            </p>
+          )}
+          {request.canSave && request.state === "pending" && (
+            <SaveLogin request={request} disabled={disabled} act={act} />
+          )}
           {request.browser ? (
             <ManualBrowserLogin request={request} disabled={disabled} act={act} />
           ) : null}
@@ -677,6 +692,72 @@ function ManualBrowserLogin({
         <Button type="submit" disabled={disabled || busy}>
           {busy ? "Signing in…" : "Sign in once"}
         </Button>
+      </form>
+    </details>
+  );
+}
+
+function SaveLogin({
+  request,
+  disabled,
+  act,
+}: {
+  request: CredentialApproval;
+  disabled: boolean;
+  act: (input: CredentialBrokerAction) => Promise<void>;
+}) {
+  const username = useRef<HTMLInputElement>(null);
+  const password = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  return (
+    <details open={request.candidates.length === 0} className="space-y-2 text-sm">
+      <summary className="cursor-pointer">Enter and save a new login</summary>
+      <p className="text-xs text-muted-foreground">
+        Create a new Bitwarden login for {request.site} and share it once with this program. Enter
+        the site password here, not your vault master password. Values stay out of chat.
+      </p>
+      <form
+        autoComplete="off"
+        className="grid gap-2 sm:grid-cols-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (disabled || busy) return;
+          const login = {
+            username: username.current?.value ?? "",
+            password: password.current?.value ?? "",
+          };
+          if (username.current) username.current.value = "";
+          if (password.current) password.current.value = "";
+          setBusy(true);
+          void act({ type: "saveLogin", requestId: request.requestId, ...login }).finally(() =>
+            setBusy(false),
+          );
+        }}
+      >
+        <Input
+          ref={username}
+          aria-label="New login username"
+          placeholder="Username or email"
+          autoComplete="off"
+          maxLength={4096}
+          required={request.field !== "password"}
+          disabled={disabled || busy}
+        />
+        <Input
+          ref={password}
+          aria-label="New login password"
+          placeholder="Site password"
+          type="password"
+          autoComplete="new-password"
+          maxLength={4096}
+          required={request.field !== "username"}
+          disabled={disabled || busy}
+        />
+        <div className="sm:col-span-2">
+          <Button type="submit" disabled={disabled || busy}>
+            {busy ? "Saving…" : "Save to Bitwarden & allow once"}
+          </Button>
+        </div>
       </form>
     </details>
   );

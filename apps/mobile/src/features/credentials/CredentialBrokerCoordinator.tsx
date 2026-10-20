@@ -103,7 +103,8 @@ function EnvironmentBroker({
     return () => subscription.remove();
   }, [state?.status, canAct, environmentId, run, viewId]);
   const pending =
-    state?.requests.filter((r) => ["pending", "awaiting_unlock"].includes(r.state)) ?? [];
+    state?.requests.filter((r) => ["pending", "awaiting_unlock", "searching"].includes(r.state)) ??
+    [];
   const hasAttention = pending.length > 0 || !!state?.notices.length;
   const shown = focused && (open || hasAttention);
   useEffect(() => {
@@ -254,7 +255,7 @@ function EnvironmentBroker({
             />
           ))}
           {state?.requests
-            .filter((r) => ["running", "preparing"].includes(r.state))
+            .filter((r) => ["running", "preparing", "saving"].includes(r.state))
             .map((request) => (
               <View key={request.requestId} className="gap-2">
                 <Text className="text-foreground">
@@ -348,9 +349,12 @@ function Approval({
   const { environments } = useEnvironments();
   const environment = environments.find((e) => e.environmentId === request.origin?.environmentId);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [selection, setSelection] = useState<string | undefined>(
-    request.candidates.length === 1 ? request.candidates[0]!.id : undefined,
-  );
+  const [chosenId, setSelection] = useState<string | undefined>(undefined);
+  const selection = request.candidates.some((candidate) => candidate.id === chosenId)
+    ? chosenId
+    : request.candidates.length === 1
+      ? request.candidates[0]!.id
+      : undefined;
   return (
     <View className="gap-2 rounded-xl border border-border p-3">
       <Text className="text-xs text-foreground-muted">
@@ -410,13 +414,17 @@ function Approval({
       <Text numberOfLines={2} className="text-foreground">
         {request.reason}
       </Text>
-      {request.state === "awaiting_unlock" ? (
+      {request.state !== "pending" ? (
         <Text className="text-foreground-muted">
-          Unlock the vault to choose a login. Access still needs your approval.
+          {request.state === "searching"
+            ? "Looking for a saved login…"
+            : "Unlock the vault to choose a login. Access still needs your approval."}
         </Text>
       ) : (
         <>
-          <Text className="text-foreground-muted">Saved login</Text>
+          {request.candidates.length > 0 && (
+            <Text className="text-foreground-muted">Saved login</Text>
+          )}
           {request.candidates.map((c) => (
             <Button
               key={c.id}
@@ -432,6 +440,14 @@ function Approval({
           Browser · {request.browser.origin} · {request.browser.profile}
         </Text>
       ) : null}
+      {request.error && (
+        <Text accessibilityRole="alert" className="text-danger">
+          {request.error}
+        </Text>
+      )}
+      {request.canSave && request.state === "pending" && (
+        <SaveLogin request={request} disabled={disabled} act={act} />
+      )}
       {request.browser ? (
         <ManualBrowserLogin request={request} disabled={disabled} act={act} />
       ) : null}
@@ -477,7 +493,7 @@ function Approval({
       <Button
         label="Allow once"
         tone="primary"
-        disabled={disabled || request.state === "awaiting_unlock" || !selection}
+        disabled={disabled || request.state !== "pending" || !selection}
         onPress={() =>
           void act({
             type: "decide",
@@ -489,7 +505,7 @@ function Approval({
       />
       <Button
         label="Always allow"
-        disabled={disabled || request.state === "awaiting_unlock" || !selection || !request.origin}
+        disabled={disabled || request.state !== "pending" || !selection || !request.origin}
         onPress={() =>
           void act({
             type: "decide",
@@ -581,6 +597,98 @@ function ManualBrowserLogin({
           />
         </>
       ) : null}
+    </View>
+  );
+}
+
+function SaveLogin({
+  request,
+  disabled,
+  act,
+}: {
+  request: CredentialApproval;
+  disabled: boolean;
+  act: (input: CredentialBrokerAction) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(request.candidates.length === 0);
+  const [busy, setBusy] = useState(false);
+  const username = useRef("");
+  const password = useRef("");
+  const usernameInput = useRef<TextInputInstance>(null);
+  const passwordInput = useRef<TextInputInstance>(null);
+  const clear = () => {
+    username.current = "";
+    password.current = "";
+    usernameInput.current?.clear();
+    passwordInput.current?.clear();
+  };
+  return (
+    <View className="gap-2">
+      <Button
+        label={open ? "Hide new login" : "Enter and save a new login"}
+        tone="text"
+        disabled={disabled || busy}
+        onPress={() => {
+          clear();
+          setOpen(!open);
+        }}
+      />
+      {open && (
+        <>
+          <Text className="text-xs text-foreground-muted">
+            Create a new Bitwarden login for {request.site} and share it once with this program.
+            Enter the site password, not your vault master password. Values stay out of chat.
+          </Text>
+          <TextInput
+            ref={usernameInput}
+            accessibilityLabel="New login username"
+            placeholder="Username or email"
+            autoComplete="off"
+            autoCapitalize="none"
+            autoCorrect={false}
+            maxLength={4096}
+            editable={!disabled && !busy}
+            onChangeText={(value) => {
+              username.current = value;
+            }}
+            className="rounded-lg border border-border p-3 text-foreground"
+          />
+          <TextInput
+            ref={passwordInput}
+            accessibilityLabel="New login password"
+            placeholder="Site password"
+            secureTextEntry
+            autoComplete="off"
+            autoCapitalize="none"
+            autoCorrect={false}
+            maxLength={4096}
+            editable={!disabled && !busy}
+            onChangeText={(value) => {
+              password.current = value;
+            }}
+            className="rounded-lg border border-border p-3 text-foreground"
+          />
+          <Button
+            label={busy ? "Saving…" : "Save to Bitwarden & allow once"}
+            disabled={disabled || busy}
+            onPress={() => {
+              if (
+                disabled ||
+                busy ||
+                (request.field !== "password" && !username.current) ||
+                (request.field !== "username" && !password.current)
+              )
+                return;
+              const login = { username: username.current, password: password.current };
+              clear();
+              setBusy(true);
+              void act({ type: "saveLogin", requestId: request.requestId, ...login }).finally(() =>
+                setBusy(false),
+              );
+            }}
+          />
+        </>
+      )}
     </View>
   );
 }

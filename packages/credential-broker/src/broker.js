@@ -126,7 +126,7 @@ export class Broker {
       notices: this.notices(),
     };
   }
-  request(input, origin, consumerEnvironment, { allowManual = false } = {}) {
+  request(input, origin, consumerEnvironment, { allowManual = false, allowSave = false } = {}) {
     if (this.#closing) throw new BrokerError("Broker is shutting down.", 503);
     const data = parseRequest(input);
     if ([...this.#requests.values()].filter((r) => !terminal.has(r.state)).length >= 100)
@@ -134,6 +134,7 @@ export class Broker {
     const request = {
       ...data,
       allow_manual: allowManual,
+      allow_save: allowSave && typeof this.provider.create === "function",
       request_id: randomUUID(),
       state: data.site ? "searching" : "pending",
       created_at: this.now(),
@@ -163,22 +164,27 @@ export class Broker {
       const candidates = await this.provider.search(request.site);
       await this.sweep();
       if (request.state !== "searching" || this.#closing) return;
-      if (!candidates.length && !request.allow_manual) {
+      if (!candidates.length && !request.allow_manual && !request.allow_save) {
         request.state = "failed";
+        request.failure_code = "no_matching_login";
         request.error = "No matching login found for this site.";
       } else {
         request.candidates = candidates;
+        if (!candidates.length)
+          request.error = "No matching login found. Enter a login to save and use it.";
         request.state = "pending";
         this.offerApproval(request);
       }
     } catch {
       if (request.state === "searching") {
-        if (request.allow_manual) {
+        if (request.allow_manual || request.allow_save) {
           request.candidates = [];
+          request.error = "Vault lookup failed. You can still enter a login to save and use it.";
           request.state = "pending";
           this.offerApproval(request);
         } else {
           request.state = "failed";
+          request.failure_code = "vault_search_failed";
           request.error = "Vault login search failed; provider output is withheld.";
         }
       }
@@ -319,6 +325,7 @@ export class Broker {
     if (operator && request.candidates) result.candidates = request.candidates;
     if (operator) result.settled = !request.cleanup_pending;
     if (operator && request.origin) result.origin = request.origin;
+    if (operator) result.allow_save = request.allow_save === true;
     if (state === "active" && request.kind === "file") result.path = request.path;
     if (request.kind === "exec") {
       result.argv = request.argv;
@@ -377,6 +384,39 @@ export class Broker {
     if (failure)
       throw new BrokerError("Access stopped, but persisting grant revocation failed.", 500);
     return { grant_id: id, state: "revoked" };
+  }
+  async saveLogin(id, login) {
+    await this.sweep();
+    const request = this.find(id);
+    if (request.state !== "pending" || !request.allow_save || this.#closing)
+      throw new BrokerError("Request is no longer awaiting a saved login.", 409);
+    if (
+      typeof login.username !== "string" ||
+      typeof login.password !== "string" ||
+      login.username.length > 4096 ||
+      login.password.length > 4096 ||
+      (request.field !== "password" && !login.username) ||
+      (request.field !== "username" && !login.password)
+    )
+      throw new BrokerError("Enter the requested login fields.", 400);
+    this.#approvalControllers.get(id)?.abort();
+    request.state = "saving";
+    request.error = undefined;
+    try {
+      const candidate = await this.provider.create(request.site, login);
+      await this.sweep();
+      // Saving in the vault cannot authorize a caller that was stopped meanwhile.
+      if (request.state !== "saving" || this.#closing) return;
+      request.candidates.push(candidate);
+      request.state = "pending";
+      return await this.decide(id, true, candidate.item_id);
+    } catch {
+      if (request.state === "saving") {
+        request.error = "Could not confirm the saved login. Check Bitwarden before retrying.";
+        request.state = "pending";
+      }
+      throw new BrokerError("Could not save and use the login.", 502);
+    }
   }
   async decide(id, approve, itemId, always = false, automaticGrant) {
     await this.sweep();
@@ -518,7 +558,7 @@ export class Broker {
     }
     for (const request of this.#requests.values()) {
       if (
-        ["pending", "searching", "preparing"].includes(request.state) &&
+        ["pending", "searching", "saving", "preparing"].includes(request.state) &&
         request.approval_deadline !== null &&
         now >= request.approval_deadline
       ) {

@@ -117,7 +117,12 @@ test("CLI preserves safe admission diagnostics and terminal failure codes withou
         (code === "unknown" ? !error.code : error.code === code),
     );
   }
-  for (const failureCode of ["consumer_start_failed", "fake-secret"]) {
+  for (const failureCode of [
+    "no_matching_login",
+    "vault_search_failed",
+    "consumer_start_failed",
+    "fake-secret",
+  ]) {
     const result = await executeInT3(input, {
       endpoint: "https://fake.invalid/mcp",
       authorization: "Bearer fake-request-only",

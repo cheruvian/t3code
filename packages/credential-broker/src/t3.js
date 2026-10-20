@@ -90,6 +90,8 @@ export class T3CredentialBroker {
           hosts: c.hosts,
         })),
         ...(r.grant_id ? { grantId: r.grant_id } : {}),
+        canSave: r.allow_save === true,
+        ...(r.error ? { error: r.error } : {}),
       })),
       notices: snapshot.notices.map((n) => ({
         noticeId: n.notice_id,
@@ -263,6 +265,11 @@ export class T3CredentialBroker {
         input.candidateId,
         input.decision === "always",
       );
+    else if (input.type === "saveLogin")
+      await broker.saveLogin(input.requestId, {
+        username: input.username,
+        password: input.password,
+      });
     else if (input.type === "dismiss") broker.dismissNotice(input.noticeId);
     else if (input.type === "revoke") await broker.revokeGrant(input.grantId);
     else if (input.type === "stop") await broker.release(input.requestId);
@@ -348,6 +355,7 @@ export class T3CredentialBroker {
     const request = broker.request(parsed, origin, consumerEnvironment, {
       // Only the host-created private browser bridge can accept a manually entered login.
       allowManual: consumerEnvironment?.CB_BROWSER_ENDPOINT !== undefined,
+      allowSave: true,
     });
     return new Promise((resolve, reject) => {
       const finish = (r) => {

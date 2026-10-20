@@ -42,9 +42,9 @@ function loginValue(record, field) {
 export const DEMO_ITEM = "11111111-1111-4111-8111-111111111111";
 export const DEMO_PASSWORD = "demo-only-password-not-a-real-credential";
 
-function run(executable, args, env, timeout = 30_000) {
+function run(executable, args, env, timeout = 30_000, input) {
   return new Promise((resolve, reject) => {
-    execFile(
+    const child = execFile(
       executable,
       args,
       { env, timeout, maxBuffer: 2 * 1024 * 1024 },
@@ -72,6 +72,8 @@ function run(executable, args, env, timeout = 30_000) {
         } else resolve(stdout);
       },
     );
+    child.stdin.on("error", () => {});
+    child.stdin.end(input);
   });
 }
 
@@ -161,6 +163,39 @@ export class BitwardenProvider {
           : [];
       })
       .slice(0, 100);
+  }
+  async create(site, { username, password }) {
+    if (!this.#session) throw new BrokerError("Vault is locked.", 503);
+    const item = {
+      type: 1,
+      name: username ? `${site} (${username})` : site,
+      favorite: false,
+      reprompt: 0,
+      login: { username, password, uris: [{ uri: `https://${site}`, match: 0 }] },
+    };
+    try {
+      // stdin keeps even the encoded login out of process arguments and logs.
+      const raw = await this.runner(
+        this.executable,
+        ["create", "item"],
+        { ...this.env, BW_SESSION: this.#session },
+        30_000,
+        Buffer.from(JSON.stringify(item)).toString("base64"),
+      );
+      const record = JSON.parse(raw);
+      if (
+        !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(record.id) ||
+        record.type !== 1 ||
+        !matchingHosts(record, site).length
+      )
+        throw new Error();
+      return { item_id: record.id, name: item.name, hosts: [site] };
+    } catch {
+      throw new BrokerError(
+        "Could not confirm the saved login. Check Bitwarden before retrying.",
+        502,
+      );
+    }
   }
   async get(item, field, site) {
     if (!this.#session) throw new BrokerError("Vault is locked.", 503);

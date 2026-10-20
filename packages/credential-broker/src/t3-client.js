@@ -109,6 +109,8 @@ export async function executeInT3(
       ...(typeof result.exitCode === "number" ? { exit_code: result.exitCode } : {}),
       ...(typeof result.signal === "string" ? { signal: result.signal } : {}),
       ...([
+        "no_matching_login",
+        "vault_search_failed",
         "consumer_start_failed",
         "supervisor_start_failed",
         "credential_cleanup_failed",
