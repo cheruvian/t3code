@@ -1,17 +1,21 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { getDomain } from "tldts";
 import { BrokerError } from "./common.js";
 
 function matchingHosts(record, site) {
+  const domain = getDomain(site, { allowPrivateDomains: true });
   return [
     ...new Set(
       (record.login?.uris ?? []).flatMap(({ uri }) => {
         try {
-          const url = new URL(uri);
+          const url = new URL(uri.includes("://") ? uri : `https://${uri}`);
           return ["http:", "https:"].includes(url.protocol) &&
             !url.username &&
             !url.password &&
-            (url.hostname === site || (site.includes(".") && url.hostname.endsWith(`.${site}`)))
+            (url.hostname === site ||
+              (domain !== null &&
+                getDomain(url.hostname, { allowPrivateDomains: true }) === domain))
             ? [url.hostname]
             : [];
         } catch {

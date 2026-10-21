@@ -13,6 +13,62 @@ const input = {
   ttl_seconds: 5,
 };
 const secondId = "22222222-2222-4222-8222-222222222222";
+for (const { site, uri, matches } of [
+  { site: "secure.chase.com", uri: "https://chase.com", matches: true },
+  { site: "secure.chase.com", uri: "https://www.chase.com/login", matches: true },
+  { site: "secure.chase.com", uri: "chase.com", matches: true },
+  { site: "chase.com", uri: "https://secure.chase.com", matches: true },
+  { site: "secure.chase.com", uri: "https://chase.com.evil.test", matches: false },
+  { site: "secure.chase.com", uri: "https://evil-chase.com", matches: false },
+  { site: "secure.chase.com", uri: "https://com", matches: false },
+  { site: "secure.chase.com", uri: "https://user:password@chase.com", matches: false },
+  { site: "login.bank.co.uk", uri: "https://bank.co.uk", matches: true },
+  { site: "login.bank.co.uk", uri: "https://other.co.uk", matches: false },
+  { site: "login.bank.co.uk", uri: "https://co.uk", matches: false },
+  { site: "login.tenant.github.io", uri: "https://tenant.github.io", matches: true },
+  { site: "tenant.github.io", uri: "https://other.github.io", matches: false },
+  { site: "127.0.0.1", uri: "http://127.0.0.1/login", matches: true },
+  { site: "127.0.0.1", uri: "http://127.0.0.2", matches: false },
+]) {
+  test(`${site} ${matches ? "matches" : "rejects"} saved URI ${uri} at search and delivery`, async () => {
+    const record = {
+      id: DEMO_ITEM,
+      type: 1,
+      name: "Fake login",
+      login: { username: "fake-user", password: "fake-password", uris: [{ uri }] },
+    };
+    const calls = [];
+    const provider = new BitwardenProvider({
+      passwordPrompt: async () => "fake-master",
+      runner: async (_, args) => {
+        calls.push(args);
+        return args[0] === "unlock"
+          ? "fake-session"
+          : args[0] === "list"
+            ? JSON.stringify([record])
+            : args[0] === "get"
+              ? JSON.stringify(record)
+              : "";
+      },
+    });
+    await provider.initialize();
+    try {
+      const candidates = await provider.search(site);
+      assert.equal(candidates.length, matches ? 1 : 0);
+      assert.deepEqual(calls[2], ["list", "items", "--url", `https://${site}`, "--raw"]);
+      if (matches) {
+        assert.deepEqual(JSON.parse(await provider.get(DEMO_ITEM, "login", site)), {
+          username: "fake-user",
+          password: "fake-password",
+        });
+      } else {
+        await assert.rejects(provider.get(DEMO_ITEM, "login", site), /invalid login/);
+      }
+    } finally {
+      await provider.close();
+    }
+  });
+}
 test("local hostname search matches the exact host and excludes lookalikes", async () => {
   assert.equal(parseRequest({ ...input, site: "heihei" }).site, "heihei");
   for (const site of [
