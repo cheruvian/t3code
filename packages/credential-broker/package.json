@@ -36,6 +36,7 @@
     "embed-programs": "node scripts/embed-programs.mjs"
   },
   "dependencies": {
+    "tldts": "catalog:",
     "zod": "4.3.6"
   },
   "devDependencies": {
