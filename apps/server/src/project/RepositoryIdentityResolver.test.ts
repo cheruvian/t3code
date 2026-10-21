@@ -40,6 +40,35 @@ const layerRepositoryIdentityResolverTest = (options: {
   ).pipe(Layer.provide(ProcessRunner.layer));
 
 it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
+  it.effect("recognizes partial-clone remotes with fetch filter annotations", () => {
+    const layerProcessRunner = Layer.succeed(ProcessRunner.ProcessRunner, {
+      run: (input) =>
+        Effect.succeed({
+          stdout: input.args.includes("rev-parse")
+            ? "/repo\n"
+            : "origin\tgit@github.com:renderwolfai/amplify-pipeline.git (fetch) [blob:none]\norigin\tgit@github.com:renderwolfai/amplify-pipeline.git (push)\n",
+          stderr: "",
+          code: ChildProcessSpawner.ExitCode(0),
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          stdoutInvalidUtf8: false,
+          stderrInvalidUtf8: false,
+        }),
+    });
+    const layerResolver = Layer.effect(
+      RepositoryIdentityResolver.RepositoryIdentityResolver,
+      RepositoryIdentityResolver.make(),
+    ).pipe(Layer.provide(layerProcessRunner));
+
+    return Effect.gen(function* () {
+      const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+      const identity = yield* resolver.resolve("/repo");
+      expect(identity?.canonicalKey).toBe("github.com/renderwolfai/amplify-pipeline");
+      expect(identity?.locator.remoteName).toBe("origin");
+    }).pipe(Effect.provide(layerResolver));
+  });
+
   it.effect("refreshes the Git root only when requested", () => {
     const calls: Array<ReadonlyArray<string>> = [];
     let rootPath = "/repo";
