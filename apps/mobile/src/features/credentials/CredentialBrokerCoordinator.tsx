@@ -1,3 +1,8 @@
+import {
+  credentialDialogAttentionKey,
+  reconcileCredentialDialog,
+  type CredentialDialogPresentation,
+} from "@t3tools/client-runtime/state/credentialBroker";
 import type { ViewInstance, TextInputInstance } from "react-native";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -21,7 +26,11 @@ import { useEnvironmentScope } from "../../state/session";
 import { credentialBroker } from "../../state/credentialBroker";
 import { useAtomCommand } from "../../state/use-atom-command";
 
-export function CredentialBrokerCoordinator() {
+export function CredentialBrokerCoordinator({
+  viewedThread,
+}: {
+  readonly viewedThread: { readonly environmentId: string; readonly threadId: string } | null;
+}) {
   const { environments } = useEnvironments();
   const [active, setActive] = useState<EnvironmentId>();
   const attention = useRef(new Set<EnvironmentId>());
@@ -42,6 +51,7 @@ export function CredentialBrokerCoordinator() {
           environmentId={e.environmentId}
           environmentLabel={e.label}
           focused={active === e.environmentId}
+          viewedThread={viewedThread}
           select={() => setActive(e.environmentId)}
           report={report}
         />
@@ -53,6 +63,7 @@ type BrokerProps = {
   environmentId: EnvironmentId;
   environmentLabel: string;
   focused: boolean;
+  viewedThread: { readonly environmentId: string; readonly threadId: string } | null;
   select: () => void;
   report: (id: EnvironmentId, attention: boolean) => void;
 };
@@ -65,6 +76,7 @@ function EnvironmentBroker({
   environmentId,
   environmentLabel,
   focused,
+  viewedThread,
   select,
   report,
 }: BrokerProps) {
@@ -76,7 +88,12 @@ function EnvironmentBroker({
   });
   const canAct = useAtomValue(credentialBroker.action.permissionAtom(environmentId));
   const state = AsyncResult.isSuccess(result) ? result.value : undefined;
-  const [open, setOpen] = useState(false);
+  const viewKey = JSON.stringify(viewedThread);
+  const [presentation, setPresentation] = useState<CredentialDialogPresentation>({
+    viewKey,
+    attentionKey: null,
+    open: false,
+  });
   const [managementOpen, setManagementOpen] = useState(false);
   const nativeVisible = useRef(false);
   const noticeViews = useRef(new Map<string, ViewInstance>());
@@ -107,14 +124,15 @@ function EnvironmentBroker({
   const pending =
     state?.requests.filter((r) => ["pending", "awaiting_unlock", "searching"].includes(r.state)) ??
     [];
-  const hasAttention = pending.length > 0 || !!state?.notices.length;
-  const [lastPendingId, setLastPendingId] = useState<string>();
-  const pendingId = pending[0]?.requestId;
-  if (pendingId && pendingId !== lastPendingId) {
-    setLastPendingId(pendingId);
-    setOpen(true);
-  }
-  const shown = focused && (open || hasAttention);
+  const attentionKey =
+    credentialDialogAttentionKey(pending, environmentId, viewedThread) ??
+    (state?.notices.length ? JSON.stringify(state.notices.map((notice) => notice.noticeId)) : null);
+  const nextPresentation = reconcileCredentialDialog(presentation, viewKey, attentionKey);
+  if (nextPresentation !== presentation) setPresentation(nextPresentation);
+  const open = nextPresentation.open;
+  const setOpen = (open: boolean) => setPresentation({ ...nextPresentation, open });
+  const hasAttention = open;
+  const shown = focused && open;
   useEffect(() => {
     report(environmentId, hasAttention);
     return () => report(environmentId, false);
@@ -144,7 +162,11 @@ function EnvironmentBroker({
   return (
     <>
       <Button
-        label={"Credential access · " + environmentLabel}
+        label={
+          "Credential access · " +
+          environmentLabel +
+          (pending.length ? ` · ${pending.length} waiting` : "")
+        }
         onPress={() => {
           select();
           setOpen(true);
@@ -161,7 +183,7 @@ function EnvironmentBroker({
           nativeVisible.current = false;
         }}
         onRequestClose={() => {
-          if (!pending.length && !state?.notices.length) setOpen(false);
+          setOpen(false);
         }}
       >
         <ScrollView
@@ -169,6 +191,10 @@ function EnvironmentBroker({
           scrollEventThrottle={100}
           contentContainerClassName="gap-4 bg-screen px-5 pb-8 pt-16"
         >
+          <Button
+            label={pending.length ? "Hide for now" : "Close"}
+            onPress={() => setOpen(false)}
+          />
           <Text className="text-2xl font-t3-semibold text-foreground">
             {pending.length ? "Credential request" : "Credential access"}
           </Text>
@@ -252,16 +278,22 @@ function EnvironmentBroker({
               />
             </View>
           ))}
-          {pending.map((request) => (
-            <Approval
-              key={request.requestId}
-              request={request}
-              environmentId={environmentId}
-              environmentLabel={environmentLabel}
-              disabled={!canAct}
-              act={act}
-            />
-          ))}
+          {[...pending]
+            .sort(
+              (a, b) =>
+                Number(b.origin?.threadId === viewedThread?.threadId) -
+                Number(a.origin?.threadId === viewedThread?.threadId),
+            )
+            .map((request) => (
+              <Approval
+                key={request.requestId}
+                request={request}
+                environmentId={environmentId}
+                environmentLabel={environmentLabel}
+                disabled={!canAct}
+                act={act}
+              />
+            ))}
           {state?.requests
             .filter((r) =>
               ["expired", "failed", "denied", "completed", "released", "revoked"].includes(r.state),

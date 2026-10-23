@@ -1,3 +1,9 @@
+import { useParams } from "@tanstack/react-router";
+import {
+  credentialDialogAttentionKey,
+  reconcileCredentialDialog,
+  type CredentialDialogPresentation,
+} from "@t3tools/client-runtime/state/credentialBroker";
 import { randomUUID } from "../lib/utils";
 import { createPortal } from "react-dom";
 import { useAtomValue } from "@effect/atom-react";
@@ -78,7 +84,7 @@ function AuthorizedBroker(props: BrokerProps) {
     <EnvironmentBroker {...props} />
   ) : null;
 }
-function EnvironmentBroker({
+export function EnvironmentBroker({
   environmentId,
   active: focused,
   select,
@@ -94,7 +100,17 @@ function EnvironmentBroker({
     reportDefect: false,
   });
   const permission = useAtomValue(credentialBroker.action.permissionAtom(environmentId));
-  const [open, setOpen] = useState(false);
+  const route = useParams({ strict: false });
+  const viewedThread =
+    route.environmentId && route.threadId
+      ? { environmentId: route.environmentId, threadId: route.threadId }
+      : null;
+  const viewKey = JSON.stringify(viewedThread);
+  const [presentation, setPresentation] = useState<CredentialDialogPresentation>({
+    viewKey,
+    attentionKey: null,
+    open: false,
+  });
   const [error, setError] = useState<string>();
   const state = AsyncResult.isSuccess(result) ? result.value : undefined;
   const canAct = permission;
@@ -121,18 +137,17 @@ function EnvironmentBroker({
   const pending =
     state?.requests.filter((r) => ["pending", "awaiting_unlock", "searching"].includes(r.state)) ??
     [];
-  const [lastPendingId, setLastPendingId] = useState<string>();
-  const pendingId = pending[0]?.requestId;
-  if (pendingId && pendingId !== lastPendingId) {
-    setLastPendingId(pendingId);
-    setOpen(true);
-  }
+  const attentionKey = credentialDialogAttentionKey(pending, environmentId, viewedThread);
+  const nextPresentation = reconcileCredentialDialog(presentation, viewKey, attentionKey);
+  if (nextPresentation !== presentation) setPresentation(nextPresentation);
+  const open = nextPresentation.open;
+  const setOpen = (open: boolean) => setPresentation({ ...nextPresentation, open });
   const active =
     state?.requests.filter((r) => ["running", "preparing", "saving"].includes(r.state)) ?? [];
   useEffect(() => {
-    report(environmentId, pending.length > 0);
+    report(environmentId, open);
     return () => report(environmentId, false);
-  }, [environmentId, pending.length, report]);
+  }, [environmentId, open, report]);
   return (
     <>
       <div>
@@ -147,11 +162,8 @@ function EnvironmentBroker({
           <KeyRoundIcon /> Credential access · {environmentLabel} {pending.length || ""}
         </Button>
       </div>
-      <Dialog open={focused && (open || pending.length > 0)} onOpenChange={setOpen}>
-        <DialogPopup
-          size={pending.length ? "wide" : "default"}
-          showCloseButton={pending.length === 0}
-        >
+      <Dialog open={focused && open} onOpenChange={setOpen}>
+        <DialogPopup size={pending.length ? "wide" : "default"} showCloseButton>
           <DialogHeader>
             <DialogTitle>{pending.length ? "Credential request" : "Credential access"}</DialogTitle>
             {pending.length === 0 && (
@@ -159,11 +171,18 @@ function EnvironmentBroker({
             )}
             <DialogDescription>
               {pending.length
-                ? "Review who is asking and choose what to share."
+                ? "Review who is asking and choose what to share. Hide this request to keep working; it returns when you open its thread."
                 : "Manage your vault and saved permissions."}
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
+            {pending.length > 0 && (
+              <div className="mb-3 flex justify-end">
+                <Button variant="outline" size="sm" onClick={() => setOpen(false)}>
+                  Hide for now
+                </Button>
+              </div>
+            )}
             <div className="space-y-4">
               {error && (
                 <p role="alert" className="text-sm text-destructive">
@@ -193,15 +212,21 @@ function EnvironmentBroker({
                   unlock={(password, executable) => act({ type: "unlock", password, executable })}
                 />
               )}
-              {pending.map((request) => (
-                <ApprovalCard
-                  key={request.requestId}
-                  request={request}
-                  environmentLabel={environmentLabel}
-                  disabled={!canAct}
-                  act={act}
-                />
-              ))}
+              {pending
+                .toSorted(
+                  (a, b) =>
+                    Number(b.origin?.threadId === viewedThread?.threadId) -
+                    Number(a.origin?.threadId === viewedThread?.threadId),
+                )
+                .map((request) => (
+                  <ApprovalCard
+                    key={request.requestId}
+                    request={request}
+                    environmentLabel={environmentLabel}
+                    disabled={!canAct}
+                    act={act}
+                  />
+                ))}
               {state?.status === "ready" && pending.length === 0 && (
                 <p className="text-sm text-muted-foreground">
                   Your vault is ready. New requests ask for permission here.

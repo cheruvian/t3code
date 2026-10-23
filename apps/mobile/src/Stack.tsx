@@ -1,3 +1,4 @@
+import { parseActiveThreadPath } from "./features/keyboard/hardwareKeyboardCommands";
 import { CredentialBrokerCoordinator } from "./features/credentials/CredentialBrokerCoordinator";
 import { ComponentCatalogScreen } from "./features/development/ComponentCatalogScreen";
 import { PullRequestGuideStopScreen } from "./features/pull-requests/guide/PullRequestGuideScreen";
@@ -612,7 +613,9 @@ function RootStackLayout(props: {
   return (
     <HardwareKeyboardCommandProvider pathname={pathname}>
       <ThreadOutboxDrainWorker />
-      <CredentialBrokerCoordinator />
+      <CredentialBrokerCoordinator
+        viewedThread={parseActiveThreadPath(workspaceLocation.pathname)}
+      />
       <ShowcaseCaptureCoordinator pathname={pathname} />
       <ExistingThreadSettingsRouteProvider>
         <AndroidWorkspaceTabsProvider>
