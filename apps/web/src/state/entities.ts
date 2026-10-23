@@ -232,6 +232,19 @@ export function useEnvironmentSupportsServerBrowser(environmentId: EnvironmentId
   );
 }
 
+export function useEnvironmentSupportsNativeDesktopBrowser(environmentId: EnvironmentId): boolean {
+  return (
+    useServerConfigs().get(environmentId)?.environment.capabilities.nativeDesktopBrowser === true
+  );
+}
+
+export function readEnvironmentSupportsNativeDesktopBrowser(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .nativeDesktopBrowser === true
+  );
+}
+
 export function readEnvironmentSupportsServerBrowser(environmentId: EnvironmentId): boolean {
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities

@@ -57,6 +57,7 @@ export const CredentialExecution = Schema.Struct({
 });
 export type CredentialExecution = typeof CredentialExecution.Type;
 export const CredentialApproval = Schema.Struct({
+  searchPhase: Schema.optional(Schema.Literals(["syncing", "matching"])),
   canSave: Schema.optional(Schema.Boolean),
   error: Schema.optional(Schema.String),
   requestId: Schema.String,

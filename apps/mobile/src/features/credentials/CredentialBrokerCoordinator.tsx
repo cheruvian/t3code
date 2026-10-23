@@ -29,7 +29,9 @@ export function CredentialBrokerCoordinator() {
     if (hasAttention) attention.current.add(id);
     else attention.current.delete(id);
     setActive((current) =>
-      current && attention.current.has(current) ? current : attention.current.values().next().value,
+      current && attention.current.has(current)
+        ? current
+        : (attention.current.values().next().value ?? current),
     );
   }, []);
   return (
@@ -106,6 +108,12 @@ function EnvironmentBroker({
     state?.requests.filter((r) => ["pending", "awaiting_unlock", "searching"].includes(r.state)) ??
     [];
   const hasAttention = pending.length > 0 || !!state?.notices.length;
+  const [lastPendingId, setLastPendingId] = useState<string>();
+  const pendingId = pending[0]?.requestId;
+  if (pendingId && pendingId !== lastPendingId) {
+    setLastPendingId(pendingId);
+    setOpen(true);
+  }
   const shown = focused && (open || hasAttention);
   useEffect(() => {
     report(environmentId, hasAttention);
@@ -254,6 +262,23 @@ function EnvironmentBroker({
               act={act}
             />
           ))}
+          {state?.requests
+            .filter((r) =>
+              ["expired", "failed", "denied", "completed", "released", "revoked"].includes(r.state),
+            )
+            .slice(0, 3)
+            .map((request) => (
+              <Text
+                key={request.requestId}
+                accessibilityLiveRegion="polite"
+                className="text-foreground-muted"
+              >
+                {request.site} ·{" "}
+                {request.state === "expired"
+                  ? "Request expired. Ask the agent for a new request to continue."
+                  : (request.error ?? `Request ${request.state}.`)}
+              </Text>
+            ))}
           {state?.requests
             .filter((r) => ["running", "preparing", "saving"].includes(r.state))
             .map((request) => (
@@ -417,13 +442,24 @@ function Approval({
       {request.state !== "pending" ? (
         <Text className="text-foreground-muted">
           {request.state === "searching"
-            ? "Looking for a saved login…"
+            ? request.searchPhase === "syncing"
+              ? "Syncing Bitwarden… You can deny this request while the vault updates."
+              : "Searching Bitwarden for matching accounts… You can deny this request while the search runs."
             : "Unlock the vault to choose a login. Access still needs your approval."}
         </Text>
       ) : (
         <>
+          {request.candidates.length === 0 && (
+            <Text accessibilityLiveRegion="polite" className="text-foreground-muted">
+              {request.error
+                ? "No accounts available for approval."
+                : "No matching accounts found."}
+            </Text>
+          )}
           {request.candidates.length > 0 && (
-            <Text className="text-foreground-muted">Saved login</Text>
+            <Text className="text-foreground-muted">
+              {request.candidates.length} matching accounts · Choose a login to approve
+            </Text>
           )}
           {request.candidates.map((c) => (
             <Button

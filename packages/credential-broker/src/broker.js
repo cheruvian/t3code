@@ -161,7 +161,11 @@ export class Broker {
   }
   async search(request) {
     try {
-      const candidates = await this.provider.search(request.site);
+      const candidates = await this.provider.search(request.site, (phase) => {
+        if (request.state !== "searching" || !["syncing", "matching"].includes(phase)) return;
+        request.search_phase = phase;
+        this.changed();
+      });
       await this.sweep();
       if (request.state !== "searching" || this.#closing) return;
       if (!candidates.length && !request.allow_manual && !request.allow_save) {
@@ -322,6 +326,7 @@ export class Broker {
     if (request.grant_id) result.grant_id = request.grant_id;
     if (request.auto_approved) result.auto_approved = true;
     if (request.site) result.site = request.site;
+    if (operator && request.search_phase) result.search_phase = request.search_phase;
     if (operator && request.candidates) result.candidates = request.candidates;
     if (operator) result.settled = !request.cleanup_pending;
     if (operator && request.origin) result.origin = request.origin;
@@ -421,7 +426,7 @@ export class Broker {
   async decide(id, approve, itemId, always = false, automaticGrant) {
     await this.sweep();
     const request = this.find(id);
-    if (request.state !== "pending")
+    if (request.state !== "pending" && !(request.state === "searching" && !approve))
       throw new BrokerError("Request is no longer awaiting approval.", 409);
     this.#approvalControllers.get(id)?.abort();
     if (!approve) {

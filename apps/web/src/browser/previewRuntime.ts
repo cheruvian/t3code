@@ -7,6 +7,8 @@ import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 import {
   readEnvironmentSupportsServerBrowser,
+  readEnvironmentSupportsNativeDesktopBrowser,
+  useEnvironmentSupportsNativeDesktopBrowser,
   useEnvironmentSupportsServerBrowser,
 } from "~/state/entities";
 
@@ -45,9 +47,11 @@ export function rendersServerTabNatively(
   environmentId: EnvironmentId,
   primaryEnvironmentId: EnvironmentId | null,
   snapshot: Pick<PreviewSessionSnapshot, "runtime"> | null | undefined,
+  nativeDesktopBrowser = readEnvironmentSupportsNativeDesktopBrowser(environmentId),
 ): boolean {
   return (
     isElectron &&
+    nativeDesktopBrowser &&
     snapshot?.runtime === "server" &&
     primaryEnvironmentId !== null &&
     environmentId === primaryEnvironmentId
@@ -58,5 +62,11 @@ export function useRendersServerTabNatively(
   environmentId: EnvironmentId,
   snapshot: Pick<PreviewSessionSnapshot, "runtime"> | null | undefined,
 ): boolean {
-  return rendersServerTabNatively(environmentId, useAtomValue(primaryEnvironmentIdAtom), snapshot);
+  const nativeDesktopBrowser = useEnvironmentSupportsNativeDesktopBrowser(environmentId);
+  return rendersServerTabNatively(
+    environmentId,
+    useAtomValue(primaryEnvironmentIdAtom),
+    snapshot,
+    nativeDesktopBrowser,
+  );
 }

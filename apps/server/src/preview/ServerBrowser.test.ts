@@ -185,6 +185,7 @@ let keyCopy = "";
 let focusedFrame: ReturnType<typeof makeFrame> | null = null;
 let contextFailure: Error | null = null;
 let desktopRendersNext = false;
+let desktopUnavailable = false;
 const desktopDetaches = new NodeEvents.EventEmitter();
 const desktopTabs = new Set<string>();
 const desktopRenders = (tabId: string) => {
@@ -248,7 +249,9 @@ const dependencies = Layer.mergeAll(
     installed: Effect.die("mock Chromium does not need an executable"),
   }),
   Layer.succeed(DesktopChannel.DesktopBrowserChannel, {
-    available: true,
+    get available() {
+      return desktopUnavailable || desktopRendersNext || desktopTabs.size > 0;
+    },
     awaitAttached: (key) => Effect.sync(() => desktopRenders(key.tabId)),
     detached: Stream.callback<{ threadId: string; tabId: string }>((queue) =>
       Effect.acquireRelease(
@@ -322,6 +325,7 @@ beforeEach(() => {
   focusedFrame = null;
   desktopTabs.clear();
   desktopRendersNext = false;
+  desktopUnavailable = false;
   releasedDesktopTabs.length = 0;
   desktopConnections.length = 0;
   settledThreads.clear();
@@ -1884,4 +1888,20 @@ it.effect(
         expect(wrongAgent.code).toBe("browser_unavailable");
       }).pipe(Effect.provide(layer)),
     ),
+);
+
+it.live("a missing desktop attachment cannot silently create a separate headless session", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* Broker.PreviewAutomationBroker;
+      yield* Effect.yieldNow;
+      desktopUnavailable = true;
+      const result = yield* broker
+        .invoke({ scope: asSession("agent-missing-desktop"), operation: "open", input: {} })
+        .pipe(Effect.asVoid, Effect.flip);
+      expect(result.message).toContain("desktop browser tab is not attached");
+      expect(contexts).toEqual([]);
+      expect(desktopConnections).toEqual([]);
+    }),
+  ).pipe(Effect.provide(layer)),
 );

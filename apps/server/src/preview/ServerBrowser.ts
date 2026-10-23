@@ -798,7 +798,14 @@ const make = Effect.gen(function* () {
             { threadId: snapshot.threadId, tabId: snapshot.tabId },
             DESKTOP_ATTACH_TIMEOUT,
           ),
-        )
+        ).then((attached) => {
+          if (!attached)
+            throw new ServerBrowserPage.ServerBrowserOperationError(
+              "PreviewAutomationDesktopUnavailableError",
+              "The desktop browser tab is not attached. Open the Browser panel in the hosting desktop app and try again. Automation has not opened a separate browser session.",
+            );
+          return true;
+        })
       : Promise.resolve(false);
 
   /** Connects to the desktop's page for a tab, which it renders and the server drives. */

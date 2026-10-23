@@ -347,6 +347,14 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
           ),
         );
 
+      expect((yield* describeWith({})).capabilities.nativeDesktopBrowser).toBe(false);
+      expect((yield* describeWith({ desktopBrowserFd: 3 })).capabilities.nativeDesktopBrowser).toBe(
+        false,
+      );
+      expect(
+        (yield* describeWith({ desktopBrowserFd: 3, desktopBrowserControlFd: 4 })).capabilities
+          .nativeDesktopBrowser,
+      ).toBe(true);
       const withFd = yield* describeWith({ mode: "desktop", desktopTelemetryControlFd: 5 });
       expect(withFd.capabilities.serverSelfUpdate).toBe("desktop-managed");
       expect(withFd.capabilities.desktopAppUpdate).toBe(true);

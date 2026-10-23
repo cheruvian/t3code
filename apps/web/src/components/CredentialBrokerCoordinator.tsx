@@ -42,7 +42,7 @@ export function CredentialBrokerCoordinator() {
     setActiveId((current) =>
       current && pendingIds.current.has(current)
         ? current
-        : pendingIds.current.values().next().value,
+        : (pendingIds.current.values().next().value ?? current),
     );
   }, []);
   return (
@@ -121,6 +121,12 @@ function EnvironmentBroker({
   const pending =
     state?.requests.filter((r) => ["pending", "awaiting_unlock", "searching"].includes(r.state)) ??
     [];
+  const [lastPendingId, setLastPendingId] = useState<string>();
+  const pendingId = pending[0]?.requestId;
+  if (pendingId && pendingId !== lastPendingId) {
+    setLastPendingId(pendingId);
+    setOpen(true);
+  }
   const active =
     state?.requests.filter((r) => ["running", "preparing", "saving"].includes(r.state)) ?? [];
   useEffect(() => {
@@ -170,7 +176,9 @@ function EnvironmentBroker({
                 </p>
               )}
               {!state && (
-                <p className="text-sm text-muted-foreground">Connecting to Credential Broker…</p>
+                <p role="status" className="text-sm text-muted-foreground">
+                  Connecting to Credential Broker…
+                </p>
               )}
               {state?.status === "unsupported" && (
                 <p className="text-sm">
@@ -199,6 +207,30 @@ function EnvironmentBroker({
                   Your vault is ready. New requests ask for permission here.
                 </p>
               )}
+              {state?.requests
+                .filter((request) =>
+                  ["expired", "failed", "denied", "completed", "released", "revoked"].includes(
+                    request.state,
+                  ),
+                )
+                .slice(0, 3)
+                .map((request) => (
+                  <p
+                    key={request.requestId}
+                    role="status"
+                    className="text-sm text-muted-foreground"
+                  >
+                    {request.site} ·{" "}
+                    {request.state === "expired"
+                      ? "Request expired. No further access is allowed. Ask the agent for a new request to continue."
+                      : request.state === "failed"
+                        ? (request.error ??
+                          "Request failed. Review the request before trying again.")
+                        : request.state === "completed"
+                          ? "Program finished. Check its result before continuing."
+                          : `Request ${request.state}.`}
+                  </p>
+                ))}
               {active.map((request) => (
                 <div
                   key={request.requestId}
@@ -348,7 +380,7 @@ function VaultUnlock({
     </form>
   );
 }
-function ApprovalCard({
+export function ApprovalCard({
   request,
   environmentLabel,
   disabled,
@@ -431,14 +463,20 @@ function ApprovalCard({
             <p className="line-clamp-2 break-words text-sm">{request.reason}</p>
           </div>
           {waitingForUnlock ? (
-            <p className="text-sm text-muted-foreground">
+            <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
               {request.state === "searching"
-                ? "Looking for a saved login…"
+                ? request.searchPhase === "syncing"
+                  ? "Syncing Bitwarden… You can deny this request while the vault updates."
+                  : "Searching Bitwarden for matching accounts… You can deny this request while the search runs."
                 : "Unlock the vault to choose a login. Access still needs your approval."}
             </p>
           ) : request.candidates.length > 0 ? (
             <div className="space-y-2">
-              <p className="text-xs font-medium text-muted-foreground">Share this saved login</p>
+              <p className="text-xs font-medium text-muted-foreground">
+                {request.candidates.length} matching{" "}
+                {request.candidates.length === 1 ? "account" : "accounts"} · Choose a login to
+                approve
+              </p>
               <Select
                 value={selection}
                 onValueChange={setSelection}
@@ -459,7 +497,13 @@ function ApprovalCard({
                 </SelectPopup>
               </Select>
             </div>
-          ) : null}
+          ) : (
+            <p role="status" className="text-sm text-muted-foreground">
+              {request.error
+                ? "No accounts available for approval."
+                : "No matching accounts found."}
+            </p>
+          )}
           {request.browser ? (
             <p className="text-xs text-muted-foreground">
               Browser · {request.browser.origin} · {request.browser.profile}

@@ -942,3 +942,34 @@ test("password-only requests can save without a username but login requests requ
   });
   assert.equal((await second.execution).state, "completed");
 });
+
+test("search progress reaches presenters before results and denial cancels the pending request", async (t) => {
+  let complete;
+  const gate = new Promise((resolve) => {
+    complete = resolve;
+  });
+  const provider = new DemoProvider();
+  provider.search = async (_site, progress) => {
+    progress("syncing");
+    await gate;
+    progress("matching");
+    return [{ item_id: DEMO_ITEM, name: "Synthetic account", hosts: ["example.com"] }];
+  };
+  const { broker, caller, input } = await setup(t, { provider });
+  const searching = milestone(broker, (s) =>
+    s.requests.some((r) => r.state === "searching" && r.searchPhase === "syncing"),
+  );
+  const execution = broker.execute(caller, input);
+  const state = await searching;
+  const request = state.requests.find((r) => r.state === "searching");
+  assert.deepEqual(request.candidates, []);
+  await assert.rejects(
+    broker.action("human", { type: "decide", requestId: request.requestId, decision: "once" }),
+    /no longer awaiting approval/,
+  );
+  await broker.action("human", { type: "decide", requestId: request.requestId, decision: "deny" });
+  assert.equal((await execution).state, "denied");
+  complete();
+  await gate;
+  assert.equal(broker.state().requests[0].state, "denied");
+});

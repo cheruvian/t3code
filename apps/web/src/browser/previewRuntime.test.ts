@@ -2,26 +2,38 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
+  electron: false,
   desktop: false,
   primary: null as string | null,
   serverBrowser: new Set<string>(),
 }));
 
-vi.mock("~/env", () => ({ isElectron: false }));
+vi.mock("~/env", () => ({
+  get isElectron() {
+    return state.electron;
+  },
+}));
 vi.mock("~/previewStateStore", () => ({ isPreviewSupportedInRuntime: () => state.desktop }));
 vi.mock("~/rpc/atomRegistry", () => ({ appAtomRegistry: { get: () => state.primary } }));
 vi.mock("~/state/primaryEnvironment", () => ({ primaryEnvironmentIdAtom: {} }));
 vi.mock("~/state/entities", () => ({
+  readEnvironmentSupportsNativeDesktopBrowser: () => false,
+  useEnvironmentSupportsNativeDesktopBrowser: () => false,
   readEnvironmentSupportsServerBrowser: (id: string) => state.serverBrowser.has(id),
   useEnvironmentSupportsServerBrowser: () => false,
 }));
 
-import { alternatePreviewRuntime, previewRuntimeFor } from "./previewRuntime";
+import {
+  alternatePreviewRuntime,
+  previewRuntimeFor,
+  rendersServerTabNatively,
+} from "./previewRuntime";
 
 const local = "local" as EnvironmentId;
 const remote = "remote" as EnvironmentId;
 
 afterEach(() => {
+  state.electron = false;
   state.desktop = false;
   state.primary = null;
   state.serverBrowser = new Set();
@@ -56,5 +68,17 @@ describe("alternatePreviewRuntime", () => {
 
   it("offers no move outside the desktop app", () => {
     expect(alternatePreviewRuntime(remote, null, true, { runtime: "server" })).toBeNull();
+  });
+});
+
+describe("rendersServerTabNatively", () => {
+  it("streams a primary standalone server instead of opening a second browser session", () => {
+    state.electron = true;
+    expect(rendersServerTabNatively(local, local, { runtime: "server" }, false)).toBe(false);
+    expect(rendersServerTabNatively(local, local, { runtime: "server" }, true)).toBe(true);
+    expect(rendersServerTabNatively(remote, local, { runtime: "server" }, true)).toBe(false);
+    expect(rendersServerTabNatively(local, local, { runtime: "desktop" }, true)).toBe(false);
+    state.electron = false;
+    expect(rendersServerTabNatively(local, local, { runtime: "server" }, true)).toBe(false);
   });
 });

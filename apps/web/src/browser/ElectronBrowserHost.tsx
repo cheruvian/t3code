@@ -5,6 +5,8 @@ import { AuthPreviewOperateScope, FILL_PREVIEW_VIEWPORT } from "@t3tools/contrac
 import { useAtomValue } from "@effect/atom-react";
 import { type ComponentProps, useEffect, useMemo, useRef, useState } from "react";
 
+import { useServerConfigs } from "~/state/entities";
+
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 
 import { isElectron } from "~/env";
@@ -27,6 +29,7 @@ export function ElectronBrowserHost() {
   const { resolvedTheme } = useTheme();
   const previewByThreadKey = useActivePreviewSessions();
   const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const serverConfigs = useServerConfigs();
   const sessions = useMemo(
     () =>
       Object.entries(previewByThreadKey).flatMap(([threadKey, previewState]) => {
@@ -36,7 +39,13 @@ export function ElectronBrowserHost() {
               .filter(
                 (snapshot) =>
                   snapshot.runtime !== "server" ||
-                  rendersServerTabNatively(threadRef.environmentId, primaryEnvironmentId, snapshot),
+                  rendersServerTabNatively(
+                    threadRef.environmentId,
+                    primaryEnvironmentId,
+                    snapshot,
+                    serverConfigs.get(threadRef.environmentId)?.environment.capabilities
+                      .nativeDesktopBrowser === true,
+                  ),
               )
               .map((snapshot) => ({
                 threadRef,
@@ -52,7 +61,7 @@ export function ElectronBrowserHost() {
               }))
           : [];
       }),
-    [previewByThreadKey, primaryEnvironmentId],
+    [previewByThreadKey, primaryEnvironmentId, serverConfigs],
   );
 
   useEffect(() => {

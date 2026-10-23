@@ -239,3 +239,64 @@ test("request requires exactly one site or UUID and rejects non-origin sites", (
   assert.throws(() => parseRequest({ ...input, item_id: DEMO_ITEM }), /Invalid request/);
   assert.throws(() => parseRequest({ ...input, site: undefined }), /Invalid request/);
 });
+
+test("concurrent searches share sync, reuse fresh vault data, and refresh after 30 seconds", async () => {
+  let now = 0;
+  let syncs = 0;
+  let releaseSync;
+  let syncStarted;
+  const started = new Promise((resolve) => {
+    syncStarted = resolve;
+  });
+  const blocked = new Promise((resolve) => {
+    releaseSync = resolve;
+  });
+  const provider = new BitwardenProvider({
+    now: () => now,
+    passwordPrompt: async () => "fake-master",
+    runner: async (_, args) => {
+      if (args[0] === "unlock") return "fake-session";
+      if (args[0] === "sync") {
+        syncs++;
+        syncStarted();
+        await blocked;
+        return "";
+      }
+      return "[]";
+    },
+  });
+  await provider.initialize();
+  const phases = [];
+  const first = provider.search("example.com", (phase) => phases.push(phase));
+  await started;
+  const second = provider.search("example.org");
+  assert.equal(syncs, 1);
+  assert.deepEqual(phases, ["syncing"]);
+  releaseSync();
+  await Promise.all([first, second]);
+  assert.deepEqual(phases, ["syncing", "matching"]);
+  now = 29_999;
+  await provider.search("example.com");
+  assert.equal(syncs, 1);
+  now = 30_000;
+  await provider.search("example.com");
+  assert.equal(syncs, 2);
+  await provider.close();
+});
+
+test("a failed sync is retried by a new search instead of caching failure", async () => {
+  let syncs = 0;
+  const provider = new BitwardenProvider({
+    passwordPrompt: async () => "fake-master",
+    runner: async (_, args) => {
+      if (args[0] === "unlock") return "fake-session";
+      if (args[0] === "sync" && ++syncs === 1) throw new Error("withheld");
+      return "[]";
+    },
+  });
+  await provider.initialize();
+  await assert.rejects(provider.search("example.com"), /Vault login search failed/);
+  assert.deepEqual(await provider.search("example.com"), []);
+  assert.equal(syncs, 2);
+  await provider.close();
+});

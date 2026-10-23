@@ -73,6 +73,7 @@ export class T3CredentialBroker {
       ].map((r) => ({
         requestId: r.request_id,
         state: r.state,
+        ...(r.search_phase ? { searchPhase: r.search_phase } : {}),
         site: r.site ?? "Direct item (CLI)",
         field: r.field,
         label: r.label,
@@ -365,6 +366,7 @@ export class T3CredentialBroker {
         resolve({
           requestId: r.request_id,
           state: r.state,
+          ...(r.search_phase ? { searchPhase: r.search_phase } : {}),
           ...(r.expires_at ? { expiresAt: r.expires_at } : {}),
           ...(r.exit_code !== undefined ? { exitCode: r.exit_code } : {}),
           ...(r.signal !== undefined ? { signal: r.signal } : {}),

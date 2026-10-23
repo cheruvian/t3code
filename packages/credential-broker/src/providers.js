@@ -99,7 +99,16 @@ export class DemoProvider {
 export class BitwardenProvider {
   mode = "bitwarden";
   #session;
-  constructor({ executable = "bw", runner = run, env = process.env, passwordPrompt } = {}) {
+  #syncing;
+  #syncedAt = -Infinity;
+  constructor({
+    executable = "bw",
+    runner = run,
+    env = process.env,
+    passwordPrompt,
+    now = Date.now,
+  } = {}) {
+    this.now = now;
     this.executable = executable;
     this.runner = runner;
     this.env = { ...env };
@@ -139,12 +148,27 @@ export class BitwardenProvider {
       master = undefined;
     }
   }
-  async search(site) {
+  async search(site, progress = () => {}) {
     if (!this.#session) throw new BrokerError("Vault is locked.", 503);
     let records;
     try {
-      // Desktop/web vault edits must reach the CLI cache before matching logins.
-      await this.runner(this.executable, ["sync"], { ...this.env, BW_SESSION: this.#session });
+      // Concurrent requests share one sync; a short freshness window avoids another
+      // network round trip when the human requests a second login immediately.
+      if (this.now() - this.#syncedAt >= 30_000) {
+        progress("syncing");
+        this.#syncing ??= this.runner(this.executable, ["sync"], {
+          ...this.env,
+          BW_SESSION: this.#session,
+        })
+          .then(() => {
+            this.#syncedAt = this.now();
+          })
+          .finally(() => {
+            this.#syncing = undefined;
+          });
+        await this.#syncing;
+      }
+      progress("matching");
       records = JSON.parse(
         await this.runner(this.executable, ["list", "items", "--url", `https://${site}`, "--raw"], {
           ...this.env,
@@ -226,6 +250,7 @@ export class BitwardenProvider {
       });
     } finally {
       this.#session = undefined;
+      this.#syncedAt = -Infinity;
     }
   }
 }
