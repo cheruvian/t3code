@@ -7,6 +7,7 @@ import type { RpcSession } from "../rpc/session.ts";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
+  AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
   AuthAccessWriteScope,
   AuthSettingsWriteScope,
@@ -61,6 +62,55 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect("requires operate access to broadcast notifications", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const send = createCommandPermissions(runtime, WS_METHODS.notificationsSend);
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthOrchestrationReadScope],
+            permissions: [AuthOrchestrationReadScope],
+          }),
+        );
+        expect(registry.get(send.permissionAtom(env))).toBe(false);
+        const denied = yield* send.authorize(registry, env).pipe(Effect.flip);
+        expect(denied._tag).toBe("EnvironmentAuthorizationError");
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(send.permissionAtom(env))).toBe(true);
+        yield* send.authorize(registry, env);
+      }),
+    ),
+  );
+
+  it.effect("requires read access to subscribe this device to push", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const push = createCommandPermissions(runtime, WS_METHODS.webPushUpdate);
+        registry.set(
+          sessions(env),
+          AsyncResult.success({ ...grant(false), scopes: [], permissions: [] }),
+        );
+        expect(registry.get(push.permissionAtom(env))).toBe(false);
+        const denied = yield* push.authorize(registry, env).pipe(Effect.flip);
+        expect(denied._tag).toBe("EnvironmentAuthorizationError");
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthOrchestrationReadScope],
+            permissions: [AuthOrchestrationReadScope],
+          }),
+        );
+        expect(registry.get(push.permissionAtom(env))).toBe(true);
+        yield* push.authorize(registry, env);
+      }),
+    ),
+  );
+
   it.effect("requires the destination settings grant to run storage cleanup", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -1,3 +1,4 @@
+import { BackgroundPushCoordinator } from "../components/BackgroundPushCoordinator";
 import { CredentialBrokerCoordinator } from "../components/CredentialBrokerCoordinator";
 import { PermissionUpdateNotice } from "../components/PermissionUpdateNotice";
 import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
@@ -247,6 +248,7 @@ function RootRouteView() {
           <ConnectOnboardingDialog />
           <SshPasswordPromptDialog />
           <SnapShotCoordinator />
+          <BackgroundPushCoordinator />
           <ThreadNotificationCoordinator />
           <CredentialBrokerCoordinator />
           <ReopenClosedViewShortcut />

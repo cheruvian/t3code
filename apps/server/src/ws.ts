@@ -1,3 +1,4 @@
+import * as WebPush from "./notifications/WebPush.ts";
 import * as AssistantPreviewBus from "./orchestration-v2/AssistantPreviewBus.ts";
 import * as ManagedDeployment from "./cloud/ManagedDeployment.ts";
 import * as CredentialBroker from "./secrets/CredentialBroker.ts";
@@ -1247,6 +1248,7 @@ const layerCoreWsRpc = (
   CoreWsRpcGroup.toLayer(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
+      const webPush = yield* WebPush.WebPush;
       const sql = yield* SqlClient.SqlClient;
       const readSql = yield* ReadOnlySqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
@@ -2470,6 +2472,9 @@ const layerCoreWsRpc = (
           }),
         [WS_METHODS.serverRunStorageCleanup]: () => storageCleanup.runNow,
         [WS_METHODS.serverGetStorageCleanupReport]: () => storageCleanup.reports,
+        [WS_METHODS.notificationsSend]: (input) => webPush.send(input),
+        [WS_METHODS.webPushConfig]: (input) => webPush.config(currentSessionId, input.endpoint),
+        [WS_METHODS.webPushUpdate]: (input) => webPush.update(currentSessionId, input),
         [WS_METHODS.serverGetSettings]: (_input) =>
           serverSettings.getSettings.pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
         [WS_METHODS.serverUpdateSettings]: ({ patch, providerInstanceMutation }) =>

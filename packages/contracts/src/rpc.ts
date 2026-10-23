@@ -1,4 +1,10 @@
 import {
+  NotificationSendInput,
+  NotificationSendResult,
+  WebPushUpdate,
+  WebPushError,
+} from "./webPush.ts";
+import {
   ManagedDeploymentState,
   ManagedDeploymentAction,
   ManagedDeploymentError,
@@ -518,6 +524,9 @@ export const WS_METHODS = {
   serverRunStorageCleanup: "server.runStorageCleanup",
   serverGetStorageCleanupReport: "server.getStorageCleanupReport",
   serverGetDatabaseStorage: "server.getDatabaseStorage",
+  notificationsSend: "notifications.send",
+  webPushConfig: "webPush.config",
+  webPushUpdate: "webPush.update",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverDiscoverSourceControl: "server.discoverSourceControl",
@@ -546,7 +555,6 @@ export const WS_METHODS = {
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
 
-  // Scheduled tasks
   scheduledTasksList: "scheduledTasks.list",
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
   scheduledTasksUpsert: "scheduledTasks.upsert",
@@ -813,6 +821,22 @@ const WsServerGetDatabaseStorageRpc = Rpc.make(WS_METHODS.serverGetDatabaseStora
   success: Schema.NullOr(DatabaseStorageStatus),
   stream: true,
   error: EnvironmentAuthorizationError,
+});
+
+const WsNotificationsSendRpc = Rpc.make(WS_METHODS.notificationsSend, {
+  payload: NotificationSendInput,
+  success: NotificationSendResult,
+  error: Schema.Union([WebPushError, EnvironmentAuthorizationError]),
+});
+const WsWebPushConfigRpc = Rpc.make(WS_METHODS.webPushConfig, {
+  payload: Schema.Struct({ endpoint: Schema.optionalKey(Schema.String) }),
+  success: Schema.Struct({ publicKey: Schema.String, enabled: Schema.Boolean }),
+  error: Schema.Union([WebPushError, EnvironmentAuthorizationError]),
+});
+const WsWebPushUpdateRpc = Rpc.make(WS_METHODS.webPushUpdate, {
+  payload: WebPushUpdate,
+  success: Schema.Void,
+  error: Schema.Union([WebPushError, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
@@ -2028,6 +2052,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRunStorageCleanupRpc,
   WsServerGetStorageCleanupReportRpc,
   WsServerGetDatabaseStorageRpc,
+  WsNotificationsSendRpc,
+  WsWebPushConfigRpc,
+  WsWebPushUpdateRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsServerDiscoverSourceControlRpc,
