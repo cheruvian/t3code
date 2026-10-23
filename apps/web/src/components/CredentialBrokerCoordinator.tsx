@@ -29,7 +29,7 @@ import {
   DialogPanel,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
-import { Select, SelectTrigger, SelectValue, SelectPopup, SelectItem } from "./ui/select";
+import { RadioGroup, Radio } from "./ui/radio-group";
 
 export function CredentialBrokerCoordinator() {
   const environmentIds = useEnvironmentIds();
@@ -404,6 +404,7 @@ export function ApprovalCard({
   );
   const environment = useEnvironment(request.origin?.environmentId ?? null);
   const waitingForUnlock = request.state !== "pending";
+  const selectedAccount = request.candidates.find((candidate) => candidate.id === selection);
   const fields =
     request.field === "login"
       ? "Username + password"
@@ -460,16 +461,31 @@ export function ApprovalCard({
         <div className="min-w-0 space-y-3">
           <div className="space-y-1">
             <p className="text-xs text-muted-foreground">Reason supplied by agent</p>
-            <p className="line-clamp-2 break-words text-sm">{request.reason}</p>
+            <p className="break-words text-sm">{request.reason}</p>
           </div>
           {waitingForUnlock ? (
-            <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
-              {request.state === "searching"
-                ? request.searchPhase === "syncing"
-                  ? "Syncing Bitwarden… You can deny this request while the vault updates."
-                  : "Searching Bitwarden for matching accounts… You can deny this request while the search runs."
-                : "Unlock the vault to choose a login. Access still needs your approval."}
-            </p>
+            <div
+              role="status"
+              aria-live="polite"
+              aria-busy={request.state === "searching"}
+              className="space-y-2 rounded-lg border p-3"
+            >
+              <p className="text-sm font-medium">
+                {request.state === "searching"
+                  ? "Loading saved accounts…"
+                  : "Waiting for vault unlock"}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {request.state === "searching"
+                  ? request.searchPhase === "syncing"
+                    ? "Syncing Bitwarden before searching for matching logins…"
+                    : "Searching Bitwarden for matching logins…"
+                  : "Unlock the vault to load your saved accounts."}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                No account has been approved. You can deny this request while you wait.
+              </p>
+            </div>
           ) : request.candidates.length > 0 ? (
             <div className="space-y-2">
               <p className="text-xs font-medium text-muted-foreground">
@@ -477,25 +493,62 @@ export function ApprovalCard({
                 {request.candidates.length === 1 ? "account" : "accounts"} · Choose a login to
                 approve
               </p>
-              <Select
-                value={selection}
-                onValueChange={setSelection}
-                items={request.candidates.map((c) => ({
-                  value: c.id,
-                  label: c.name + " · " + c.hosts.join(", "),
-                }))}
+              <RadioGroup
+                value={selection ?? ""}
+                onValueChange={(value) => setSelection(typeof value === "string" ? value : null)}
+                aria-label="Saved account to share"
               >
-                <SelectTrigger>
-                  <SelectValue placeholder="Choose a login" />
-                </SelectTrigger>
-                <SelectPopup>
-                  {request.candidates.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name} · {c.hosts.join(", ")}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
+                {request.candidates.map((candidate) => (
+                  <label
+                    key={candidate.id}
+                    className="flex cursor-pointer items-start gap-3 rounded-lg border p-3"
+                  >
+                    <Radio
+                      value={candidate.id}
+                      disabled={disabled}
+                      aria-label={`${candidate.name} · ${candidate.username ?? "Username unavailable"}`}
+                    />
+                    <span className="min-w-0 space-y-1">
+                      <span className="block break-words text-sm font-medium">
+                        {candidate.name}
+                      </span>
+                      <span className="block break-all text-sm">
+                        {candidate.username ?? "Username unavailable"}
+                      </span>
+                      <span className="block break-all text-xs text-muted-foreground">
+                        {candidate.hosts.join(", ")}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </RadioGroup>
+              {selectedAccount && (
+                <details className="text-sm">
+                  <summary className="cursor-pointer">Review selected account and access</summary>
+                  <dl className="mt-2 space-y-2 break-words">
+                    <div>
+                      <dt className="text-xs text-muted-foreground">Saved login</dt>
+                      <dd>{selectedAccount.name}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-muted-foreground">Username</dt>
+                      <dd className="break-all">
+                        {selectedAccount.username ?? "Username unavailable"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-muted-foreground">Matching sites</dt>
+                      <dd className="break-all">{selectedAccount.hosts.join(", ")}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-muted-foreground">Access requested</dt>
+                      <dd>
+                        {fields} · {request.ttlSeconds}s after approval
+                      </dd>
+                    </div>
+                  </dl>
+                </details>
+              )}
             </div>
           ) : (
             <p role="status" className="text-sm text-muted-foreground">

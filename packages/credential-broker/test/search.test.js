@@ -94,7 +94,7 @@ test("local hostname search matches the exact host and excludes lookalikes", asy
   });
   await provider.initialize();
   assert.deepEqual(await provider.search("heihei"), [
-    { item_id: DEMO_ITEM, name: "Test host", hosts: ["heihei"] },
+    { item_id: DEMO_ITEM, name: "Test host", username: "fake-user", hosts: ["heihei"] },
   ]);
   await provider.close();
 });
@@ -179,7 +179,7 @@ test("empty, failed, and cancelled searches never deliver files or resurrect req
   assert.deepEqual(await readdir(broker.leaseDir), []);
 });
 
-test("provider search strips credential fields and lookalikes, rechecks host at delivery", async () => {
+test("provider search keeps human username metadata, strips secrets and rechecks host at delivery", async () => {
   const calls = [];
   const record = (id, uri, extra = {}) => ({
     id,
@@ -211,8 +211,16 @@ test("provider search strips credential fields and lookalikes, rechecks host at 
   await provider.initialize();
   const matches = await provider.search("example.com");
   assert.deepEqual(matches, [
-    { item_id: DEMO_ITEM, name: "Example login", hosts: ["accounts.example.com"] },
+    {
+      item_id: DEMO_ITEM,
+      name: "Example login",
+      username: "private-user",
+      hosts: ["accounts.example.com"],
+    },
   ]);
+  assert.ok(!JSON.stringify(matches).includes("private-pass"));
+  assert.ok(!JSON.stringify(matches).includes("private-note"));
+  assert.ok(!JSON.stringify(matches).includes("private=token"));
   assert.deepEqual(calls[1], ["sync"]);
   assert.deepEqual(calls[2], ["list", "items", "--url", "https://example.com", "--raw"]);
   assert.equal(

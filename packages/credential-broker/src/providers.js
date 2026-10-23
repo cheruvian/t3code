@@ -179,7 +179,7 @@ export class BitwardenProvider {
     } catch {
       throw new BrokerError("Vault login search failed.", 502);
     }
-    // Bitwarden returns full records. Retain only approval metadata, never fields.
+    // Retain only human approval metadata, never passwords, notes, or full URLs.
     return records
       .flatMap((record) => {
         const hosts = matchingHosts(record, site);
@@ -187,7 +187,16 @@ export class BitwardenProvider {
           !record.deletedDate &&
           /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(record.id) &&
           hosts.length
-          ? [{ item_id: record.id, name: String(record.name ?? "Login").slice(0, 120), hosts }]
+          ? [
+              {
+                item_id: record.id,
+                name: String(record.name ?? "Login").slice(0, 120),
+                hosts,
+                ...(typeof record.login?.username === "string" && record.login.username
+                  ? { username: record.login.username.slice(0, 320) }
+                  : {}),
+              },
+            ]
           : [];
       })
       .slice(0, 100);
@@ -217,7 +226,12 @@ export class BitwardenProvider {
         !matchingHosts(record, site).length
       )
         throw new Error();
-      return { item_id: record.id, name: item.name, hosts: [site] };
+      return {
+        item_id: record.id,
+        name: item.name,
+        hosts: [site],
+        ...(username ? { username: username.slice(0, 320) } : {}),
+      };
     } catch {
       throw new BrokerError(
         "Could not confirm the saved login. Check Bitwarden before retrying.",

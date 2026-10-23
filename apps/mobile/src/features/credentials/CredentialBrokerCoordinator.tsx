@@ -436,15 +436,13 @@ function Approval({
         <Text className="text-foreground">Program: {request.argv[0]?.split(/[\\/]/).at(-1)}</Text>
       </View>
       <Text className="text-sm text-foreground-muted">Reason supplied by agent</Text>
-      <Text numberOfLines={2} className="text-foreground">
-        {request.reason}
-      </Text>
+      <Text className="text-foreground">{request.reason}</Text>
       {request.state !== "pending" ? (
-        <Text className="text-foreground-muted">
+        <Text accessibilityLiveRegion="polite" className="text-foreground-muted">
           {request.state === "searching"
             ? request.searchPhase === "syncing"
-              ? "Syncing Bitwarden… You can deny this request while the vault updates."
-              : "Searching Bitwarden for matching accounts… You can deny this request while the search runs."
+              ? "Loading saved accounts… Syncing Bitwarden. You can deny this request while you wait."
+              : "Loading saved accounts… Searching Bitwarden. You can deny this request while you wait."
             : "Unlock the vault to choose a login. Access still needs your approval."}
         </Text>
       ) : (
@@ -464,7 +462,14 @@ function Approval({
           {request.candidates.map((c) => (
             <Button
               key={c.id}
-              label={(selection === c.id ? "✓ " : "") + c.name + " · " + c.hosts.join(", ")}
+              label={
+                (selection === c.id ? "✓ " : "") +
+                c.name +
+                " · " +
+                (c.username ?? "Username unavailable") +
+                " · " +
+                c.hosts.join(", ")
+              }
               disabled={disabled}
               onPress={() => setSelection(c.id)}
             />

@@ -102,6 +102,7 @@ test("Bitwarden creates host-bound logins through stdin and returns only selecti
     {
       item_id: DEMO_ITEM,
       name: "tower (test-user)",
+      username: "test-user",
       hosts: ["tower"],
     },
   );

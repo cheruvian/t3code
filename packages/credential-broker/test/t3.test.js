@@ -973,3 +973,25 @@ test("search progress reaches presenters before results and denial cancels the p
   await gate;
   assert.equal(broker.state().requests[0].state, "denied");
 });
+
+test("human account choices include usernames but agent execution results do not", async (t) => {
+  const provider = new DemoProvider();
+  provider.search = async () => [
+    {
+      item_id: DEMO_ITEM,
+      name: "Example account",
+      username: "synthetic@example.com",
+      hosts: ["example.com"],
+    },
+  ];
+  const { broker, caller, input } = await setup(t, { provider });
+  const ready = milestone(broker, (state) => state.requests.some((r) => r.state === "pending"));
+  const execution = broker.execute(caller, input);
+  const request = (await ready).requests.find((r) => r.state === "pending");
+  assert.equal(request.candidates[0].username, "synthetic@example.com");
+  await broker.action("human", { type: "decide", requestId: request.requestId, decision: "deny" });
+  const result = await execution;
+  assert.equal(result.state, "denied");
+  assert.ok(!JSON.stringify(result).includes("synthetic@example.com"));
+  assert.equal(result.candidates, undefined);
+});

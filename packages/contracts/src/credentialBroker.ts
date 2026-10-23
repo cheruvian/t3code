@@ -77,7 +77,12 @@ export const CredentialApproval = Schema.Struct({
     Schema.Struct({ tabId: PreviewTabId, origin: Schema.String, profile: Schema.String }),
   ),
   candidates: Schema.Array(
-    Schema.Struct({ id: Schema.String, name: Schema.String, hosts: Schema.Array(Schema.String) }),
+    Schema.Struct({
+      id: Schema.String,
+      name: Schema.String,
+      username: Schema.optional(Schema.String),
+      hosts: Schema.Array(Schema.String),
+    }),
   ),
   grantId: Schema.optional(Schema.String),
 });

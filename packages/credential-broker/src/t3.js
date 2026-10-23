@@ -88,6 +88,7 @@ export class T3CredentialBroker {
         candidates: (r.candidates ?? []).map((c) => ({
           id: c.item_id,
           name: c.name,
+          ...(c.username ? { username: c.username } : {}),
           hosts: c.hosts,
         })),
         ...(r.grant_id ? { grantId: r.grant_id } : {}),
