@@ -1,6 +1,8 @@
 import {
   AGENT_EXPOSED_API_NAMES,
   AgentApiCallError,
+  NotificationSendInput,
+  NotificationSendResult,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   Project,
@@ -130,6 +132,13 @@ const withLiveRpc = <A, E, R>(
   });
 
 const runners = {
+  [WS_METHODS.notificationsSend]: makeRunner(
+    WS_METHODS.notificationsSend,
+    NotificationSendInput,
+    NotificationSendResult,
+    (input) =>
+      withLiveRpc(WS_METHODS.notificationsSend, (rpc) => rpc[WS_METHODS.notificationsSend](input)),
+  ),
   [WS_METHODS.serverGetConfig]: makeRunner(
     WS_METHODS.serverGetConfig,
     EmptyInput,

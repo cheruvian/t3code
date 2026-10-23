@@ -1,3 +1,6 @@
+import * as NotificationHttp from "./notifications/http.ts";
+import * as WebPush from "./notifications/WebPush.ts";
+import * as WebPushTransport from "./notifications/WebPushTransport.ts";
 import * as ManagedDeployment from "./cloud/ManagedDeployment.ts";
 import * as DeploymentAdmission from "./cloud/DeploymentAdmission.ts";
 import * as CredentialBroker from "./secrets/CredentialBroker.ts";
@@ -563,6 +566,7 @@ const layerProviderInstallationRefresh = Layer.effectDiscard(
 );
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
+  WebPush.layer.pipe(Layer.provide(WebPushTransport.layer)),
   AgentAwarenessRelay.layer,
   Layer.effectDiscard(
     Effect.flatMap(ResourceActionReactor.ResourceActionReactor, (service) => service.start()),
@@ -740,6 +744,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(OrchestrationHttp.layer),
       Layer.provide(PullRequestHttp.layer),
       Layer.provide(ProjectHttp.layer),
+      Layer.provide(NotificationHttp.layer),
       Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
       Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
       Layer.provide(AuthHttp.layerAuthenticatedAuth),

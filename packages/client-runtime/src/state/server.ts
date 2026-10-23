@@ -966,6 +966,18 @@ export function createServerEnvironmentAtoms<R, E>(
 
   return {
     configValueAtom,
+    sendNotification: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:send-notification",
+      tag: WS_METHODS.notificationsSend,
+    }),
+    webPushConfig: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:web-push-config",
+      tag: WS_METHODS.webPushConfig,
+    }),
+    webPushUpdate: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:web-push-update",
+      tag: WS_METHODS.webPushUpdate,
+    }),
     runStorageCleanup: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:run-storage-cleanup",
       tag: WS_METHODS.serverRunStorageCleanup,

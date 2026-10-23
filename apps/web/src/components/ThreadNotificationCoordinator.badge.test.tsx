@@ -1,3 +1,4 @@
+vi.mock("../webPush", () => ({ useWebPushEnabled: () => false }));
 import { EnvironmentId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";

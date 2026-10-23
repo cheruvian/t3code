@@ -1,3 +1,4 @@
+vi.mock("../webPush", () => ({ useWebPushEnabled: () => state.push }));
 import type { ClientSettings } from "@t3tools/contracts/settings";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
@@ -6,6 +7,7 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
+  push: false,
   mode: "off" as ClientSettings["notificationMode"],
   inApp: true,
   active: { environmentId: "env-1", threadId: "other-thread" },
@@ -160,6 +162,7 @@ async function complete() {
 }
 
 beforeEach(() => {
+  state.push = false;
   vi.clearAllMocks();
   Object.assign(state, {
     mode: "off",
@@ -377,4 +380,25 @@ describe("thread notifications", () => {
       silent: true,
     });
   });
+});
+
+it("lets background push handle system alerts without duplicating local notifications or sounds", async () => {
+  state.mode = "notifications-and-sound";
+  state.push = true;
+  state.focused = false;
+  await render();
+  state.completedAt = "2026-09-13T09:01:00.000Z";
+  await render();
+  expect(state.notification).not.toHaveBeenCalled();
+  expect(state.sound).not.toHaveBeenCalled();
+});
+
+it("keeps sound-only alerts working while a device is subscribed to background push", async () => {
+  state.mode = "sound";
+  state.push = true;
+  await render();
+  state.completedAt = "2026-09-13T09:01:00.000Z";
+  await render();
+  expect(state.sound).toHaveBeenCalledOnce();
+  expect(state.notification).not.toHaveBeenCalled();
 });

@@ -1,3 +1,4 @@
+import { BackgroundPushSettings } from "./BackgroundPushSettings";
 import { MobileAppLinks } from "../MobileAppLinks";
 import { threadMoveUndoParticipants } from "@t3tools/client-runtime/operations";
 import { undoThreadEnvironmentMove } from "../../lib/threadEnvironmentMove";
@@ -2861,6 +2862,7 @@ export function GeneralSettingsPanel() {
 
       <SettingsSection id="behavior" title="Behavior">
         <NotificationSettings />
+        <BackgroundPushSettings />
         <SettingsRow
           {...searchableSetting("in-app-notifications")}
           description="Show a toast when another thread finishes, fails, or needs input or approval while this app has focus."

@@ -27,6 +27,7 @@ const destructiveNamePatterns = [
   /installRelayClient/,
 ];
 const agentNamePatterns = [
+  /^notifications\.send$/,
   /^server\.(getConfig|getSettings|updateSettings|upsertKeybinding|removeKeybinding)$/,
   /^projects\.(listEntries|readFile|searchContents|searchEntries|writeFile|mutate)$/,
   /^orchestration\.(dispatchCommand|getTurnDiff|getFullThreadDiff|searchThreads|subscribeShell|subscribeThread|launchThread|getThreadProjection)$/,

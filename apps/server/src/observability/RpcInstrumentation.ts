@@ -19,6 +19,9 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
  * even where they differ from the method prefix.
  */
 const RPC_AGGREGATES = {
+  [WS_METHODS.notificationsSend]: "server",
+  [WS_METHODS.webPushConfig]: "server",
+  [WS_METHODS.webPushUpdate]: "server",
   [WS_METHODS.credentialBrokerSubscribe]: "credentialBroker",
   [WS_METHODS.credentialBrokerAction]: "credentialBroker",
   [THREAD_MOVE_RPC]: "orchestration",

@@ -1,3 +1,4 @@
+import { useWebPushEnabled } from "../webPush";
 import {
   type PendingSubagentRequest,
   presentThreadShell,
@@ -120,6 +121,7 @@ function EnvironmentNotifications({
     strict: false,
   });
   const previous = useRef(new Map<ThreadId, NotificationState>());
+  const pushEnabled = useWebPushEnabled(environmentId) && hasDesktopNotifications(mode);
 
   useEffect(() => {
     if (threads === null) {
@@ -179,7 +181,7 @@ function EnvironmentNotifications({
               : status === "failed"
                 ? "Thread failed"
                 : "Input needed";
-      if (hasNotificationSound(mode)) {
+      if (!pushEnabled && hasNotificationSound(mode)) {
         void playNotificationSound(kind, () =>
           hasNotificationSound(getClientSettings().notificationMode),
         );
@@ -221,6 +223,7 @@ function EnvironmentNotifications({
         continue;
       }
       if (
+        pushEnabled ||
         !hasDesktopNotifications(mode) ||
         (document.visibilityState === "visible" && document.hasFocus()) ||
         typeof Notification === "undefined" ||
@@ -255,6 +258,7 @@ function EnvironmentNotifications({
     mode,
     navigate,
     onNotification,
+    pushEnabled,
     threads,
   ]);
 

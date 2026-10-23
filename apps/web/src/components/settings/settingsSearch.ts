@@ -375,6 +375,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     scope: "project-defaults",
   },
   {
+    id: "background-push",
+    title: "Background push",
+    to: "/settings/general",
+    searchTerms: ["notification push pwa background phone iphone approval completion"],
+  },
+  {
     id: "thread-notifications",
     title: "Thread notifications",
     to: "/settings/general",

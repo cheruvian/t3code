@@ -42,6 +42,7 @@ import type * as RpcGroup from "effect/rpc/RpcGroup";
 type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
 
 export const RPC_REQUIRED_SCOPES = {
+  [WS_METHODS.webPushConfig]: AuthOrchestrationReadScope,
   [WS_METHODS.credentialBrokerSubscribe]: AuthAccessReadScope,
   [THREAD_MOVE_RPC]: AuthOrchestrationOperateScope,
   ...CLIENT_GUARDED_RPC_SCOPES,
