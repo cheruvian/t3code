@@ -2717,7 +2717,7 @@ const make = Effect.gen(function* () {
       Effect.tryPromise({
         try: async () => {
           const tab = tabs.get(tabKey(input.threadId, input.tabId));
-          if (!tab || tab.closing || tab.desktop) throw new Error();
+          if (!tab || tab.closing) throw new Error();
           if (input.agentSessionId && !tab.control.agentCanActNow(input.agentSessionId))
             throw new Error();
           const url = tab.page.url();
@@ -2728,6 +2728,29 @@ const make = Effect.gen(function* () {
           const bridge = await createBrowserLoginBridge((login, signal) =>
             consumeBrowserLogin({
               page: tab.page,
+              createPrivatePage: tab.desktop
+                ? async () => {
+                    const scope = await Effect.runPromise(Scope.make());
+                    try {
+                      const endpoint = await Effect.runPromise(
+                        desktopChannel
+                          .privatePageEndpoint({ threadId: tab.threadId, tabId: tab.tabId })
+                          .pipe(Scope.provide(scope)),
+                      );
+                      const connected = await contexts.connectDesktopPage(endpoint);
+                      return {
+                        page: connected.page,
+                        close: async () => {
+                          await connected.browser.close().catch(constVoid);
+                          await Effect.runPromise(Scope.close(scope, Exit.void));
+                        },
+                      };
+                    } catch {
+                      await Effect.runPromise(Scope.close(scope, Exit.void));
+                      throw new Error("Private desktop sign-in page unavailable.");
+                    }
+                  }
+                : undefined,
               url,
               fields: input,
               login,
