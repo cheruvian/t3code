@@ -16,6 +16,12 @@ export const DesktopBrowserEvent = Schema.Union([
 export type DesktopBrowserEvent = typeof DesktopBrowserEvent.Type;
 
 export const DesktopBrowserCommand = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("private-open"),
+    ...TabKey,
+    sourceTabId: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({ type: Schema.Literal("private-close"), ...TabKey }),
   Schema.Struct({ type: Schema.Literal("cdp"), ...TabKey, message: Schema.String }),
   Schema.Struct({ type: Schema.Literal("release"), ...TabKey }),
   Schema.Struct({

@@ -52,6 +52,9 @@ export class DesktopBrowserChannel extends Context.Service<
     readonly detached: Stream.Stream<DesktopTabKey>;
     readonly attached: Stream.Stream<DesktopTabKey>;
     readonly isAttached: (key: DesktopTabKey) => Effect.Effect<boolean>;
+    readonly privatePageEndpoint: (
+      source: DesktopTabKey,
+    ) => Effect.Effect<string, never, Scope.Scope>;
     readonly endpoint: (key: DesktopTabKey) => Effect.Effect<string, never, Scope.Scope>;
     readonly pointer: (
       key: DesktopTabKey,
@@ -76,6 +79,7 @@ const make = Effect.gen(function* () {
       detached: Stream.empty,
       attached: Stream.empty,
       isAttached: () => Effect.succeed(false),
+      privatePageEndpoint: () => Effect.die("No desktop app is attached to this server."),
       endpoint: () => Effect.die("No desktop app is attached to this server."),
       pointer: () => Effect.void,
     });
@@ -190,22 +194,35 @@ const make = Effect.gen(function* () {
       return `ws://127.0.0.1:${address.port}/${secret}`;
     });
 
+  const awaitAttached = (key: DesktopTabKey, timeout: Duration.Input) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const subscription = yield* PubSub.subscribe(changes);
+        if (attachedTabs.has(keyOf(key))) return true;
+        return yield* Stream.fromSubscription(subscription).pipe(
+          Stream.filter((change) => change.attached && keyOf(change.key) === keyOf(key)),
+          Stream.runHead,
+          Effect.map(Option.isSome),
+          Effect.timeoutOption(timeout),
+          Effect.map((result) => Option.getOrElse(result, () => false)),
+        );
+      }),
+    );
+
   return DesktopBrowserChannel.of({
     available: true,
-    awaitAttached: (key, timeout) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const subscription = yield* PubSub.subscribe(changes);
-          if (attachedTabs.has(keyOf(key))) return true;
-          return yield* Stream.fromSubscription(subscription).pipe(
-            Stream.filter((change) => change.attached && keyOf(change.key) === keyOf(key)),
-            Stream.runHead,
-            Effect.map(Option.isSome),
-            Effect.timeoutOption(timeout),
-            Effect.map((result) => Option.getOrElse(result, () => false)),
-          );
-        }),
-      ),
+    awaitAttached,
+    privatePageEndpoint: (source) =>
+      Effect.gen(function* () {
+        const key = { threadId: source.threadId, tabId: `private-${NodeCrypto.randomUUID()}` };
+        yield* Effect.acquireRelease(
+          command({ type: "private-open", ...key, sourceTabId: source.tabId }),
+          () => command({ type: "private-close", ...key }),
+        );
+        if (!(yield* awaitAttached(key, "10 seconds")))
+          return yield* Effect.die("The private desktop browser page did not attach.");
+        return yield* endpoint(key);
+      }),
     detached: Stream.fromPubSub(changes).pipe(
       Stream.filter((change) => !change.attached),
       Stream.map((change) => change.key),

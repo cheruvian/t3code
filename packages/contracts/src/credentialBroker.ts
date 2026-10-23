@@ -170,7 +170,7 @@ export class CredentialBrokerError extends Schema.TaggedError<CredentialBrokerEr
       case "unsupported_platform":
         return "Credential Broker unsupported_platform: this host's security adapters are unavailable.";
       case "browser_unavailable":
-        return "Credential Broker browser_unavailable: private sign-in requires an agent-controlled server-backed HTTP(S) browser tab. Desktop-attached tabs are not supported.";
+        return "Credential Broker browser_unavailable: private sign-in requires an available agent-controlled HTTP(S) browser tab and its private sign-in page.";
       case "invalid_request":
         return "Credential Broker invalid_request: use a valid hostname, a command name or absolute executable path, an absolute working directory, and an integer lifetime of 5–300 seconds.";
       case "consumer_unavailable":

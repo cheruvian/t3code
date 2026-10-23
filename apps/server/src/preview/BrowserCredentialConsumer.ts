@@ -18,6 +18,9 @@ export async function consumeBrowserLogin(input: {
   readonly login: { username: string; password: string };
   readonly signal: AbortSignal;
   readonly checkTarget: () => boolean;
+  readonly createPrivatePage?:
+    | (() => Promise<{ page: Page; close: () => Promise<void> }>)
+    | undefined;
 }) {
   const original = new URL(input.url);
   if (!["http:", "https:"].includes(original.protocol) || original.username || original.password)
@@ -26,8 +29,9 @@ export async function consumeBrowserLogin(input: {
   let login: { username: string; password: string } | undefined;
   let privatePage: Page | undefined;
   let cdp: CDPSession | undefined;
+  let closePrivatePage: (() => Promise<void>) | undefined;
   const abort = () => {
-    void privatePage?.close().catch(() => {});
+    void closePrivatePage?.().catch(() => {});
   };
   input.signal.addEventListener("abort", abort, { once: true });
   try {
@@ -40,10 +44,17 @@ export async function consumeBrowserLogin(input: {
       !login.password
     )
       throw new Error();
-    privatePage = await input.page.context().newPage();
+    if (input.createPrivatePage) {
+      const created = await input.createPrivatePage();
+      privatePage = created.page;
+      closePrivatePage = created.close;
+    } else {
+      privatePage = await input.page.context().newPage();
+      closePrivatePage = () => signInPage.close();
+    }
     const signInPage = privatePage;
     if (input.signal.aborted) throw new Error();
-    cdp = await input.page.context().newCDPSession(privatePage);
+    cdp = await privatePage.context().newCDPSession(privatePage);
     await cdp.send("Network.setBypassServiceWorker", { bypass: true });
     privatePage.on("popup", (popup) => {
       void popup.close().catch(() => {});
@@ -133,14 +144,15 @@ export async function consumeBrowserLogin(input: {
     await submit.click({ timeout: 5000 });
     await password.waitFor({ state: "hidden", timeout: 15_000 });
     checkTarget();
-    await privatePage.close();
+    await closePrivatePage();
     privatePage = undefined;
+    closePrivatePage = undefined;
     // The working tab never receives the filled form or its diagnostic buffers.
     await input.page.reload({ waitUntil: "domcontentloaded", timeout: 15_000 });
   } finally {
     login = undefined;
     input.signal.removeEventListener("abort", abort);
-    await privatePage?.close().catch(() => {});
+    await closePrivatePage?.().catch(() => {});
     await cdp?.detach().catch(() => {});
   }
 }

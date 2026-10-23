@@ -132,6 +132,34 @@ describe("private browser credential delivery", () => {
     expect(visibleOutput).not.toContain(login.username);
     expect(visibleOutput).not.toContain(login.password);
   });
+  it("uses a supplied private desktop page and closes its dedicated connection", async () => {
+    let closed = 0;
+    const observed: string[] = [];
+    page.on("request", (request) => observed.push(request.url() + (request.postData() ?? "")));
+    await consumeBrowserLogin({
+      page,
+      url: origin,
+      fields,
+      login,
+      signal: new AbortController().signal,
+      checkTarget: () => true,
+      createPrivatePage: async () => {
+        const privatePage = await context.newPage();
+        return {
+          page: privatePage,
+          close: async () => {
+            closed++;
+            await privatePage.close();
+          },
+        };
+      },
+    });
+    expect(closed).toBe(1);
+    expect(await page.locator("h1").textContent()).toBe("Signed in");
+    expect(context.pages()).toEqual([page]);
+    expect(JSON.stringify(observed)).not.toContain(login.username);
+    expect(JSON.stringify(observed)).not.toContain(login.password);
+  });
   it("rejects a changed or no longer owned target before creating a page", async () => {
     await expect(consume({ checkTarget: () => false })).rejects.toThrow();
     expect(received).toEqual([]);
