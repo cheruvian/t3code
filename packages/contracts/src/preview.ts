@@ -253,7 +253,7 @@ export const PreviewClearProfileInput = Schema.Struct({
 export type PreviewClearProfileInput = typeof PreviewClearProfileInput.Type;
 
 export const PreviewListInput = Schema.Struct({
-  threadId: ThreadId,
+  threadId: Schema.optional(ThreadId),
 });
 export type PreviewListInput = typeof PreviewListInput.Type;
 

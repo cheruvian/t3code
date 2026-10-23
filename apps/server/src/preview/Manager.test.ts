@@ -529,3 +529,17 @@ it.layer(layer)("PreviewManager", (it) => {
     }),
   );
 });
+
+it.effect("lists all threads for a desktop host without selecting a thread", () =>
+  Effect.gen(function* () {
+    const manager = yield* PreviewManager.PreviewManager;
+    const first = yield* manager.open({ threadId: freshThreadId(), url: "https://example.com" });
+    const second = yield* manager.open({ threadId: freshThreadId(), url: "https://example.org" });
+    const all = yield* manager.list({});
+    expect(all.sessions.map((session) => session.tabId)).toEqual(
+      expect.arrayContaining([first.tabId, second.tabId]),
+    );
+    const scoped = yield* manager.list({ threadId: ThreadId.make(first.threadId) });
+    expect(scoped.sessions.map((session) => session.tabId)).toEqual([first.tabId]);
+  }).pipe(Effect.provide(layer)),
+);

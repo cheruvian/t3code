@@ -1,6 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
-import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
+  parseScopedThreadKey,
+  scopeThreadRef,
+  scopedThreadKey,
+} from "@t3tools/client-runtime/environment";
+import {
+  ThreadId,
+  type EnvironmentId,
   type DesktopPreviewColorScheme,
   type DesktopPreviewFavicon,
   type PreviewEvent,
@@ -504,3 +510,20 @@ export const __testing = {
   EMPTY_THREAD_PREVIEW_STATE,
   RECENT_URL_LIMIT: PREVIEW_RECENT_URL_LIMIT,
 };
+
+export function reconcilePreviewEnvironmentSessions(
+  environmentId: EnvironmentId,
+  result: PreviewListResult,
+): void {
+  const threadIds = new Set(result.sessions.map((session) => session.threadId));
+  for (const key of appAtomRegistry.get(activePreviewThreadKeysAtom).keys) {
+    const ref = parseScopedThreadKey(key);
+    if (ref?.environmentId === environmentId) threadIds.add(ref.threadId);
+  }
+  for (const threadId of threadIds) {
+    reconcilePreviewServerSessions(scopeThreadRef(environmentId, ThreadId.make(threadId)), {
+      ...result,
+      sessions: result.sessions.filter((session) => session.threadId === threadId),
+    });
+  }
+}

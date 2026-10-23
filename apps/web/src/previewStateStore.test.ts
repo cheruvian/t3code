@@ -17,6 +17,7 @@ import {
   previewStateAtom,
   readThreadPreviewState,
   reconcilePreviewServerSessions,
+  reconcilePreviewEnvironmentSessions,
   rememberPreviewUrl,
   resetPreviewStateForTests,
   setActivePreviewTab,
@@ -621,4 +622,21 @@ describe("previewStateStore (single-tab)", () => {
       `http://localhost:${5000 + __testing.RECENT_URL_LIMIT + 4}/`,
     );
   });
+});
+
+it("hosts background thread tabs from an environment baseline and removes closed tabs", () => {
+  reconcilePreviewEnvironmentSessions(environmentId, {
+    serverEpoch,
+    revision: 1,
+    sessions: [makeSnapshot(), makeSnapshot({ threadId: "thread-2", tabId: "tab_b" })],
+  });
+  expect(readThreadPreviewState(ref).sessions.tab_a).toBeDefined();
+  expect(readThreadPreviewState(otherRef).sessions.tab_b).toBeDefined();
+  reconcilePreviewEnvironmentSessions(environmentId, {
+    serverEpoch,
+    revision: 2,
+    sessions: [makeSnapshot()],
+  });
+  expect(readThreadPreviewState(otherRef).sessions).toEqual({});
+  expect(readThreadPreviewState(ref).sessions.tab_a).toBeDefined();
 });

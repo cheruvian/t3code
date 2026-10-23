@@ -1,9 +1,16 @@
 "use client";
 
-import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
-import { AuthPreviewOperateScope, FILL_PREVIEW_VIEWPORT } from "@t3tools/contracts";
+import { parseScopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  AuthPreviewOperateScope,
+  FILL_PREVIEW_VIEWPORT,
+  ThreadId,
+  type EnvironmentId,
+} from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { type ComponentProps, useEffect, useMemo, useRef, useState } from "react";
+
+import { AsyncResult, Atom } from "effect/reactivity";
 
 import { useServerConfigs } from "~/state/entities";
 
@@ -12,7 +19,12 @@ import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 import { isElectron } from "~/env";
 import { useClientSettingsHydrated } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
-import { useActivePreviewSessions } from "~/previewStateStore";
+import {
+  applyPreviewServerEvent,
+  readThreadPreviewState,
+  reconcilePreviewEnvironmentSessions,
+  useActivePreviewSessions,
+} from "~/previewStateStore";
 import { previewEnvironment } from "~/state/preview";
 import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -30,6 +42,10 @@ export function ElectronBrowserHost() {
   const previewByThreadKey = useActivePreviewSessions();
   const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
   const serverConfigs = useServerConfigs();
+  const hostsPrimary =
+    isElectron &&
+    primaryEnvironmentId !== null &&
+    serverConfigs.get(primaryEnvironmentId)?.environment.capabilities.nativeDesktopBrowser === true;
   const sessions = useMemo(
     () =>
       Object.entries(previewByThreadKey).flatMap(([threadKey, previewState]) => {
@@ -131,6 +147,7 @@ export function ElectronBrowserHost() {
   if (!isElectron) return null;
   return (
     <div className="contents" data-electron-browser-host>
+      {hostsPrimary && <DesktopPreviewSync environmentId={primaryEnvironmentId} />}
       {sessions.map(({ threadRef, snapshot, runtimeTabId, pictureInPicture, zoomFactor }) => {
         const url = snapshot.navStatus._tag === "Idle" ? null : snapshot.navStatus.url;
         return (
@@ -181,4 +198,32 @@ function useTabProfileId(profileId: string | undefined): string | undefined {
     setFallback(defaultProfileId);
   }
   return profileId ?? fallback;
+}
+
+// The hosting desktop must hear about agent tabs even when their thread is not viewed.
+const desktopPreviewSyncAtom = Atom.family((environmentId: EnvironmentId) => {
+  const sessions = previewEnvironment.list({ environmentId, input: {} });
+  const events = previewEnvironment.events({ environmentId, input: {} });
+  return Atom.make((get) => {
+    get.subscribe(sessions, (result) => {
+      if (AsyncResult.isSuccess(result))
+        reconcilePreviewEnvironmentSessions(environmentId, result.value);
+    });
+    get.subscribe(events, (result) => {
+      if (!AsyncResult.isSuccess(result)) return;
+      const event = result.value;
+      const ref = scopeThreadRef(environmentId, ThreadId.make(event.threadId));
+      const epoch = readThreadPreviewState(ref).serverEpoch;
+      if (epoch !== null && epoch !== event.serverEpoch) get.refresh(sessions);
+      else applyPreviewServerEvent(ref, event);
+    });
+    get.mount(events);
+    get.mount(sessions);
+    get.refresh(sessions);
+  });
+});
+
+function DesktopPreviewSync({ environmentId }: { environmentId: EnvironmentId }) {
+  useAtomValue(desktopPreviewSyncAtom(environmentId));
+  return null;
 }

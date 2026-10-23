@@ -1011,6 +1011,8 @@ const make = Effect.gen(function* () {
       // Background creation keeps the failed tab; automation awaits the original error.
       void tab.initialNavigation.catch(constVoid);
     }
+    // Native pages may finish loading before the CDP connection installs these listeners.
+    if (desktop) await reportLoaded(tab);
     return tab;
   };
 

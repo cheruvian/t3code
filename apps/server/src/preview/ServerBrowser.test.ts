@@ -55,6 +55,7 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
     }
     async connectDesktopPage(endpoint: string) {
       const context = makeContext();
+      if (desktopInitialUrl) await context.page.goto(desktopInitialUrl);
       desktopConnections.push({ endpoint, context });
       return { browser: { close: async () => {} }, page: context.page as unknown as Page };
     }
@@ -186,6 +187,7 @@ let focusedFrame: ReturnType<typeof makeFrame> | null = null;
 let contextFailure: Error | null = null;
 let desktopRendersNext = false;
 let desktopUnavailable = false;
+let desktopInitialUrl: string | undefined;
 const desktopDetaches = new NodeEvents.EventEmitter();
 const desktopTabs = new Set<string>();
 const desktopRenders = (tabId: string) => {
@@ -327,6 +329,7 @@ beforeEach(() => {
   desktopTabs.clear();
   desktopRendersNext = false;
   desktopUnavailable = false;
+  desktopInitialUrl = undefined;
   releasedDesktopTabs.length = 0;
   desktopConnections.length = 0;
   settledThreads.clear();
@@ -1943,4 +1946,33 @@ it.live("prepares private sign-in for an agent-owned desktop-attached tab", () =
       expect(desktopConnections).toHaveLength(1);
     }),
   ).pipe(Effect.provide(layer)),
+);
+
+it.live(
+  "reconciles a desktop page that loaded before the server attached without navigating it",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        desktopRendersNext = true;
+        desktopInitialUrl = "https://example.com/photos";
+        yield* ServerBrowser.ServerBrowser;
+        yield* Effect.yieldNow;
+        const broker = yield* Broker.PreviewAutomationBroker;
+        const manager = yield* Manager.PreviewManager;
+        yield* broker.invoke({
+          scope: asSession("agent-preloaded-desktop"),
+          operation: "open",
+          input: { url: "https://example.com/login" },
+        });
+        const { sessions } = yield* manager.list({ threadId: scope.thread.threadId });
+        expect(sessions[0]?.navStatus).toEqual({
+          _tag: "Success",
+          url: "https://example.com/photos",
+          title: "test page",
+        });
+        expect(desktopConnections[0]?.context.page.goto).toHaveBeenCalledExactlyOnceWith(
+          "https://example.com/photos",
+        );
+      }),
+    ).pipe(Effect.provide(layer)),
 );
