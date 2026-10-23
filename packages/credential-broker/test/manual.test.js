@@ -5,12 +5,14 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import { executeManualCredential } from "../src/manual.js";
 
-async function setup(t, handler) {
+async function setup(t, handler, { requireNodeMode = false } = {}) {
   const runtime = await mkdtemp("/tmp/t3-browser-credential-test-");
   const host = join(runtime, "host.mjs");
   await writeFile(
     host,
-    `import {runCredentialWorker} from ${JSON.stringify(new URL("../src/worker.js", import.meta.url).href)}; await runCredentialWorker(process.argv[3]);`,
+    `import {runCredentialWorker} from ${JSON.stringify(new URL("../src/worker.js", import.meta.url).href)};
+    if (${requireNodeMode} && process.argv[3] === "browser" && process.env.ELECTRON_RUN_AS_NODE !== "1") process.exit(71);
+    await runCredentialWorker(process.argv[3]);`,
   );
   const workerEntrypoint = [host, "__credential-broker-worker"];
   const server = createServer(handler);
@@ -67,6 +69,26 @@ test("private manual entry reaches only the supervised browser consumer and clea
   assert.equal(result.exitCode, 0);
   assert.deepEqual(delivered, options.login);
   assert.ok(!JSON.stringify(result).includes(options.login.password));
+  assert.deepEqual(await readdir(join(runtime, "manual")), []);
+});
+
+test("private browser host workers retain the Node mode required by Electron", async (t) => {
+  let delivered = false;
+  const { runtime, options } = await setup(
+    t,
+    async (request, response) => {
+      for await (const _ of request) {
+        // Consume only fixture credentials without retaining their contents.
+      }
+      delivered = true;
+      response.end("ok");
+    },
+    { requireNodeMode: true },
+  );
+  const result = await executeManualCredential(options);
+  assert.equal(result.state, "completed");
+  assert.equal(result.exitCode, 0);
+  assert.equal(delivered, true);
   assert.deepEqual(await readdir(join(runtime, "manual")), []);
 });
 

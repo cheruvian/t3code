@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { unlink } from "node:fs/promises";
 
-const { argv, cwd, file, file_env, expires_at } = JSON.parse(process.argv[2]);
+const { argv, cwd, file, file_env, expires_at, host_worker } = JSON.parse(process.argv[2]);
 let child;
 let finished = false;
 let timer;
@@ -42,7 +42,9 @@ try {
     process.exit(0);
   }
   const consumerEnvironment = { ...process.env };
-  delete consumerEnvironment.ELECTRON_RUN_AS_NODE;
+  // Internal workers reuse the Electron host executable, which needs Node mode.
+  // Ordinary approved commands must not inherit Electron's launch controls.
+  if (!host_worker) delete consumerEnvironment.ELECTRON_RUN_AS_NODE;
   child = spawn(argv[0], argv.slice(1), {
     cwd,
     env: { ...consumerEnvironment, [file_env]: file },

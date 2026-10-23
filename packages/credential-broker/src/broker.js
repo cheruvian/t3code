@@ -600,6 +600,10 @@ export class Broker {
           file: request.path,
           file_env: request.file_env,
           expires_at: request.expires_at,
+          host_worker:
+            this.workerEntrypoint !== undefined &&
+            request.argv[0] === process.execPath &&
+            this.workerEntrypoint.every((argument, index) => request.argv[index + 1] === argument),
         }),
       ],
       {
