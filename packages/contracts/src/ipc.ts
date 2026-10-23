@@ -1289,6 +1289,7 @@ export interface DesktopBridge {
 
 /** Renderer callback invoked by Electron with a fresh user gesture before display-media capture. */
 export const DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER = "__t3DesktopPreviewRecordingCapture";
+export const DESKTOP_PREVIEW_RENDERING_LEASE = "__t3DesktopPreviewRenderingLease";
 
 export interface DesktopPreviewBridge {
   setForwardedShortcuts?: (shortcuts: ReadonlyArray<PreviewForwardedShortcut>) => Promise<void>;

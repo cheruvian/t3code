@@ -118,6 +118,45 @@ describe("DesktopBrowserHost", () => {
     }),
   );
 
+  it.effect("releases background rendering when the server disconnects during capture", () =>
+    Effect.gen(function* () {
+      const host = yield* DesktopBrowserHost.make;
+      const debuggee = makeDebuggee();
+      const acquired = Promise.withResolvers<void>();
+      const released = Promise.withResolvers<void>();
+      let active = false;
+      Object.assign(debuggee.tab.webContents, {
+        id: 7,
+        hostWebContents: {
+          isDestroyed: () => false,
+          executeJavaScript: async (expression: string) => {
+            active = expression.includes(", true)");
+            if (active) acquired.resolve();
+            else released.resolve();
+            return true;
+          },
+        },
+      });
+      host.attach(key, debuggee.tab);
+      yield* host.handleCommandLine(
+        encodeJson({
+          type: "cdp",
+          ...key,
+          message: encodeJson({
+            id: 1,
+            method: "Page.captureScreenshot",
+            sessionId: "t3-preview-page",
+          }),
+        }),
+      );
+      yield* Effect.promise(() => acquired.promise);
+      yield* host.handleCommandLine(encodeJson({ type: "release", ...key }));
+      yield* Effect.promise(() => released.promise);
+      expect(active).toBe(false);
+      debuggee.release();
+    }),
+  );
+
   it.effect("tells a download the person clicked from one the agent's input started", () =>
     Effect.gen(function* () {
       const host = yield* DesktopBrowserHost.make;

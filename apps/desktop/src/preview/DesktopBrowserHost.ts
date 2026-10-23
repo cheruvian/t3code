@@ -19,6 +19,7 @@ import * as Stream from "effect/Stream";
 
 import { createCdpRelayConnection, type CdpRelayConnection } from "./CdpRelay.ts";
 import { sendPageCommand } from "./GuestInput.ts";
+import { withCaptureRendering } from "./CaptureRendering.ts";
 
 const encodeEvent = Schema.encodeSync(Schema.fromJsonString(DesktopBrowserEvent));
 const decodeCommand = Schema.decodeUnknownOption(Schema.fromJsonString(DesktopBrowserCommand));
@@ -40,6 +41,7 @@ export interface DesktopBrowserTabDebugger {
 const keyOf = ({ threadId, tabId }: DesktopBrowserTabKey) => `${threadId}\u0000${tabId}`;
 
 interface AttachedTab {
+  captureAbort: AbortController;
   readonly key: DesktopBrowserTabKey;
   readonly debuggee: DesktopBrowserTabDebugger;
   relay: CdpRelayConnection | null;
@@ -126,10 +128,19 @@ export const makeWithPrivatePages = (createPrivatePage = createPrivateBrowserPag
       const { webContents, debugger: debuggee } = tab.debuggee;
       const relay: CdpRelayConnection = createCdpRelayConnection(
         {
-          send: (method, params, sessionId) =>
-            sessionId === undefined
-              ? sendPageCommand(webContents, debuggee, method, params)
-              : debuggee.sendCommand(method, params, sessionId),
+          send: (method, params, sessionId) => {
+            const send = () =>
+              sessionId === undefined
+                ? sendPageCommand(webContents, debuggee, method, params)
+                : debuggee.sendCommand(method, params, sessionId);
+            return method === "Page.captureScreenshot"
+              ? withCaptureRendering(
+                  webContents,
+                  send,
+                  AbortSignal.any([tab.captureAbort.signal, AbortSignal.timeout(10_000)]),
+                )
+              : send();
+          },
           targetId: () =>
             debuggee
               .sendCommand("Target.getTargetInfo")
@@ -176,6 +187,7 @@ export const makeWithPrivatePages = (createPrivatePage = createPrivateBrowserPag
       }
       const tab = tabs.get(id);
       if (!tab) return;
+      tab.captureAbort.abort();
       tabs.delete(id);
       tab.debuggee.debugger.off("message", tab.onMessage);
       emit({ type: "detached", ...key });
@@ -186,6 +198,7 @@ export const makeWithPrivatePages = (createPrivatePage = createPrivateBrowserPag
       if (tabs.get(id)?.debuggee.webContents === debuggee.webContents) return;
       if (tabs.has(id)) detach(key);
       const tab: AttachedTab = {
+        captureAbort: new AbortController(),
         key,
         debuggee,
         relay: null,
@@ -247,6 +260,8 @@ export const makeWithPrivatePages = (createPrivatePage = createPrivateBrowserPag
           return;
         }
         if (value.type === "release") {
+          tab.captureAbort.abort();
+          tab.captureAbort = new AbortController();
           tab.relay = null;
           return;
         }
@@ -267,6 +282,8 @@ export const makeWithPrivatePages = (createPrivatePage = createPrivateBrowserPag
       return Effect.forEach(
         [...tabs.values()],
         (tab) => {
+          tab.captureAbort.abort();
+          tab.captureAbort = new AbortController();
           tab.relay = null;
           return PubSub.publish(outbox, { type: "attached", ...tab.key });
         },
