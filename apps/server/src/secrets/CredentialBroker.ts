@@ -252,7 +252,10 @@ const make = Effect.gen(function* () {
             const result = await broker.execute(caller, input, signal, {
               CB_BROWSER_ENDPOINT: target.endpoint,
             });
-            return call.manualResult ?? result;
+            const execution = call.manualResult ?? result;
+            return execution.state === "completed" && execution.exitCode !== 0
+              ? { ...execution, browserFailureStage: "delivery" as const, ...target.failure() }
+              : execution;
           },
           catch: safeBrokerFailure,
         }).pipe(

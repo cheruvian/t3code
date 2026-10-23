@@ -3,6 +3,7 @@
 import {
   CredentialBrokerError,
   type CredentialBrowserLoginInput,
+  type CredentialExecution,
   BUILT_IN_BROWSER_PROFILES,
   DEFAULT_BROWSER_PROFILE_ID,
   FILL_PREVIEW_VIEWPORT,
@@ -229,6 +230,10 @@ export class ServerBrowser extends Context.Service<
         readonly origin: string;
         readonly profile: string;
         readonly endpoint: string;
+        readonly failure: () => Pick<
+          CredentialExecution,
+          "browserFailureStage" | "browserRequestBlocked"
+        >;
         readonly close: () => Promise<void>;
       },
       CredentialBrokerError,

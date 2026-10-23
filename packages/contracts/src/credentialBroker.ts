@@ -47,6 +47,19 @@ export const CredentialExecutionFailureCode = Schema.Literals([
   "supervisor_start_failed",
   "credential_cleanup_failed",
 ]);
+export const CredentialBrowserFailureStage = Schema.Literals([
+  "private_page",
+  "connection",
+  "navigation",
+  "username",
+  "password",
+  "submit",
+  "session_refresh",
+  "target_changed",
+  "request_policy",
+  "delivery",
+]);
+export type CredentialBrowserFailureStage = typeof CredentialBrowserFailureStage.Type;
 export const CredentialExecution = Schema.Struct({
   requestId: Schema.String,
   state: Schema.String,
@@ -54,6 +67,8 @@ export const CredentialExecution = Schema.Struct({
   exitCode: Schema.optional(Schema.NullOr(Schema.Number)),
   signal: Schema.optional(Schema.NullOr(Schema.String)),
   failureCode: Schema.optional(CredentialExecutionFailureCode),
+  browserFailureStage: Schema.optional(CredentialBrowserFailureStage),
+  browserRequestBlocked: Schema.optional(Schema.Boolean),
 });
 export type CredentialExecution = typeof CredentialExecution.Type;
 export const CredentialApproval = Schema.Struct({

@@ -334,9 +334,113 @@ describe("private browser credential delivery", () => {
       });
       expect(response.status).toBe(400);
       expect(await response.text()).toBe("Sign-in did not complete.");
+      expect(bridge.failure()).toEqual({
+        browserFailureStage: "delivery",
+        browserRequestBlocked: false,
+      });
+      expect(JSON.stringify(bridge.failure())).not.toContain(login.password);
       expect(
         (await fetch(bridge.endpoint, { method: "POST", body: JSON.stringify(login) })).status,
       ).toBe(404);
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it("reports private page creation failure without retaining the underlying error", async () => {
+    const bridge = await createBrowserLoginBridge((privateLogin, signal) =>
+      consumeBrowserLogin({
+        page,
+        url: origin,
+        fields,
+        login: privateLogin,
+        signal,
+        checkTarget: () => true,
+        createPrivatePage: async () => {
+          throw new Error(login.password);
+        },
+      }),
+    );
+    try {
+      expect(bridge.failure()).toEqual({});
+      const response = await fetch(bridge.endpoint, {
+        method: "POST",
+        body: JSON.stringify(login),
+      });
+      expect(response.status).toBe(400);
+      expect(bridge.failure()).toEqual({
+        browserFailureStage: "private_page",
+        browserRequestBlocked: false,
+      });
+      expect(await response.text()).not.toContain(login.password);
+      expect(JSON.stringify(bridge.failure())).not.toContain(login.password);
+      expect(context.pages()).toEqual([page]);
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it.each([
+    { path: "/", fields: { ...fields, usernameSelector: "[" }, stage: "username", blocked: false },
+    { path: "/", fields: { ...fields, passwordSelector: "[" }, stage: "password", blocked: false },
+    { path: "/unsafe", fields, stage: "request_policy", blocked: false },
+  ])("identifies $stage failures without returning private page diagnostics", async (fixture) => {
+    const bridge = await createBrowserLoginBridge((privateLogin, signal) =>
+      consumeBrowserLogin({
+        page,
+        url: origin + fixture.path,
+        fields: fixture.fields,
+        login: privateLogin,
+        signal,
+        checkTarget: () => true,
+      }),
+    );
+    try {
+      const response = await fetch(bridge.endpoint, {
+        method: "POST",
+        body: JSON.stringify(login),
+      });
+      expect(response.status).toBe(400);
+      expect(bridge.failure()).toEqual({
+        browserFailureStage: fixture.stage,
+        browserRequestBlocked: fixture.blocked,
+      });
+      expect(received).toEqual([]);
+      expect(context.pages()).toEqual([page]);
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it("reports a blocked request when the target changes during private page creation", async () => {
+    let targetCurrent = true;
+    const bridge = await createBrowserLoginBridge((privateLogin, signal) =>
+      consumeBrowserLogin({
+        page,
+        url: origin,
+        fields,
+        login: privateLogin,
+        signal,
+        checkTarget: () => targetCurrent,
+        createPrivatePage: async () => {
+          const privatePage = await context.newPage();
+          targetCurrent = false;
+          return { page: privatePage, close: () => privatePage.close() };
+        },
+      }),
+    );
+    try {
+      const response = await fetch(bridge.endpoint, {
+        method: "POST",
+        body: JSON.stringify(login),
+      });
+      expect(response.status).toBe(400);
+      expect(bridge.failure()).toEqual({
+        browserFailureStage: "navigation",
+        browserRequestBlocked: true,
+      });
+      expect(received).toEqual([]);
+      expect(context.pages()).toEqual([page]);
     } finally {
       await bridge.close();
     }

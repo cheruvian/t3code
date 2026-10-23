@@ -2,6 +2,18 @@
 import * as NodeHttp from "node:http";
 import * as NodeCrypto from "node:crypto";
 import type { Page, CDPSession, Locator } from "playwright-core";
+import type { CredentialBrowserFailureStage, CredentialExecution } from "@t3tools/contracts";
+
+class BrowserCredentialFailure extends Error {
+  readonly stage: CredentialBrowserFailureStage;
+  readonly requestBlocked: boolean;
+
+  constructor(stage: CredentialBrowserFailureStage, requestBlocked = false) {
+    super("Private browser sign-in did not complete.");
+    this.stage = stage;
+    this.requestBlocked = requestBlocked;
+  }
+}
 
 export interface BrowserLoginFields {
   readonly usernameSelector: string;
@@ -24,8 +36,11 @@ export async function consumeBrowserLogin(input: {
 }) {
   const original = new URL(input.url);
   if (!["http:", "https:"].includes(original.protocol) || original.username || original.password)
-    throw new Error("Unsupported browser sign-in target.");
-  if (input.signal.aborted || !input.checkTarget()) throw new Error();
+    throw new BrowserCredentialFailure("target_changed");
+  if (input.signal.aborted || !input.checkTarget())
+    throw new BrowserCredentialFailure("target_changed");
+  let stage: CredentialBrowserFailureStage = "delivery";
+  let blockedRequest = false;
   let login: { username: string; password: string } | undefined;
   let privatePage: Page | undefined;
   let cdp: CDPSession | undefined;
@@ -44,6 +59,7 @@ export async function consumeBrowserLogin(input: {
       !login.password
     )
       throw new Error();
+    stage = "private_page";
     if (input.createPrivatePage) {
       const created = await input.createPrivatePage();
       privatePage = created.page;
@@ -54,6 +70,7 @@ export async function consumeBrowserLogin(input: {
     }
     const signInPage = privatePage;
     if (input.signal.aborted) throw new Error();
+    stage = "connection";
     cdp = await privatePage.context().newCDPSession(privatePage);
     await cdp.send("Network.setBypassServiceWorker", { bypass: true });
     privatePage.on("popup", (popup) => {
@@ -76,20 +93,22 @@ export async function consumeBrowserLogin(input: {
         ((request.isNavigationRequest() ||
           !["GET", "HEAD", "OPTIONS"].includes(request.method())) &&
           url.origin !== original.origin)
-      )
+      ) {
+        blockedRequest = true;
         await route.abort();
-      else await route.continue();
+      } else await route.continue();
     });
+    stage = "navigation";
     await privatePage.goto(original.href, { waitUntil: "domcontentloaded", timeout: 15_000 });
     if (new URL(privatePage.url()).origin !== original.origin || !input.checkTarget())
-      throw new Error();
+      throw new BrowserCredentialFailure("target_changed");
     const checkTarget = () => {
       if (
         input.signal.aborted ||
         !input.checkTarget() ||
         new URL(signInPage.url()).origin !== original.origin
       )
-        throw new Error();
+        throw new BrowserCredentialFailure("target_changed");
     };
     const visible = async (selector: string) => {
       const locator = signInPage.locator(selector).filter({ visible: true });
@@ -105,7 +124,7 @@ export async function consumeBrowserLogin(input: {
         await submit.getAttribute("formaction"),
       ]) {
         if (new URL(action ?? signInPage.url(), signInPage.url()).origin !== original.origin)
-          throw new Error();
+          throw new BrowserCredentialFailure("request_policy");
       }
       if (await form.count()) {
         // Prevent credentials entering a native GET URL; SPA submit handlers still run.
@@ -120,6 +139,7 @@ export async function consumeBrowserLogin(input: {
         );
       }
     };
+    stage = "username";
     const username = await visible(input.fields.usernameSelector);
     if (input.fields.usernameSubmitSelector) {
       const next = await visible(input.fields.usernameSubmitSelector);
@@ -129,6 +149,7 @@ export async function consumeBrowserLogin(input: {
       checkTarget();
       await next.click({ timeout: 5000 });
     }
+    stage = "password";
     const password = await visible(input.fields.passwordSelector);
     const submit = await visible(input.fields.submitSelector);
     const passwordType = await password.getAttribute("type");
@@ -141,6 +162,7 @@ export async function consumeBrowserLogin(input: {
     checkTarget();
     await password.fill(login.password, { timeout: 5000 });
     checkTarget();
+    stage = "submit";
     await submit.click({ timeout: 5000 });
     await password.waitFor({ state: "hidden", timeout: 15_000 });
     checkTarget();
@@ -148,7 +170,14 @@ export async function consumeBrowserLogin(input: {
     privatePage = undefined;
     closePrivatePage = undefined;
     // The working tab never receives the filled form or its diagnostic buffers.
-    await input.page.reload({ waitUntil: "domcontentloaded", timeout: 15_000 });
+    stage = "session_refresh";
+    // Electron guests can leave CDP Page.reload pending without navigation events.
+    await input.page.goto(original.href, { waitUntil: "domcontentloaded", timeout: 15_000 });
+  } catch (error) {
+    throw new BrowserCredentialFailure(
+      error instanceof BrowserCredentialFailure ? error.stage : stage,
+      blockedRequest,
+    );
   } finally {
     login = undefined;
     input.signal.removeEventListener("abort", abort);
@@ -164,6 +193,7 @@ export async function createBrowserLoginBridge(
   const capability = `/${NodeCrypto.randomUUID()}`;
   const abort = new AbortController();
   let used = false;
+  let failure: Pick<CredentialExecution, "browserFailureStage" | "browserRequestBlocked"> = {};
   const server = NodeHttp.createServer(async (request, response) => {
     if (used || request.method !== "POST" || request.url !== capability) {
       response.writeHead(404).end();
@@ -196,7 +226,11 @@ export async function createBrowserLoginBridge(
       body = "";
       await consume({ username: value.username, password: value.password }, abort.signal);
       response.writeHead(200, { "content-type": "text/plain" }).end("ok");
-    } catch {
+    } catch (error) {
+      failure = {
+        browserFailureStage: error instanceof BrowserCredentialFailure ? error.stage : "delivery",
+        browserRequestBlocked: error instanceof BrowserCredentialFailure && error.requestBlocked,
+      };
       response.writeHead(400).end("Sign-in did not complete.");
     }
   });
@@ -208,6 +242,7 @@ export async function createBrowserLoginBridge(
   if (!address || typeof address === "string") throw new Error();
   return {
     endpoint: `http://127.0.0.1:${address.port}${capability}`,
+    failure: () => failure,
     close: async () => {
       abort.abort();
       server.closeAllConnections();
