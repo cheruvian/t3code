@@ -4,7 +4,7 @@ import * as NodeCrypto from "node:crypto";
 import type { Page, CDPSession, Locator } from "playwright-core";
 import type { CredentialBrowserFailureStage, CredentialExecution } from "@t3tools/contracts";
 
-class BrowserCredentialFailure extends Error {
+export class BrowserCredentialFailure extends Error {
   readonly stage: CredentialBrowserFailureStage;
   readonly requestBlocked: boolean;
 
@@ -20,9 +20,10 @@ export interface BrowserLoginFields {
   readonly usernameSubmitSelector?: string | undefined;
   readonly passwordSelector: string;
   readonly submitSelector: string;
+  readonly successSelector?: string | undefined;
 }
 
-/** No page listeners, snapshots, recordings, returned account values, or raw browser errors. */
+/** Trusted consumer: callers must suspend observation before shared-tab entry. */
 export async function consumeBrowserLogin(input: {
   readonly page: Page;
   readonly url: string;
@@ -30,6 +31,7 @@ export async function consumeBrowserLogin(input: {
   readonly login: { username: string; password: string };
   readonly signal: AbortSignal;
   readonly checkTarget: () => boolean;
+  readonly sharedTab?: boolean;
   readonly createPrivatePage?:
     | (() => Promise<{ page: Page; close: () => Promise<void> }>)
     | undefined;
@@ -45,7 +47,16 @@ export async function consumeBrowserLogin(input: {
   let privatePage: Page | undefined;
   let cdp: CDPSession | undefined;
   let closePrivatePage: (() => Promise<void>) | undefined;
+  let routeHandler: Parameters<Page["route"]>[1] | undefined;
+  const closePopup = (popup: Page) => {
+    void popup.close().catch(() => {});
+  };
+  let sharedDocumentClean = !input.sharedTab;
   const abort = () => {
+    if (input.sharedTab)
+      void input.page
+        .goto("about:blank", { waitUntil: "commit", timeout: 5000 })
+        .catch(() => input.page.close().catch(() => {}));
     void closePrivatePage?.().catch(() => {});
   };
   input.signal.addEventListener("abort", abort, { once: true });
@@ -60,7 +71,9 @@ export async function consumeBrowserLogin(input: {
     )
       throw new Error();
     stage = "private_page";
-    if (input.createPrivatePage) {
+    if (input.sharedTab) {
+      privatePage = input.page;
+    } else if (input.createPrivatePage) {
       const created = await input.createPrivatePage();
       privatePage = created.page;
       closePrivatePage = created.close;
@@ -73,12 +86,10 @@ export async function consumeBrowserLogin(input: {
     stage = "connection";
     cdp = await privatePage.context().newCDPSession(privatePage);
     await cdp.send("Network.setBypassServiceWorker", { bypass: true });
-    privatePage.on("popup", (popup) => {
-      void popup.close().catch(() => {});
-    });
+    privatePage.on("popup", closePopup);
     let filled = false;
     // Redirects and form posts may not move approved credentials to another origin.
-    await privatePage.route("**/*", async (route) => {
+    routeHandler = async (route) => {
       const request = route.request();
       const url = new URL(request.url());
       if (
@@ -86,10 +97,10 @@ export async function consumeBrowserLogin(input: {
         !input.checkTarget() ||
         (filled && url.origin !== original.origin) ||
         (filled &&
-          url.search &&
-          [login!.username, login!.password].some(
-            (value) => url.href.includes(encodeURIComponent(value)) || url.href.includes(value),
-          )) ||
+          (!login ||
+            [login.username, login.password].some(
+              (value) => url.href.includes(encodeURIComponent(value)) || url.href.includes(value),
+            ))) ||
         ((request.isNavigationRequest() ||
           !["GET", "HEAD", "OPTIONS"].includes(request.method())) &&
           url.origin !== original.origin)
@@ -97,8 +108,14 @@ export async function consumeBrowserLogin(input: {
         blockedRequest = true;
         await route.abort();
       } else await route.continue();
-    });
+    };
+    await privatePage.route("**/*", routeHandler);
     stage = "navigation";
+    if (input.sharedTab) {
+      await privatePage.goto("about:blank", { waitUntil: "commit", timeout: 5000 });
+      await cdp.send("Page.resetNavigationHistory");
+      await cdp.send("Runtime.discardConsoleEntries");
+    }
     await privatePage.goto(original.href, { waitUntil: "domcontentloaded", timeout: 15_000 });
     if (new URL(privatePage.url()).origin !== original.origin || !input.checkTarget())
       throw new BrowserCredentialFailure("target_changed");
@@ -147,7 +164,8 @@ export async function consumeBrowserLogin(input: {
       filled = true;
       await username.fill(login.username, { timeout: 5000 });
       checkTarget();
-      await next.click({ timeout: 5000 });
+      if (input.sharedTab) await next.dispatchEvent("click", undefined, { timeout: 5000 });
+      else await next.click({ timeout: 5000 });
     }
     stage = "password";
     const password = await visible(input.fields.passwordSelector);
@@ -163,16 +181,47 @@ export async function consumeBrowserLogin(input: {
     await password.fill(login.password, { timeout: 5000 });
     checkTarget();
     stage = "submit";
-    await submit.click({ timeout: 5000 });
+    // Hidden desktop guests cannot receive pointer input. Only this approved consumer
+    // dispatches the form control event; ordinary tools remain excluded by the reservation.
+    if (input.sharedTab) await submit.dispatchEvent("click", undefined, { timeout: 5000 });
+    else await submit.click({ timeout: 5000 });
     await password.waitFor({ state: "hidden", timeout: 15_000 });
     checkTarget();
-    await closePrivatePage();
+    if (blockedRequest) throw new BrowserCredentialFailure("request_policy", true);
+    if (input.fields.successSelector) {
+      stage = "verification";
+      await visible(input.fields.successSelector);
+    }
+    if (input.sharedTab) {
+      // A fresh document removes filled forms, page closures and cached console objects.
+      // Navigating this same tab retains sessionStorage; transferring it to a new tab does not.
+      stage = "cleanup";
+      const destination = signInPage.url();
+      if (
+        [login.username, login.password].some(
+          (value) => destination.includes(value) || destination.includes(encodeURIComponent(value)),
+        )
+      )
+        throw new BrowserCredentialFailure("request_policy");
+      await signInPage.goto("about:blank", { waitUntil: "commit", timeout: 5000 });
+      await signInPage.goto(destination, { waitUntil: "domcontentloaded", timeout: 15_000 });
+      await cdp.send("Page.resetNavigationHistory");
+      await cdp.send("Runtime.discardConsoleEntries");
+      if (input.signal.aborted || !input.checkTarget())
+        throw new BrowserCredentialFailure("target_changed");
+      sharedDocumentClean = true;
+      if (input.fields.successSelector) {
+        stage = "verification";
+        await visible(input.fields.successSelector);
+      }
+      return input.fields.successSelector ? ("authenticated" as const) : ("submitted" as const);
+    }
+    await closePrivatePage!();
     privatePage = undefined;
     closePrivatePage = undefined;
-    // The working tab never receives the filled form or its diagnostic buffers.
     stage = "session_refresh";
-    // Electron guests can leave CDP Page.reload pending without navigation events.
     await input.page.goto(original.href, { waitUntil: "domcontentloaded", timeout: 15_000 });
+    return "submitted" as const;
   } catch (error) {
     throw new BrowserCredentialFailure(
       error instanceof BrowserCredentialFailure ? error.stage : stage,
@@ -181,6 +230,27 @@ export async function consumeBrowserLogin(input: {
   } finally {
     login = undefined;
     input.signal.removeEventListener("abort", abort);
+    if (input.sharedTab && !sharedDocumentClean) {
+      // Failure/revocation never exposes the partially filled document to observers.
+      const blanked = await (async () => {
+        await input.page.goto("about:blank", { waitUntil: "commit", timeout: 5000 });
+        await cdp?.send("Page.resetNavigationHistory");
+        await cdp?.send("Runtime.discardConsoleEntries");
+      })().then(
+        () => true,
+        () => false,
+      );
+      if (!blanked) await input.page.close().catch(() => {});
+      if (!blanked && !input.page.isClosed())
+        await Promise.reject(new BrowserCredentialFailure("cleanup"));
+    }
+    privatePage?.off("popup", closePopup);
+    if (privatePage && routeHandler)
+      await privatePage.unroute("**/*", routeHandler).catch(() => {});
+    if (input.sharedTab) {
+      await cdp?.send("Runtime.discardConsoleEntries").catch(() => {});
+      await cdp?.send("Network.setBypassServiceWorker", { bypass: false }).catch(() => {});
+    }
     await closePrivatePage?.().catch(() => {});
     await cdp?.detach().catch(() => {});
   }
@@ -188,12 +258,19 @@ export async function consumeBrowserLogin(input: {
 
 /** One-use loopback capability; only its supervised process receives the URL. */
 export async function createBrowserLoginBridge(
-  consume: (login: { username: string; password: string }, signal: AbortSignal) => Promise<void>,
+  consume: (
+    login: { username: string; password: string },
+    signal: AbortSignal,
+  ) => Promise<void | "submitted" | "authenticated">,
 ) {
   const capability = `/${NodeCrypto.randomUUID()}`;
   const abort = new AbortController();
   let used = false;
-  let failure: Pick<CredentialExecution, "browserFailureStage" | "browserRequestBlocked"> = {};
+  let consuming: ReturnType<typeof consume> | undefined;
+  let failure: Pick<
+    CredentialExecution,
+    "browserFailureStage" | "browserRequestBlocked" | "browserOutcome"
+  > = {};
   const server = NodeHttp.createServer(async (request, response) => {
     if (used || request.method !== "POST" || request.url !== capability) {
       response.writeHead(404).end();
@@ -224,7 +301,9 @@ export async function createBrowserLoginBridge(
       )
         throw new Error();
       body = "";
-      await consume({ username: value.username, password: value.password }, abort.signal);
+      consuming = consume({ username: value.username, password: value.password }, abort.signal);
+      const outcome = await consuming;
+      if (outcome) failure = { browserOutcome: outcome };
       response.writeHead(200, { "content-type": "text/plain" }).end("ok");
     } catch (error) {
       failure = {
@@ -246,6 +325,7 @@ export async function createBrowserLoginBridge(
     close: async () => {
       abort.abort();
       server.closeAllConnections();
+      await consuming?.catch(() => {});
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };

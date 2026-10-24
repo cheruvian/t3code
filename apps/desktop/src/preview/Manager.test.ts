@@ -1,3 +1,4 @@
+import { setCredentialEntryPrivacy } from "./CredentialEntryPrivacy.ts";
 import { it as effectIt } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
@@ -235,6 +236,7 @@ const {
 }));
 
 vi.mock("electron", () => ({
+  app: { on: vi.fn(), off: vi.fn() },
   BrowserWindow: browserWindowConstructor,
   ClipboardItem: class {
     constructor(data: Record<string, unknown>) {
@@ -254,6 +256,7 @@ vi.mock("electron", () => ({
     fromPartition: vi.fn(),
   },
   webContents: {
+    getAllWebContents: vi.fn(() => []),
     fromId,
     getFocusedWebContents,
   },
@@ -2661,6 +2664,67 @@ describe("PreviewManager", () => {
         });
       }),
     ),
+  );
+
+  effectIt.effect(
+    "discards a native capture crossing credential entry and blocks recording until cleanup",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const preview = makeFaviconWebContents({ id: 871 });
+          const started = Promise.withResolvers<void>();
+          const finish = Promise.withResolvers<void>();
+          const capturePage = vi.fn(async () => {
+            started.resolve();
+            await finish.promise;
+            return { toPNG: () => Buffer.from("synthetic-sensitive-frame") };
+          });
+          Object.assign(preview.webContents, {
+            once: () => {},
+            capturePage,
+            hostWebContents: { isDestroyed: () => false, executeJavaScript: async () => true },
+          });
+          fromId.mockReturnValue(preview.webContents as never);
+          yield* manager.createTab("credential-fixture");
+          yield* manager.registerWebview("credential-fixture", 871);
+          writeFile.mockClear();
+          const capture = yield* Effect.exit(manager.captureScreenshot("credential-fixture")).pipe(
+            Effect.forkScoped,
+          );
+          yield* Effect.promise(() => started.promise);
+          yield* Effect.promise(() =>
+            setCredentialEntryPrivacy(
+              preview.webContents as unknown as Electron.WebContents,
+              true,
+              async () => true,
+            ),
+          );
+          try {
+            expect(
+              Exit.isFailure(yield* Effect.exit(manager.captureScreenshot("credential-fixture"))),
+            ).toBe(true);
+            expect(
+              Exit.isFailure(yield* Effect.exit(manager.startRecording("credential-fixture"))),
+            ).toBe(true);
+            expect(writeFile).not.toHaveBeenCalled();
+          } finally {
+            yield* Effect.promise(() =>
+              setCredentialEntryPrivacy(
+                preview.webContents as unknown as Electron.WebContents,
+                false,
+                undefined,
+              ),
+            );
+          }
+          // The old screenshot finishes after protection ended; the epoch still rejects it.
+          finish.resolve();
+          expect(Exit.isFailure(yield* Fiber.join(capture))).toBe(true);
+          expect(writeFile).not.toHaveBeenCalled();
+          expect(
+            Exit.isSuccess(yield* Effect.exit(manager.captureScreenshot("credential-fixture"))),
+          ).toBe(true);
+        }),
+      ),
   );
 
   effectIt.effect("preserves both screenshots of the same site in the same millisecond", () =>

@@ -21,6 +21,35 @@ export class SessionControl {
   private epoch = 0;
   private closed = false;
   private inFlight = 0;
+  private credentialAbort: AbortController | null = null;
+  private readonly observations = new Set<Promise<unknown>>();
+
+  get credentialsActive() {
+    return this.credentialAbort !== null;
+  }
+
+  assertObservable() {
+    this.assertOpen();
+    if (this.credentialsActive)
+      throw new BrowserControlInterrupted("Private credential entry is in progress.");
+  }
+
+  /** Reserve before draining readers; no new work may cross the credential boundary. */
+  credentialEntry<A>(run: (signal: AbortSignal) => Promise<A>): Promise<A> {
+    this.assertObservable();
+    const abort = new AbortController();
+    this.credentialAbort = abort;
+    return this.enqueue(async () => {
+      await Promise.allSettled(this.observations);
+      try {
+        this.assertOpen();
+        abort.signal.throwIfAborted();
+        return await run(abort.signal);
+      } finally {
+        this.credentialAbort = null;
+      }
+    });
+  }
 
   constructor(agentId: string | null, onGenerationChange: () => void = () => {}) {
     this.agentId = agentId;
@@ -66,17 +95,18 @@ export class SessionControl {
   }
 
   private changeOwner(owner: string | null) {
+    this.credentialAbort?.abort();
     this.owner = owner;
     this.epoch++;
     this.onGenerationChange();
   }
 
   private async action<A>(allowed: () => boolean, run: () => Promise<A>) {
-    this.assertOpen();
+    this.assertObservable();
     if (!allowed()) throw new BrowserControlInterrupted("You do not control this browser tab.");
     const epoch = this.epoch;
     return this.enqueue(async () => {
-      this.assertOpen();
+      this.assertObservable();
       if (epoch !== this.epoch || !allowed()) throw new BrowserControlInterrupted();
       return run();
     });
@@ -107,14 +137,20 @@ export class SessionControl {
    * a page while a human drives it without holding up the human's input.
    */
   observe<A>(run: () => Promise<A>) {
-    this.assertOpen();
-    return run();
+    this.assertObservable();
+    const result = Promise.resolve().then(() => {
+      this.assertObservable();
+      return run();
+    });
+    this.observations.add(result);
+    void result.finally(() => this.observations.delete(result)).catch(() => {});
+    return result;
   }
 
   system<A>(run: () => Promise<A>) {
-    this.assertOpen();
+    this.assertObservable();
     return this.enqueue(async () => {
-      this.assertOpen();
+      this.assertObservable();
       return run();
     });
   }

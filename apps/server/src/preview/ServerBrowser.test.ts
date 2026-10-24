@@ -1,3 +1,5 @@
+// @effect-diagnostics globalFetch:off - Test-only loopback credential transport.
+import * as BrowserCredentialConsumer from "./BrowserCredentialConsumer.ts";
 import * as NodeEvents from "node:events";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -79,7 +81,7 @@ function makeSession(frame?: ReturnType<typeof makeFrame>) {
   const events = new NodeEvents.EventEmitter();
   return {
     on: vi.fn((name: string, listener: () => void) => events.on(name, listener)),
-    emit: (name: string) => events.emit(name),
+    emit: (name: string, ...args: unknown[]) => events.emit(name, ...args),
     detach: vi.fn(async () => {}),
     send: vi.fn(async (method: string, input?: unknown): Promise<Record<string, unknown>> => {
       if (method === "Page.getNavigationHistory") return { currentIndex: 0, entries: [{}] };
@@ -157,6 +159,7 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
     }),
   };
   const context = {
+    pages: () => [page],
     page,
     sessions,
     newPage: async () => page as unknown as Page,
@@ -177,6 +180,12 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
   };
   return context;
 }
+
+const postFixtureCredentials = (endpoint: string) =>
+  fetch(endpoint, {
+    method: "POST",
+    body: JSON.stringify({ username: "synthetic-user", password: "synthetic-password" }),
+  });
 
 const contexts: ReturnType<typeof makeContext>[] = [];
 const contextRequests: Array<{ profileId: string; isolated: boolean }> = [];
@@ -1973,6 +1982,110 @@ it.live(
         expect(desktopConnections[0]?.context.page.goto).toHaveBeenCalledExactlyOnceWith(
           "https://example.com/photos",
         );
+      }),
+    ).pipe(Effect.provide(layer)),
+);
+
+it.live(
+  "shared credential entry blocks concurrent tools and drops sensitive diagnostics and viewer frames",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { browser, broker, tabId } = yield* ready;
+        yield* broker.invoke({
+          scope,
+          tabId,
+          operation: "navigate",
+          input: { url: "https://example.com/login" },
+        });
+        const viewer = yield* browser.attachViewer(viewerInput(tabId, false));
+        const page = contexts[0]!.page;
+        const viewerSession = contexts[0]!.sessions.at(-1)!;
+        const entered = Promise.withResolvers<void>();
+        const finish = Promise.withResolvers<void>();
+        const spy = vi
+          .spyOn(BrowserCredentialConsumer, "consumeBrowserLogin")
+          .mockImplementationOnce(async () => {
+            entered.resolve();
+            await finish.promise;
+            return "authenticated";
+          });
+        try {
+          const target = yield* browser.prepareCredentialLogin({
+            threadId: testThread.threadId,
+            tabId,
+            agentSessionId: `${scope.environmentId}\u0000${testThread.providerSessionId}`,
+            usernameSelector: "#username",
+            passwordSelector: "#password",
+            submitSelector: "button",
+            reason: "Fixture sign in",
+          });
+          const response = yield* Effect.promise(() =>
+            postFixtureCredentials(target.endpoint),
+          ).pipe(Effect.forkScoped);
+          yield* Effect.promise(() => entered.promise);
+          yield* Queue.clear(viewer.output as Queue.Queue<ServerBrowser.ServerBrowserViewerOutput>);
+          const secret = "synthetic-password";
+          const request = { url: () => `https://example.com/${secret}`, method: () => "POST" };
+          page.emit("request", request);
+          page.emit("response", { url: request.url, request: () => request, status: () => 200 });
+          page.emit("console", { type: () => "log", text: () => secret });
+          viewerSession.emit("Page.screencastFrame", {
+            data: Buffer.from(secret).toString("base64"),
+            metadata: { deviceWidth: 800 },
+            sessionId: 1,
+          });
+          for (const operation of [
+            "snapshot",
+            "evaluate",
+            "waitFor",
+            "recordingStart",
+            "status",
+            "open",
+          ] as const) {
+            const failure = yield* broker
+              .invoke<void>({ scope, tabId, operation, input: {} })
+              .pipe(Effect.flip);
+            expect(JSON.stringify(failure)).not.toContain(secret);
+            expect(failure).toMatchObject({ _tag: "PreviewAutomationControlInterruptedError" });
+          }
+          expect(
+            yield* Queue.clear(
+              viewer.output as Queue.Queue<ServerBrowser.ServerBrowserViewerOutput>,
+            ),
+          ).toEqual([]);
+          finish.resolve();
+          expect((yield* Fiber.join(response)).status).toBe(200);
+          expect(target.failure()).toEqual({ browserOutcome: "authenticated" });
+          // Late responses belong to requests made while entry was private.
+          page.emit("response", { url: request.url, request: () => request, status: () => 200 });
+          const snapshot = yield* broker.invoke<PreviewAutomationSnapshot>({
+            scope,
+            tabId,
+            operation: "snapshot",
+            input: {},
+          });
+          expect(JSON.stringify(snapshot)).not.toContain(secret);
+          const context = contexts[0]!;
+          vi.spyOn(context, "pages").mockReturnValueOnce([page, page]);
+          const isolated = yield* browser.prepareCredentialLogin({
+            threadId: testThread.threadId,
+            tabId,
+            agentSessionId: `${scope.environmentId}\u0000${testThread.providerSessionId}`,
+            usernameSelector: "#username",
+            passwordSelector: "#password",
+            submitSelector: "button",
+            reason: "Isolation fixture",
+          });
+          expect(
+            (yield* Effect.promise(() => postFixtureCredentials(isolated.endpoint))).status,
+          ).toBe(400);
+          expect(isolated.failure()).toMatchObject({ browserFailureStage: "privacy" });
+          expect(spy).toHaveBeenCalledOnce();
+        } finally {
+          finish.resolve();
+          spy.mockRestore();
+        }
       }),
     ).pipe(Effect.provide(layer)),
 );

@@ -1,3 +1,4 @@
+import { DESKTOP_CREDENTIAL_ENTRY_COMMAND } from "@t3tools/contracts";
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Playwright callbacks run outside the Effect runtime.
 // Screencasts ignore emulated device scale; real 2x keeps captures sharp.
 import {
@@ -83,7 +84,11 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as DesktopBrowserChannel from "./DesktopBrowserChannel.ts";
 import * as PreviewManager from "./Manager.ts";
-import { consumeBrowserLogin, createBrowserLoginBridge } from "./BrowserCredentialConsumer.ts";
+import {
+  BrowserCredentialFailure,
+  consumeBrowserLogin,
+  createBrowserLoginBridge,
+} from "./BrowserCredentialConsumer.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
@@ -232,7 +237,7 @@ export class ServerBrowser extends Context.Service<
         readonly endpoint: string;
         readonly failure: () => Pick<
           CredentialExecution,
-          "browserFailureStage" | "browserRequestBlocked"
+          "browserFailureStage" | "browserRequestBlocked" | "browserOutcome"
         >;
         readonly close: () => Promise<void>;
       },
@@ -605,10 +610,12 @@ const make = Effect.gen(function* () {
   };
 
   const report = (tab: ServerTab, navStatus: PreviewNavStatus) => {
+    if (tab.control.credentialsActive) return;
     void tab.cdp
       .send("Page.getNavigationHistory")
       .catch(() => null)
       .then((history) => {
+        if (tab.control.credentialsActive) return;
         const index = history?.currentIndex ?? 0;
         const count = history?.entries.length ?? 0;
         runFork(
@@ -627,12 +634,13 @@ const make = Effect.gen(function* () {
   };
 
   const reportLoaded = async (tab: ServerTab) => {
+    if (tab.control.credentialsActive) return;
     const url = tab.page.url();
     // Chromium's error page loads after `requestfailed` and must not clear LoadFailed.
     if (url === "about:blank" || url.startsWith("chrome-error://")) return;
     const title = (await tab.page.title().catch(() => "")).slice(0, 512);
     // A navigation that started while reading the title owns the status now.
-    if (tab.loading || tab.page.url() !== url) return;
+    if (tab.control.credentialsActive || tab.loading || tab.page.url() !== url) return;
     report(tab, { _tag: "Success", url: url.slice(0, 2048), title });
   };
 
@@ -910,7 +918,12 @@ const make = Effect.gen(function* () {
     const isMainNavigation = (request: { isNavigationRequest(): boolean; frame(): unknown }) =>
       request.isNavigationRequest() && request.frame() === page.mainFrame();
     const navigationGenerations = new WeakMap<object, number>();
+    const privateRequests = new WeakSet<object>();
     page.on("request", (request) => {
+      if (tab.control.credentialsActive) {
+        privateRequests.add(request);
+        return;
+      }
       if (!isMainNavigation(request)) return;
       navigationGenerations.set(request, ++tab.navigationGeneration);
       clearAbortedNavigation(tab);
@@ -924,11 +937,12 @@ const make = Effect.gen(function* () {
     page.on("framenavigated", (frame) => {
       // Same-document navigations (SPA routes) fire no load event.
       if (frame === page.mainFrame() && !tab.loading) void reportLoaded(tab);
-      if (!desktop) void recordFrameCopies(tab, frame);
+      if (!desktop && !tab.control.credentialsActive) void recordFrameCopies(tab, frame);
     });
     // An adopted popup's frames may have loaded before the tab listened.
     if (adopted) for (const frame of page.frames()) void recordFrameCopies(tab, frame);
     page.on("requestfailed", (request) => {
+      if (tab.control.credentialsActive || privateRequests.has(request)) return;
       const errorText = request.failure()?.errorText ?? "";
       pushBounded(tab.networkEntries, {
         url: request.url(),
@@ -971,6 +985,7 @@ const make = Effect.gen(function* () {
       });
     });
     page.on("response", (response) => {
+      if (tab.control.credentialsActive || privateRequests.has(response.request())) return;
       pushBounded(tab.networkEntries, {
         url: response.url(),
         method: response.request().method(),
@@ -980,6 +995,7 @@ const make = Effect.gen(function* () {
       });
     });
     page.on("console", (message) => {
+      if (tab.control.credentialsActive) return;
       pushBounded(tab.consoleEntries, {
         level: message.type(),
         text: message.text().slice(0, 2_000),
@@ -987,13 +1003,31 @@ const make = Effect.gen(function* () {
       });
     });
     page.on("dialog", (dialog) => {
+      if (tab.control.credentialsActive) {
+        void dialog.dismiss().catch(constVoid);
+        return;
+      }
       tab.dialog = dialog;
       broadcastControl(tab);
     });
-    page.on("download", (download) => void saveDownload(tab, download));
-    page.on("filechooser", (chooser) => void offerFileChooser(tab, chooser));
+    page.on("download", (download) => {
+      if (tab.control.credentialsActive) {
+        void download.cancel().catch(constVoid);
+        return;
+      }
+      void saveDownload(tab, download);
+    });
+    page.on("filechooser", (chooser) => {
+      if (!tab.control.credentialsActive) void offerFileChooser(tab, chooser);
+    });
     // Popups become tabs and keep `window.opener`, so sign-in popups can report back.
-    page.on("popup", (popup) => void adoptPopup(tab, popup));
+    page.on("popup", (popup) => {
+      if (tab.control.credentialsActive) {
+        void popup.close().catch(constVoid);
+        return;
+      }
+      void adoptPopup(tab, popup);
+    });
     // Playwright cannot reload a crashed page, so it must leave the tab list.
     const key = tabKey(tab.threadId, tab.tabId);
     if (closedPendingTabs.delete(key)) {
@@ -1485,7 +1519,7 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const statusWithTitle = async (
+  const readStatusWithTitle = async (
     tab: ServerTab | undefined,
     agentSessionId?: string,
   ): Promise<PreviewAutomationStatus> => {
@@ -1524,7 +1558,10 @@ const make = Effect.gen(function* () {
         .filter((candidate) => candidate.threadId === tab.threadId)
         .map((candidate) => ({
           tabId: candidate.tabId,
-          url: candidate.page.url() === "about:blank" ? null : candidate.page.url(),
+          url:
+            candidate.control.credentialsActive || candidate.page.url() === "about:blank"
+              ? null
+              : candidate.page.url(),
           ...(candidate.openerTabId === undefined ? {} : { openerTabId: candidate.openerTabId }),
           owner: tabOwner(candidate),
           ownedByCaller: candidate.control.agentId === agentSessionId,
@@ -1543,6 +1580,11 @@ const make = Effect.gen(function* () {
     if (status.url === null || tab.dialog) return status;
     return { ...status, title: (await tab.page.title().catch(() => "")) || null };
   };
+
+  const statusWithTitle = (tab: ServerTab | undefined, agentSessionId?: string) =>
+    tab
+      ? tab.control.observe(() => readStatusWithTitle(tab, agentSessionId))
+      : readStatusWithTitle(tab, agentSessionId);
 
   const resolveNavigationUrl = (input: PreviewAutomationNavigateInput) => {
     if (input.url !== undefined) return normalizePreviewUrl(input.url);
@@ -1858,6 +1900,11 @@ const make = Effect.gen(function* () {
   };
 
   const runOperation = async (request: PreviewAutomationRequest): Promise<unknown> => {
+    if (
+      request.operation === "open" &&
+      [...tabs.values()].some((tab) => tab.control.credentialsActive)
+    )
+      throw new BrowserControlInterrupted("Private credential entry is in progress.");
     const input = request.input;
     switch (request.operation) {
       case "status":
@@ -1992,6 +2039,7 @@ const make = Effect.gen(function* () {
       }
     }
     const tab = await requireTab(request);
+    if (request.operation !== "close") tab.control.assertObservable();
     // Closing must unblock an action waiting on a dialog, without queueing behind it.
     if (request.operation === "close") {
       if (tab.control.agentId !== request.agentSessionId)
@@ -2049,6 +2097,7 @@ const make = Effect.gen(function* () {
   };
 
   const executeTabOperation = async (tab: ServerTab, request: PreviewAutomationRequest) => {
+    tab.control.assertObservable();
     const input = request.input;
     switch (request.operation) {
       case "navigate": {
@@ -2432,7 +2481,7 @@ const make = Effect.gen(function* () {
         screencastScale = scale;
         screencastParams = screencastParams.then(async () => {
           // A scaled capture is rendering; its resume starts the stream.
-          if (tab.capturing > 0) return;
+          if (tab.capturing > 0 || tab.control.credentialsActive) return;
           await session.send("Page.stopScreencast").catch(constVoid);
           await session
             .send("Page.startScreencast", {
@@ -2451,6 +2500,10 @@ const make = Effect.gen(function* () {
         pressedKeys: new Map(),
         pressedButtons: new Map(),
         push: (next) => {
+          if (tab.control.credentialsActive && next._tag !== "gone" && next._tag !== "reconnect") {
+            if (next._tag === "frame") runFork(next.ack);
+            return;
+          }
           // Dropped frames must still release Chromium.
           if (Queue.offerUnsafe(output, next)) return;
           if (next._tag === "frame") runFork(next.ack);
@@ -2499,6 +2552,7 @@ const make = Effect.gen(function* () {
       pushFileChooser(tab);
       // Full scale: a scaled capture would flash in every other viewer.
       const pushStill = async () => {
+        if (tab.control.credentialsActive) return;
         const data = await withCaptureLock(tab, () =>
           ServerBrowserPage.captureViewport(tab.page, session, {
             format: "jpeg",
@@ -2517,6 +2571,12 @@ const make = Effect.gen(function* () {
       );
       let screencastStarted = false;
       session.on("Page.screencastFrame", (frame) => {
+        if (tab.control.credentialsActive) {
+          void session
+            .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
+            .catch(constVoid);
+          return;
+        }
         screencastStarted = true;
         if (framesInFlight > 0) mayHaveDropped = true;
         framesInFlight += 1;
@@ -2732,45 +2792,117 @@ const make = Effect.gen(function* () {
           if (!["http:", "https:"].includes(target.protocol) || target.username || target.password)
             throw new Error();
           const generation = tab.control.generation;
-          const bridge = await createBrowserLoginBridge((login, signal) =>
-            consumeBrowserLogin({
-              page: tab.page,
-              createPrivatePage: tab.desktop
-                ? async () => {
-                    const scope = await Effect.runPromise(Scope.make());
-                    try {
-                      const endpoint = await Effect.runPromise(
-                        desktopChannel
-                          .privatePageEndpoint({ threadId: tab.threadId, tabId: tab.tabId })
-                          .pipe(Scope.provide(scope)),
-                      );
-                      const connected = await contexts.connectDesktopPage(endpoint);
-                      return {
-                        page: connected.page,
-                        close: async () => {
-                          await connected.browser.close().catch(constVoid);
+          const sharedTab = input.mode !== "private-page";
+          const bridge = await createBrowserLoginBridge((login, signal) => {
+            const consume = (entrySignal: AbortSignal) =>
+              consumeBrowserLogin({
+                sharedTab: sharedTab,
+                page: tab.page,
+                createPrivatePage:
+                  !sharedTab && tab.desktop
+                    ? async () => {
+                        const scope = await Effect.runPromise(Scope.make());
+                        try {
+                          const endpoint = await Effect.runPromise(
+                            desktopChannel
+                              .privatePageEndpoint({ threadId: tab.threadId, tabId: tab.tabId })
+                              .pipe(Scope.provide(scope)),
+                          );
+                          const connected = await contexts.connectDesktopPage(endpoint);
+                          return {
+                            page: connected.page,
+                            close: async () => {
+                              await connected.browser.close().catch(constVoid);
+                              await Effect.runPromise(Scope.close(scope, Exit.void));
+                            },
+                          };
+                        } catch {
                           await Effect.runPromise(Scope.close(scope, Exit.void));
-                        },
-                      };
-                    } catch {
-                      await Effect.runPromise(Scope.close(scope, Exit.void));
-                      throw new Error("Private desktop sign-in page unavailable.");
-                    }
+                          throw new Error("Private desktop sign-in page unavailable.");
+                        }
+                      }
+                    : undefined,
+                url,
+                fields: input,
+                login,
+                signal: entrySignal,
+                checkTarget: () =>
+                  !tab.closing &&
+                  !tab.page.isClosed() &&
+                  (sharedTab || tab.page.url() === url) &&
+                  (!input.agentSessionId ||
+                    (tab.control.generation === generation &&
+                      tab.control.agentCanActNow(input.agentSessionId))),
+              });
+            if (!sharedTab) {
+              tab.control.assertObservable();
+              return consume(signal);
+            }
+            if (tab.page.url() !== url || tab.control.generation !== generation)
+              throw new BrowserCredentialFailure("target_changed");
+            // Revocation must also unblock a prior inspection that never settled.
+            const stopEntry = () => {
+              void dropTab(tab, true);
+            };
+            signal.addEventListener("abort", stopEntry, { once: true });
+            if (signal.aborted) stopEntry();
+            return tab.control
+              .credentialEntry(async (controlSignal) => {
+                const entrySignal = AbortSignal.any([signal, controlSignal]);
+                let desktopProtected = false;
+                try {
+                  if (
+                    entrySignal.aborted ||
+                    tab.page.url() !== url ||
+                    tab.control.generation !== generation ||
+                    (input.agentSessionId !== undefined &&
+                      !tab.control.agentCanActNow(input.agentSessionId)) ||
+                    tab.openerTabId !== undefined ||
+                    (!tab.desktop && tab.page.context().pages().length !== 1) ||
+                    tab.recording ||
+                    tab.recordingStart ||
+                    tab.dialog ||
+                    tab.fileChooser
+                  )
+                    throw new Error("Browser is busy.");
+                  await withCaptureLock(tab, async () => {
+                    await Promise.all([...tab.viewers].map((viewer) => viewer.pause()));
+                  });
+                  if (tab.desktop) {
+                    await tab.cdp.send(
+                      DESKTOP_CREDENTIAL_ENTRY_COMMAND as never,
+                      { active: true } as never,
+                    );
+                    desktopProtected = true;
                   }
-                : undefined,
-              url,
-              fields: input,
-              login,
-              signal,
-              checkTarget: () =>
-                !tab.closing &&
-                !tab.page.isClosed() &&
-                tab.page.url() === url &&
-                (!input.agentSessionId ||
-                  (tab.control.generation === generation &&
-                    tab.control.agentCanActNow(input.agentSessionId))),
-            }),
-          );
+                  tab.consoleEntries.length = 0;
+                  tab.networkEntries.length = 0;
+                  tab.actionTimeline.length = 0;
+                  ServerBrowserPage.invalidateRefs(tab.page);
+                  return await consume(entrySignal);
+                } catch (error) {
+                  if (error instanceof BrowserCredentialFailure && error.stage === "cleanup")
+                    dropTab(tab, true);
+                  throw error instanceof BrowserCredentialFailure
+                    ? error
+                    : new BrowserCredentialFailure("privacy");
+                } finally {
+                  if (desktopProtected)
+                    await tab.cdp
+                      .send(DESKTOP_CREDENTIAL_ENTRY_COMMAND as never, { active: false } as never)
+                      .catch(() => {
+                        void dropTab(tab, true);
+                        throw new BrowserCredentialFailure("cleanup");
+                      });
+                }
+              })
+              .finally(async () => {
+                signal.removeEventListener("abort", stopEntry);
+                await Promise.all([...tab.viewers].map((viewer) => viewer.resume()));
+                broadcastControl(tab);
+                await reportLoaded(tab);
+              });
+          });
           return {
             ...bridge,
             site: target.hostname,

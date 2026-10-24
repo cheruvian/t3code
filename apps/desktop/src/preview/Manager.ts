@@ -1,3 +1,9 @@
+import {
+  assertCredentialEntryInactive,
+  closeCredentialPeer,
+  credentialEntryActive,
+  credentialEntryEpoch,
+} from "./CredentialEntryPrivacy.ts";
 /**
  * Desktop side of the in-app browser preview.
  *
@@ -550,6 +556,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const annotationThemeRef = yield* Ref.make(DEFAULT_ANNOTATION_THEME);
   const annotationSendEnabled = new Map<string, boolean>();
   const mainWindowRef = yield* Ref.make<Option.Option<BrowserWindow>>(Option.none());
+  const rejectCredentialPeer = (_event: Electron.Event, contents: Electron.WebContents) =>
+    closeCredentialPeer(contents);
+  yield* Effect.acquireRelease(
+    Effect.sync(() => app.on("web-contents-created", rejectCredentialPeer)),
+    () => Effect.sync(() => app.off("web-contents-created", rejectCredentialPeer)),
+  );
   const tabsRef = yield* SynchronizedRef.make<ReadonlyMap<string, PreviewTabState>>(new Map());
   const allAudioMutedRef = yield* Ref.make(false);
   const audioMutationSemaphore = yield* Semaphore.make(1);
@@ -595,7 +607,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
 
   const attempt = <A>(errorContext: PreviewOperationContext, evaluate: () => A) =>
     Effect.try({
-      try: evaluate,
+      try: () => {
+        if (errorContext.webContentsId !== undefined)
+          assertCredentialEntryInactive(errorContext.webContentsId);
+        return evaluate();
+      },
       catch: (cause) => new PreviewOperationError({ ...errorContext, cause }),
     });
   const attemptPromise = <A>(
@@ -603,7 +619,17 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     evaluate: () => PromiseLike<A>,
   ) =>
     Effect.tryPromise({
-      try: evaluate,
+      try: async () => {
+        const id = errorContext.webContentsId;
+        if (id !== undefined) assertCredentialEntryInactive(id);
+        const epoch = id === undefined ? 0 : credentialEntryEpoch(id);
+        const result = await evaluate();
+        if (id !== undefined) {
+          assertCredentialEntryInactive(id);
+          if (epoch !== credentialEntryEpoch(id)) throw new Error("Browser privacy changed.");
+        }
+        return result;
+      },
       catch: (cause) => new PreviewOperationError({ ...errorContext, cause }),
     });
   const capturePageWithRetry = Effect.fn("PreviewManager.capturePageWithRetry")(function* (
@@ -613,10 +639,15 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   ) {
     const requireCurrentGuest = Effect.gen(function* () {
       const tabs = yield* SynchronizedRef.get(tabsRef);
-      if (wc.isDestroyed() || tabs.get(tabId)?.webContentsId !== wc.id) {
+      if (
+        credentialEntryActive(wc.id) ||
+        wc.isDestroyed() ||
+        tabs.get(tabId)?.webContentsId !== wc.id
+      ) {
         return yield* new PreviewWebContentsNotFoundError({ tabId, webContentsId: wc.id });
       }
     });
+    const epoch = credentialEntryEpoch(wc.id);
     const capture = Effect.gen(function* () {
       yield* requireCurrentGuest;
       const image = yield* Effect.tryPromise({
@@ -630,6 +661,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         }),
       );
       yield* requireCurrentGuest;
+      if (epoch !== credentialEntryEpoch(wc.id))
+        return yield* new PreviewWebContentsNotFoundError({ tabId, webContentsId: wc.id });
       return image;
     });
     return yield* capture.pipe(
@@ -840,7 +873,16 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     tabId: string,
     delivery: () => Effect.Effect<void>,
   ) =>
-    Effect.suspend(delivery).pipe(
+    Effect.gen(function* () {
+      const tab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
+      if (
+        tab?.webContentsId !== undefined &&
+        tab.webContentsId !== null &&
+        credentialEntryActive(tab.webContentsId)
+      )
+        return;
+      yield* Effect.suspend(delivery);
+    }).pipe(
       Effect.catchCauseIf(
         (cause) => !Cause.hasInterrupts(cause),
         (cause) =>
@@ -985,6 +1027,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         webContentsId: tab.webContentsId,
       });
     }
+    yield* attempt({ operation: "credentialPrivacy", webContentsId: wc.id }, () =>
+      assertCredentialEntryInactive(wc.id),
+    );
     return wc;
   });
 
@@ -1099,6 +1144,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             method: string,
             params: Record<string, unknown>,
           ) {
+            if (credentialEntryActive(wc.id)) return;
             if (method === "Page.screencastFrame") {
               const sessionId = params["sessionId"];
               if (typeof sessionId === "number") {
@@ -1250,13 +1296,19 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       confirmedNavigation = false,
     ) {
       if (wc.isDestroyed()) return;
+      if (credentialEntryActive(wc.id)) return;
       const computedNavStatus = computeNavStatus(wc);
       const canGoBack = wc.navigationHistory.canGoBack();
       const canGoForward = wc.navigationHistory.canGoForward();
       const updatedAt = yield* currentIso;
       const next = yield* SynchronizedRef.modify(tabsRef, (tabs) => {
         const current = tabs.get(tabId);
-        if (!current || current.webContentsId !== wc.id || webContents.fromId(wc.id) !== wc) {
+        if (
+          credentialEntryActive(wc.id) ||
+          !current ||
+          current.webContentsId !== wc.id ||
+          webContents.fromId(wc.id) !== wc
+        ) {
           return [Option.none<PreviewTabState>(), tabs] as const;
         }
         // Electron emits did-stop-loading after did-fail-load. At that point the
@@ -1314,6 +1366,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const navigationStarted = (
       event: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
     ) => {
+      if (credentialEntryActive(wc.id)) {
+        cancelFaviconCapture();
+        return;
+      }
       if (event.isMainFrame && !event.isSameDocument) cancelFaviconCapture();
     };
     const audioStateChanged = (
@@ -1366,6 +1422,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       if (Option.isSome(next)) yield* emitIfCurrent(tabId, next.value);
     });
     const faviconUpdated = (_event: Event, rawCandidates: ReadonlyArray<string>): void => {
+      if (credentialEntryActive(wc.id)) return;
       const pageUrl = wc.getURL();
       if (!safeHttpOrigin(pageUrl)) return;
       const candidates = selectFaviconCandidates(rawCandidates);
@@ -1419,7 +1476,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       validatedUrl: string,
       isMainFrame: boolean,
     ): void => {
-      if (code === -3 || !isMainFrame) return;
+      if (credentialEntryActive(wc.id) || code === -3 || !isMainFrame) return;
       runFork(
         update(tabId, {
           navStatus: {
@@ -1449,7 +1506,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       }
     });
     const recordingInput = (_event: unknown, input: unknown) => {
-      if (!isRecordingInput(input)) return;
+      if (credentialEntryActive(wc.id) || !isRecordingInput(input)) return;
       return runFork(
         Effect.gen(function* () {
           const tab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
@@ -1467,6 +1524,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       );
     };
     const humanInput = (_event: unknown, rawSignal?: unknown): void => {
+      if (credentialEntryActive(wc.id)) return;
       runFork(handleHumanInput(rawSignal));
     };
     const mouseNavigate = (_event: unknown, payload?: unknown): void => {
@@ -1497,6 +1555,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     // otherwise spawn native windows without limit. Nothing in an OAuth flow
     // opens a second popup, so the chain stops at the first one.
     const windowCreated = (window: Electron.BrowserWindow): void => {
+      if (credentialEntryActive(wc.id)) {
+        window.destroy();
+        return;
+      }
       window.webContents.setIgnoreMenuShortcuts(true);
       window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
       window.webContents.on("before-input-event", (_event, input) => {
@@ -1504,6 +1566,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       });
     };
     const beforeInput = (event: Electron.Event, input: Electron.Input): void => {
+      if (credentialEntryActive(wc.id)) {
+        event.preventDefault();
+        return;
+      }
       syncMenuShortcuts(wc, input);
       if (
         input.type === "keyDown" &&
@@ -1598,6 +1664,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.ipc.on(MOUSE_NAVIGATE_CHANNEL, mouseNavigate);
         detachPasskeys = passkeys.attachGuest(wc);
         wc.setWindowOpenHandler((details) => {
+          if (credentialEntryActive(wc.id)) return { action: "deny" };
           const action = previewWindowOpenAction(details);
           if (action === "popup") {
             return { action: "allow", overrideBrowserWindowOptions: POPUP_WINDOW_OPTIONS };
@@ -2356,7 +2423,29 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       }
       if (afterAttach.serverTab) {
         yield* listenForAgentPointers;
-        browserHost.attach(afterAttach.serverTab, { webContents: wc, debugger: control.debugger });
+        browserHost.attach(afterAttach.serverTab, {
+          webContents: wc,
+          debugger: control.debugger,
+          canEnterCredentialMode: () =>
+            Effect.runPromise(
+              Effect.gen(function* () {
+                const capture = (yield* SynchronizedRef.get(frameCaptureSessionsRef)).get(tabId);
+                const pick = (yield* Ref.get(pickSessionsRef)).get(tabId);
+                return (
+                  !wc.isDevToolsOpened() &&
+                  !webContents
+                    .getAllWebContents()
+                    .some(
+                      (other) =>
+                        other.id !== wc.id && !other.isDestroyed() && other.session === wc.session,
+                    ) &&
+                  !capture &&
+                  !pick &&
+                  pendingRecording?.tabId !== tabId
+                );
+              }),
+            ),
+        });
       }
       if (afterAttach.colorScheme !== "system") {
         yield* attemptPromise({ operation: "applyColorScheme", tabId, webContentsId: wc.id }, () =>

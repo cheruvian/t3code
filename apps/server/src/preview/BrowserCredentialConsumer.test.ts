@@ -35,7 +35,18 @@ describe("private browser credential delivery", () => {
   beforeEach(async () => {
     received = [];
     server = NodeHttp.createServer(async (request, response) => {
-      if (request.url === "/login" && request.method === "POST") {
+      if (request.url === "/tab-local" || request.url === "/hide-only") {
+        response.setHeader("content-type", "text/html");
+        response.end(`<form method="post"><input id="username"><input id="password" type="password"><button>Sign in</button></form><h1 hidden>Authenticated fixture</h1><script>
+          const authenticated = () => { document.querySelector('form').hidden = true; document.querySelector('h1').hidden = false; };
+          if (sessionStorage.getItem('synthetic-auth') === 'yes') authenticated();
+          document.querySelector('form').onsubmit = event => {
+            event.preventDefault();
+            if (location.pathname === '/hide-only') { document.querySelector('#password').hidden = true; return; }
+            sessionStorage.setItem('synthetic-auth', 'yes'); authenticated();
+          };
+        </script>`);
+      } else if (request.url === "/login" && request.method === "POST") {
         let body = "";
         for await (const chunk of request) body += String(chunk);
         received.push(body);
@@ -132,6 +143,61 @@ describe("private browser credential delivery", () => {
     expect(visibleOutput).not.toContain(login.username);
     expect(visibleOutput).not.toContain(login.password);
   });
+  it("retains tab-local authentication and removes the credential document before reporting verified success", async () => {
+    const result = await consumeBrowserLogin({
+      page,
+      url: origin + "/tab-local#/login",
+      fields: { ...fields, successSelector: "h1" },
+      login,
+      signal: new AbortController().signal,
+      checkTarget: () => true,
+      sharedTab: true,
+    });
+    expect(result).toBe("authenticated");
+    expect(context.pages()).toEqual([page]);
+    expect(await page.locator("h1").isVisible()).toBe(true);
+    expect(await page.locator("#password").inputValue()).toBe("");
+    expect(await page.locator("#username").inputValue()).toBe("");
+    const cdp = await context.newCDPSession(page);
+    expect((await cdp.send("Page.getNavigationHistory")).entries).toHaveLength(1);
+    await cdp.detach();
+  });
+
+  it("does not claim authentication merely because the password field disappeared", async () => {
+    const result = await consumeBrowserLogin({
+      page,
+      url: origin + "/hide-only",
+      fields,
+      login,
+      signal: new AbortController().signal,
+      checkTarget: () => true,
+      sharedTab: true,
+    });
+    expect(result).toBe("submitted");
+    expect(await page.locator("h1").isVisible()).toBe(false);
+    expect(await page.locator("#password").inputValue()).toBe("");
+  });
+
+  it("blanks the shared document when ownership changes after credentials are entered", async () => {
+    const controller = new AbortController();
+    page.on("request", (request) => {
+      if (request.method() === "POST") controller.abort();
+    });
+    await expect(
+      consumeBrowserLogin({
+        page,
+        url: origin,
+        fields,
+        login,
+        signal: controller.signal,
+        checkTarget: () => !controller.signal.aborted,
+        sharedTab: true,
+      }),
+    ).rejects.toMatchObject({ stage: expect.any(String) });
+    expect(page.url()).toBe("about:blank");
+    expect(await page.locator("input").count()).toBe(0);
+  });
+
   it("uses a supplied private desktop page and closes its dedicated connection", async () => {
     let closed = 0;
     const observed: string[] = [];

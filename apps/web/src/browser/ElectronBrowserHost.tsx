@@ -1,5 +1,7 @@
 "use client";
 
+import { installBrowserCredentialEntry } from "./browserCredentialEntry";
+
 import { parseScopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   AuthPreviewOperateScope,
@@ -40,6 +42,7 @@ import { previewRuntimeTabId } from "./previewRuntimeTabId";
 
 export function ElectronBrowserHost() {
   useEffect(installBrowserCaptureActivity, []);
+  useEffect(installBrowserCredentialEntry, []);
   const { resolvedTheme } = useTheme();
   const previewByThreadKey = useActivePreviewSessions();
   const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);

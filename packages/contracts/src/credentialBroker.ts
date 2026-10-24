@@ -30,6 +30,10 @@ export type CredentialExecInput = typeof CredentialExecInput.Type;
 
 export const CredentialBrowserLoginInput = Schema.Struct({
   tabId: PreviewTabId,
+  mode: Schema.optional(Schema.Literals(["shared-tab", "private-page"])),
+  successSelector: Schema.optional(
+    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
+  ),
   usernameSelector: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
   usernameSubmitSelector: Schema.optional(
     Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
@@ -58,6 +62,9 @@ export const CredentialBrowserFailureStage = Schema.Literals([
   "target_changed",
   "request_policy",
   "delivery",
+  "privacy",
+  "verification",
+  "cleanup",
 ]);
 export type CredentialBrowserFailureStage = typeof CredentialBrowserFailureStage.Type;
 export const CredentialExecution = Schema.Struct({
@@ -67,6 +74,7 @@ export const CredentialExecution = Schema.Struct({
   exitCode: Schema.optional(Schema.NullOr(Schema.Number)),
   signal: Schema.optional(Schema.NullOr(Schema.String)),
   failureCode: Schema.optional(CredentialExecutionFailureCode),
+  browserOutcome: Schema.optional(Schema.Literals(["submitted", "authenticated"])),
   browserFailureStage: Schema.optional(CredentialBrowserFailureStage),
   browserRequestBlocked: Schema.optional(Schema.Boolean),
 });

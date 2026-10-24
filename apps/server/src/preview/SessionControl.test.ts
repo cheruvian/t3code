@@ -179,3 +179,58 @@ describe("SessionControl", () => {
     await expect(control.agent("agent-b", async () => "acted")).resolves.toBe("acted");
   });
 });
+
+describe("credential entry reservation", () => {
+  it("drains existing observations and prevents queued/new inspection until cleanup", async () => {
+    const control = new SessionControl("agent");
+    const observed = Promise.withResolvers<void>();
+    const finishRead = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+    const cleanup = Promise.withResolvers<void>();
+    const events: string[] = [];
+    const read = control.observe(async () => {
+      observed.resolve();
+      await finishRead.promise;
+      events.push("read finished");
+    });
+    await observed.promise;
+    const entry = control.credentialEntry(async () => {
+      events.push("entry");
+      entered.resolve();
+      await cleanup.promise;
+      events.push("clean");
+    });
+    expect(control.credentialsActive).toBe(true);
+    expect(() => control.observe(async () => "secret")).toThrow("credential entry");
+    await expect(control.agent("agent", async () => "secret")).rejects.toThrow("credential entry");
+    expect(() => control.system(async () => "secret")).toThrow("credential entry");
+    expect(events).toEqual([]);
+    finishRead.resolve();
+    await read;
+    await entered.promise;
+    expect(events).toEqual(["read finished", "entry"]);
+    cleanup.resolve();
+    await entry;
+    await expect(control.agent("agent", async () => "safe")).resolves.toBe("safe");
+    expect(events).toEqual(["read finished", "entry", "clean"]);
+  });
+
+  it("aborts on human takeover without releasing inspection before cleanup", async () => {
+    const control = new SessionControl("agent");
+    const entered = Promise.withResolvers<AbortSignal>();
+    const cleanup = Promise.withResolvers<void>();
+    const entry = control.credentialEntry(async (signal) => {
+      entered.resolve(signal);
+      await cleanup.promise;
+    });
+    const signal = await entered.promise;
+    await expect(control.take("human")).rejects.toThrow("credential entry");
+    expect(signal.aborted).toBe(true);
+    expect(control.credentialsActive).toBe(true);
+    expect(() => control.observe(async () => "secret")).toThrow();
+    cleanup.resolve();
+    await entry;
+    await expect(control.human("human", async () => "MFA")).resolves.toBe("MFA");
+    await expect(control.agent("agent", async () => "stale")).rejects.toThrow();
+  });
+});
