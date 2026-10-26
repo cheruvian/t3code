@@ -1500,6 +1500,10 @@ const make = Effect.gen(function* () {
     const status = {
       available: true,
       visible: tab.viewers.size > 0,
+      visibility: {
+        streamSubscriberCount: tab.viewers.size,
+        desktopAttached: tab.desktop !== null,
+      },
       tabId: tab.tabId,
       url: url === "about:blank" ? null : url,
       title: null,
@@ -1524,6 +1528,10 @@ const make = Effect.gen(function* () {
           owner: tabOwner(candidate),
           ownedByCaller: candidate.control.agentId === agentSessionId,
           visible: candidate.viewers.size > 0,
+          visibility: {
+            streamSubscriberCount: candidate.viewers.size,
+            desktopAttached: candidate.desktop !== null,
+          },
           ...(candidate.profileId === undefined ? {} : { profileId: candidate.profileId }),
         })),
       ...profileStatus(),

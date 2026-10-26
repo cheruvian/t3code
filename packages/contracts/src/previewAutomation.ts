@@ -82,9 +82,27 @@ export const PreviewAutomationProfile = Schema.Struct({
 });
 export type PreviewAutomationProfile = typeof PreviewAutomationProfile.Type;
 
+const PreviewAutomationVisibility = Schema.Struct({
+  streamSubscriberCount: Schema.Number.annotate({
+    description:
+      "Number of connected viewer streams. A subscription does not prove the user can see the page.",
+  }),
+  desktopAttached: Schema.Boolean.annotate({
+    description:
+      "Automation is connected to the desktop page. Does not report whether the desktop Browser panel is shown, focused, or unobscured.",
+  }),
+});
+
 export const PreviewAutomationStatus = Schema.Struct({
-  available: Schema.Boolean,
-  visible: Schema.Boolean,
+  available: Schema.Boolean.annotate({
+    description:
+      "Whether an automation-capable tab is available, independent of viewer visibility.",
+  }),
+  visible: Schema.Boolean.annotate({
+    description:
+      "On server hosts, true means at least one viewer stream is subscribed. False does not mean the desktop Browser panel is hidden or automation is unavailable. Screenshot capture is independent of this flag.",
+  }),
+  visibility: Schema.optional(PreviewAutomationVisibility),
   tabId: Schema.NullOr(PreviewTabId),
   url: Schema.NullOr(Schema.String),
   title: Schema.NullOr(Schema.String),
@@ -134,7 +152,11 @@ export const PreviewAutomationStatus = Schema.Struct({
         openerTabId: Schema.optional(PreviewTabId),
         owner: Schema.optional(PreviewAutomationTabOwner),
         ownedByCaller: Schema.optional(Schema.Boolean),
-        visible: Schema.optional(Schema.Boolean),
+        visible: Schema.optional(Schema.Boolean).annotate({
+          description:
+            "Whether this tab has a subscribed viewer stream; not desktop panel visibility.",
+        }),
+        visibility: Schema.optional(PreviewAutomationVisibility),
         profileId: Schema.optional(BrowserProfileId),
       }),
     ),
@@ -163,7 +185,7 @@ export const PreviewAutomationOpenInput = Schema.Struct({
   open: Schema.optional(
     Schema.Boolean.annotate({
       description:
-        "Whether to open the thread-bound inline preview for the human. Defaults to true; set false for background-only automation.",
+        "Whether to open the thread-bound inline preview for the human. Defaults to true; set false for background-only automation. Requests presentation; does not confirm a viewer subscription or actual panel visibility.",
     }),
   ),
   show: Schema.optional(

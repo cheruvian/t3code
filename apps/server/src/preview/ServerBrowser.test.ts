@@ -1574,6 +1574,72 @@ it.live("viewers see the agent's pointer move to its target and click there", ()
   ).pipe(Effect.provide(layer)),
 );
 
+it.live.each([false, true])(
+  "reports stream subscriptions independently of capture and desktop attachment (%s)",
+  (desktopAttached) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const broker = yield* Broker.PreviewAutomationBroker;
+        const browser = yield* ServerBrowser.ServerBrowser;
+        yield* Effect.yieldNow;
+        desktopRendersNext = desktopAttached;
+        const opened = yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "open",
+          input: { url: "https://example.test/visibility", open: true, show: true },
+        });
+        const tabId = PreviewTabId.make(opened.tabId!);
+        const status = broker.invoke<PreviewAutomationStatus>({
+          scope,
+          tabId,
+          operation: "status",
+          input: {},
+        });
+        const unsubscribed = {
+          available: true,
+          visible: false,
+          visibility: { streamSubscriberCount: 0, desktopAttached },
+        };
+        expect(opened).toMatchObject(unsubscribed);
+        const snapshot = yield* broker.invoke<PreviewAutomationSnapshot>({
+          scope,
+          tabId,
+          operation: "snapshot",
+          input: {},
+        });
+        expect(snapshot.screenshot).toMatchObject({ mimeType: "image/png", data: "ZnJhbWU=" });
+        expect(yield* status).toMatchObject(unsubscribed);
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* browser.attachViewer(viewerInput(tabId, false));
+            const subscribed = yield* status;
+            expect(subscribed).toMatchObject({
+              available: true,
+              visible: true,
+              visibility: { streamSubscriberCount: 1, desktopAttached },
+            });
+            expect(subscribed.tabs).toEqual([
+              expect.objectContaining({
+                tabId,
+                visible: true,
+                visibility: { streamSubscriberCount: 1, desktopAttached },
+              }),
+            ]);
+          }),
+        );
+        const disconnected = yield* status;
+        expect(disconnected).toMatchObject(unsubscribed);
+        expect(disconnected.tabs).toEqual([
+          expect.objectContaining({
+            tabId,
+            visible: false,
+            visibility: { streamSubscriberCount: 0, desktopAttached },
+          }),
+        ]);
+      }),
+    ).pipe(Effect.provide(layer)),
+);
+
 it.live("drives the desktop's own page for a tab the desktop renders", () =>
   Effect.scoped(
     Effect.gen(function* () {
