@@ -173,3 +173,15 @@ else if (args[0] === 'create') {
   );
   await provider.close();
 });
+
+test("vault unlock requires the T3 password callback and never starts a native prompt", async () => {
+  let started = false;
+  const provider = new BitwardenProvider({
+    runner: async () => {
+      started = true;
+      return "fake-session";
+    },
+  });
+  await assert.rejects(provider.initialize(), /Unlock the vault through Credential access in T3/);
+  assert.equal(started, false);
+});

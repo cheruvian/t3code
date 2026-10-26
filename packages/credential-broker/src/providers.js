@@ -57,13 +57,7 @@ function run(executable, args, env, timeout = 30_000, input) {
         if (error) {
           let message =
             "Credential provider operation failed. Check vault login/unlock in the human terminal.";
-          if (executable === "/usr/bin/osascript") {
-            message = error.killed
-              ? "Native vault unlock timed out. Enter your password in the dialog on the host Mac."
-              : /\(-128\)/.test(stderr)
-                ? "Native vault unlock was cancelled."
-                : "Native vault unlock dialog failed. Run the broker from a human terminal with access to the host desktop.";
-          } else if (error.code === "ENOENT") {
+          if (error.code === "ENOENT") {
             message = "Bitwarden CLI executable was not found.";
           } else if (args[0] === "unlock") {
             message = error.killed
@@ -117,19 +111,7 @@ export class BitwardenProvider {
     this.passwordPrompt =
       passwordPrompt ??
       (() => {
-        if (process.platform !== "darwin")
-          throw new BrokerError(
-            "Native vault unlock currently requires macOS. Use demo mode on other platforms.",
-          );
-        return run(
-          "/usr/bin/osascript",
-          [
-            "-e",
-            'text returned of (display dialog "Unlock Bitwarden for Credential Broker" default answer "" with hidden answer buttons {"Cancel", "Unlock"} default button "Unlock")',
-          ],
-          this.env,
-          120_000,
-        );
+        throw new BrokerError("Unlock the vault through Credential access in T3.");
       });
   }
   async initialize() {

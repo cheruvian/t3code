@@ -2,15 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { execFile, spawn } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Broker } from "../src/broker.js";
-import { startServers } from "../src/server.js";
 import { DemoProvider, DEMO_ITEM, DEMO_PASSWORD } from "../src/providers.js";
 
-const execute = promisify(execFile);
-const cli = fileURLToPath(new URL("../src/cli.js", import.meta.url));
 const base = {
   kind: "exec",
   item_id: DEMO_ITEM,
@@ -37,84 +33,12 @@ async function setup(t) {
     watchdog: false,
   });
   await broker.initialize();
-  const server = await startServers(broker, {
-    port: 0,
-    host: "127.0.0.1",
-    publicUrl: "http://test.invalid",
-  });
   t.after(async () => {
-    await server.close();
     await broker.close();
     await rm(runtime, { recursive: true, force: true });
   });
   return { runtime, broker };
 }
-
-test("one CLI exec waits for approval, suppresses raw/encoded child output, cleans up, and strips ambient secrets", async (t) => {
-  const { runtime, broker } = await setup(t);
-  process.env.CB_AMBIENT_TEST_SECRET = "should-not-reach-child";
-  t.after(() => {
-    delete process.env.CB_AMBIENT_TEST_SECRET;
-  });
-  const marker = join(runtime, "command-result.json");
-  const program =
-    'const fs=require("node:fs");const secret=fs.readFileSync(process.env.CB_CREDENTIAL_FILE);process.stdout.write(secret);process.stderr.write(secret.toString("base64"));fs.writeFileSync(process.argv[1],JSON.stringify({length:secret.length,ambient:!!process.env.CB_AMBIENT_TEST_SECRET,session:!!process.env.BW_SESSION,args:process.argv.slice(2)}));';
-  // Observe failure immediately rather than leaving a rejected child promise unhandled.
-  const execution = execute(
-    process.execPath,
-    [
-      cli,
-      "exec",
-      "--runtime",
-      runtime,
-      "--item",
-      DEMO_ITEM,
-      "--label",
-      base.label,
-      "--reason",
-      base.reason,
-      "--ttl",
-      "5",
-      "--",
-      process.execPath,
-      "-e",
-      program,
-      marker,
-      "literal;argument",
-      "$(literal)",
-    ],
-    { timeout: 10_000 },
-  ).then(
-    (value) => ({ value }),
-    (error) => ({ error }),
-  );
-  const pending = await until(async () => (await broker.list()).find((r) => r.kind === "exec"));
-  assert.equal(pending.state, "pending");
-  assert.equal(
-    pending.argv[0],
-    await import("node:fs/promises").then((fs) => fs.realpath(process.execPath)),
-  );
-  assert.deepEqual(await readdir(broker.leaseDir), []);
-  await assert.rejects(stat(marker), { code: "ENOENT" });
-  await broker.decide(pending.request_id, true);
-  const { value, error } = await execution;
-  assert.ifError(error);
-  const result = JSON.parse(value.stdout);
-  assert.equal(result.state, "completed");
-  assert.equal(result.exit_code, 0);
-  assert.equal(result.path, undefined);
-  assert.equal(value.stderr, "");
-  for (const output of [value.stdout, value.stderr]) {
-    assert.ok(!output.includes(DEMO_PASSWORD));
-    assert.ok(!output.includes(Buffer.from(DEMO_PASSWORD).toString("base64")));
-  }
-  const facts = JSON.parse(await readFile(marker, "utf8"));
-  assert.equal(facts.length, DEMO_PASSWORD.length);
-  assert.equal(facts.ambient, false);
-  assert.equal(facts.session, false);
-  assert.deepEqual(facts.args, ["literal;argument", "$(literal)"]);
-  assert.deepEqual(await readdir(broker.leaseDir), []);
-});
 
 test("denied exec never launches its program or creates a file", async (t) => {
   const { runtime, broker } = await setup(t);

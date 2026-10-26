@@ -1,8 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Playwright callbacks run outside the Effect runtime.
 // Screencasts ignore emulated device scale; real 2x keeps captures sharp.
 import {
-  CredentialBrokerError,
-  type CredentialBrowserLoginInput,
   BUILT_IN_BROWSER_PROFILES,
   DEFAULT_BROWSER_PROFILE_ID,
   FILL_PREVIEW_VIEWPORT,
@@ -82,7 +80,6 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as DesktopBrowserChannel from "./DesktopBrowserChannel.ts";
 import * as PreviewManager from "./Manager.ts";
-import { consumeBrowserLogin, createBrowserLoginBridge } from "./BrowserCredentialConsumer.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
@@ -218,22 +215,6 @@ export interface ServerBrowserViewer {
 export class ServerBrowser extends Context.Service<
   ServerBrowser,
   {
-    readonly prepareCredentialLogin: (
-      input: CredentialBrowserLoginInput & {
-        readonly threadId: ThreadId;
-        readonly agentSessionId?: string;
-      },
-    ) => Effect.Effect<
-      {
-        readonly site: string;
-        readonly origin: string;
-        readonly profile: string;
-        readonly endpoint: string;
-        readonly close: () => Promise<void>;
-      },
-      CredentialBrokerError,
-      Scope.Scope
-    >;
     readonly attachViewer: (input: {
       readonly threadId: string;
       readonly tabId: string;
@@ -2717,77 +2698,7 @@ const make = Effect.gen(function* () {
       catch: (cause) => new PreviewClearProfileError({ profileId, cause }),
     });
 
-  const prepareCredentialLogin = (
-    input: CredentialBrowserLoginInput & {
-      readonly threadId: ThreadId;
-      readonly agentSessionId?: string;
-    },
-  ) =>
-    Effect.acquireRelease(
-      Effect.tryPromise({
-        try: async () => {
-          const tab = tabs.get(tabKey(input.threadId, input.tabId));
-          if (!tab || tab.closing) throw new Error();
-          if (input.agentSessionId && !tab.control.agentCanActNow(input.agentSessionId))
-            throw new Error();
-          const url = tab.page.url();
-          const target = new URL(url);
-          if (!["http:", "https:"].includes(target.protocol) || target.username || target.password)
-            throw new Error();
-          const generation = tab.control.generation;
-          const bridge = await createBrowserLoginBridge((login, signal) =>
-            consumeBrowserLogin({
-              page: tab.page,
-              createPrivatePage: tab.desktop
-                ? async () => {
-                    const scope = await Effect.runPromise(Scope.make());
-                    try {
-                      const endpoint = await Effect.runPromise(
-                        desktopChannel
-                          .privatePageEndpoint({ threadId: tab.threadId, tabId: tab.tabId })
-                          .pipe(Scope.provide(scope)),
-                      );
-                      const connected = await contexts.connectDesktopPage(endpoint);
-                      return {
-                        page: connected.page,
-                        close: async () => {
-                          await connected.browser.close().catch(constVoid);
-                          await Effect.runPromise(Scope.close(scope, Exit.void));
-                        },
-                      };
-                    } catch {
-                      await Effect.runPromise(Scope.close(scope, Exit.void));
-                      throw new Error("Private desktop sign-in page unavailable.");
-                    }
-                  }
-                : undefined,
-              url,
-              fields: input,
-              login,
-              signal,
-              checkTarget: () =>
-                !tab.closing &&
-                !tab.page.isClosed() &&
-                tab.page.url() === url &&
-                (!input.agentSessionId ||
-                  (tab.control.generation === generation &&
-                    tab.control.agentCanActNow(input.agentSessionId))),
-            }),
-          );
-          return {
-            ...bridge,
-            site: target.hostname,
-            origin: target.origin,
-            profile: tab.profileId ?? "Temporary tab storage",
-          };
-        },
-        catch: () => new CredentialBrokerError({ code: "browser_unavailable" }),
-      }),
-      (bridge) => Effect.promise(() => bridge.close()).pipe(Effect.ignore),
-    );
-
   return ServerBrowser.of({
-    prepareCredentialLogin,
     attachViewer,
     clearProfile,
     reportProfiles,

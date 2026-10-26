@@ -1,10 +1,8 @@
-import { join } from "node:path";
 import { createRequire } from "node:module";
 
 // External dependencies load from disk in Node single-executable distributions.
 const { z } = createRequire(import.meta.url)("zod");
 
-export const DEFAULT_RUNTIME = join("/tmp", `ai-os-credentials-${process.getuid?.() ?? "user"}`);
 export const GUIDANCE =
   "Sensitive credential file: pass its path to the intended program. Do not read, cat, print, log, copy, commit, or send its contents to an LLM. Release promptly. Expiry deletes the path; it cannot revoke copies already read.";
 export function siteHost(value) {

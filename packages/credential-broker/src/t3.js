@@ -280,7 +280,7 @@ export class T3CredentialBroker {
     else throw new BrokerError("Unknown operator operation.");
     this.#publish();
   }
-  async execute(origin, input, signal, consumerEnvironment) {
+  async execute(origin, input, signal) {
     if (signal?.aborted)
       return Promise.reject(
         new BrokerError("Credential caller was cancelled.", 409, "caller_cancelled"),
@@ -359,9 +359,7 @@ export class T3CredentialBroker {
     const broker = this.#broker;
     if (this.#closing || !broker || this.#status !== "ready")
       throw new BrokerError("Broker unavailable.", 503, "broker_unavailable");
-    const request = broker.request(parsed, origin, consumerEnvironment, {
-      // Only the host-created private browser bridge can accept a manually entered login.
-      allowManual: consumerEnvironment?.CB_BROWSER_ENDPOINT !== undefined,
+    const request = broker.request(parsed, origin, {
       allowSave: true,
       argv0: parsedArgv0,
     });

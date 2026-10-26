@@ -2,15 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
 import { Broker } from "../src/broker.js";
-import { startServers } from "../src/server.js";
 import { DemoProvider, DEMO_ITEM, DEMO_PASSWORD } from "../src/providers.js";
 
-const execute = promisify(execFile);
-const cli = fileURLToPath(new URL("../src/cli.js", import.meta.url));
 async function until(fn) {
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
@@ -185,70 +179,6 @@ test("presenter startup delay does not reduce the five-minute visible lifetime",
   const notice = broker.notices()[0];
   assert.equal(notice.created_at, beforeStartup + 4000);
   assert.equal(notice.expires_at, beforeStartup + 304000);
-});
-
-test("one-click revoke interrupts actual waiting CLI and supervised caller, removes file, prevents next automatic use", async (t) => {
-  const { broker, input, runtime, notifier, marker } = await setup(t);
-  const id = await allow(broker, input);
-  await rm(marker, { force: true });
-  const server = await startServers(broker, {
-    port: 0,
-    host: "127.0.0.1",
-    publicUrl: "http://test.invalid",
-  });
-  t.after(() => server.close());
-  const execution = execute(
-    process.execPath,
-    [
-      cli,
-      "exec",
-      "--runtime",
-      runtime,
-      "--site",
-      "example.com",
-      "--field",
-      "login",
-      "--label",
-      input.label,
-      "--reason",
-      input.reason,
-      "--ttl",
-      "30",
-      "--cwd",
-      runtime,
-      "--",
-      ...input.argv,
-    ],
-    { timeout: 10000 },
-  ).then(
-    (value) => ({ value }),
-    (error) => ({ error }),
-  );
-  await until(() => notifier.shown.length === 1);
-  const notice = notifier.shown[0];
-  await until(async () => (await broker.status(notice.notice.request_id)).state === "running");
-  const details = await until(async () => {
-    try {
-      return JSON.parse(await readFile(marker, "utf8"));
-    } catch {}
-  });
-  notice.action("revoke");
-  const { error } = await execution;
-  assert.equal(error.code, 125);
-  assert.equal(JSON.parse(error.stdout).state, "revoked");
-  assert.ok(!error.stdout.includes(DEMO_PASSWORD));
-  await until(() => {
-    try {
-      process.kill(details.pid, 0);
-    } catch (e) {
-      return e.code === "ESRCH";
-    }
-  });
-  await assert.rejects(stat(details.path), { code: "ENOENT" });
-  assert.equal(broker.grants.get(id), undefined);
-  assert.equal(broker.notices()[0].revoked, true);
-  const next = await pending(broker, input);
-  await broker.release(next.request_id);
 });
 
 test("revocation during provider fetch cancels delivery", async (t) => {

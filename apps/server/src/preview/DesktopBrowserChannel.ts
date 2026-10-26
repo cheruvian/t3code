@@ -52,9 +52,6 @@ export class DesktopBrowserChannel extends Context.Service<
     readonly detached: Stream.Stream<DesktopTabKey>;
     readonly attached: Stream.Stream<DesktopTabKey>;
     readonly isAttached: (key: DesktopTabKey) => Effect.Effect<boolean>;
-    readonly privatePageEndpoint: (
-      source: DesktopTabKey,
-    ) => Effect.Effect<string, never, Scope.Scope>;
     readonly endpoint: (key: DesktopTabKey) => Effect.Effect<string, never, Scope.Scope>;
     readonly pointer: (
       key: DesktopTabKey,
@@ -79,7 +76,6 @@ const make = Effect.gen(function* () {
       detached: Stream.empty,
       attached: Stream.empty,
       isAttached: () => Effect.succeed(false),
-      privatePageEndpoint: () => Effect.die("No desktop app is attached to this server."),
       endpoint: () => Effect.die("No desktop app is attached to this server."),
       pointer: () => Effect.void,
     });
@@ -212,17 +208,6 @@ const make = Effect.gen(function* () {
   return DesktopBrowserChannel.of({
     available: true,
     awaitAttached,
-    privatePageEndpoint: (source) =>
-      Effect.gen(function* () {
-        const key = { threadId: source.threadId, tabId: `private-${NodeCrypto.randomUUID()}` };
-        yield* Effect.acquireRelease(
-          command({ type: "private-open", ...key, sourceTabId: source.tabId }),
-          () => command({ type: "private-close", ...key }),
-        );
-        if (!(yield* awaitAttached(key, "10 seconds")))
-          return yield* Effect.die("The private desktop browser page did not attach.");
-        return yield* endpoint(key);
-      }),
     detached: Stream.fromPubSub(changes).pipe(
       Stream.filter((change) => !change.attached),
       Stream.map((change) => change.key),

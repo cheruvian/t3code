@@ -3,7 +3,7 @@
 The broker owns Bitwarden sessions, private site lookup, temporary credential
 delivery, grants, expiry, output suppression, and supervised process groups.
 T3 uses its request-only adapter as the primary credential approval experience.
-The original CLI and Electron interface remain available as standalone consumers.
+The CLI forwards requests from attached ACP sessions to the same T3 approval flow.
 
 ## T3
 
@@ -38,61 +38,26 @@ associated active callers; the waiting tool resolves as revoked after cleanup.
 T3 turn termination, session revocation, tool interruption, vault lock, and
 server shutdown also release associated access.
 
-The adapter uses the same supervisor/watchdog source as the standalone broker.
+The broker supervises consumer processes and credential-file expiry.
 T3 hosts them through its hidden worker command so Electron and single-executable
 runtimes preserve IPC and cleanup. Direct package use embeds those programs. After changing either program, run
 node scripts/embed-programs.mjs. The check command detects stale embedded source.
 
-## Integrated browser sign-in
+## CLI compatibility
 
-Ask the agent to sign in to a page in the integrated browser. In the credential
-request, select a saved Bitwarden login or expand **Enter a login privately** to
-submit a username and password for one use. Manual entry works while Bitwarden
-is locked, when no saved login matches, or when lookup fails, and does not save
-the login. Approval waits until you decide or the
-originating call stops; the credential lifetime starts after approval.
+Agents with an attached T3 request-only provider session can run:
 
-Sign-in uses a private page in the working tab's storage context. It closes that
-page and reloads the working tab after submission. The filled page is excluded
-from T3 snapshots, recordings, and diagnostics. Saved permissions include the
-browser origin, profile, and form selectors. Temporary tab storage lasts only as
-long as that tab's context; persistent profiles retain their website sessions.
+    credential-broker exec --site example.com --field password --reason "Run the requested operation" -- node /absolute/path/to/consumer.mjs
 
-This flow supports same-origin username/password forms in server-backed tabs,
-including a username step followed by a password step under one private approval.
-For staged sign-in, agents supply `usernameSubmitSelector` for the first step's
-Next button and selectors for the password field and final submit control on the
-second step. The password field need not be visible on the first step.
-Desktop-attached tabs, cross-origin SSO, and interactive MFA need a separate
-human sign-in workflow. Revoking broker permission does not sign out a website.
-
-## Standalone compatibility
-
-From this package directory:
-
-    vp run desktop        # human terminal: Bitwarden + optional Electron companion
-    vp run desktop:demo   # fake credentials
-    node src/cli.js --help
-
-Electron is a development dependency for the optional companion; T3 approval\ndoes not install, load, or launch it.
-Never start the standalone operator interface through an agent tool: it prints
-a private operator capability URL.
-
-Standalone exec keeps its Unix-socket protocol, private permissions, suppressed
-stdout/stderr, supervised cleanup, and revoked exit code 125. File leases remain
-standalone only and are unsupervised. CLI labels remain unverified. No standalone
-socket request can supply trusted T3 origin metadata.
-
-Inside an ACP session, exec automatically uses its attached request-only T3 MCP
-session. --t3 explicitly selects that transport. Native Codex and Claude agents
-use credential_broker_exec directly; standalone CLI use remains available outside
-T3. The packaged server also supports t3 credential-broker exec. Neither transport
-accepts human decisions, exposes vault records, or reads operator tokens.
+The CLI forwards command names to the environment for resolution and uses T3's
+connected web, desktop, or mobile client for approval. Native agents call
+`credential_broker_exec` directly. The packaged server also supports
+`t3 credential-broker exec`. These transports return execution metadata only;
+they cannot approve requests, expose vault choices, or start an approval interface.
 
 ## Limits and verification
 
-The boundary separates the supported interfaces; it does not isolate arbitrary
-same-user shell tools from the filesystem, processes, browser state, or Bitwarden.
+The broker does not isolate arbitrary same-user shell tools from the filesystem, processes, browser state, or Bitwarden.
 Human clients must keep their operator sessions out of agent-controlled browsers.
 Approval does not sandbox an arbitrary consumer. The consumer must prevent
 credential-bearing snapshots, traces, screenshots, recordings, and application
@@ -104,13 +69,12 @@ passwords, or invalidate website sessions. Host suspension delays timers until
 resume. The watchdog and restart cleanup provide additional recovery.
 
 macOS is verified. Linux needs host verification. Windows fails closed pending
-ACL, named-pipe, and process-tree supervision adapters; portable Electron UI does
-not supply those guarantees.
+ACL, named-pipe, and process-tree supervision adapters.
 
     vp run check
     vp run test
 
-Tests use fake credentials. They exercise the real CLI, subprocess supervision,
+Tests use fake credentials. They exercise the T3 CLI transport, subprocess supervision,
 raw/encoded output suppression, permissions, expiry, cancellation, restart
 recovery, private Bitwarden child environments, site filtering, scoped grants,
 remote visibility acknowledgment, five-minute notices, dismissal, and revocation.

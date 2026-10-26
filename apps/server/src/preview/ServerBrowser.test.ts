@@ -254,7 +254,6 @@ const dependencies = Layer.mergeAll(
     get available() {
       return desktopUnavailable || desktopRendersNext || desktopTabs.size > 0;
     },
-    privatePageEndpoint: () => Effect.die("Private page not exercised"),
     awaitAttached: (key) => Effect.sync(() => desktopRenders(key.tabId)),
     detached: Stream.callback<{ threadId: string; tabId: string }>((queue) =>
       Effect.acquireRelease(
@@ -1920,46 +1919,6 @@ it.live("a desktop page that comes back reconnects without waiting for a viewer"
   ).pipe(Effect.provide(layer)),
 );
 
-it.effect(
-  "binds private credential delivery to the actual thread, agent owner, origin, and profile",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { browser, broker, tabId } = yield* ready;
-        yield* broker.invoke({
-          scope,
-          operation: "navigate",
-          tabId,
-          input: { url: "https://example.com:8443/login" },
-        });
-        const input = {
-          threadId: testThread.threadId,
-          tabId,
-          usernameSelector: "#username",
-          passwordSelector: "#password",
-          submitSelector: "button",
-          reason: "Sign in",
-          agentSessionId: `${scope.environmentId}\u0000${testThread.providerSessionId}`,
-        };
-        const target = yield* browser.prepareCredentialLogin(input);
-        expect(target).toMatchObject({
-          site: "example.com",
-          origin: "https://example.com:8443",
-          profile: "Temporary tab storage",
-        });
-        expect(new URL(target.endpoint).hostname).toBe("127.0.0.1");
-        const wrongThread = yield* browser
-          .prepareCredentialLogin({ ...input, threadId: ThreadId.make("another-thread") })
-          .pipe(Effect.flip);
-        expect(wrongThread.code).toBe("browser_unavailable");
-        const wrongAgent = yield* browser
-          .prepareCredentialLogin({ ...input, agentSessionId: "another-agent" })
-          .pipe(Effect.flip);
-        expect(wrongAgent.code).toBe("browser_unavailable");
-      }).pipe(Effect.provide(layer)),
-    ),
-);
-
 it.live("a missing desktop attachment cannot silently create a separate headless session", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -1972,44 +1931,6 @@ it.live("a missing desktop attachment cannot silently create a separate headless
       expect(result.message).toContain("desktop browser tab is not attached");
       expect(contexts).toEqual([]);
       expect(desktopConnections).toEqual([]);
-    }),
-  ).pipe(Effect.provide(layer)),
-);
-
-it.live("prepares private sign-in for an agent-owned desktop-attached tab", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const browser = yield* ServerBrowser.ServerBrowser;
-      const broker = yield* Broker.PreviewAutomationBroker;
-      const manager = yield* Manager.PreviewManager;
-      yield* Effect.yieldNow;
-      desktopRendersNext = true;
-      const agentSessionId = `${scope.environmentId}\u0000${testThread.providerSessionId}`;
-      const opened = yield* manager.open({
-        threadId: testThread.threadId,
-        runtime: "server",
-        automationOwner: agentSessionId,
-      });
-      yield* browser.attachViewer(viewerInput(opened.tabId, false));
-      yield* broker.invoke({
-        scope,
-        operation: "navigate",
-        tabId: opened.tabId,
-        input: { url: "https://example.com/login" },
-      });
-      const target = yield* browser.prepareCredentialLogin({
-        threadId: testThread.threadId,
-        tabId: opened.tabId,
-        agentSessionId,
-        usernameSelector: "#username",
-        passwordSelector: "#password",
-        submitSelector: "button",
-        reason: "Sign in",
-      });
-      expect(target.site).toBe("example.com");
-      expect(new URL(target.endpoint).hostname).toBe("127.0.0.1");
-      expect(contexts).toEqual([]);
-      expect(desktopConnections).toHaveLength(1);
     }),
   ).pipe(Effect.provide(layer)),
 );

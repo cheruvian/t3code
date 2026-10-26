@@ -20,10 +20,8 @@ describe("credential tool boundary", () => {
       expect(decode({ ...request, ttlSeconds }).ttlSeconds).toBe(ttlSeconds);
   });
   it("exposes requests without human approval or secret entry capabilities", () => {
-    expect(Object.keys(CredentialsToolkit.tools)).toEqual([
-      "preview_login",
-      "credential_broker_exec",
-    ]);
+    expect(Object.keys(CredentialsToolkit.tools)).toEqual(["credential_broker_exec"]);
+    expect(resolveT3McpToolDefinition("preview_login")).toBeNull();
     const schema = Tool.getJsonSchema(CredentialsToolkit.tools.credential_broker_exec);
     expect(schema).toMatchObject({ type: "object" });
     expect(JSON.stringify(schema)).not.toContain('"$ref"');
@@ -38,18 +36,6 @@ describe("credential tool boundary", () => {
       "token",
     ])
       expect(schema.properties).not.toHaveProperty(operatorCapability);
-    expect(resolveT3McpToolDefinition("preview_login")).not.toBeNull();
-    const browserSchema = Tool.getJsonSchema(CredentialsToolkit.tools.preview_login);
-    expect(browserSchema.properties).toHaveProperty("tabId");
-    for (const operatorCapability of [
-      "username",
-      "password",
-      "approve",
-      "origin",
-      "endpoint",
-      "site",
-    ])
-      expect(browserSchema.properties).not.toHaveProperty(operatorCapability);
     expect(resolveT3McpToolDefinition("credential_broker_exec")).not.toBeNull();
   });
 });

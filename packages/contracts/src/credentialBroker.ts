@@ -1,4 +1,3 @@
-import { PreviewTabId } from "./preview.ts";
 import * as Schema from "effect/Schema";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { EnvironmentId, ThreadId, ProjectId } from "./baseSchemas.ts";
@@ -27,18 +26,6 @@ export const CredentialExecInput = Schema.Struct({
   cwd: Schema.optional(Schema.String),
 });
 export type CredentialExecInput = typeof CredentialExecInput.Type;
-
-export const CredentialBrowserLoginInput = Schema.Struct({
-  tabId: PreviewTabId,
-  usernameSelector: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
-  usernameSubmitSelector: Schema.optional(
-    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
-  ),
-  passwordSelector: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
-  submitSelector: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
-  reason: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2048)),
-});
-export type CredentialBrowserLoginInput = typeof CredentialBrowserLoginInput.Type;
 
 export const CredentialExecutionFailureCode = Schema.Literals([
   "no_matching_login",
@@ -74,9 +61,6 @@ export const CredentialApproval = Schema.Struct({
   argv0: Schema.optional(Schema.String),
   cwd: Schema.String,
   origin: Schema.optional(CredentialCaller),
-  browser: Schema.optional(
-    Schema.Struct({ tabId: PreviewTabId, origin: Schema.String, profile: Schema.String }),
-  ),
   candidates: Schema.Array(
     Schema.Struct({
       id: Schema.String,
@@ -126,12 +110,6 @@ export const CredentialBrokerAction = Schema.Union([
     password: Schema.String.check(Schema.isMaxLength(4096)),
   }),
   Schema.Struct({
-    type: Schema.Literal("browserManual"),
-    requestId: Schema.String,
-    username: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
-    password: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
-  }),
-  Schema.Struct({
     type: Schema.Literal("decide"),
     requestId: Schema.String,
     decision: Schema.Literals(["deny", "once", "always"]),
@@ -158,7 +136,6 @@ export const CredentialBrokerFailureCode = Schema.Literals([
   "vault_locked",
   "vault_unlocking",
   "unsupported_platform",
-  "browser_unavailable",
   "invalid_request",
   "consumer_unavailable",
   "caller_cancelled",
@@ -176,8 +153,6 @@ export class CredentialBrokerError extends Schema.TaggedError<CredentialBrokerEr
         return "Credential Broker vault_unlocking: wait for the human's private vault unlock to finish.";
       case "unsupported_platform":
         return "Credential Broker unsupported_platform: this host's security adapters are unavailable.";
-      case "browser_unavailable":
-        return "Credential Broker browser_unavailable: private sign-in requires an available agent-controlled HTTP(S) browser tab and its private sign-in page.";
       case "invalid_request":
         return "Credential Broker invalid_request: use a valid hostname, a command name or absolute executable path, an absolute working directory, and an integer lifetime of 5–300 seconds.";
       case "consumer_unavailable":

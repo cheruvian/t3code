@@ -74,241 +74,162 @@ export class DesktopBrowserHost extends Context.Service<
   }
 >()("@t3tools/desktop/preview/DesktopBrowserHost") {}
 
-export interface PrivateBrowserPage {
-  readonly debuggee: DesktopBrowserTabDebugger;
-  readonly close: () => void;
-}
+export const make = Effect.gen(function* () {
+  const outbox = yield* PubSub.unbounded<DesktopBrowserEventType>();
+  const pointers = yield* PubSub.sliding<{
+    readonly key: DesktopBrowserTabKey;
+    readonly phase: "move" | "click";
+    readonly x: number;
+    readonly y: number;
+  }>(16);
+  const runFork = Effect.runForkWith(yield* Effect.context<never>());
+  const tabs = new Map<string, AttachedTab>();
+  const emit = (event: DesktopBrowserEventType) => runFork(PubSub.publish(outbox, event));
 
-export async function createPrivateBrowserPage(
-  source: DesktopBrowserTabDebugger,
-): Promise<PrivateBrowserPage> {
-  const { BrowserWindow } = await import("electron");
-  const window = new BrowserWindow({
-    show: false,
-    webPreferences: {
-      session: source.webContents.session,
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      backgroundThrottling: false,
-    },
-  });
-  try {
-    window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    await window.loadURL("about:blank");
-    window.webContents.debugger.attach("1.3");
-    return {
-      debuggee: { webContents: window.webContents, debugger: window.webContents.debugger },
-      close: () => {
-        if (!window.isDestroyed()) window.destroy();
+  const relayFor = (tab: AttachedTab) => {
+    if (tab.relay) return tab.relay;
+    const { webContents, debugger: debuggee } = tab.debuggee;
+    const relay: CdpRelayConnection = createCdpRelayConnection(
+      {
+        send: (method, params, sessionId) => {
+          const send = () =>
+            sessionId === undefined
+              ? sendPageCommand(webContents, debuggee, method, params)
+              : debuggee.sendCommand(method, params, sessionId);
+          return method === "Page.captureScreenshot"
+            ? withCaptureRendering(
+                webContents,
+                send,
+                AbortSignal.any([tab.captureAbort.signal, AbortSignal.timeout(10_000)]),
+              )
+            : send();
+        },
+        targetId: () =>
+          debuggee
+            .sendCommand("Target.getTargetInfo")
+            .then((result: { targetInfo: { targetId: string } }) => result.targetInfo.targetId),
+        url: () => webContents.getURL(),
+        title: () => webContents.getTitle(),
+        userAgent: () => webContents.getUserAgent(),
+        setDownloadDirectory: (directory) => {
+          tab.downloadDirectory = directory;
+        },
+      },
+      (message) => {
+        if (tab.relay === relay && tabs.get(keyOf(tab.key)) === tab) {
+          emit({ type: "cdp", ...tab.key, message });
+        }
+      },
+    );
+    tab.relay = relay;
+    return relay;
+  };
+
+  /**
+   * Without a path Electron would open its Save dialog over the app for a file
+   * the agent asked for. CDP names the download just before this runs.
+   */
+  const placeDownload = (source: Electron.WebContents, item: Electron.DownloadItem) => {
+    const tab = [...tabs.values()].find(
+      (candidate) => candidate.debuggee.webContents === source && candidate.downloadDirectory,
+    );
+    if (!tab?.downloadDirectory || !tab.pendingDownloadGuid) return false;
+    item.setSavePath(NodePath.join(tab.downloadDirectory, tab.pendingDownloadGuid));
+    tab.pendingDownloadGuid = null;
+    return true;
+  };
+
+  const detach = (key: DesktopBrowserTabKey) => {
+    const id = keyOf(key);
+    const tab = tabs.get(id);
+    if (!tab) return;
+    tab.captureAbort.abort();
+    tabs.delete(id);
+    tab.debuggee.debugger.off("message", tab.onMessage);
+    emit({ type: "detached", ...key });
+  };
+
+  const attach = (key: DesktopBrowserTabKey, debuggee: DesktopBrowserTabDebugger) => {
+    const id = keyOf(key);
+    if (tabs.get(id)?.debuggee.webContents === debuggee.webContents) return;
+    if (tabs.has(id)) detach(key);
+    const tab: AttachedTab = {
+      captureAbort: new AbortController(),
+      key,
+      debuggee,
+      relay: null,
+      downloadDirectory: null,
+      pendingDownloadGuid: null,
+      agentInputAt: Number.NEGATIVE_INFINITY,
+      onMessage: (_event, method, params, sessionId) => {
+        if (method === "Browser.downloadWillBegin") {
+          const guid = (params as { guid?: unknown } | undefined)?.guid;
+          tab.pendingDownloadGuid = typeof guid === "string" ? guid : null;
+        }
+        tab.relay?.event(method, params, sessionId);
       },
     };
-  } catch {
-    window.destroy();
-    throw new Error("Private desktop browser page could not start.");
-  }
-}
+    tabs.set(id, tab);
+    debuggee.debugger.on("message", tab.onMessage);
+    emit({ type: "attached", ...key });
+  };
 
-export const makeWithPrivatePages = (createPrivatePage = createPrivateBrowserPage) =>
-  Effect.gen(function* () {
-    const outbox = yield* PubSub.unbounded<DesktopBrowserEventType>();
-    const pointers = yield* PubSub.sliding<{
-      readonly key: DesktopBrowserTabKey;
-      readonly phase: "move" | "click";
-      readonly x: number;
-      readonly y: number;
-    }>(16);
-    const runFork = Effect.runForkWith(yield* Effect.context<never>());
-    const tabs = new Map<string, AttachedTab>();
-    const privatePages = new Map<string, { source: string; page?: PrivateBrowserPage }>();
-    const emit = (event: DesktopBrowserEventType) => runFork(PubSub.publish(outbox, event));
-
-    const relayFor = (tab: AttachedTab) => {
-      if (tab.relay) return tab.relay;
-      const { webContents, debugger: debuggee } = tab.debuggee;
-      const relay: CdpRelayConnection = createCdpRelayConnection(
-        {
-          send: (method, params, sessionId) => {
-            const send = () =>
-              sessionId === undefined
-                ? sendPageCommand(webContents, debuggee, method, params)
-                : debuggee.sendCommand(method, params, sessionId);
-            return method === "Page.captureScreenshot"
-              ? withCaptureRendering(
-                  webContents,
-                  send,
-                  AbortSignal.any([tab.captureAbort.signal, AbortSignal.timeout(10_000)]),
-                )
-              : send();
-          },
-          targetId: () =>
-            debuggee
-              .sendCommand("Target.getTargetInfo")
-              .then((result: { targetInfo: { targetId: string } }) => result.targetInfo.targetId),
-          url: () => webContents.getURL(),
-          title: () => webContents.getTitle(),
-          userAgent: () => webContents.getUserAgent(),
-          setDownloadDirectory: (directory) => {
-            tab.downloadDirectory = directory;
-          },
-        },
-        (message) => {
-          if (tab.relay === relay && tabs.get(keyOf(tab.key)) === tab) {
-            emit({ type: "cdp", ...tab.key, message });
-          }
-        },
-      );
-      tab.relay = relay;
-      return relay;
-    };
-
-    /**
-     * Without a path Electron would open its Save dialog over the app for a file
-     * the agent asked for. CDP names the download just before this runs.
-     */
-    const placeDownload = (source: Electron.WebContents, item: Electron.DownloadItem) => {
-      const tab = [...tabs.values()].find(
-        (candidate) => candidate.debuggee.webContents === source && candidate.downloadDirectory,
-      );
-      if (!tab?.downloadDirectory || !tab.pendingDownloadGuid) return false;
-      item.setSavePath(NodePath.join(tab.downloadDirectory, tab.pendingDownloadGuid));
-      tab.pendingDownloadGuid = null;
-      return true;
-    };
-
-    const detach = (key: DesktopBrowserTabKey) => {
-      const id = keyOf(key);
-      for (const [privateId, entry] of privatePages) {
-        if (privateId !== id && entry.source !== id) continue;
-        privatePages.delete(privateId);
-        entry.page?.close();
-        if (privateId !== id)
-          detach({ threadId: key.threadId, tabId: privateId.split("\u0000")[1]! });
-      }
-      const tab = tabs.get(id);
+  const handleCommandLine = (line: string) =>
+    Effect.sync(() => {
+      const command = decodeCommand(line);
+      if (Option.isNone(command)) return;
+      const value = command.value;
+      const tab = tabs.get(keyOf(value));
       if (!tab) return;
-      tab.captureAbort.abort();
-      tabs.delete(id);
-      tab.debuggee.debugger.off("message", tab.onMessage);
-      emit({ type: "detached", ...key });
-    };
-
-    const attach = (key: DesktopBrowserTabKey, debuggee: DesktopBrowserTabDebugger) => {
-      const id = keyOf(key);
-      if (tabs.get(id)?.debuggee.webContents === debuggee.webContents) return;
-      if (tabs.has(id)) detach(key);
-      const tab: AttachedTab = {
-        captureAbort: new AbortController(),
-        key,
-        debuggee,
-        relay: null,
-        downloadDirectory: null,
-        pendingDownloadGuid: null,
-        agentInputAt: Number.NEGATIVE_INFINITY,
-        onMessage: (_event, method, params, sessionId) => {
-          if (method === "Browser.downloadWillBegin") {
-            const guid = (params as { guid?: unknown } | undefined)?.guid;
-            tab.pendingDownloadGuid = typeof guid === "string" ? guid : null;
-          }
-          tab.relay?.event(method, params, sessionId);
-        },
-      };
-      tabs.set(id, tab);
-      debuggee.debugger.on("message", tab.onMessage);
-      emit({ type: "attached", ...key });
-    };
-
-    const handleCommandLine = (line: string) =>
-      Effect.sync(() => {
-        const command = decodeCommand(line);
-        if (Option.isNone(command)) return;
-        const value = command.value;
-        const commandKey = { threadId: value.threadId, tabId: value.tabId };
-        if (value.type === "private-close") {
-          if (privatePages.has(keyOf(value))) detach(commandKey);
-          return;
-        }
-        if (value.type === "private-open") {
-          const sourceKey = { threadId: value.threadId, tabId: value.sourceTabId };
-          const source = tabs.get(keyOf(sourceKey));
-          const id = keyOf(value);
-          if (!source || privatePages.has(keyOf(sourceKey)) || tabs.has(id) || privatePages.has(id))
-            return;
-          const entry: { source: string; page?: PrivateBrowserPage } = { source: keyOf(sourceKey) };
-          privatePages.set(id, entry);
-          void createPrivatePage(source.debuggee)
-            .then((page) => {
-              if (privatePages.get(id) !== entry || tabs.get(keyOf(sourceKey)) !== source) {
-                page.close();
-                return;
-              }
-              entry.page = page;
-              page.debuggee.webContents.once("destroyed", () => detach(commandKey));
-              attach(commandKey, page.debuggee);
-            })
-            .catch(() => {
-              if (privatePages.get(id) === entry) privatePages.delete(id);
-              emit({ type: "detached", threadId: value.threadId, tabId: value.tabId });
-            });
-          return;
-        }
-        const tab = tabs.get(keyOf(value));
-        if (!tab) return;
-        if (value.type === "pointer") {
-          const { threadId, tabId, phase, x, y } = value;
-          runFork(PubSub.publish(pointers, { key: { threadId, tabId }, phase, x, y }));
-          return;
-        }
-        if (value.type === "release") {
-          tab.captureAbort.abort();
-          tab.captureAbort = new AbortController();
-          tab.relay = null;
-          return;
-        }
-        if (AGENT_INPUT_COMMAND.test(value.message)) tab.agentInputAt = performance.now();
-        relayFor(tab).receive(value.message);
-      });
-
-    const humanStartedDownload = (source: Electron.WebContents) => {
-      const tab = [...tabs.values()].find((candidate) => candidate.debuggee.webContents === source);
-      return tab !== undefined && performance.now() - tab.agentInputAt > AGENT_DOWNLOAD_WINDOW_MS;
-    };
-
-    const announceAll = Effect.suspend(() => {
-      for (const id of privatePages.keys()) {
-        const [threadId, tabId] = id.split("\u0000");
-        detach({ threadId: threadId!, tabId: tabId! });
+      if (value.type === "pointer") {
+        const { threadId, tabId, phase, x, y } = value;
+        runFork(PubSub.publish(pointers, { key: { threadId, tabId }, phase, x, y }));
+        return;
       }
-      return Effect.forEach(
-        [...tabs.values()],
-        (tab) => {
-          tab.captureAbort.abort();
-          tab.captureAbort = new AbortController();
-          tab.relay = null;
-          return PubSub.publish(outbox, { type: "attached", ...tab.key });
-        },
-        { discard: true },
-      );
+      if (value.type === "release") {
+        tab.captureAbort.abort();
+        tab.captureAbort = new AbortController();
+        tab.relay = null;
+        return;
+      }
+      if (AGENT_INPUT_COMMAND.test(value.message)) tab.agentInputAt = performance.now();
+      relayFor(tab).receive(value.message);
     });
 
-    return DesktopBrowserHost.of({
-      pointers: Stream.fromPubSub(pointers),
-      // Subscribes before announcing, so no attach falls between the two.
-      events: Stream.unwrap(
-        Effect.gen(function* () {
-          const subscription = yield* PubSub.subscribe(outbox);
-          yield* announceAll;
-          return Stream.fromSubscription(subscription);
-        }),
-      ).pipe(Stream.map((event) => lineEncoder.encode(`${encodeEvent(event)}\n`))),
-      handleCommandLine,
-      attach,
-      detach,
-      placeDownload,
-      humanStartedDownload,
-    });
+  const humanStartedDownload = (source: Electron.WebContents) => {
+    const tab = [...tabs.values()].find((candidate) => candidate.debuggee.webContents === source);
+    return tab !== undefined && performance.now() - tab.agentInputAt > AGENT_DOWNLOAD_WINDOW_MS;
+  };
+
+  const announceAll = Effect.suspend(() => {
+    return Effect.forEach(
+      [...tabs.values()],
+      (tab) => {
+        tab.captureAbort.abort();
+        tab.captureAbort = new AbortController();
+        tab.relay = null;
+        return PubSub.publish(outbox, { type: "attached", ...tab.key });
+      },
+      { discard: true },
+    );
   });
 
-export const make = makeWithPrivatePages();
+  return DesktopBrowserHost.of({
+    pointers: Stream.fromPubSub(pointers),
+    // Subscribes before announcing, so no attach falls between the two.
+    events: Stream.unwrap(
+      Effect.gen(function* () {
+        const subscription = yield* PubSub.subscribe(outbox);
+        yield* announceAll;
+        return Stream.fromSubscription(subscription);
+      }),
+    ).pipe(Stream.map((event) => lineEncoder.encode(`${encodeEvent(event)}\n`))),
+    handleCommandLine,
+    attach,
+    detach,
+    placeDownload,
+    humanStartedDownload,
+  });
+});
 
 export const layer = Layer.effect(DesktopBrowserHost, make);

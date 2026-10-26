@@ -1364,12 +1364,6 @@ importers:
       '@t3tools/contracts':
         specifier: workspace:*
         version: link:../contracts
-      electron:
-        specifier: 44.7.0
-        version: 44.7.0(supports-color@8.1.1)
-      playwright-core:
-        specifier: 1.60.0
-        version: 1.60.0
 
   packages/effect-acp:
     dependencies:

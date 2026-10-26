@@ -509,11 +509,7 @@ function Approval({
           ))}
         </>
       )}
-      {request.browser ? (
-        <Text className="text-xs text-foreground-muted">
-          Browser · {request.browser.origin} · {request.browser.profile}
-        </Text>
-      ) : null}
+
       {request.error && (
         <Text accessibilityRole="alert" className="text-danger">
           {request.error}
@@ -522,9 +518,7 @@ function Approval({
       {request.canSave && request.state === "pending" && (
         <SaveLogin request={request} disabled={disabled} act={act} />
       )}
-      {request.browser ? (
-        <ManualBrowserLogin request={request} disabled={disabled} act={act} />
-      ) : null}
+
       <Button
         label={detailsOpen ? "Hide command & scope" : "Command, workspace & permission scope"}
         tone="text"
@@ -590,88 +584,6 @@ function Approval({
           })
         }
       />
-    </View>
-  );
-}
-
-function ManualBrowserLogin({
-  request,
-  disabled,
-  act,
-}: {
-  request: CredentialApproval;
-  disabled: boolean;
-  act: (input: CredentialBrokerAction) => Promise<void>;
-}) {
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const username = useRef("");
-  const password = useRef("");
-  const usernameInput = useRef<TextInputInstance>(null);
-  const passwordInput = useRef<TextInputInstance>(null);
-  return (
-    <View className="gap-2">
-      <Button
-        label={open ? "Hide private login" : "Enter a login privately"}
-        tone="text"
-        disabled={disabled || busy}
-        onPress={() => {
-          username.current = "";
-          password.current = "";
-          usernameInput.current?.clear();
-          passwordInput.current?.clear();
-          setOpen(!open);
-        }}
-      />
-      {open ? (
-        <>
-          <Text className="text-xs text-foreground-muted">
-            Use once in browser profile {request.browser?.profile}. Values stay out of chat and are
-            not saved in Bitwarden.
-          </Text>
-          <TextInput
-            ref={usernameInput}
-            accessibilityLabel="Private browser username"
-            placeholder="Username or email"
-            autoCapitalize="none"
-            autoCorrect={false}
-            editable={!disabled && !busy}
-            onChangeText={(value) => {
-              username.current = value;
-            }}
-            className="rounded-lg border border-border p-3 text-foreground"
-          />
-          <TextInput
-            ref={passwordInput}
-            accessibilityLabel="Private browser password"
-            placeholder="Password"
-            secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
-            editable={!disabled && !busy}
-            onChangeText={(value) => {
-              password.current = value;
-            }}
-            className="rounded-lg border border-border p-3 text-foreground"
-          />
-          <Button
-            label={busy ? "Signing in…" : "Sign in once"}
-            disabled={disabled || busy}
-            onPress={() => {
-              if (!username.current || !password.current) return;
-              const login = { username: username.current, password: password.current };
-              username.current = "";
-              password.current = "";
-              usernameInput.current?.clear();
-              passwordInput.current?.clear();
-              setBusy(true);
-              void act({ type: "browserManual", requestId: request.requestId, ...login }).finally(
-                () => setBusy(false),
-              );
-            }}
-          />
-        </>
-      ) : null}
     </View>
   );
 }

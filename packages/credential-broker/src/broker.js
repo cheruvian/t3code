@@ -37,8 +37,6 @@ export class Broker {
   #lockOwned = false;
   #timer;
   #closing = false;
-  #approvalQueue = Promise.resolve();
-  #approvalControllers = new Map();
   #notices = new Map();
   constructor({
     runtime,
@@ -46,7 +44,6 @@ export class Broker {
     approvalTimeout = 120_000,
     now = Date.now,
     watchdog = true,
-    approver,
     notifier,
     onChange = () => {},
     runnerProgram,
@@ -62,7 +59,6 @@ export class Broker {
     this.approvalTimeout = approvalTimeout;
     this.now = now;
     this.watchdog = watchdog;
-    this.approver = approver;
     this.notifier = notifier;
     this.grants = new GrantStore(this.runtime);
     this.leaseDir = join(this.runtime, "leases");
@@ -126,12 +122,7 @@ export class Broker {
       notices: this.notices(),
     };
   }
-  request(
-    input,
-    origin,
-    consumerEnvironment,
-    { allowManual = false, allowSave = false, argv0 } = {},
-  ) {
+  request(input, origin, { allowSave = false, argv0 } = {}) {
     if (this.#closing) throw new BrokerError("Broker is shutting down.", 503);
     const data = parseRequest(input);
     if ([...this.#requests.values()].filter((r) => !terminal.has(r.state)).length >= 100)
@@ -139,7 +130,6 @@ export class Broker {
     const request = {
       ...data,
       ...(argv0 ? { argv0 } : {}),
-      allow_manual: allowManual,
       allow_save: allowSave && typeof this.provider.create === "function",
       request_id: randomUUID(),
       state: data.site ? "searching" : "pending",
@@ -148,8 +138,6 @@ export class Broker {
     };
     // Only the embedding host can supply origin; parseRequest rejects it on the CLI wire.
     if (origin) request.origin = Object.freeze({ ...origin });
-    if (consumerEnvironment)
-      request.consumerEnvironment = Object.freeze({ ...consumerEnvironment });
     let state = request.state;
     Object.defineProperty(request, "state", {
       enumerable: true,
@@ -174,7 +162,7 @@ export class Broker {
       });
       await this.sweep();
       if (request.state !== "searching" || this.#closing) return;
-      if (!candidates.length && !request.allow_manual && !request.allow_save) {
+      if (!candidates.length && !request.allow_save) {
         request.state = "failed";
         request.failure_code = "no_matching_login";
         request.error = "No matching login found for this site.";
@@ -187,7 +175,7 @@ export class Broker {
       }
     } catch {
       if (request.state === "searching") {
-        if (request.allow_manual || request.allow_save) {
+        if (request.allow_save) {
           request.candidates = [];
           request.error = "Vault lookup failed. You can still enter a login to save and use it.";
           request.state = "pending";
@@ -201,16 +189,12 @@ export class Broker {
     }
   }
   offerApproval(request) {
-    void this.tryAutomatic(request)
-      .then((used) => {
-        if (!used && request.state === "pending") this.queueApproval(request);
-      })
-      .catch(() => {
-        if (request.state === "pending") {
-          request.state = "failed";
-          request.error = "Automatic approval failed; no credential access granted.";
-        }
-      });
+    void this.tryAutomatic(request).catch(() => {
+      if (request.state === "pending") {
+        request.state = "failed";
+        request.error = "Automatic approval failed; no credential access granted.";
+      }
+    });
   }
   async tryAutomatic(request) {
     if (request.kind !== "exec" || !this.grants.list().length) return false;
@@ -264,40 +248,6 @@ export class Broker {
     request.auto_approved = true;
     await this.decide(request.request_id, true, grant.item_id, false, grant);
     return true;
-  }
-  queueApproval(request) {
-    if (!this.approver) return;
-    this.#approvalQueue = this.#approvalQueue
-      .then(async () => {
-        await this.sweep();
-        if (request.state !== "pending" || this.#closing) return;
-        const controller = new AbortController();
-        this.#approvalControllers.set(request.request_id, controller);
-        try {
-          const decision = await this.approver(this.public(request, true), {
-            signal: controller.signal,
-          });
-          await this.sweep();
-          if (request.state === "pending" && !this.#closing) {
-            if (typeof decision?.approve !== "boolean") throw new Error();
-            await this.decide(
-              request.request_id,
-              decision.approve,
-              decision.item_id,
-              decision.always === true,
-            );
-          }
-        } catch {
-          if (request.state === "pending") {
-            request.state = "failed";
-            request.error =
-              "Desktop approval failed; no credential access granted. Check the companion app.";
-          }
-        } finally {
-          this.#approvalControllers.delete(request.request_id);
-        }
-      })
-      .catch(() => {});
   }
   public(request, operator = false) {
     const {
@@ -411,7 +361,6 @@ export class Broker {
       (request.field !== "username" && !login.password)
     )
       throw new BrokerError("Enter the requested login fields.", 400);
-    this.#approvalControllers.get(id)?.abort();
     request.state = "saving";
     request.error = undefined;
     try {
@@ -435,7 +384,6 @@ export class Broker {
     const request = this.find(id);
     if (request.state !== "pending" && !(request.state === "searching" && !approve))
       throw new BrokerError("Request is no longer awaiting approval.", 409);
-    this.#approvalControllers.get(id)?.abort();
     if (!approve) {
       request.state = "denied";
       return this.public(request);
@@ -532,7 +480,6 @@ export class Broker {
     if (!terminal.has(request.state)) {
       request.cleanup_pending = true;
       request.state = state;
-      this.#approvalControllers.get(id)?.abort();
       // Concurrent cancellation paths share the same cleanup milestone.
       request.cleanupPromise = (async () => {
         try {
@@ -590,8 +537,6 @@ export class Broker {
       if (process.env[key] !== undefined) env[key] = process.env[key];
     }
     if (this.workerEntrypoint || process.versions.electron) env.ELECTRON_RUN_AS_NODE = "1";
-    if (request.consumerEnvironment?.CB_BROWSER_ENDPOINT)
-      env.CB_BROWSER_ENDPOINT = request.consumerEnvironment.CB_BROWSER_ENDPOINT;
     const runner = fork(
       this.workerEntrypoint?.[0] ??
         (this.runnerProgram ? "-e" : fileURLToPath(new URL("./runner.js", import.meta.url))),
