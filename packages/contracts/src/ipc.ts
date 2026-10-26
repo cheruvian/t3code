@@ -1419,6 +1419,3 @@ export interface LocalApi {
     setClientSettings: (settings: ClientSettings) => Promise<void>;
   };
 }
-
-export const DESKTOP_PREVIEW_CREDENTIAL_ENTRY = "__t3DesktopPreviewCredentialEntry";
-export const DESKTOP_CREDENTIAL_ENTRY_COMMAND = "T3.setCredentialEntry";

@@ -202,10 +202,7 @@ const make = Effect.gen(function* () {
   ): CredentialExecInput => ({
     site: target.site,
     field: "login",
-    label:
-      fields.mode === "private-page"
-        ? "Sign in through a separate private browser page"
-        : "Sign in in this browser tab (view hidden during credential entry)",
+    label: "Sign in through the integrated T3 browser",
     reason: fields.reason,
     ttlSeconds: 60,
     cwd,
@@ -255,10 +252,7 @@ const make = Effect.gen(function* () {
             const result = await broker.execute(caller, input, signal, {
               CB_BROWSER_ENDPOINT: target.endpoint,
             });
-            const execution = call.manualResult ?? result;
-            return execution.state === "completed" && execution.exitCode !== 0
-              ? { ...execution, browserFailureStage: "delivery" as const, ...target.failure() }
-              : { ...execution, ...target.failure() };
+            return call.manualResult ?? result;
           },
           catch: safeBrokerFailure,
         }).pipe(

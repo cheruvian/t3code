@@ -1,10 +1,3 @@
-import { DESKTOP_CREDENTIAL_ENTRY_COMMAND } from "@t3tools/contracts";
-import {
-  closeCredentialEntry,
-  credentialEntryActive,
-  credentialEntryEpoch,
-  setCredentialEntryPrivacy,
-} from "./CredentialEntryPrivacy.ts";
 // @effect-diagnostics nodeBuiltinImport:off - Names download files on the shared disk.
 /**
  * The preview manager owns the tab's single debugger session and hands it here;
@@ -43,7 +36,6 @@ export interface DesktopBrowserTabKey {
 export interface DesktopBrowserTabDebugger {
   readonly webContents: Electron.WebContents;
   readonly debugger: Electron.Debugger;
-  readonly canEnterCredentialMode?: () => Promise<boolean>;
 }
 
 const keyOf = ({ threadId, tabId }: DesktopBrowserTabKey) => `${threadId}\u0000${tabId}`;
@@ -137,32 +129,16 @@ export const makeWithPrivatePages = (createPrivatePage = createPrivateBrowserPag
       const relay: CdpRelayConnection = createCdpRelayConnection(
         {
           send: (method, params, sessionId) => {
-            if (method === DESKTOP_CREDENTIAL_ENTRY_COMMAND)
-              return setCredentialEntryPrivacy(
-                webContents,
-                params.active === true,
-                tab.debuggee.canEnterCredentialMode,
-              ).then(() => ({}));
-            if (method === "Page.captureScreenshot" && credentialEntryActive(webContents.id))
-              return Promise.reject(new Error("Private credential entry is in progress."));
             const send = () =>
               sessionId === undefined
                 ? sendPageCommand(webContents, debuggee, method, params)
                 : debuggee.sendCommand(method, params, sessionId);
-            const epoch = credentialEntryEpoch(webContents.id);
             return method === "Page.captureScreenshot"
               ? withCaptureRendering(
                   webContents,
                   send,
                   AbortSignal.any([tab.captureAbort.signal, AbortSignal.timeout(10_000)]),
-                ).then((result) => {
-                  if (
-                    credentialEntryActive(webContents.id) ||
-                    epoch !== credentialEntryEpoch(webContents.id)
-                  )
-                    throw new Error("Browser privacy changed.");
-                  return result;
-                })
+                )
               : send();
           },
           targetId: () =>
@@ -211,7 +187,6 @@ export const makeWithPrivatePages = (createPrivatePage = createPrivateBrowserPag
       }
       const tab = tabs.get(id);
       if (!tab) return;
-      closeCredentialEntry(tab.debuggee.webContents);
       tab.captureAbort.abort();
       tabs.delete(id);
       tab.debuggee.debugger.off("message", tab.onMessage);
@@ -285,7 +260,6 @@ export const makeWithPrivatePages = (createPrivatePage = createPrivateBrowserPag
           return;
         }
         if (value.type === "release") {
-          closeCredentialEntry(tab.debuggee.webContents);
           tab.captureAbort.abort();
           tab.captureAbort = new AbortController();
           tab.relay = null;
@@ -308,7 +282,6 @@ export const makeWithPrivatePages = (createPrivatePage = createPrivateBrowserPag
       return Effect.forEach(
         [...tabs.values()],
         (tab) => {
-          closeCredentialEntry(tab.debuggee.webContents);
           tab.captureAbort.abort();
           tab.captureAbort = new AbortController();
           tab.relay = null;

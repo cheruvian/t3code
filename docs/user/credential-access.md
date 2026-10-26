@@ -37,17 +37,8 @@ use notice, access requires manual approval.
 For sign-in through the integrated browser, choose a saved login or enter one
 privately in the approval form. A username page followed by a password page uses
 one approval; the password is filled only after its field becomes visible.
-The browser view is hidden during credential entry, and agent inspection is
-blocked. Stop recordings and close other tabs using the same browser session
-before approving browser sign-in. T3 clears the filled
-page before showing the tab again. If entry fails or is stopped, the tab is
-blanked or closed before inspection resumes.
-
-Both steps must stay on the approved origin. MFA, cross-origin SSO, and sites
-that lose their sign-in when the page reloads need human sign-in. A completed
-submission does not necessarily mean the site accepted the login; the agent must
-verify the authenticated page. Revoking access does not sign out an established
-website session.
+Both steps must stay on the approved origin. MFA and cross-origin SSO still need
+human sign-in. Revoking access does not sign out an established website session.
 
 Credentials go directly to the approved consumer through a private temporary
 file. Child output is discarded. Approval is not a sandbox: approve only programs

@@ -30,10 +30,6 @@ export type CredentialExecInput = typeof CredentialExecInput.Type;
 
 export const CredentialBrowserLoginInput = Schema.Struct({
   tabId: PreviewTabId,
-  mode: Schema.optional(Schema.Literals(["shared-tab", "private-page"])),
-  successSelector: Schema.optional(
-    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
-  ),
   usernameSelector: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
   usernameSubmitSelector: Schema.optional(
     Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1024)),
@@ -51,22 +47,6 @@ export const CredentialExecutionFailureCode = Schema.Literals([
   "supervisor_start_failed",
   "credential_cleanup_failed",
 ]);
-export const CredentialBrowserFailureStage = Schema.Literals([
-  "private_page",
-  "connection",
-  "navigation",
-  "username",
-  "password",
-  "submit",
-  "session_refresh",
-  "target_changed",
-  "request_policy",
-  "delivery",
-  "privacy",
-  "verification",
-  "cleanup",
-]);
-export type CredentialBrowserFailureStage = typeof CredentialBrowserFailureStage.Type;
 export const CredentialExecution = Schema.Struct({
   requestId: Schema.String,
   state: Schema.String,
@@ -74,9 +54,6 @@ export const CredentialExecution = Schema.Struct({
   exitCode: Schema.optional(Schema.NullOr(Schema.Number)),
   signal: Schema.optional(Schema.NullOr(Schema.String)),
   failureCode: Schema.optional(CredentialExecutionFailureCode),
-  browserOutcome: Schema.optional(Schema.Literals(["submitted", "authenticated"])),
-  browserFailureStage: Schema.optional(CredentialBrowserFailureStage),
-  browserRequestBlocked: Schema.optional(Schema.Boolean),
 });
 export type CredentialExecution = typeof CredentialExecution.Type;
 export const CredentialApproval = Schema.Struct({

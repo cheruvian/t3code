@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Stands in for an Electron debugger.
 import { describe, expect, it } from "@effect/vitest";
-import { DESKTOP_CREDENTIAL_ENTRY_COMMAND, DesktopBrowserEvent } from "@t3tools/contracts";
+import { DesktopBrowserEvent } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
@@ -260,39 +260,3 @@ describe("private sign-in pages", () => {
     }).pipe(Effect.scoped),
   );
 });
-
-it.effect("rejects desktop screenshot requests while credential entry owns the guest", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const host = yield* DesktopBrowserHost.make;
-      const debuggee = makeDebuggee();
-      Object.assign(debuggee.tab.webContents, {
-        id: 811,
-        once: () => {},
-        isDestroyed: () => false,
-        close: () => {},
-        hostWebContents: { isDestroyed: () => false, executeJavaScript: async () => true },
-      });
-      Object.assign(debuggee.tab, { canEnterCredentialMode: async () => true });
-      host.attach(key, debuggee.tab);
-      const send = (id: number, method: string, params: Record<string, unknown>) =>
-        Effect.gen(function* () {
-          const reader = yield* takeEvents(host, 2).pipe(Effect.forkScoped);
-          yield* Effect.yieldNow;
-          yield* host.handleCommandLine(
-            encodeJson({
-              type: "cdp",
-              ...key,
-              message: encodeJson({ id, method, params, sessionId: "t3-preview-page" }),
-            }),
-          );
-          const events = yield* Fiber.join(reader);
-          return events.at(-1) as { type: "cdp"; message: string };
-        });
-      yield* send(1, DESKTOP_CREDENTIAL_ENTRY_COMMAND, { active: true });
-      const capture = yield* send(2, "Page.captureScreenshot", {});
-      expect(capture.message).toContain("Private credential entry");
-      yield* send(3, DESKTOP_CREDENTIAL_ENTRY_COMMAND, { active: false });
-    }),
-  ),
-);
