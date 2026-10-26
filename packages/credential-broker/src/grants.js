@@ -38,6 +38,7 @@ export async function commandScope(request, provider) {
         }
       : null,
     argv: [files[0].path, ...request.argv.slice(1)],
+    ...(request.argv0 ? { argv0: request.argv0 } : {}),
     cwd: await realpath(request.cwd),
     file_env: request.file_env,
     files,

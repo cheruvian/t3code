@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { unlink } from "node:fs/promises";
 
-const { argv, cwd, file, file_env, expires_at, host_worker } = JSON.parse(process.argv[2]);
+const { argv, cwd, file, file_env, expires_at, host_worker, argv0 } = JSON.parse(process.argv[2]);
 let child;
 let finished = false;
 let timer;
@@ -47,6 +47,7 @@ try {
   if (!host_worker) delete consumerEnvironment.ELECTRON_RUN_AS_NODE;
   child = spawn(argv[0], argv.slice(1), {
     cwd,
+    argv0,
     env: { ...consumerEnvironment, [file_env]: file },
     detached: true,
     // Discard raw and transformed output; do not depend on redaction heuristics.
