@@ -107,6 +107,88 @@ function visible(broker, viewId = "view") {
   const detach = broker.subscribe("human", viewId, () => {});
   return broker.action("human", { type: "presenter", viewId, visible: true }).then(() => detach);
 }
+test("thread password delivery gives only the consumer the raw file and returns metadata", async (t) => {
+  const { broker, caller, input, runtime, marker, script } = await setup(t);
+  await writeFile(
+    script,
+    `import fs from "node:fs";
+const path = process.env.CB_CREDENTIAL_FILE;
+const value = fs.readFileSync(path, "utf8");
+const expected = ${JSON.stringify(DEMO_PASSWORD)};
+const valid = value === expected;
+const privateFile = (fs.statSync(path).mode & 0o777) === 0o600;
+process.stdout.write(value);
+process.stderr.write(Buffer.from(value).toString("base64"));
+fs.writeFileSync(process.argv[2], JSON.stringify({ valid, privateFile, path }));
+process.exitCode = valid && privateFile ? 0 : 1;
+`,
+  );
+  const { execution, request } = await pending(broker, caller, { ...input, field: "password" });
+  await assert.rejects(stat(marker), { code: "ENOENT" });
+  assert.deepEqual(await readdir(join(runtime, "leases")), []);
+  assert.equal(request.field, "password");
+  await broker.action("human", {
+    type: "decide",
+    requestId: request.requestId,
+    decision: "once",
+    candidateId: DEMO_ITEM,
+  });
+  const result = await execution;
+  assert.equal(result.state, "completed");
+  assert.equal(result.exitCode, 0);
+  const receipt = JSON.parse(await readFile(marker, "utf8"));
+  assert.equal(receipt.valid, true);
+  assert.equal(receipt.privateFile, true);
+  await assert.rejects(stat(receipt.path), { code: "ENOENT" });
+  assert.deepEqual(await readdir(join(runtime, "leases")), []);
+  const metadata = JSON.stringify({ result, state: broker.state() });
+  assert.ok(!metadata.includes(DEMO_PASSWORD));
+  assert.ok(!metadata.includes(Buffer.from(DEMO_PASSWORD).toString("base64")));
+  assert.deepEqual(Object.keys(result).sort(), ["exitCode", "expiresAt", "requestId", "state"]);
+});
+
+test("symlink invocation names survive canonical execution and bind saved grants", async (t) => {
+  const { broker, caller, input, runtime, marker, script } = await setup(t);
+  const alias = join(runtime, "node");
+  const other = join(runtime, "other-node");
+  await symlink(process.execPath, alias);
+  await symlink(process.execPath, other);
+  await writeFile(
+    script,
+    `import fs from "node:fs";
+const valid = process.argv0 === "node" && fs.readFileSync(process.env.CB_CREDENTIAL_FILE).length > 0;
+fs.writeFileSync(process.argv[2], JSON.stringify({ valid }));
+process.exitCode = valid ? 0 : 2;
+`,
+  );
+  const first = await pending(broker, caller, { ...input, argv: [alias, script, marker] });
+  assert.equal(first.request.argv[0], await realpath(process.execPath));
+  assert.equal(first.request.argv0, "node");
+  // Retargeting the alias after approval presentation must not change execution.
+  await unlink(alias);
+  await symlink("/does-not-exist", alias);
+  await broker.action("human", {
+    type: "decide",
+    requestId: first.request.requestId,
+    decision: "always",
+    candidateId: DEMO_ITEM,
+  });
+  const result = await first.execution;
+  assert.equal(result.exitCode, 0);
+  assert.equal(JSON.parse(await readFile(marker, "utf8")).valid, true);
+  assert.equal(broker.state().grants[0].argv0, "node");
+  await visible(broker);
+  const changed = await pending(broker, caller, { ...input, argv: [other, script, marker] });
+  assert.equal(changed.request.argv0, "other-node");
+  assert.equal(broker.state().notices.length, 0);
+  await broker.action("human", {
+    type: "decide",
+    requestId: changed.request.requestId,
+    decision: "deny",
+  });
+  assert.equal((await changed.execution).state, "denied");
+});
+
 test("host lookup pins the executable shown for approval even if its PATH symlink changes", async (t) => {
   const { caller, input, runtime, marker } = await setup(t, { searchPath: "" });
   const bin = join(runtime, "bin");

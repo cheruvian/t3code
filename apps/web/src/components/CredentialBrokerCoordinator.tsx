@@ -304,6 +304,7 @@ export function EnvironmentBroker({
                           {
                             thread: grant.threadId,
                             executable: grant.argv[0],
+                            invocationName: grant.argv0,
                             arguments: grant.argv.slice(1),
                             directory: grant.cwd,
                           },
@@ -606,6 +607,7 @@ export function ApprovalCard({
               {JSON.stringify(
                 {
                   executable: request.argv[0],
+                  invocationName: request.argv0,
                   arguments: request.argv.slice(1),
                   directory: request.cwd,
                   workspace: request.origin?.workspace,

@@ -4,7 +4,7 @@ import { BitwardenProvider } from "./providers.js";
 import { BrokerError, parseRequest } from "./common.js";
 import { access, stat, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
-import { delimiter, isAbsolute, join } from "node:path";
+import { basename, delimiter, isAbsolute, join } from "node:path";
 import runnerProgram from "./runner-program.js";
 import watchdogProgram from "./watchdog-program.js";
 
@@ -20,7 +20,7 @@ async function resolveExecutable(program, searchPath) {
       const canonical = await realpath(candidate);
       if (!(await stat(canonical)).isFile()) continue;
       await access(canonical, constants.X_OK);
-      return canonical;
+      return { executable: canonical, argv0: basename(candidate) };
     } catch {}
   }
   throw new Error("Executable unavailable.");
@@ -83,6 +83,7 @@ export class T3CredentialBroker {
         approvalDeadline: r.approval_deadline,
         ...(r.expires_at ? { expiresAt: r.expires_at } : {}),
         argv: r.argv,
+        ...(r.argv0 ? { argv0: r.argv0 } : {}),
         cwd: r.cwd,
         ...(r.origin ? { origin: r.origin } : {}),
         candidates: (r.candidates ?? []).map((c) => ({
@@ -109,6 +110,7 @@ export class T3CredentialBroker {
         site: g.scope.site ?? "Direct item (CLI)",
         field: g.scope.field,
         argv: g.scope.argv,
+        ...(g.scope.argv0 ? { argv0: g.scope.argv0 } : {}),
         cwd: g.scope.cwd,
         maxTtl: g.max_ttl,
         ...(g.scope.origin ? { threadId: g.scope.origin.threadId } : {}),
@@ -304,15 +306,18 @@ export class T3CredentialBroker {
     );
     // Check on the server that will actually run the command, before searching
     // the vault or asking the human to authorize an unusable consumer.
+    let parsedArgv0;
     try {
       const [executable, directory] = await Promise.all([
         resolveExecutable(parsed.argv[0], this.searchPath),
         stat(parsed.cwd),
       ]);
       if (!directory.isDirectory()) throw new Error();
+      // Multicall binaries select behavior from argv[0], independently of the pinned path.
       // Approval, grant fingerprinting, and spawning all use this same path.
       // Changing PATH or retargeting its symlink cannot select another binary.
-      parsed.argv = [executable, ...parsed.argv.slice(1)];
+      parsed.argv = [executable.executable, ...parsed.argv.slice(1)];
+      parsedArgv0 = executable.argv0;
     } catch {
       throw new BrokerError(
         "Consumer unavailable: check that the command is installed on this environment’s PATH and its working directory exists.",
@@ -358,6 +363,7 @@ export class T3CredentialBroker {
       // Only the host-created private browser bridge can accept a manually entered login.
       allowManual: consumerEnvironment?.CB_BROWSER_ENDPOINT !== undefined,
       allowSave: true,
+      argv0: parsedArgv0,
     });
     return new Promise((resolve, reject) => {
       const finish = (r) => {

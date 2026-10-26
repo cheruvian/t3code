@@ -126,13 +126,19 @@ export class Broker {
       notices: this.notices(),
     };
   }
-  request(input, origin, consumerEnvironment, { allowManual = false, allowSave = false } = {}) {
+  request(
+    input,
+    origin,
+    consumerEnvironment,
+    { allowManual = false, allowSave = false, argv0 } = {},
+  ) {
     if (this.#closing) throw new BrokerError("Broker is shutting down.", 503);
     const data = parseRequest(input);
     if ([...this.#requests.values()].filter((r) => !terminal.has(r.state)).length >= 100)
       throw new BrokerError("Too many open requests.", 429);
     const request = {
       ...data,
+      ...(argv0 ? { argv0 } : {}),
       allow_manual: allowManual,
       allow_save: allowSave && typeof this.provider.create === "function",
       request_id: randomUUID(),
@@ -334,6 +340,7 @@ export class Broker {
     if (state === "active" && request.kind === "file") result.path = request.path;
     if (request.kind === "exec") {
       result.argv = request.argv;
+      if (request.argv0) result.argv0 = request.argv0;
       result.cwd = request.cwd;
       result.file_env = request.file_env;
       result.output_policy =
@@ -596,6 +603,7 @@ export class Broker {
             : []),
         JSON.stringify({
           argv: request.argv,
+          argv0: request.argv0,
           cwd: request.cwd,
           file: request.path,
           file_env: request.file_env,

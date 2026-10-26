@@ -11,6 +11,18 @@ thread, agent, workspace, program, arguments, fields, and access lifetime. Purpo
 and labels come from the caller. Choose the matching login, then deny access,
 allow it once, or always allow its exact scope.
 
+For a thread agent to use a saved password, ask it to prepare a script for the
+operation and run it with `credential_broker_exec`. Choose the saved login in the
+private approval dialog. The script receives a temporary file path through
+`CB_CREDENTIAL_FILE`: `field: "password"` delivers the password as UTF-8 text;
+`field: "login"` delivers JSON with `username` and `password`.
+
+The script reads the file directly and uses the value internally. The agent does
+not need to read it or open a browser. The tool returns execution status and an
+exit code; script output is discarded. The temporary file is deleted when the
+program finishes, expires, or is stopped. An existing private credential file can
+also be used directly by a script when you authorize it.
+
 To add a login, choose **Enter and save a new login** in the request dialog.
 Enter the requested site's username and password, then choose
 **Save to Bitwarden & allow once**. This creates a new login for the site and

@@ -71,6 +71,7 @@ export const CredentialApproval = Schema.Struct({
   approvalDeadline: Schema.NullOr(Schema.Number),
   expiresAt: Schema.optional(Schema.Number),
   argv: Schema.Array(Schema.String),
+  argv0: Schema.optional(Schema.String),
   cwd: Schema.String,
   origin: Schema.optional(CredentialCaller),
   browser: Schema.optional(
@@ -109,6 +110,7 @@ export const CredentialBrokerState = Schema.Struct({
       site: Schema.String,
       field: Schema.String,
       argv: Schema.Array(Schema.String),
+      argv0: Schema.optional(Schema.String),
       cwd: Schema.String,
       maxTtl: Schema.Number,
       threadId: Schema.optional(Schema.String),
