@@ -112,6 +112,7 @@ export async function executeInT3(
       ...(typeof result.signal === "string" ? { signal: result.signal } : {}),
       ...([
         "no_matching_login",
+        "no_matching_ssh_key",
         "vault_search_failed",
         "consumer_start_failed",
         "supervisor_start_failed",

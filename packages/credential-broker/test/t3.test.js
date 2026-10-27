@@ -14,10 +14,11 @@ import {
   realpath,
 } from "node:fs/promises";
 import { watch } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join, relative } from "node:path";
 import { Broker } from "../src/broker.js";
 import { T3CredentialBroker } from "../src/t3.js";
-import { DemoProvider, DEMO_PASSWORD, DEMO_ITEM } from "../src/providers.js";
+import { BitwardenProvider, DemoProvider, DEMO_PASSWORD, DEMO_ITEM } from "../src/providers.js";
 import { parseRequest } from "../src/common.js";
 
 let sequence = 0;
@@ -1076,4 +1077,412 @@ test("human account choices include usernames but agent execution results do not
   assert.equal(result.state, "denied");
   assert.ok(!JSON.stringify(result).includes("synthetic@example.com"));
   assert.equal(result.candidates, undefined);
+});
+
+test("SSH approval delivers an OpenSSH-usable private file only to its consumer and cleans it up", async (t) => {
+  const keyDirectory = await mkdtemp("/tmp/t3-ssh-key-");
+  t.after(() => rm(keyDirectory, { recursive: true, force: true }));
+  const keyPath = join(keyDirectory, "identity");
+  execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", keyPath], { stdio: "ignore" });
+  const privateKey = await readFile(keyPath, "utf8");
+  const publicKey = (await readFile(`${keyPath}.pub`, "utf8"))
+    .trim()
+    .split(" ")
+    .slice(0, 2)
+    .join(" ");
+  const item = {
+    id: DEMO_ITEM,
+    type: 5,
+    name: "Test SSH identity",
+    fields: [{ name: "t3-ssh-hosts", type: 0, value: "example.com" }],
+    sshKey: { privateKey },
+  };
+  let reads = 0;
+  const provider = new BitwardenProvider({
+    passwordPrompt: async () => "fake-master",
+    runner: async (_, args) => {
+      if (args[0] === "unlock") return "fake-session";
+      if (args[0] === "list") return JSON.stringify([item]);
+      if (args[0] === "get") {
+        reads++;
+        return JSON.stringify(item);
+      }
+      return "";
+    },
+  });
+  const { broker, caller, input, script, marker, runtime } = await setup(t, { provider });
+  await writeFile(
+    script,
+    `import fs from "node:fs";
+import { spawnSync } from "node:child_process";
+const path = process.env.CB_CREDENTIAL_FILE;
+const result = spawnSync("ssh-keygen", ["-y", "-f", path], { encoding: "utf8" });
+const usable = result.status === 0 && result.stdout.trim().split(" ").slice(0, 2).join(" ") === ${JSON.stringify(publicKey)};
+const privateFile = (fs.statSync(path).mode & 0o777) === 0o600;
+fs.writeFileSync(process.argv[2], JSON.stringify({ usable, privateFile, path }));
+process.exitCode = usable && privateFile ? 0 : 1;
+`,
+  );
+  const sshInput = { ...input, field: "sshKey" };
+  const { execution, request } = await pending(broker, caller, sshInput);
+  assert.equal(request.field, "sshKey");
+  assert.equal(request.canSave, false);
+  assert.equal(reads, 0);
+  assert.deepEqual(await readdir(join(runtime, "leases")), []);
+  await assert.rejects(
+    broker.action("human", {
+      type: "saveLogin",
+      requestId: request.requestId,
+      username: "test",
+      password: "test",
+    }),
+    /no longer awaiting a saved login/,
+  );
+  await broker.action("human", {
+    type: "decide",
+    requestId: request.requestId,
+    decision: "once",
+    candidateId: DEMO_ITEM,
+  });
+  const result = await execution;
+  assert.equal(result.state, "completed");
+  assert.equal(result.exitCode, 0);
+  assert.equal(reads, 1);
+  const receipt = JSON.parse(await readFile(marker, "utf8"));
+  assert.equal(receipt.usable, true);
+  assert.equal(receipt.privateFile, true);
+  await assert.rejects(stat(receipt.path), { code: "ENOENT" });
+  assert.deepEqual(await readdir(join(runtime, "leases")), []);
+  assert.equal(
+    JSON.stringify({ result, state: broker.state(), request }).includes(privateKey),
+    false,
+  );
+  const denied = await pending(broker, caller, sshInput);
+  await broker.action("human", {
+    type: "decide",
+    requestId: denied.request.requestId,
+    decision: "deny",
+  });
+  assert.equal((await denied.execution).state, "denied");
+  assert.equal(reads, 1);
+  assert.deepEqual(await readdir(join(runtime, "leases")), []);
+});
+
+test("missing SSH keys return an SSH-specific failure without allowing login creation", async (t) => {
+  const provider = new DemoProvider();
+  provider.search = async (_site, _progress, field) => {
+    assert.equal(field, "sshKey");
+    return [];
+  };
+  const { broker, caller, input, runtime } = await setup(t, { provider });
+  const result = await broker.execute(caller, { ...input, field: "sshKey" });
+  assert.equal(result.state, "failed");
+  assert.equal(result.failureCode, "no_matching_ssh_key");
+  assert.deepEqual(await readdir(join(runtime, "leases")), []);
+});
+
+for (const field of ["password", "sshKey"]) {
+  test(`manual ${field} selection can override a wrong host once without granting ongoing access`, async (t) => {
+    let reads = 0;
+    const record = {
+      id: DEMO_ITEM,
+      type: field === "sshKey" ? 5 : 1,
+      name: "Manual test credential",
+      login: {
+        username: "private-user",
+        password: "private-password",
+        uris: [{ uri: "https://wrong.example.test" }],
+      },
+      sshKey: { privateKey: "private-ssh-key" },
+      fields: [{ name: "t3-ssh-hosts", type: 0, value: "wrong.example.test" }],
+    };
+    const provider = new BitwardenProvider({
+      passwordPrompt: async () => "fake-master",
+      runner: async (_, args) => {
+        if (args[0] === "unlock") return "fake-session";
+        if (args[0] === "list") return JSON.stringify([record]);
+        if (args[0] === "get") {
+          reads++;
+          return JSON.stringify(record);
+        }
+        return "";
+      },
+    });
+    const { broker, caller, input, runtime } = await setup(t, { provider });
+    const { execution, request } = await pending(broker, caller, { ...input, field });
+    assert.equal(request.canSearch, true);
+    assert.equal(request.candidates.length, 0);
+    await broker.action("human", { type: "search", requestId: request.requestId, query: "manual" });
+    const searched = broker.state().requests.find((r) => r.requestId === request.requestId);
+    assert.equal(searched.searchQuery, "manual");
+    assert.equal(searched.site, input.site);
+    assert.equal(searched.candidates[0].hostMismatch, true);
+    assert.equal(reads, 0);
+    assert.deepEqual(await readdir(join(runtime, "leases")), []);
+    await assert.rejects(
+      broker.action("human", {
+        type: "decide",
+        requestId: request.requestId,
+        decision: "once",
+        candidateId: "not-listed",
+      }),
+      /Choose one/,
+    );
+    assert.equal(reads, 0);
+    assert.deepEqual(broker.state().grants, []);
+    await broker.action("human", {
+      type: "decide",
+      requestId: request.requestId,
+      decision: "once",
+      candidateId: DEMO_ITEM,
+    });
+    const result = await execution;
+    assert.equal(result.state, "completed");
+    assert.equal(result.exitCode, 0);
+    assert.equal(reads, 1);
+    assert.deepEqual(broker.state().grants, []);
+    const publicResult = JSON.stringify(result);
+    for (const privateValue of [
+      "private-password",
+      "private-ssh-key",
+      "private-user",
+      "Manual test credential",
+      "wrong.example.test",
+    ])
+      assert.equal(publicResult.includes(privateValue), false);
+    assert.deepEqual(await readdir(join(runtime, "leases")), []);
+  });
+}
+
+test("latest manual search wins, hostname reset restores matching, and denial cancels late results", async (t) => {
+  const completions = new Map();
+  const started = new Map();
+  const candidate = {
+    item_id: DEMO_ITEM,
+    name: "Manual result",
+    hosts: ["other.test"],
+    hostMismatch: true,
+  };
+  class SearchingProvider extends DemoProvider {
+    async search() {
+      return [];
+    }
+    searchVault(_site, query) {
+      started.get(query)();
+      return new Promise((resolve) => completions.set(query, resolve));
+    }
+  }
+  const { broker, caller, input, runtime } = await setup(t, { provider: new SearchingProvider() });
+  const { execution, request } = await pending(broker, caller, input);
+  const begin = async (query) => {
+    let resolve;
+    const ready = new Promise((r) => {
+      resolve = r;
+    });
+    started.set(query, resolve);
+    const action = broker.action("human", { type: "search", requestId: request.requestId, query });
+    await ready;
+    return { action };
+  };
+  const first = await begin("older");
+  const second = await begin("newer");
+  completions.get("newer")([{ ...candidate, name: "Newer result" }]);
+  await second.action;
+  completions.get("older")([{ ...candidate, name: "Older result" }]);
+  await first.action;
+  let state = broker.state().requests.find((r) => r.requestId === request.requestId);
+  assert.equal(state.searchQuery, "newer");
+  assert.equal(state.candidates[0].name, "Newer result");
+  await broker.action("human", { type: "search", requestId: request.requestId });
+  state = broker.state().requests.find((r) => r.requestId === request.requestId);
+  assert.equal(state.searchQuery, undefined);
+  assert.deepEqual(state.candidates, []);
+  await assert.rejects(
+    broker.action("human", {
+      type: "decide",
+      requestId: request.requestId,
+      decision: "once",
+      candidateId: DEMO_ITEM,
+    }),
+    /Choose one/,
+  );
+  await assert.rejects(
+    broker.action("human", {
+      type: "search",
+      requestId: request.requestId,
+      query: "x".repeat(201),
+    }),
+    /200 characters/,
+  );
+  const last = await begin("cancelled");
+  await broker.action("human", { type: "decide", requestId: request.requestId, decision: "deny" });
+  assert.equal((await execution).state, "denied");
+  completions.get("cancelled")([candidate]);
+  await last.action;
+  state = broker.state().requests.find((r) => r.requestId === request.requestId);
+  assert.equal(state.state, "denied");
+  assert.deepEqual(state.candidates, []);
+  assert.deepEqual(await readdir(join(runtime, "leases")), []);
+});
+
+test("manual search errors remain recoverable and never expose provider details", async (t) => {
+  let fail = true;
+  class SearchingProvider extends DemoProvider {
+    async search() {
+      throw new Error("private-default-search");
+    }
+    async searchVault() {
+      if (fail) throw new Error("private-manual-search");
+      return [{ item_id: DEMO_ITEM, name: "Recovered login", hosts: ["example.com"] }];
+    }
+  }
+  const { broker, caller, input } = await setup(t, { provider: new SearchingProvider() });
+  const { execution, request } = await pending(broker, caller, input);
+  assert.equal(request.canSearch, true);
+  assert.equal(JSON.stringify(request).includes("private-default-search"), false);
+  await broker.action("human", { type: "search", requestId: request.requestId, query: "recover" });
+  let current = broker.state().requests.find((r) => r.requestId === request.requestId);
+  assert.equal(current.state, "pending");
+  assert.equal(JSON.stringify(current).includes("private-manual-search"), false);
+  fail = false;
+  await broker.action("human", { type: "search", requestId: request.requestId, query: "recover" });
+  current = broker.state().requests.find((r) => r.requestId === request.requestId);
+  assert.equal(current.candidates[0].name, "Recovered login");
+  assert.equal(current.error, undefined);
+  await broker.action("human", { type: "decide", requestId: request.requestId, decision: "deny" });
+  assert.equal((await execution).state, "denied");
+});
+
+for (const field of ["password", "sshKey"]) {
+  test(`save host and always allow makes ${field} match and automatically usable on the next request`, async (t) => {
+    let record = {
+      id: DEMO_ITEM,
+      type: field === "sshKey" ? 5 : 1,
+      name: "Saved credential",
+      login: {
+        username: "private-user",
+        password: "private-password",
+        uris: [{ uri: "https://other.test" }],
+      },
+      sshKey: { privateKey: "private-key" },
+      fields: [{ name: "t3-ssh-hosts", type: 0, value: "other.test" }],
+    };
+    let edits = 0;
+    const provider = new BitwardenProvider({
+      passwordPrompt: async () => "fake-master",
+      runner: async (_, args, _env, _timeout, input) => {
+        if (args[0] === "unlock") return "fake-session";
+        if (args[0] === "list") return JSON.stringify([record]);
+        if (args[0] === "get") return JSON.stringify(record);
+        if (args[0] === "edit") {
+          edits++;
+          record = JSON.parse(Buffer.from(input, "base64").toString());
+          return JSON.stringify(record);
+        }
+        return "";
+      },
+    });
+    const { broker, caller, input, runtime } = await setup(t, { provider });
+    const requestInput = { ...input, site: "heihei", field };
+    const { execution, request } = await pending(broker, caller, requestInput);
+    assert.equal(request.canSaveHost, true);
+    await broker.action("human", { type: "search", requestId: request.requestId, query: "saved" });
+    await broker.action("human", {
+      type: "decide",
+      requestId: request.requestId,
+      decision: "always",
+      candidateId: DEMO_ITEM,
+    });
+    assert.equal((await execution).state, "completed");
+    assert.equal(edits, 1);
+    assert.equal(broker.state().grants.length, 1);
+    assert.equal(broker.state().grants[0].site, "heihei");
+    assert.equal((await provider.search("heihei", () => {}, field)).length, 1);
+    const detach = await visible(broker);
+    const noticed = milestone(broker, (s) => s.notices.length > 0);
+    const automatic = broker.execute(caller, requestInput);
+    const notice = (await noticed).notices[0];
+    await broker.action("human", { type: "seen", viewId: "view", noticeId: notice.noticeId });
+    const result = await automatic;
+    assert.equal(result.state, "completed");
+    assert.equal(result.exitCode, 0);
+    assert.equal(edits, 1);
+    assert.equal(JSON.stringify(result).includes("private-key"), false);
+    assert.deepEqual(await readdir(join(runtime, "leases")), []);
+    detach();
+  });
+}
+
+test("a failed host save leaves the request actionable without a grant or execution", async (t) => {
+  class Provider extends DemoProvider {
+    async search() {
+      return [];
+    }
+    async searchVault() {
+      return [
+        { item_id: DEMO_ITEM, name: "Other host", hosts: ["other.test"], hostMismatch: true },
+      ];
+    }
+    async addHost() {
+      throw new Error("private-provider-error");
+    }
+  }
+  const { broker, caller, input, marker, runtime } = await setup(t, { provider: new Provider() });
+  const { execution, request } = await pending(broker, caller, input);
+  await broker.action("human", { type: "search", requestId: request.requestId, query: "" });
+  await assert.rejects(
+    broker.action("human", {
+      type: "decide",
+      requestId: request.requestId,
+      decision: "always",
+      candidateId: DEMO_ITEM,
+    }),
+    /Could not save the host/,
+  );
+  const current = broker.state().requests.find((r) => r.requestId === request.requestId);
+  assert.equal(current.state, "pending");
+  assert.equal(current.candidates[0].hostMismatch, true);
+  assert.equal(JSON.stringify(current).includes("private-provider-error"), false);
+  assert.deepEqual(broker.state().grants, []);
+  assert.deepEqual(await readdir(join(runtime, "leases")), []);
+  await assert.rejects(stat(marker), { code: "ENOENT" });
+  await broker.action("human", { type: "decide", requestId: request.requestId, decision: "deny" });
+  assert.equal((await execution).state, "denied");
+});
+
+test("stopping during a host save prevents creating a grant or starting the consumer", async (t) => {
+  let finish, start;
+  const started = new Promise((resolve) => {
+    start = resolve;
+  });
+  class Provider extends DemoProvider {
+    async search() {
+      return [];
+    }
+    async searchVault() {
+      return [{ item_id: DEMO_ITEM, name: "Other host", hosts: [], hostMismatch: true }];
+    }
+    addHost() {
+      start();
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    }
+  }
+  const { broker, caller, input, marker } = await setup(t, { provider: new Provider() });
+  const { execution, request } = await pending(broker, caller, input);
+  await broker.action("human", { type: "search", requestId: request.requestId, query: "" });
+  const approval = broker.action("human", {
+    type: "decide",
+    requestId: request.requestId,
+    decision: "always",
+    candidateId: DEMO_ITEM,
+  });
+  await started;
+  await broker.action("human", { type: "stop", requestId: request.requestId });
+  assert.equal((await execution).state, "released");
+  finish({ hosts: [input.site] });
+  await approval;
+  assert.deepEqual(broker.state().grants, []);
+  await assert.rejects(stat(marker), { code: "ENOENT" });
 });

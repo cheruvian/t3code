@@ -303,7 +303,7 @@ test("a failed sync is retried by a new search instead of caching failure", asyn
     },
   });
   await provider.initialize();
-  await assert.rejects(provider.search("example.com"), /Vault login search failed/);
+  await assert.rejects(provider.search("example.com"), /Vault credential search failed/);
   assert.deepEqual(await provider.search("example.com"), []);
   assert.equal(syncs, 2);
   await provider.close();

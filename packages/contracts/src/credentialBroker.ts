@@ -23,7 +23,7 @@ export const CredentialExecInput = Schema.Struct({
       "Existing tab from preview_status for this script to operate. The consumer receives T3_BROWSER_URL; no new page is created. Omit for non-browser scripts.",
   }),
   site: Schema.String,
-  field: Schema.Literals(["login", "username", "password"]),
+  field: Schema.Literals(["login", "username", "password", "sshKey"]),
   label: Schema.String,
   reason: Schema.String,
   ttlSeconds: Schema.Int.check(Schema.isBetween({ minimum: 5, maximum: 300 })),
@@ -56,6 +56,7 @@ export type CredentialBrowserCommand = typeof CredentialBrowserCommand.Type;
 
 export const CredentialExecutionFailureCode = Schema.Literals([
   "no_matching_login",
+  "no_matching_ssh_key",
   "vault_search_failed",
   "consumer_start_failed",
   "supervisor_start_failed",
@@ -73,6 +74,9 @@ export type CredentialExecution = typeof CredentialExecution.Type;
 export const CredentialApproval = Schema.Struct({
   searchPhase: Schema.optional(Schema.Literals(["syncing", "matching"])),
   canSave: Schema.optional(Schema.Boolean),
+  canSearch: Schema.optional(Schema.Boolean),
+  canSaveHost: Schema.optional(Schema.Boolean),
+  searchQuery: Schema.optional(Schema.String),
   error: Schema.optional(Schema.String),
   requestId: Schema.String,
   state: Schema.String,
@@ -94,6 +98,7 @@ export const CredentialApproval = Schema.Struct({
       name: Schema.String,
       username: Schema.optional(Schema.String),
       hosts: Schema.Array(Schema.String),
+      hostMismatch: Schema.optional(Schema.Boolean),
     }),
   ),
   grantId: Schema.optional(Schema.String),
@@ -130,6 +135,11 @@ export const CredentialBrokerState = Schema.Struct({
 });
 export type CredentialBrokerState = typeof CredentialBrokerState.Type;
 export const CredentialBrokerAction = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("search"),
+    requestId: Schema.String,
+    query: Schema.optional(Schema.String.check(Schema.isMaxLength(200))),
+  }),
   Schema.Struct({
     type: Schema.Literal("saveLogin"),
     requestId: Schema.String,

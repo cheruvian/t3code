@@ -93,6 +93,7 @@ test("always allow persists without credentials and only the selected exact comm
   for (const changed of [
     { client: "different caller" },
     { field: "password" },
+    { field: "sshKey" },
     { ttl_seconds: 31 },
     { argv: [...input.argv, "extra"] },
   ]) {

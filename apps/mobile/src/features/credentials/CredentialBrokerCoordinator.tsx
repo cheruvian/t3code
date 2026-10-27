@@ -7,20 +7,24 @@ import type { ViewInstance, TextInputInstance } from "react-native";
 import { useAtomValue } from "@effect/atom-react";
 import {
   AuthAccessReadScope,
-  resolveEnvironmentMachineKind,
   type CredentialApproval,
   type CredentialBrokerAction,
   type EnvironmentId,
 } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, Modal, ScrollView, TextInput, View, useWindowDimensions } from "react-native";
+import {
+  AppState,
+  Modal,
+  Pressable,
+  ScrollView,
+  TextInput,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import * as Crypto from "expo-crypto";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
-import { EnvironmentIcon } from "../../components/EnvironmentIcon";
-import { ProjectFavicon } from "../../components/ProjectFavicon";
-import { useProject } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentScope } from "../../state/session";
 import { credentialBroker } from "../../state/credentialBroker";
@@ -100,6 +104,7 @@ function EnvironmentBroker({
   const { height } = useWindowDimensions();
   const [password, setPassword] = useState("");
   const [executable, setExecutable] = useState("bw");
+  const [advancedUnlock, setAdvancedUnlock] = useState(false);
   const [error, setError] = useState<string>();
   const act = async (input: CredentialBrokerAction) => {
     const outcome = await run({ environmentId, input });
@@ -124,6 +129,10 @@ function EnvironmentBroker({
   const pending =
     state?.requests.filter((r) => ["pending", "awaiting_unlock", "searching"].includes(r.state)) ??
     [];
+  const active =
+    state?.requests.filter((r) => ["running", "preparing", "saving"].includes(r.state)) ?? [];
+  const hasRequests = pending.length + active.length > 0;
+  const locked = state?.status === "locked" || state?.status === "unlocking";
   const attentionKey =
     credentialDialogAttentionKey(pending, environmentId, viewedThread) ??
     (state?.notices.length ? JSON.stringify(state.notices.map((notice) => notice.noticeId)) : null);
@@ -191,14 +200,11 @@ function EnvironmentBroker({
           scrollEventThrottle={100}
           contentContainerClassName="gap-4 bg-screen px-5 pb-8 pt-16"
         >
-          <Button
-            label={pending.length ? "Hide for now" : "Close"}
-            onPress={() => setOpen(false)}
-          />
+          <Button label={hasRequests ? "Hide for now" : "Close"} onPress={() => setOpen(false)} />
           <Text className="text-2xl font-t3-semibold text-foreground">
-            {pending.length ? "Credential request" : "Credential access"}
+            {locked ? "Unlock Bitwarden" : hasRequests ? "Credential request" : "Credential access"}
           </Text>
-          {pending.length === 0 && (
+          {!hasRequests && (
             <Text className="text-sm text-foreground-muted">{environmentLabel}</Text>
           )}
           <Text className="text-sm text-foreground-muted">
@@ -218,6 +224,7 @@ function EnvironmentBroker({
               <Text className="text-foreground">
                 Unlock Bitwarden privately. Its CLI must be signed in on the server.
               </Text>
+              <Text className="text-sm text-foreground">Bitwarden master password</Text>
               <TextInput
                 secureTextEntry
                 autoComplete="off"
@@ -227,14 +234,21 @@ function EnvironmentBroker({
                 maxLength={4096}
                 className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
               />
-              <TextInput
-                value={executable}
-                onChangeText={setExecutable}
-                autoCapitalize="none"
-                autoCorrect={false}
-                accessibilityLabel="Bitwarden CLI executable"
-                className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+              <Button
+                label={advancedUnlock ? "Hide advanced setup" : "Advanced setup"}
+                tone="text"
+                onPress={() => setAdvancedUnlock(!advancedUnlock)}
               />
+              {advancedUnlock && (
+                <TextInput
+                  value={executable}
+                  onChangeText={setExecutable}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  accessibilityLabel="Bitwarden CLI executable"
+                  className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+                />
+              )}
               <Button
                 label="Unlock vault"
                 disabled={!canAct || state.status === "unlocking"}
@@ -257,7 +271,7 @@ function EnvironmentBroker({
               onLayout={acknowledge}
             >
               <Text className="font-t3-medium text-foreground">
-                {notice.revoked ? "Permission revoked" : "Saved login used automatically"}
+                {notice.revoked ? "Permission revoked" : "Saved credential used automatically"}
               </Text>
               <Text className="text-foreground-muted">
                 {notice.site} · {notice.command}
@@ -278,22 +292,23 @@ function EnvironmentBroker({
               />
             </View>
           ))}
-          {[...pending]
-            .sort(
-              (a, b) =>
-                Number(b.origin?.threadId === viewedThread?.threadId) -
-                Number(a.origin?.threadId === viewedThread?.threadId),
-            )
-            .map((request) => (
-              <Approval
-                key={request.requestId}
-                request={request}
-                environmentId={environmentId}
-                environmentLabel={environmentLabel}
-                disabled={!canAct}
-                act={act}
-              />
-            ))}
+          {!locked &&
+            [...pending, ...active]
+              .sort(
+                (a, b) =>
+                  Number(b.origin?.threadId === viewedThread?.threadId) -
+                  Number(a.origin?.threadId === viewedThread?.threadId),
+              )
+              .map((request) => (
+                <Approval
+                  key={request.requestId}
+                  request={request}
+                  environmentId={environmentId}
+                  environmentLabel={environmentLabel}
+                  disabled={!canAct}
+                  act={act}
+                />
+              ))}
           {state?.requests
             .filter((r) =>
               ["expired", "failed", "denied", "completed", "released", "revoked"].includes(r.state),
@@ -311,22 +326,7 @@ function EnvironmentBroker({
                   : (request.error ?? `Request ${request.state}.`)}
               </Text>
             ))}
-          {state?.requests
-            .filter((r) => ["running", "preparing", "saving"].includes(r.state))
-            .map((request) => (
-              <View key={request.requestId} className="gap-2">
-                <Text className="text-foreground">
-                  {request.site} · {request.state}
-                </Text>
-                <Button
-                  label="Stop"
-                  tone="danger"
-                  disabled={!canAct}
-                  onPress={() => void act({ type: "stop", requestId: request.requestId })}
-                />
-              </View>
-            ))}
-          {pending.length > 0 && (
+          {hasRequests && (
             <Button
               label={
                 managementOpen
@@ -337,12 +337,13 @@ function EnvironmentBroker({
               onPress={() => setManagementOpen(!managementOpen)}
             />
           )}
-          {(managementOpen || pending.length === 0) && (
+          {(managementOpen || (!hasRequests && !locked)) && (
             <>
               {state?.grants.map((grant) => (
                 <View key={grant.grantId} className="gap-2 rounded-xl border border-border p-4">
                   <Text className="text-foreground">
-                    {grant.site} · {grant.field} · {grant.maxTtl}s maximum
+                    {grant.site} · {grant.field === "sshKey" ? "SSH private key" : grant.field} ·{" "}
+                    {grant.maxTtl}s maximum
                   </Text>
                   <Text selectable className="text-xs text-foreground-muted">
                     {JSON.stringify(
@@ -387,7 +388,6 @@ function EnvironmentBroker({
   );
 }
 function Approval({
-  environmentId,
   request,
   environmentLabel,
   disabled,
@@ -399,191 +399,262 @@ function Approval({
   disabled: boolean;
   act: (input: CredentialBrokerAction) => Promise<void>;
 }) {
-  const project = useProject(
-    request.origin?.projectId
-      ? { environmentId: request.origin.environmentId, projectId: request.origin.projectId }
-      : null,
-  );
-  const { environments } = useEnvironments();
-  const environment = environments.find((e) => e.environmentId === request.origin?.environmentId);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [chosenId, setSelection] = useState<string | undefined>(undefined);
-  const selection = request.candidates.some((candidate) => candidate.id === chosenId)
+  const [chosenId, setSelection] = useState<string | undefined>();
+  const [adding, setAdding] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const selection = request.candidates.some((c) => c.id === chosenId)
     ? chosenId
-    : request.candidates.length === 1
+    : request.searchQuery === undefined && request.candidates.length === 1
       ? request.candidates[0]!.id
       : undefined;
+  const selected = request.candidates.find((c) => c.id === selection);
+  const canAlways = !!request.origin && (!selected?.hostMismatch || request.canSaveHost === true);
+  const unavailable = disabled || submitting || request.state !== "pending";
+  const processing = ["preparing", "saving", "running"].includes(request.state);
+  const submit = async (choice: "once" | "always" | "deny") => {
+    if (disabled || submitting) return;
+    setSubmitting(true);
+    try {
+      await act({
+        type: "decide",
+        requestId: request.requestId,
+        decision: choice,
+        ...(choice !== "deny" && selection ? { candidateId: selection } : {}),
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
   return (
-    <View className="gap-2 rounded-xl border border-border p-3">
-      <Text className="text-xs text-foreground-muted">
-        {request.field === "login"
-          ? "Username + password"
-          : request.field === "password"
-            ? "Password"
-            : "Username"}{" "}
-        requested for
-      </Text>
-      <Text className="text-xl font-t3-semibold text-foreground">{request.site}</Text>
-      <Text className="text-xs text-foreground-muted">
-        {request.ttlSeconds}s access after approval
-      </Text>
-      <View className="gap-2 rounded-xl bg-card p-3">
-        <Text className="text-xs text-foreground-muted">
-          {request.origin ? "Caller verified by T3" : "Unverified caller"}
-        </Text>
-        <View className="flex-row items-center gap-1.5">
-          <Text className="text-foreground">Project:</Text>
-          {project && (
-            <ProjectFavicon
-              environmentId={project.environmentId}
-              projectTitle={project.title}
-              workspaceRoot={project.workspaceRoot}
-              faviconPath={project.faviconPath}
-              projectIcon={project.projectIcon}
-              size={16}
-            />
-          )}
-          <Text className="flex-1 text-foreground">
-            {request.origin?.projectName || "Not available"}
-          </Text>
-        </View>
-        <Text className="text-foreground">
-          Thread: {request.origin?.threadTitle || "No verified T3 thread"}
-        </Text>
-        <Text className="text-foreground">
-          Agent:{" "}
+    <View className="gap-4">
+      <View className="gap-2">
+        <Text className="text-xl font-t3-semibold text-foreground">{request.site}</Text>
+        <Text className="text-sm text-foreground-muted">
           {request.origin
-            ? `${request.origin.agent} · ${request.origin.providerInstanceId}`
-            : "Not verified"}
+            ? [request.origin.projectName, request.origin.threadTitle, environmentLabel]
+                .filter(Boolean)
+                .join(" · ")
+            : `Unverified caller · ${environmentLabel}`}
         </Text>
-        <View className="flex-row items-center gap-1.5">
-          <Text className="text-foreground">Environment:</Text>
-          <EnvironmentIcon
-            environmentId={environmentId}
-            kind={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
-            size={16}
-            tintColorClassName="accent-icon"
-          />
-          <Text className="flex-1 text-foreground">{environmentLabel}</Text>
-        </View>
-        <Text className="text-foreground">Program: {request.argv[0]?.split(/[\\/]/).at(-1)}</Text>
+        <Text className="text-foreground">{request.reason}</Text>
+        <Text className="text-xs text-foreground-muted">{request.ttlSeconds}s per use</Text>
       </View>
-      <Text className="text-sm text-foreground-muted">Reason supplied by agent</Text>
-      <Text className="text-foreground">{request.reason}</Text>
-      {request.state !== "pending" ? (
-        <Text accessibilityLiveRegion="polite" className="text-foreground-muted">
-          {request.state === "searching"
-            ? request.searchPhase === "syncing"
-              ? "Loading saved accounts… Syncing Bitwarden. You can deny this request while you wait."
-              : "Loading saved accounts… Searching Bitwarden. You can deny this request while you wait."
-            : "Unlock the vault to choose a login. Access still needs your approval."}
+      {processing ? (
+        <View className="gap-3 rounded-xl bg-card p-4">
+          <Text accessibilityLiveRegion="polite" className="font-t3-medium text-foreground">
+            {request.state === "running"
+              ? "Program is running"
+              : request.state === "saving"
+                ? "Saving credential to Bitwarden…"
+                : "Preparing approved access…"}
+          </Text>
+          <Text className="text-foreground-muted">
+            You can keep working. Stop ends this operation and removes temporary credential access.
+          </Text>
+          <Button
+            label="Stop operation"
+            tone="danger"
+            disabled={disabled}
+            onPress={() => void act({ type: "stop", requestId: request.requestId })}
+          />
+        </View>
+      ) : request.state === "awaiting_unlock" ? (
+        <Text className="text-foreground-muted">
+          Unlock Bitwarden to choose a credential for this request.
         </Text>
       ) : (
         <>
-          {request.candidates.length === 0 && (
-            <Text accessibilityLiveRegion="polite" className="text-foreground-muted">
-              {request.error
-                ? "No accounts available for approval."
-                : "No matching accounts found."}
-            </Text>
+          <View className="gap-3">
+            <View className="flex-row items-center justify-between gap-2">
+              <Text className="font-t3-medium text-foreground">
+                {adding ? "New login" : request.field === "sshKey" ? "SSH key" : "Saved credential"}
+              </Text>
+              {request.canSave && (
+                <Button
+                  label={adding ? "Choose saved credential" : "Add credential"}
+                  tone="text"
+                  disabled={unavailable}
+                  onPress={() => setAdding(!adding)}
+                />
+              )}
+            </View>
+            {adding ? (
+              <SaveLogin request={request} disabled={disabled || submitting} act={act} />
+            ) : (
+              <>
+                {request.canSearch && (
+                  <VaultSearch
+                    key={request.searchQuery}
+                    request={request}
+                    disabled={unavailable || !!request.grantId}
+                    search={(query) => {
+                      setSelection(undefined);
+                      void act({
+                        type: "search",
+                        requestId: request.requestId,
+                        ...(query !== undefined ? { query } : {}),
+                      });
+                    }}
+                  />
+                )}
+                {request.state === "searching" ? (
+                  <Text accessibilityLiveRegion="polite" className="py-3 text-foreground-muted">
+                    {request.searchPhase === "syncing"
+                      ? "Syncing Bitwarden…"
+                      : "Finding credentials…"}
+                  </Text>
+                ) : request.candidates.length ? (
+                  <ScrollView
+                    className="max-h-56 rounded-xl border border-border"
+                    nestedScrollEnabled
+                  >
+                    <View accessibilityRole="radiogroup">
+                      {request.candidates.map((c) => (
+                        <Pressable
+                          key={c.id}
+                          accessibilityRole="radio"
+                          accessibilityState={{
+                            checked: selection === c.id,
+                            disabled: disabled || submitting,
+                          }}
+                          accessibilityLabel={[
+                            c.name,
+                            c.username,
+                            c.hosts.join(", ") || "No saved host",
+                            c.hostMismatch ? "Host does not match" : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                          disabled={disabled || submitting}
+                          onPress={() => setSelection(c.id)}
+                          className={selection === c.id ? "gap-1 bg-card p-3" : "gap-1 p-3"}
+                        >
+                          <Text className="font-t3-medium text-foreground">
+                            {selection === c.id ? "✓ " : ""}
+                            {c.name}
+                          </Text>
+                          <Text className="text-xs text-foreground-muted">
+                            {[c.username, c.hosts.join(", ") || "No saved host"]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </ScrollView>
+                ) : (
+                  !request.error && (
+                    <Text className="text-foreground-muted">
+                      No credentials found. Search all Bitwarden or add a login.
+                    </Text>
+                  )
+                )}
+              </>
+            )}
+            {request.error && (
+              <Text accessibilityRole="alert" className="text-danger">
+                {request.error}
+              </Text>
+            )}
+          </View>
+          {!adding && (
+            <>
+              <Text className="text-xs text-foreground-muted">
+                {selected?.hostMismatch
+                  ? `Always allow also saves ${request.site} to this credential in Bitwarden. Existing hosts are kept.`
+                  : "Always allow remembers access for this thread, credential, and command. Revoke anytime in Manage access."}
+              </Text>
+              <View className="flex-row flex-wrap justify-end gap-2">
+                <Button
+                  label="Deny"
+                  tone="text"
+                  disabled={disabled || submitting}
+                  onPress={() => void submit("deny")}
+                />
+                <Button
+                  label="Always allow"
+                  tone="secondary"
+                  disabled={unavailable || !selection || !canAlways}
+                  onPress={() => void submit("always")}
+                />
+                <Button
+                  label="Allow once"
+                  tone="primary"
+                  loading={submitting}
+                  disabled={unavailable || !selection}
+                  onPress={() => void submit("once")}
+                />
+              </View>
+            </>
           )}
-          {request.candidates.length > 0 && (
-            <Text className="text-foreground-muted">
-              {request.candidates.length} matching accounts · Choose a login to approve
-            </Text>
-          )}
-          {request.candidates.map((c) => (
-            <Button
-              key={c.id}
-              label={
-                (selection === c.id ? "✓ " : "") +
-                c.name +
-                " · " +
-                (c.username ?? "Username unavailable") +
-                " · " +
-                c.hosts.join(", ")
-              }
-              disabled={disabled}
-              onPress={() => setSelection(c.id)}
-            />
-          ))}
         </>
       )}
-
-      {request.error && (
-        <Text accessibilityRole="alert" className="text-danger">
-          {request.error}
-        </Text>
-      )}
-      {request.canSave && request.state === "pending" && (
-        <SaveLogin request={request} disabled={disabled} act={act} />
-      )}
-
       <Button
-        label={detailsOpen ? "Hide command & scope" : "Command, workspace & permission scope"}
+        label={detailsOpen ? "Hide request details" : "Request details"}
         tone="text"
         onPress={() => setDetailsOpen(!detailsOpen)}
       />
       {detailsOpen && (
-        <>
-          <Text selectable className="text-xs text-foreground">
-            {JSON.stringify(
-              {
-                executable: request.argv[0],
-                invocationName: request.argv0,
-                arguments: request.argv.slice(1),
-                directory: request.cwd,
-                labelClaim: request.label,
-                reason: request.reason,
-                callerClaim: request.clientClaim,
-                origin: request.origin,
-              },
-              null,
-              2,
-            )}
-          </Text>
-          <Text className="text-xs text-foreground-muted">
-            Always allow scopes this login to the thread, provider, workspace, exact command,
-            fingerprints, fields, and maximum lifetime. Review or revoke it under Manage access.
-          </Text>
-        </>
+        <Text selectable className="text-xs text-foreground-muted">
+          {JSON.stringify(
+            {
+              agent: request.origin?.agent,
+              executable: request.argv[0],
+              arguments: request.argv.slice(1),
+              directory: request.cwd,
+              fields: request.field,
+              lifetimeSeconds: request.ttlSeconds,
+            },
+            null,
+            2,
+          )}
+        </Text>
       )}
+    </View>
+  );
+}
+
+function VaultSearch({
+  request,
+  disabled,
+  search,
+}: {
+  request: CredentialApproval;
+  disabled: boolean;
+  search: (query?: string) => void;
+}) {
+  const [query, setQuery] = useState(request.searchQuery ?? "");
+  return (
+    <View className="gap-2">
+      <Text className="text-sm text-foreground">Search Bitwarden</Text>
+      <TextInput
+        accessibilityLabel="Search Bitwarden by name, username, or host"
+        value={query}
+        onChangeText={setQuery}
+        editable={!disabled}
+        maxLength={200}
+        autoCapitalize="none"
+        autoCorrect={false}
+        placeholder="Name, username, or host"
+        className="rounded-xl border border-border px-3 py-2 text-foreground"
+        returnKeyType="search"
+        onSubmitEditing={() => {
+          if (!disabled) search(query);
+        }}
+      />
+      <Button label="Search" disabled={disabled} onPress={() => search(query)} />
       <Text className="text-xs text-foreground-muted">
-        {request.approvalDeadline === null
-          ? "Waits for your decision · no approval timeout"
-          : `Approval expires ${new Date(request.approvalDeadline).toLocaleTimeString()}`}
+        Search all saved credentials, even when the host differs. Leave blank to browse.
       </Text>
-      <Button
-        label="Deny"
-        tone="text"
-        disabled={disabled}
-        onPress={() => void act({ type: "decide", requestId: request.requestId, decision: "deny" })}
-      />
-      <Button
-        label="Allow once"
-        tone="primary"
-        disabled={disabled || request.state !== "pending" || !selection}
-        onPress={() =>
-          void act({
-            type: "decide",
-            requestId: request.requestId,
-            decision: "once",
-            candidateId: selection!,
-          })
-        }
-      />
-      <Button
-        label="Always allow"
-        disabled={disabled || request.state !== "pending" || !selection || !request.origin}
-        onPress={() =>
-          void act({
-            type: "decide",
-            requestId: request.requestId,
-            decision: "always",
-            candidateId: selection!,
-          })
-        }
-      />
+      {request.searchQuery !== undefined && (
+        <Button
+          label="Use hostname matches"
+          tone="text"
+          disabled={disabled}
+          onPress={() => search()}
+        />
+      )}
     </View>
   );
 }
@@ -597,7 +668,6 @@ function SaveLogin({
   disabled: boolean;
   act: (input: CredentialBrokerAction) => Promise<void>;
 }) {
-  const [open, setOpen] = useState(request.candidates.length === 0);
   const [busy, setBusy] = useState(false);
   const username = useRef("");
   const password = useRef("");
@@ -611,71 +681,60 @@ function SaveLogin({
   };
   return (
     <View className="gap-2">
+      <Text className="text-xs text-foreground-muted">
+        Create a new Bitwarden login for {request.site} and share it once with this program. Enter
+        the site password, not your vault master password. Values stay out of chat.
+      </Text>
+      <Text className="text-sm text-foreground">Username or email</Text>
+      <TextInput
+        ref={usernameInput}
+        accessibilityLabel="New login username"
+        placeholder="Username or email"
+        autoComplete="off"
+        autoCapitalize="none"
+        autoCorrect={false}
+        maxLength={4096}
+        editable={!disabled && !busy}
+        onChangeText={(value) => {
+          username.current = value;
+        }}
+        className="rounded-lg border border-border p-3 text-foreground"
+      />
+      <Text className="text-sm text-foreground">Site password</Text>
+      <TextInput
+        ref={passwordInput}
+        accessibilityLabel="New login password"
+        placeholder="Site password"
+        secureTextEntry
+        autoComplete="off"
+        autoCapitalize="none"
+        autoCorrect={false}
+        maxLength={4096}
+        editable={!disabled && !busy}
+        onChangeText={(value) => {
+          password.current = value;
+        }}
+        className="rounded-lg border border-border p-3 text-foreground"
+      />
       <Button
-        label={open ? "Hide new login" : "Enter and save a new login"}
-        tone="text"
+        label={busy ? "Saving…" : "Save to Bitwarden & allow once"}
         disabled={disabled || busy}
         onPress={() => {
+          if (
+            disabled ||
+            busy ||
+            (request.field !== "password" && !username.current) ||
+            (request.field !== "username" && !password.current)
+          )
+            return;
+          const login = { username: username.current, password: password.current };
           clear();
-          setOpen(!open);
+          setBusy(true);
+          void act({ type: "saveLogin", requestId: request.requestId, ...login }).finally(() =>
+            setBusy(false),
+          );
         }}
       />
-      {open && (
-        <>
-          <Text className="text-xs text-foreground-muted">
-            Create a new Bitwarden login for {request.site} and share it once with this program.
-            Enter the site password, not your vault master password. Values stay out of chat.
-          </Text>
-          <TextInput
-            ref={usernameInput}
-            accessibilityLabel="New login username"
-            placeholder="Username or email"
-            autoComplete="off"
-            autoCapitalize="none"
-            autoCorrect={false}
-            maxLength={4096}
-            editable={!disabled && !busy}
-            onChangeText={(value) => {
-              username.current = value;
-            }}
-            className="rounded-lg border border-border p-3 text-foreground"
-          />
-          <TextInput
-            ref={passwordInput}
-            accessibilityLabel="New login password"
-            placeholder="Site password"
-            secureTextEntry
-            autoComplete="off"
-            autoCapitalize="none"
-            autoCorrect={false}
-            maxLength={4096}
-            editable={!disabled && !busy}
-            onChangeText={(value) => {
-              password.current = value;
-            }}
-            className="rounded-lg border border-border p-3 text-foreground"
-          />
-          <Button
-            label={busy ? "Saving…" : "Save to Bitwarden & allow once"}
-            disabled={disabled || busy}
-            onPress={() => {
-              if (
-                disabled ||
-                busy ||
-                (request.field !== "password" && !username.current) ||
-                (request.field !== "username" && !password.current)
-              )
-                return;
-              const login = { username: username.current, password: password.current };
-              clear();
-              setBusy(true);
-              void act({ type: "saveLogin", requestId: request.requestId, ...login }).finally(() =>
-                setBusy(false),
-              );
-            }}
-          />
-        </>
-      )}
     </View>
   );
 }

@@ -24,6 +24,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as AuthSessions from "../persistence/AuthSessions.ts";
@@ -98,6 +99,7 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const transport = yield* WebPushTransport.WebPushTransport;
+  const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
   const lock = yield* Semaphore.make(1);
   const startedAt = yield* DateTime.now;
   let state: StoredState | undefined;
@@ -282,6 +284,17 @@ const make = Effect.gen(function* () {
     }
     const current = yield* lock.withPermits(1)(load);
     if (current.subscriptions.length === 0) return;
+    const activity = yield* backgroundPolicy.snapshot;
+    if (
+      activity.leases.some(
+        (lease) =>
+          (lease.clientKind === "web" || lease.clientKind === "desktop-renderer") &&
+          lease.visible &&
+          lease.focused &&
+          lease.recentlyInteracted,
+      )
+    )
+      return;
     const source = yield* threads.getThreadShell(event.threadId);
     if (source === null || source.archivedAt !== null || source.deletedAt !== null) return;
     let thread: OrchestrationV2ThreadShell = source;
