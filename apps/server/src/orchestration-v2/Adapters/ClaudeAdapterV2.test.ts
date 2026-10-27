@@ -8045,7 +8045,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const roster = providerThreadRosterEvents(harness.events).at(-1)?.providerThread
           .pendingBackgroundTasks;
         assert.deepEqual(roster, [
-          { taskId: longRunning.taskId, kind: "monitor", description: "Monitor 0" },
+          { taskId: longRunning.taskId, kind: "monitor", description: "Monitor 0", awaited: false },
         ]);
       }).pipe(
         Effect.provide(
