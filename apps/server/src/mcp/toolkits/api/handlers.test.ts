@@ -1,3 +1,8 @@
+import * as RuntimeLayer from "../../../orchestration-v2/runtimeLayer.ts";
+import * as SqlitePersistence from "../../../persistence/Sqlite.ts";
+import * as ProjectEnrichmentService from "../../../project/ProjectEnrichmentService.ts";
+import * as RepositoryIdentityResolver from "../../../project/RepositoryIdentityResolver.ts";
+import * as ProjectFaviconResolver from "../../../project/ProjectFaviconResolver.ts";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ThreadMoveTransferService from "../../../orchestration-v2/ThreadMoveTransferService.ts";
 import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
@@ -19,6 +24,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { NodeHttpServer } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import {
+  CommandId,
+  type ProjectMutation,
+  WS_METHODS,
   AGENT_EXPOSED_API_NAMES,
   AgentApiCallError,
   AuthSessionId,
@@ -338,6 +346,86 @@ it.effect("updates global keybindings through the helper bridge", () =>
       ]),
     });
   }).pipe(Effect.provide(TestLayer)),
+);
+
+const helperProjectMetadata = Layer.mergeAll(
+  Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+    resolve: () => Effect.succeed(null),
+  }),
+  Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
+    invalidate: () => Effect.void,
+    resolvePath: () => Effect.succeed(null),
+  }),
+);
+const helperProjectService = RuntimeLayer.layerProjectService.pipe(
+  Layer.provideMerge(ProjectEnrichmentService.layer.pipe(Layer.provide(helperProjectMetadata))),
+  Layer.provideMerge(SqlitePersistence.layerMemory),
+  Layer.provideMerge(serviceLayers),
+);
+it.effect(
+  "replaces a project Setup worktree action with a global action through projects.mutate",
+  () =>
+    Effect.gen(function* () {
+      yield* seedRuntime;
+      const projects = yield* ProjectService;
+      yield* projects.create({
+        commandId: CommandId.make("helper:seed"),
+        projectId: targetProjectId,
+        title: "Helper action migration",
+        workspaceRoot: process.cwd(),
+        scripts: [
+          {
+            id: "setup-worktree",
+            name: "Setup worktree",
+            command: "vp i",
+            icon: "configure",
+            runOnWorktreeCreate: true,
+          },
+        ],
+      });
+      const forwardRpc: typeof withEnvironmentRpc = <A, E, R>(
+        _input: Parameters<typeof withEnvironmentRpc>[0],
+        run: Parameters<typeof withEnvironmentRpc<A, E, R>>[1],
+      ) =>
+        run({
+          [WS_METHODS.projectsMutate]: (mutation: ProjectMutation) => {
+            if (mutation.type !== "project.update")
+              return Effect.die("Unexpected project operation");
+            const { type: _type, ...input } = mutation;
+            return projects.update(input);
+          },
+        } as unknown as Parameters<typeof run>[0]).pipe(
+          Effect.provide(
+            Layer.mock(RpcClient.Protocol)({
+              supportsAck: false,
+              supportsTransferables: false,
+              codecFor: Schema.toCodecJson,
+            }),
+          ),
+          Effect.scoped,
+        );
+      vi.mocked(withEnvironmentRpc).mockImplementation(forwardRpc);
+      const upsert = yield* callApi("server.upsertKeybinding", {
+        key: "mod+alt+s",
+        command: "script.setup-worktree.run",
+      });
+      expect(upsert.isError).toBe(false);
+      expect(upsert.structuredContent).toMatchObject({
+        keybindings: expect.arrayContaining([
+          expect.objectContaining({ command: "script.setup-worktree.run" }),
+        ]),
+      });
+      const update = yield* callApi("projects.mutate", {
+        type: "project.update",
+        commandId: "helper:remove-setup",
+        projectId: targetProjectId,
+        scripts: [],
+      });
+      expect(update.isError).toBe(false);
+      expect(update.structuredContent).toMatchObject({ id: targetProjectId, scripts: [] });
+      const stored = yield* projects.getById(targetProjectId);
+      expect(stored).toMatchObject({ value: { id: targetProjectId, scripts: [] } });
+    }).pipe(Effect.provide(TestLayer.pipe(Layer.provideMerge(helperProjectService)))),
 );
 
 // Serves the full production MCP layer over HTTP to pin endpoint separation:
