@@ -1,3 +1,5 @@
+import { SidebarCreatingBlock } from "./sidebar/SidebarCreatingBlock";
+import { useOptimisticThreadListStore } from "../optimisticThreadListStore";
 import {
   isThreadMoveInProgress,
   threadMoveUndoParticipants,
@@ -993,6 +995,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ),
         );
   const threads = useQuietThreadShells();
+  const canonicalThreadKeys = new Set(threads.map(threadShellKey));
+  const creatingThreads = useOptimisticThreadListStore((state) => state.entriesByKey);
+  const creatingDraftIds = new Set(
+    Object.values(creatingThreads).flatMap((entry) => (entry.draftId ? [entry.draftId] : [])),
+  );
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
@@ -1070,7 +1077,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const visibleDraftSessionCount = useComposerDraftStore((store) => {
     let count = 0;
     for (const [draftKey, session] of Object.entries(store.draftThreadsByThreadKey)) {
-      if (session.promotedTo != null) {
+      if (session.promotedTo != null || creatingDraftIds.has(DraftId.make(draftKey))) {
         continue;
       }
       if (!composerDraftHasUserContent(store.draftsByThreadKey[draftKey])) {
@@ -3105,12 +3112,19 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       };
                       const from = isContextDrag ? null : (dragState?.activeSection ?? null);
                       const items: ReactNode[] = [
+                        <SidebarCreatingBlock
+                          key="creating-threads"
+                          canonicalThreadKeys={canonicalThreadKeys}
+                          scopedProjectKeys={scopedProjectKeys}
+                          onNavigate={navigateToThread}
+                        />,
                         <SidebarDraftBlock
                           key="draft-sessions"
                           projectByKey={projectByKey}
                           projectDisplayNameByKey={projectDisplayNameByKey}
                           scopedProjectKeys={scopedProjectKeys}
                           routeDraftId={routeDraftIdForRows}
+                          creatingDraftIds={creatingDraftIds}
                           onNavigateToDraft={navigateToDraft}
                           onDraftContextMenu={handleDraftContextMenu}
                         />,

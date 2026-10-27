@@ -1,3 +1,4 @@
+import { withOptimisticThreadCreation } from "../../optimisticThreadListStore";
 import {
   type EnvironmentId,
   type ModelSelection,
@@ -162,46 +163,56 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
               const supportsInlineMessageContext =
                 appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment
                   .capabilities.inlineMessageContext === true;
-              return startThreadTurn({
-                environmentId,
-                input: {
-                  threadId: targetThreadId,
-                  message: {
-                    messageId: newMessageId(),
-                    role: "user",
-                    attachments,
-                    ...withMessageContext({
-                      text: target.text,
-                      context,
-                      supportsInlineMessageContext,
-                    }),
-                  },
-                  modelSelection: target.selection,
-                  titleSeed: title,
-                  runtimeMode,
-                  interactionMode: target.interactionMode,
-                  bootstrap: {
-                    createThread: {
-                      projectId: project.id,
-                      title,
+              return withOptimisticThreadCreation(
+                {
+                  threadRef: scopeThreadRef(environmentId, targetThreadId),
+                  projectId: project.id,
+                  title,
+                  createdAt,
+                  draftId: null,
+                },
+                () =>
+                  startThreadTurn({
+                    environmentId,
+                    input: {
+                      threadId: targetThreadId,
+                      message: {
+                        messageId: newMessageId(),
+                        role: "user",
+                        attachments,
+                        ...withMessageContext({
+                          text: target.text,
+                          context,
+                          supportsInlineMessageContext,
+                        }),
+                      },
                       modelSelection: target.selection,
+                      titleSeed: title,
                       runtimeMode,
                       interactionMode: target.interactionMode,
-                      branch,
-                      worktreePath: null,
+                      bootstrap: {
+                        createThread: {
+                          projectId: project.id,
+                          title,
+                          modelSelection: target.selection,
+                          runtimeMode,
+                          interactionMode: target.interactionMode,
+                          branch,
+                          worktreePath: null,
+                          createdAt: createdAt,
+                        },
+                        prepareWorktree: {
+                          projectCwd: project.workspaceRoot,
+                          baseBranch: branch,
+                          requireWorktree: true,
+                          ...(startFromOrigin ? { startFromOrigin: true } : {}),
+                        },
+                        runSetupScript: true,
+                      },
                       createdAt: createdAt,
                     },
-                    prepareWorktree: {
-                      projectCwd: project.workspaceRoot,
-                      baseBranch: branch,
-                      requireWorktree: true,
-                      ...(startFromOrigin ? { startFromOrigin: true } : {}),
-                    },
-                    runSetupScript: true,
-                  },
-                  createdAt: createdAt,
-                },
-              });
+                  }),
+              );
             },
             openThread: (threadId) =>
               void navigate({

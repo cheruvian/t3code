@@ -60,3 +60,18 @@ export function representedThreadKeys(
 ): ReadonlySet<string> {
   return new Set([...canonicalThreadKeys, ...Object.keys(entriesByKey)]);
 }
+
+export async function withOptimisticThreadCreation<T extends { readonly _tag: string }>(
+  entry: OptimisticThreadListEntry,
+  start: () => Promise<T>,
+): Promise<T> {
+  useOptimisticThreadListStore.getState().add(entry);
+  try {
+    const result = await start();
+    if (result._tag === "Failure") useOptimisticThreadListStore.getState().remove(entry.threadRef);
+    return result;
+  } catch (error) {
+    useOptimisticThreadListStore.getState().remove(entry.threadRef);
+    throw error;
+  }
+}

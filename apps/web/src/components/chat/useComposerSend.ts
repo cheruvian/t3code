@@ -1,3 +1,4 @@
+import { withOptimisticThreadCreation } from "../../optimisticThreadListStore";
 import { rememberUncertainSend } from "./useUncertainSendRecovery";
 import { offlineMessages } from "../../state/offlineMessages";
 import type { OfflineMessage } from "../../lib/offlineMessageQueue";
@@ -1400,35 +1401,48 @@ export function useComposerSend(input: ComposerSendInput) {
           : null;
       if (backgroundThreadRef) beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
       turnStartAttempted = true;
-      const startPromise = startThreadTurn({
-        environmentId,
-        input: {
-          threadId: threadIdForSend,
-          message: {
-            messageId: messageIdForSend,
-            role: "user",
-            attachments: turnAttachmentsResult.value,
-            ...withMessageContext({
-              text: outgoingMessageText,
-              context: buildOutgoingMessageContext(
-                boundAttachmentIds(turnAttachmentsResult.value, composerAttachmentsSnapshot),
-              ),
-              // Read at dispatch time: the upload and persistence awaits above can
-              // span a server reconnect that changes it.
-              supportsInlineMessageContext:
-                appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment
-                  .capabilities.inlineMessageContext === true,
-            }),
+      const start = () =>
+        startThreadTurn({
+          environmentId,
+          input: {
+            threadId: threadIdForSend,
+            message: {
+              messageId: messageIdForSend,
+              role: "user",
+              attachments: turnAttachmentsResult.value,
+              ...withMessageContext({
+                text: outgoingMessageText,
+                context: buildOutgoingMessageContext(
+                  boundAttachmentIds(turnAttachmentsResult.value, composerAttachmentsSnapshot),
+                ),
+                // Read at dispatch time: the upload and persistence awaits above can
+                // span a server reconnect that changes it.
+                supportsInlineMessageContext:
+                  appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment
+                    .capabilities.inlineMessageContext === true,
+              }),
+            },
+            modelSelection: ctxSelectedModelSelection,
+            titleSeed: title,
+            runtimeMode,
+            interactionMode: sendInteractionMode,
+            dispatchMode: turnDispatchMode,
+            ...(bootstrap ? { bootstrap } : {}),
+            createdAt: messageCreatedAt,
           },
-          modelSelection: ctxSelectedModelSelection,
-          titleSeed: title,
-          runtimeMode,
-          interactionMode: sendInteractionMode,
-          dispatchMode: turnDispatchMode,
-          ...(bootstrap ? { bootstrap } : {}),
-          createdAt: messageCreatedAt,
-        },
-      });
+        });
+      const startPromise = isLocalDraftThread
+        ? withOptimisticThreadCreation(
+            {
+              threadRef: scopeThreadRef(environmentId, threadIdForSend),
+              projectId: activeProject.id,
+              title,
+              createdAt: messageCreatedAt,
+              draftId,
+            },
+            start,
+          )
+        : start();
       if (backgroundThreadRef) {
         try {
           backgroundDraftOpened = Boolean(
