@@ -226,6 +226,7 @@ import {
   createComposerScrollGestureState,
   recordComposerScrollGestureEvent,
   shouldCollapseComposerForScrollKey,
+  shouldDismissMobileKeyboardForComposerPull,
   resetComposerScrollGesture,
   suppressActiveComposerScrollGesture,
 } from "./composerScrollGesture";
@@ -1107,6 +1108,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerScrollCollapseEligibleRef = useRef(false);
   const windowRefocusInFlightRef = useRef(false);
   const composerScrollGestureRef = useRef(createComposerScrollGestureState());
+  const mobileComposerPullRef = useRef<{
+    touchId: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
   const pendingThreadImportsRef = useRef<Map<string, number>>(new Map());
   const isRevertingCheckpointRef = useRef(isRevertingCheckpoint);
   useLayoutEffect(() => {
@@ -3439,6 +3445,48 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     <form
       ref={composerFormRef}
       onSubmit={submitComposerStable}
+      onTouchStartCapture={(event) => {
+        mobileComposerPullRef.current = null;
+        if (!isMobileViewport || event.touches.length !== 1) return;
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const editor = target.closest<HTMLElement>('[data-testid="composer-editor"]');
+        if (!editor || document.activeElement !== editor || editor.scrollTop > 1) return;
+        const touch = event.touches[0];
+        if (!touch) return;
+        mobileComposerPullRef.current = {
+          touchId: touch.identifier,
+          startX: touch.clientX,
+          startY: touch.clientY,
+        };
+      }}
+      onTouchMoveCapture={(event) => {
+        const pull = mobileComposerPullRef.current;
+        if (!pull) return;
+        if (event.touches.length !== 1) {
+          mobileComposerPullRef.current = null;
+          return;
+        }
+        const touch = event.touches[0];
+        if (!touch || touch.identifier !== pull.touchId) return;
+        if (
+          !shouldDismissMobileKeyboardForComposerPull({
+            startX: pull.startX,
+            startY: pull.startY,
+            currentX: touch.clientX,
+            currentY: touch.clientY,
+          })
+        )
+          return;
+        mobileComposerPullRef.current = null;
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      }}
+      onTouchEndCapture={() => {
+        mobileComposerPullRef.current = null;
+      }}
+      onTouchCancelCapture={() => {
+        mobileComposerPullRef.current = null;
+      }}
       onPointerDownCapture={(event) => {
         const target = event.target;
         if (isInsideRestingComposerControlScope(target)) return;
