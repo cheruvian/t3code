@@ -13,6 +13,8 @@ import {
   ThreadId,
   RuntimeRequestId,
   NodeId,
+  RpcClientId,
+  type ClientActivityReportInput,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ThreadShell,
   type WebPushSubscription,
@@ -23,7 +25,11 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
+import * as HostPowerMonitor from "../background/HostPowerMonitor.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as AuthSessions from "../persistence/AuthSessions.ts";
@@ -149,6 +155,28 @@ const setup = Effect.gen(function* () {
   });
   const dependencies = Layer.mergeAll(
     NodeCrypto.layer,
+    BackgroundPolicy.layer.pipe(
+      Layer.provide(
+        Layer.merge(
+          ServerSettings.layerTest(),
+          Layer.mock(HostPowerMonitor.HostPowerMonitor)({
+            snapshot: Effect.succeed({
+              source: "unknown",
+              idle: "unknown",
+              idleSeconds: null,
+              locked: "unknown",
+              suspended: false,
+              onBattery: "unknown",
+              lowPowerMode: "unknown",
+              thermalState: "unknown",
+              stale: true,
+              updatedAt: DateTime.makeUnsafe(NOW),
+            }),
+            streamChanges: Stream.never,
+          }),
+        ),
+      ),
+    ),
     Layer.mock(ServerSecretStore.ServerSecretStore)({
       get: (name) => Effect.sync(() => Option.fromNullishOr(bytes.get(name))),
       set: (name, value) =>
@@ -202,10 +230,12 @@ const setup = Effect.gen(function* () {
         }),
     }),
   );
-  const context = yield* Layer.build(WebPush.layer.pipe(Layer.provide(dependencies)));
+  const context = yield* Layer.build(WebPush.layer.pipe(Layer.provideMerge(dependencies)));
   const service = yield* WebPush.WebPush.pipe(Effect.provide(context));
+  const policy = yield* BackgroundPolicy.BackgroundPolicy.pipe(Effect.provide(context));
   return {
     service,
+    policy,
     sent,
     emit: (value: OrchestrationV2DomainEvent) =>
       Deferred.succeed(event, value).pipe(
@@ -235,6 +265,121 @@ const setup = Effect.gen(function* () {
 });
 
 describe("background push", () => {
+  it.effect.each([
+    {
+      clientKind: "desktop-renderer",
+      visible: true,
+      focused: true,
+      recentlyInteracted: true,
+      suppressed: true,
+    },
+    { clientKind: "web", visible: true, focused: true, recentlyInteracted: true, suppressed: true },
+    {
+      clientKind: "desktop-renderer",
+      visible: false,
+      focused: true,
+      recentlyInteracted: true,
+      suppressed: false,
+    },
+    {
+      clientKind: "desktop-renderer",
+      visible: true,
+      focused: false,
+      recentlyInteracted: true,
+      suppressed: false,
+    },
+    {
+      clientKind: "desktop-renderer",
+      visible: true,
+      focused: true,
+      recentlyInteracted: false,
+      suppressed: false,
+    },
+    {
+      clientKind: "mobile",
+      visible: true,
+      focused: true,
+      recentlyInteracted: true,
+      suppressed: false,
+    },
+  ] as const)("gates automatic pushes on client activity: %j", (activity) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { service, sent, policy, setShell } = yield* setup;
+        yield* service.update(SESSION_ID, {
+          type: "subscribe",
+          subscription,
+          notificationMode: "notifications-and-sound",
+        });
+        yield* policy.reportClientActivity(
+          AuthSessionId.make("desktop-session"),
+          RpcClientId.make(1),
+          {
+            clientId: "other-client",
+            ...activity,
+            scopes: [],
+            observedAt: DateTime.makeUnsafe(NOW),
+          },
+        );
+        yield* service.notify(completedEvent());
+        expect(sent).toHaveLength(activity.suppressed ? 0 : 1);
+        setShell(
+          shell({
+            pendingRuntimeRequest: {
+              id: RuntimeRequestId.make("request-active"),
+              kind: "user_input",
+              createdAt: DateTime.makeUnsafe(NOW),
+            },
+          }),
+        );
+        yield* service.notify(requestEvent("request-active"));
+        expect(sent).toHaveLength(activity.suppressed ? 0 : 2);
+        yield* service.send({ title: "Explicit alert", body: "Requested through the API" });
+        expect(sent).toHaveLength(activity.suppressed ? 1 : 3);
+      }),
+    ),
+  );
+
+  it.effect.each(["blur", "idle", "disconnect", "expiry"] as const)(
+    "resumes automatic pushes after %s",
+    (reason) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { service, sent, policy } = yield* setup;
+          yield* service.update(SESSION_ID, {
+            type: "subscribe",
+            subscription,
+            notificationMode: "notifications-and-sound",
+          });
+          const sessionId = AuthSessionId.make("desktop-session");
+          const rpcClientId = RpcClientId.make(1);
+          const report: ClientActivityReportInput = {
+            clientId: "desktop",
+            clientKind: "desktop-renderer",
+            visible: true,
+            focused: true,
+            recentlyInteracted: true,
+            scopes: [],
+            ttlMs: 45_000,
+            observedAt: DateTime.makeUnsafe(NOW),
+          };
+          yield* policy.reportClientActivity(sessionId, rpcClientId, report);
+          yield* service.notify(completedEvent());
+          expect(sent).toHaveLength(0);
+          if (reason === "expiry") yield* TestClock.adjust("45 seconds");
+          else if (reason === "disconnect") yield* policy.removeRpcClient(sessionId, rpcClientId);
+          else
+            yield* policy.reportClientActivity(sessionId, rpcClientId, {
+              ...report,
+              focused: reason !== "blur",
+              recentlyInteracted: reason !== "idle",
+            });
+          yield* service.notify(completedEvent());
+          expect(sent).toHaveLength(1);
+        }),
+      ),
+  );
+
   it.effect.each(["off", "sound", "notifications", "notifications-and-sound"] as const)(
     "honors %s for thread alerts while keeping custom API notifications independent",
     (notificationMode) =>
