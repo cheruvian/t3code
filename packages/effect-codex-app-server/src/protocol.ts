@@ -4,6 +4,8 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as PubSub from "effect/PubSub";
+import type * as Take from "effect/Take";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
@@ -163,13 +165,13 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
     const protocolScope = yield* Scope.Scope;
     const requestHandlerScope = yield* Scope.fork(protocolScope, "parallel");
     const outgoing = yield* Queue.unbounded<string, Cause.Done<void>>();
-    const incomingNotifications = yield* Queue.sliding<
-      CodexAppServerIncomingNotification,
-      Cause.Done<void>
-    >(MAX_BUFFERED_RAW_MESSAGES);
-    const incomingRequests = yield* Queue.sliding<CodexAppServerIncomingRequest, Cause.Done<void>>(
-      MAX_BUFFERED_RAW_MESSAGES,
-    );
+    // Raw taps are live-only; callbacks handle every message independently of subscribers.
+    const incomingNotifications =
+      yield* PubSub.sliding<Take.Take<CodexAppServerIncomingNotification>>(
+        MAX_BUFFERED_RAW_MESSAGES,
+      );
+    const incomingRequests =
+      yield* PubSub.sliding<Take.Take<CodexAppServerIncomingRequest>>(MAX_BUFFERED_RAW_MESSAGES);
     const pending = yield* Ref.make(new Map<string, CodexAppServerPendingRequest>());
     const nextRequestId = yield* Ref.make(1);
     const maxIncomingMessageBytes = options.maxIncomingMessageBytes ?? MAX_INCOMING_MESSAGE_BYTES;
@@ -310,7 +312,7 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
     };
 
     const handleRequest = (request: CodexAppServerIncomingRequest) =>
-      Queue.offer(incomingRequests, request).pipe(
+      PubSub.publish(incomingRequests, [request]).pipe(
         Effect.flatMap(() => {
           const handler = options.onRequest;
           if (!handler) return Effect.void;
@@ -359,7 +361,7 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
       );
 
     const handleNotification = (notification: CodexAppServerIncomingNotification) =>
-      Queue.offer(incomingNotifications, notification).pipe(
+      PubSub.publish(incomingNotifications, [notification]).pipe(
         Effect.andThen(options.onNotification ? options.onNotification(notification) : Effect.void),
         Effect.asVoid,
       );
@@ -480,8 +482,8 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
       handleTermination(() =>
         Effect.succeed(new CodexError.CodexAppServerInputStreamEndedError({})),
       ).pipe(
-        Effect.andThen(Queue.end(incomingNotifications)),
-        Effect.andThen(Queue.end(incomingRequests)),
+        Effect.andThen(PubSub.end(incomingNotifications, Exit.void)),
+        Effect.andThen(PubSub.end(incomingRequests, Exit.void)),
       ),
     );
 
@@ -514,8 +516,8 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
       });
 
     return {
-      incomingNotifications: Stream.fromQueue(incomingNotifications),
-      incomingRequests: Stream.fromQueue(incomingRequests),
+      incomingNotifications: Stream.fromPubSubTake(incomingNotifications),
+      incomingRequests: Stream.fromPubSubTake(incomingRequests),
       request,
       notify,
       respond,

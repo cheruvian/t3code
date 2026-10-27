@@ -715,6 +715,93 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
     }),
   );
 
+  it.effect("delivers raw messages only to live subscribers and releases them on close", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const protocolScope = yield* Scope.make();
+      yield* Effect.addFinalizer(() => Scope.close(protocolScope, Exit.void));
+
+      const historicalMessagesRouted = yield* Deferred.make<void>();
+      const terminationError = new CodexError.CodexAppServerProcessExitedError({ code: 19 });
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        terminationError: Effect.succeed(terminationError),
+        onNotification: ({ method }) =>
+          method === "test/historical-barrier"
+            ? Deferred.succeed(historicalMessagesRouted, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+      }).pipe(Effect.provideService(Scope.Scope, protocolScope));
+
+      yield* Queue.offer(
+        input,
+        encodeJsonl({ method: "test/historical-notification", params: { phase: "historical" } }),
+      );
+      yield* Queue.offer(
+        input,
+        encodeJsonl({
+          id: 41,
+          method: "test/historical-request",
+          params: { phase: "historical" },
+        }),
+      );
+      yield* Queue.offer(input, encodeJsonl({ method: "test/historical-barrier" }));
+      yield* Deferred.await(historicalMessagesRouted);
+
+      const liveNotification = {
+        method: "test/live-notification",
+        params: { phase: "live" },
+      } as const;
+      const liveRequest = {
+        id: 42,
+        method: "test/live-request",
+        params: { phase: "live" },
+      } as const;
+      const seenNotifications = yield* Ref.make<
+        Array<CodexProtocol.CodexAppServerIncomingNotification>
+      >([]);
+      const seenRequests = yield* Ref.make<Array<CodexProtocol.CodexAppServerIncomingRequest>>([]);
+      const liveNotificationObserved = yield* Deferred.make<void>();
+      const liveRequestObserved = yield* Deferred.make<void>();
+
+      const notificationsFiber = yield* transport.incomingNotifications.pipe(
+        Stream.runForEach((notification) =>
+          Ref.update(seenNotifications, (current) => [...current, notification]).pipe(
+            Effect.andThen(
+              notification.method === liveNotification.method
+                ? Deferred.succeed(liveNotificationObserved, undefined)
+                : Effect.void,
+            ),
+          ),
+        ),
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      const requestsFiber = yield* transport.incomingRequests.pipe(
+        Stream.runForEach((request) =>
+          Ref.update(seenRequests, (current) => [...current, request]).pipe(
+            Effect.andThen(
+              request.method === liveRequest.method
+                ? Deferred.succeed(liveRequestObserved, undefined)
+                : Effect.void,
+            ),
+          ),
+        ),
+        Effect.forkScoped({ startImmediately: true }),
+      );
+
+      yield* Queue.offer(input, encodeJsonl(liveNotification));
+      yield* Queue.offer(input, encodeJsonl(liveRequest));
+      yield* Deferred.await(liveNotificationObserved);
+      yield* Deferred.await(liveRequestObserved);
+
+      assert.deepEqual(yield* Ref.get(seenNotifications), [liveNotification]);
+      assert.deepEqual(yield* Ref.get(seenRequests), [liveRequest]);
+
+      yield* Scope.close(protocolScope, Exit.void);
+      yield* Fiber.join(notificationsFiber);
+      yield* Fiber.join(requestsFiber);
+    }),
+  );
+
   it.effect("settles pending requests on scope close without awaiting a live process exit", () =>
     Effect.gen(function* () {
       const { stdio, output } = yield* makeInMemoryStdio();
