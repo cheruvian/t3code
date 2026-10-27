@@ -9,12 +9,16 @@ import { createPortal } from "react-dom";
 import { useAtomValue } from "@effect/atom-react";
 import {
   AuthAccessReadScope,
+  resolveEnvironmentMachineKind,
   type CredentialApproval,
   type CredentialBrokerAction,
   type CredentialNotice,
   type EnvironmentId,
 } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
+import { ProjectFavicon } from "./ProjectFavicon";
+import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
+import { useProject } from "../state/entities";
 import { KeyRoundIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { credentialBroker } from "../state/credentialBroker";
@@ -401,6 +405,15 @@ export function ApprovalCard({
   disabled: boolean;
   act: (input: CredentialBrokerAction) => Promise<void>;
 }) {
+  const project = useProject(
+    request.origin?.projectId
+      ? { environmentId: request.origin.environmentId, projectId: request.origin.projectId }
+      : null,
+  );
+  const environment = useEnvironment(request.origin?.environmentId ?? null);
+  const callerLabel = request.origin
+    ? [request.origin.projectName, request.origin.threadTitle].filter(Boolean).join(" · ")
+    : "Unverified caller";
   const [chosenId, setSelection] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -437,13 +450,21 @@ export function ApprovalCard({
             {request.ttlSeconds}s per use
           </span>
         </div>
-        <p className="text-sm text-muted-foreground">
-          {request.origin
-            ? [request.origin.projectName, request.origin.threadTitle, environmentLabel]
-                .filter(Boolean)
-                .join(" · ")
-            : `Unverified caller · ${environmentLabel}`}
-        </p>
+        <div className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
+          {project ? <ProjectFavicon project={project} className="size-3.5 shrink-0" /> : null}
+          {callerLabel ? (
+            <>
+              <span>{callerLabel}</span>
+              <span aria-hidden>·</span>
+            </>
+          ) : null}
+          <EnvironmentMachineIcon
+            aria-hidden
+            kind={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
+            className="size-3.5 shrink-0"
+          />
+          <span>{environmentLabel}</span>
+        </div>
         <p className="text-sm">{request.reason}</p>
       </div>
       {processing ? (

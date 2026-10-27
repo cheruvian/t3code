@@ -7,6 +7,7 @@ import type { ViewInstance, TextInputInstance } from "react-native";
 import { useAtomValue } from "@effect/atom-react";
 import {
   AuthAccessReadScope,
+  resolveEnvironmentMachineKind,
   type CredentialApproval,
   type CredentialBrokerAction,
   type EnvironmentId,
@@ -25,6 +26,9 @@ import {
 import * as Crypto from "expo-crypto";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
+import { ProjectFavicon } from "../../components/ProjectFavicon";
+import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
+import { useProject } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentScope } from "../../state/session";
 import { credentialBroker } from "../../state/credentialBroker";
@@ -399,6 +403,18 @@ function Approval({
   disabled: boolean;
   act: (input: CredentialBrokerAction) => Promise<void>;
 }) {
+  const project = useProject(
+    request.origin?.projectId
+      ? { environmentId: request.origin.environmentId, projectId: request.origin.projectId }
+      : null,
+  );
+  const { environments } = useEnvironments();
+  const environment = environments.find(
+    (entry) => entry.environmentId === request.origin?.environmentId,
+  );
+  const callerLabel = request.origin
+    ? [request.origin.projectName, request.origin.threadTitle].filter(Boolean).join(" · ")
+    : "Unverified caller";
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [chosenId, setSelection] = useState<string | undefined>();
   const [adding, setAdding] = useState(false);
@@ -430,13 +446,27 @@ function Approval({
     <View className="gap-4">
       <View className="gap-2">
         <Text className="text-xl font-t3-semibold text-foreground">{request.site}</Text>
-        <Text className="text-sm text-foreground-muted">
-          {request.origin
-            ? [request.origin.projectName, request.origin.threadTitle, environmentLabel]
-                .filter(Boolean)
-                .join(" · ")
-            : `Unverified caller · ${environmentLabel}`}
-        </Text>
+        <View className="flex-row flex-wrap items-center gap-1.5">
+          {project ? (
+            <ProjectFavicon
+              environmentId={project.environmentId}
+              projectTitle={project.title}
+              workspaceRoot={project.workspaceRoot}
+              faviconPath={project.faviconPath}
+              projectIcon={project.projectIcon}
+              size={16}
+            />
+          ) : null}
+          {callerLabel ? (
+            <Text className="text-sm text-foreground-muted">{callerLabel} ·</Text>
+          ) : null}
+          <EnvironmentMachineSymbol
+            kind={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
+            size={16}
+            tintColorClassName="accent-icon"
+          />
+          <Text className="text-sm text-foreground-muted">{environmentLabel}</Text>
+        </View>
         <Text className="text-foreground">{request.reason}</Text>
         <Text className="text-xs text-foreground-muted">{request.ttlSeconds}s per use</Text>
       </View>
