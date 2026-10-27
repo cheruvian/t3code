@@ -13,7 +13,7 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        Array.from({ length: 73 }, (_, index) => index + 1),
+        Array.from({ length: 80 }, (_, index) => index + 1),
       );
     }),
   );
@@ -42,6 +42,13 @@ layer("055_OrchestrationV2", (it) => {
         [71, "ThreadFailureLookupIndex"],
         [72, "AssistantMessageShellIndex"],
         [73, "LegacyV1ActivityImport"],
+        [74, "DropUnusedV1Projections"],
+        [75, "CanonicalizeThreadPullRequestLinks"],
+        [76, "CodexUsageNativeTurnIndex"],
+        [77, "RepairClientSettlementTimestamps"],
+        [78, "WebhookDedupe"],
+        [79, "ShellStopRequestIndex"],
+        [80, "ThreadMessageSearch"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 

@@ -302,10 +302,9 @@ export const makeKeyedDrainableWorker = Effect.fn("makeKeyedDrainableWorker")(fu
         if (claimed === null) {
           return Effect.void;
         }
-        return options.process(claimed.work.item).pipe(
-          Effect.catch(() => Effect.void),
-          Effect.ensuring(retireItem(claimed.key, claimed.work.sequence)),
-        );
+        return options
+          .process(claimed.work.item)
+          .pipe(Effect.ignore, Effect.ensuring(retireItem(claimed.key, claimed.work.sequence)));
       }),
     ),
   );
@@ -316,8 +315,8 @@ export const makeKeyedDrainableWorker = Effect.fn("makeKeyedDrainableWorker")(fu
     { concurrency: 1 },
   ).pipe(Effect.asVoid);
 
-  const enqueue: KeyedDrainableWorker<A>["enqueue"] = (item) =>
-    Effect.gen(function* () {
+  const enqueue: KeyedDrainableWorker<A>["enqueue"] = Effect.fn("KeyedDrainableWorker.enqueue")(
+    function* (item) {
       const state = yield* TxRef.get(stateRef);
       if (!state.admissionOpen) {
         return yield* new DrainableWorkerClosedError();
@@ -348,7 +347,9 @@ export const makeKeyedDrainableWorker = Effect.fn("makeKeyedDrainableWorker")(fu
       if (shouldSchedule) {
         yield* TxQueue.offer(readyQueue, key);
       }
-    }).pipe(Effect.tx);
+    },
+    Effect.tx,
+  );
 
   const drain: KeyedDrainableWorker<A>["drain"] = Effect.gen(function* () {
     const token = {};

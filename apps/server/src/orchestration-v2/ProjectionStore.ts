@@ -92,6 +92,7 @@ import * as Ref from "effect/Ref";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import { ReadOnlySqlClient } from "../persistence/Services/ReadOnlySqlClient.ts";
 import type * as Statement from "effect/sql/Statement";
 
 import { MCP_APP_OUTPUT_KEY } from "@t3tools/shared/mcpApp";
@@ -106,6 +107,7 @@ import {
   selectHistoryPageFromCursor,
   selectRecentTimelineWindow,
   THREAD_HISTORY_PAGE_POLICY,
+  THREAD_HISTORY_TURN_SNAPSHOT_ROW_LIMIT,
 } from "./threadHistoryPaging.ts";
 
 export class ProjectionStoreApplyEventError extends Schema.TaggedError<ProjectionStoreApplyEventError>()(
@@ -3236,14 +3238,30 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
                     ELSE 0
                   END AS ordinal
                   FROM user_anchors
+                ), latest_user_turn AS (
+                  -- Mirrors selectOlderTimelinePage: whole turns while the
+                  -- newest user turn fits the turn row budget, otherwise the
+                  -- window pages from inside that turn with the row limit.
+                  SELECT COUNT(*) AS row_count
+                  FROM (
+                    SELECT 1
+                    FROM eligible
+                    WHERE ordinal >= (SELECT MAX(ordinal) FROM user_anchors)
+                    LIMIT ${THREAD_HISTORY_PAGE_POLICY.maxTurnItems + 1}
+                  )
                 ), selected AS (
+                  -- Choose and sort rows by ID, then fetch payloads in that
+                  -- order. A turn window can hold megabytes of tool output, and
+                  -- carrying it through the union and sort cost about a second.
                   SELECT item_rowid, ordinal, turn_item_id, run_id, type
                   FROM eligible
                   WHERE ordinal >= (SELECT ordinal FROM boundary)
                   ORDER BY ordinal DESC, turn_item_id DESC
                   LIMIT CASE
                     WHEN ${window.rowLimit} = 0 THEN 0
-                    WHEN EXISTS (SELECT 1 FROM user_anchors) THEN -1
+                    WHEN (SELECT row_count FROM latest_user_turn)
+                      BETWEEN 1 AND ${THREAD_HISTORY_PAGE_POLICY.maxTurnItems}
+                      THEN ${THREAD_HISTORY_TURN_SNAPSHOT_ROW_LIMIT}
                     ELSE ${window.rowLimit}
                   END
                 ), retained AS MATERIALIZED (
@@ -7180,7 +7198,22 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
   }),
 );
 
-export const layer = layerSql;
+export const layer = Layer.effect(
+  ProjectionStoreV2,
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const readSql = Option.getOrElse(yield* Effect.serviceOption(ReadOnlySqlClient), () => sql);
+    const writes = yield* ProjectionStoreV2.pipe(Effect.provide(layerSql));
+    if (readSql === sql) return writes;
+    const reads = yield* ProjectionStoreV2.pipe(
+      Effect.provide(layerSql),
+      Effect.provideService(SqlClient.SqlClient, readSql),
+    );
+    // Both clients share a transaction context: reads inside an existing write
+    // transaction use its connection and see its uncommitted projection rows.
+    return ProjectionStoreV2.of({ ...reads, apply: writes.apply });
+  }),
+);
 
 export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
   ProjectionStoreV2,
@@ -8118,12 +8151,15 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                   ? rawStart
                   : anchors.at(-anchorLimit)!
                 : Math.max(0, anchorIndex - options.rowLimit);
+            const latestTurnRows = anchors.length > 0 ? anchorIndex - anchors.at(-1)! : 0;
+            const rowLimit =
+              options.rowLimit > 0 &&
+              latestTurnRows > 0 &&
+              latestTurnRows <= THREAD_HISTORY_PAGE_POLICY.maxTurnItems
+                ? THREAD_HISTORY_TURN_SNAPSHOT_ROW_LIMIT
+                : options.rowLimit;
             const visibleTurnItems = candidates.slice(
-              options.rowLimit === 0
-                ? anchorIndex
-                : anchors.length > 0
-                  ? start
-                  : Math.max(start, anchorIndex - Math.max(0, options.rowLimit)),
+              Math.max(start, anchorIndex - Math.max(0, rowLimit)),
             );
             return {
               ...snapshot,

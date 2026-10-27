@@ -229,6 +229,7 @@ it.effect("keeps the event loop responsive while a file-backed query executes", 
           SELECT 1 UNION ALL SELECT value + 1 FROM numbers WHERE value < 1000000
         ) SELECT SUM(value) AS total FROM numbers
       `.pipe(
+        SqliteClient.readOnly,
         Effect.tap(() => Effect.sync(() => completed.push("query"))),
         Effect.forkChild,
       );
@@ -243,7 +244,7 @@ it.effect("keeps the event loop responsive while a file-backed query executes", 
       });
       assert.deepEqual(completed, ["heartbeat"]);
       assert.deepEqual(yield* Fiber.join(query), [{ total: 500000500000 }]);
-    }).pipe(Effect.provide(SqliteClient.layer({ filename })));
+    }).pipe(Effect.provide(SqliteClient.layer({ filename, readerWorker: true })));
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 

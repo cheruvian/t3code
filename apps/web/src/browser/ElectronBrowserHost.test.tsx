@@ -8,6 +8,7 @@ vi.mock("./openFileInPreview", () => ({ openUrlInPreview: () => {} }));
 vi.mock("./annotationTheme", () => ({ readPreviewAnnotationTheme: () => ({}) }));
 vi.mock("~/env", () => ({ isElectron: true }));
 vi.mock("~/state/entities", () => ({
+  readEnvironmentSupportsNativeDesktopBrowser: () => true,
   useServerConfigs: () =>
     new Map([["host", { environment: { capabilities: { nativeDesktopBrowser: true } } }]]),
 }));

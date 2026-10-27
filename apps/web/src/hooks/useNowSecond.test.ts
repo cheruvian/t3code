@@ -10,9 +10,10 @@ afterEach(() => {
 describe("useNowSecond", () => {
   it("shares one timer and tears it down after the last subscriber", async () => {
     let subscribe: ((listener: () => void) => () => void) | undefined;
-    const setInterval = vi.fn(() => 42);
-    const clearInterval = vi.fn();
-    vi.stubGlobal("window", { setInterval, clearInterval });
+    const setTimeout = vi.fn(() => 42);
+    const clearTimeout = vi.fn();
+    vi.stubGlobal("setTimeout", setTimeout);
+    vi.stubGlobal("clearTimeout", clearTimeout);
     vi.doMock("react", () => ({
       useSyncExternalStore: (nextSubscribe: typeof subscribe, getSnapshot: () => number) => {
         subscribe = nextSubscribe;
@@ -25,10 +26,10 @@ describe("useNowSecond", () => {
     const unsubscribeFirst = subscribe?.(() => undefined);
     const unsubscribeSecond = subscribe?.(() => undefined);
 
-    expect(setInterval).toHaveBeenCalledTimes(1);
+    expect(setTimeout).toHaveBeenCalledTimes(1);
     unsubscribeFirst?.();
-    expect(clearInterval).not.toHaveBeenCalled();
+    expect(clearTimeout).not.toHaveBeenCalled();
     unsubscribeSecond?.();
-    expect(clearInterval).toHaveBeenCalledWith(42);
+    expect(clearTimeout).toHaveBeenCalledWith(42);
   });
 });

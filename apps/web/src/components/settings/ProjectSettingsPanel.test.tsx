@@ -58,6 +58,10 @@ const state = vi.hoisted(() => ({
   navigate: vi.fn(),
 }));
 
+vi.mock("~/state/olderSettledShelf", () => ({ readUnloadedThreadCount: () => 0 }));
+vi.mock("~/state/use-orchestration-command", () => ({
+  useOrchestrationCommand: (command: "update" | "delete") => state[command],
+}));
 vi.mock("~/connection/runtime", () => ({ connectionAtomRuntime: undefined }));
 vi.mock("@t3tools/client-runtime/state/session", () => ({
   createEnvironmentSessionAtoms: () => ({

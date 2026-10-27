@@ -68,7 +68,7 @@ const readOnlyConnectionLayer = (config: RuntimeSqliteLayerConfig) =>
   NodeSqliteClient.layer({
     ...config,
     readonly: true,
-    readerWorker: false,
+    readerWorker: true,
     spanAttributes: { ...config.spanAttributes, "db.connection.role": "read" },
   }).pipe(
     Layer.flatMap((context) => {

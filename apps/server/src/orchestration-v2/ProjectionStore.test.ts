@@ -1717,24 +1717,21 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           rowLimit: 77,
           userTurnLimit: THREAD_HISTORY_PAGE_POLICY.maxUserTurns,
         });
-      // Human-turn windows retain the entire turn even beyond a transport row budget.
-      assert.lengthOf((yield* humanWindow()).projection.turnItems, 1_000);
-      // Removing the newest anchor includes the older human turn in full.
+      assert.lengthOf(
+        (yield* humanWindow()).projection.turnItems,
+        THREAD_HISTORY_TURN_SNAPSHOT_ROW_LIMIT,
+      );
+      // With the newest user turn 1,000 rows back, the window pages from inside it.
       const setNewestTurnType = (type: "command_execution" | "user_message") => sql`
         UPDATE orchestration_v2_projection_turn_items
         SET type = ${type}, payload_json = json_set(payload_json, '$.type', ${type})
         WHERE thread_id = ${threadId} AND ordinal = 1000
       `;
       yield* setNewestTurnType("command_execution");
-      assert.lengthOf((yield* humanWindow()).projection.turnItems, 1_000);
-      assert.lengthOf(
-        (yield* projectionStore.getThreadSnapshotWindow(threadId, { rowLimit: 77 })).projection
-          .turnItems,
-        77,
-      );
+      assert.lengthOf((yield* humanWindow()).projection.turnItems, 77);
       yield* setNewestTurnType("user_message");
 
-      // A human turn remains complete even when its text exceeds the transport budget.
+      // Fewer than 75 rows still need a byte pass after materializing wire payloads.
       yield* sql`
         UPDATE orchestration_v2_projection_turn_items
         SET type = 'assistant_message', payload_json = json_set(payload_json,
@@ -1749,8 +1746,9 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         position: 70,
       });
       const bytePage = yield* projectionStore.getThreadHistoryPage(threadId, byteCursor);
-      assert.lengthOf(bytePage.items, 70);
-      assert.isAbove(
+      assert.isAbove(bytePage.items.length, 0);
+      assert.isBelow(bytePage.items.length, 70);
+      assert.isAtMost(
         Buffer.byteLength(JSON.stringify(bytePage.items), "utf8"),
         THREAD_HISTORY_PAGE_POLICY.maxEncodedBytes,
       );
@@ -1803,7 +1801,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         WHERE thread_id = ${threadId} AND ordinal BETWEEN 600 AND 624
       `;
 
-      // A complete turn keeps an interrupt result and its request on the same page.
+      // A turn split by the row budget keeps an interrupt result's request on the same page.
       yield* sql`
         UPDATE orchestration_v2_projection_turn_items
         SET run_id = 'run:bounded-sql-history:500',
@@ -1825,7 +1823,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       const interruptIds = interruptPage.items.map((row) => String(row.sourceItemId));
       assert.include(interruptIds, "turn-item:bounded-sql-history:580");
       assert.include(interruptIds, "turn-item:bounded-sql-history:500");
-      assert.include(interruptIds, "turn-item:bounded-sql-history:501");
+      assert.notInclude(interruptIds, "turn-item:bounded-sql-history:501");
       yield* sql`
         UPDATE orchestration_v2_projection_turn_items
         SET run_id = 'run:bounded-sql-history:' || ordinal, type = 'command_execution',
@@ -1908,7 +1906,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         cursor = page.nextCursor;
       }
 
-      assert.equal(pageCount, 1);
+      assert.isAtLeast(pageCount, 3);
       assert.lengthOf(loadedIds, 1_000);
       assert.strictEqual(new Set(loadedIds).size, 1_000);
       assert.deepEqual(

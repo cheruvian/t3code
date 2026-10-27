@@ -2,6 +2,7 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -82,7 +83,7 @@ it.effect(
             nativeThreadId,
             cwd: logicalCwd,
             environment: { ...process.env, CLAUDE_CONFIG_DIR: homePath },
-            entryPath: NodePath.resolve("apps/server/src/bin.ts"),
+            entryPath: fileURLToPath(new URL("../../bin.ts", import.meta.url)),
           };
 
           return { input, transcriptPath, nativeThreadId, userMessageId };

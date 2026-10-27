@@ -14,6 +14,8 @@ import * as TestClock from "effect/testing/TestClock";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 
+import * as CodexRpc from "./rpc.ts";
+import * as CodexSchema from "./schema.ts";
 import * as CodexError from "./errors.ts";
 import * as CodexProtocol from "./protocol.ts";
 import { makeInMemoryStdio } from "./_internal/stdio.ts";
@@ -25,6 +27,18 @@ const encodeJsonl = (value: unknown) => encoder.encode(`${encodeUnknownJsonStrin
 
 const decodeJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
 
+const decodeAccountTokenUsageResponse = Schema.decodeUnknownEffect(
+  CodexRpc.CLIENT_REQUEST_RESPONSES["account/usage/read"],
+);
+const decodeAccountRateLimitsResponse = Schema.decodeUnknownEffect(
+  CodexRpc.CLIENT_REQUEST_RESPONSES["account/rateLimits/read"],
+);
+const decodeConsumeRateLimitResetCreditParams = Schema.decodeUnknownEffect(
+  CodexRpc.CLIENT_REQUEST_PARAMS["account/rateLimitResetCredit/consume"],
+);
+const decodeConsumeRateLimitResetCreditResponse = Schema.decodeUnknownEffect(
+  CodexRpc.CLIENT_REQUEST_RESPONSES["account/rateLimitResetCredit/consume"],
+);
 const decodeThreadResumeResponse = Schema.decodeUnknownEffect(
   CodexRpc.CLIENT_REQUEST_RESPONSES["thread/resume"],
 );

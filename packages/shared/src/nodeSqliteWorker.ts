@@ -241,27 +241,26 @@ export const makeConnection = Effect.fnUntraced(function* (options: SqliteClient
         })
         .pipe(Effect.ensuring(Effect.promise(() => connection.worker.terminate())), Effect.orDie),
   );
-  const run = (
+  const run = Effect.fn("NodeSqliteWorker.run")(function* (
     sql: string,
     params: ReadonlyArray<unknown>,
     prepared: boolean,
     values = false,
     raw = false,
-  ) =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      return yield* Effect.withFiber((fiber) =>
-        connection.request({
-          sql,
-          params,
-          prepared,
-          values,
-          raw,
-          now,
-          safeIntegers: Boolean(Context.get(fiber.context, Client.SafeIntegers)),
-        }),
-      );
-    });
+  ) {
+    const now = yield* Clock.currentTimeMillis;
+    return yield* Effect.withFiber((fiber) =>
+      connection.request({
+        sql,
+        params,
+        prepared,
+        values,
+        raw,
+        now,
+        safeIntegers: Boolean(Context.get(fiber.context, Client.SafeIntegers)),
+      }),
+    );
+  });
   return {
     execute: (sql, params, transform) =>
       transform

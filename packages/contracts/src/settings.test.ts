@@ -32,7 +32,7 @@ describe("ServerSettings response streaming", () => {
     expect(decodeServerSettings({}).responseStreamingMode).toBe("paragraph");
   });
 
-  it.each(["turn", "paragraph", "token"])(
+  it.each(["turn", "paragraph"])(
     "round-trips %s as an environment setting and project override",
     (responseStreamingMode) => {
       const input = {
@@ -711,8 +711,8 @@ describe("ClientSettings send shortcut", () => {
 });
 
 describe("ClientSettings follow-up behavior", () => {
-  it("defaults to queue and accepts either behavior", () => {
-    expect(decodeClientSettings({}).followUpBehavior).toBe("queue");
+  it("defaults to steer and accepts either behavior", () => {
+    expect(decodeClientSettings({}).followUpBehavior).toBe("steer");
     for (const followUpBehavior of ["queue", "steer"]) {
       expect(decodeClientSettings({ followUpBehavior }).followUpBehavior).toBe(followUpBehavior);
       expect(decodeClientSettingsPatch({ followUpBehavior }).followUpBehavior).toBe(

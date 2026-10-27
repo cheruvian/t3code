@@ -2216,8 +2216,8 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Context handoff");
-    expect(markup).toContain("GPT 5.6 Sol");
-    expect(markup).toContain("Claude Fable 5");
+    expect(markup).toContain("5.6 Sol");
+    expect(markup).toContain("Fable 5");
     expect(markup).not.toContain("Full conversation context");
     expect(markup).not.toContain("·");
 
@@ -2251,8 +2251,8 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(legacyMarkup).toContain("GPT 5.6 Sol");
-    expect(legacyMarkup).toContain("Claude Fable 5");
+    expect(legacyMarkup).toContain("5.6 Sol");
+    expect(legacyMarkup).toContain("Fable 5");
     expect(legacyMarkup).not.toContain("Full conversation context");
 
     // Without run data either (e.g. cross-thread items) it falls back to

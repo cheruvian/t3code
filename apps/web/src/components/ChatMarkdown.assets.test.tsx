@@ -8,8 +8,15 @@ const mint = vi.hoisted(() => vi.fn());
 const choose = vi.hoisted(() => vi.fn());
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("./chat/PierreEntryIcon", () => ({ PierreEntryIcon: () => null }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
-vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
+vi.mock("@effect/atom-react", async () => {
+  const { AtomRegistry } = await import("effect/reactivity");
+  const registry = AtomRegistry.make();
+  return { useAtomValue: (atom: Parameters<typeof registry.get>[0]) => registry.get(atom) };
+});
+vi.mock("../hooks/useTheme", () => ({
+  useTheme: () => ({ resolvedTheme: "dark" }),
+  useRenderedAppearance: () => "dark",
+}));
 vi.mock("../hooks/useFileMetadata", () => ({ useFileMetadata: () => undefined }));
 vi.mock("../hooks/useSettings", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../hooks/useSettings")>();
@@ -53,6 +60,13 @@ vi.mock("../state/session", async (importOriginal) => ({
   useEnvironmentScope: () => false,
   usePreparedConnection: () => ({ _tag: "Some", value: { httpBaseUrl: "https://host.test" } }),
 }));
+vi.mock("../state/server", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    environmentServerConfigsAtom: Atom.make(new Map()),
+    serverEnvironment: { configValueAtom: () => Atom.make(null) },
+  };
+});
 vi.mock("../state/entities", () => ({
   readEnvironmentSupportsServerBrowser: () => false,
   readThreadShell: () => null,

@@ -456,19 +456,20 @@ export const make = Effect.gen(function* () {
     Effect.sync(() => {
       const command = decodeCommand(line);
       if (Option.isNone(command)) return;
-      if (command.value.type === "turn") {
-        if (command.value.active) agentTurns.add(command.value.threadId);
-        else endAgentTurn(command.value.threadId);
+      const value = command.value;
+      if (value.type === "turn") {
+        if (value.active) agentTurns.add(value.threadId);
+        else endAgentTurn(value.threadId);
         return;
       }
-      const tab = tabs.get(keyOf(command.value));
+      const tab = tabs.get(keyOf(value));
       if (!tab) return;
       if (value.type === "pointer") {
         const { threadId, tabId, phase, x, y } = value;
         runFork(PubSub.publish(pointers, { key: { threadId, tabId }, phase, x, y }));
         return;
       }
-      if (command.value.type === "release") {
+      if (value.type === "release") {
         dropRelay(tab);
         return;
       }

@@ -2,6 +2,7 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import { fileURLToPath } from "node:url";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
 import { afterEach, expect, it } from "vite-plus/test";
@@ -442,7 +443,7 @@ async function fixture(options?: {
                     nativeThreadId: input.providerThread.nativeThreadRef!.nativeId!,
                     cwd: input.thread.worktreePath!,
                     environment: { ...process.env, CLAUDE_CONFIG_DIR: home },
-                    entryPath: NodePath.resolve("apps/server/src/bin.ts"),
+                    entryPath: fileURLToPath(new URL("../bin.ts", import.meta.url)),
                   }),
                 ),
                 Effect.map(() => ({

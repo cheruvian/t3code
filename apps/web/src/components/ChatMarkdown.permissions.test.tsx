@@ -27,8 +27,15 @@ const state = vi.hoisted(() => ({
   linkedPullRequest: null as ThreadLinkedPullRequest | null,
 }));
 
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => serverConfig }));
-vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
+vi.mock("@effect/atom-react", async () => {
+  const { AtomRegistry } = await import("effect/reactivity");
+  const registry = AtomRegistry.make();
+  return { useAtomValue: (atom: Parameters<typeof registry.get>[0]) => registry.get(atom) };
+});
+vi.mock("../hooks/useTheme", () => ({
+  useTheme: () => ({ resolvedTheme: "dark" }),
+  useRenderedAppearance: () => "dark",
+}));
 vi.mock("../hooks/useFileMetadata", () => ({ useFileMetadata: () => undefined }));
 vi.mock("../hooks/useSettings", () => ({
   getClientSettings: () => DEFAULT_CLIENT_SETTINGS,
@@ -80,9 +87,15 @@ vi.mock("../state/session", async () => {
     usePreparedConnection: () => ({ _tag: "None" }),
   };
 });
-vi.mock("../state/server", () => ({
-  serverEnvironment: { configValueAtom: () => "config" },
-}));
+vi.mock("../state/server", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    environmentServerConfigsAtom: Atom.make(
+      () => new Map([[threadRef.environmentId, serverConfig]]),
+    ),
+    serverEnvironment: { configValueAtom: () => Atom.make(() => serverConfig) },
+  };
+});
 vi.mock("../state/threads", () => ({
   threadEnvironment: { updateMetadata: "updateMetadata" },
 }));
@@ -90,7 +103,23 @@ vi.mock("../state/entities", () => ({
   readEnvironmentSupportsServerBrowser: () => false,
   useServerConfigs: () => new Map([[threadRef.environmentId, serverConfig]]),
   readThreadShell: () => ({ linkedPullRequest: state.linkedPullRequest }),
-  useProjects: () => [{ id: linkedPullRequest.projectId, environmentId: threadRef.environmentId }],
+  useProjects: () => [
+    {
+      id: linkedPullRequest.projectId,
+      environmentId: threadRef.environmentId,
+      repositoryIdentity: {
+        canonicalKey: "github.com/example/repo",
+        provider: "github",
+        owner: "example",
+        name: "repo",
+        locator: {
+          source: "git-remote",
+          remoteName: "origin",
+          remoteUrl: "https://github.com/example/repo.git",
+        },
+      },
+    },
+  ],
 }));
 vi.mock("../rightPanelStore", () => ({
   useRightPanelStore: { getState: () => ({ openFile: state.openFile }) },

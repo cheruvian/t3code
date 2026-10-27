@@ -1151,6 +1151,7 @@ it.effect("creates a worktree from a local base absent from origin", () => {
   const harness = makeHarness({
     hasCommit: () => Effect.succeed(true),
     git: {
+      resolveWorktreeBaseRemote: () => Effect.succeed(null),
       remoteBranchExists: () => Effect.succeed(false),
       resolveRemoteTrackingCommit,
     },
