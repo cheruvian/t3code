@@ -5,14 +5,33 @@ import * as Exit from "effect/Exit";
 import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import { migrationManifest, runMigrations } from "./Migrations.ts";
+import { migrationEntries, migrationManifest, runMigrations } from "./Migrations.ts";
 import PullRequestFilesViewed from "./Migrations/058_PullRequestFilesViewed.ts";
 import RemoveRedundantProjectionIndexes from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 import OrchestrationV2 from "./Migrations/055_OrchestrationV2.ts";
 
+// Published upstream migration IDs are independent of the fork ledger.
+const upstreamPrefix = [45, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57];
+const seedPublishedPrefix = Migrator.make({})({
+  loader: Migrator.fromRecord(
+    Object.fromEntries([
+      ...migrationEntries
+        .filter(([id]) => id <= 40)
+        .map(([id, name, migration]) => [`${id}_${name}`, migration]),
+      ...upstreamPrefix.map((forkId, index) => {
+        const [, name, migration] = migrationEntries.find(([id]) => id === forkId)!;
+        return [`${index + 41}_${name}`, migration];
+      }),
+    ]),
+  ),
+});
+const expectedPreviewUpgrade = migrationEntries
+  .filter(([id]) => id > 40 && !upstreamPrefix.includes(id) && id !== 61)
+  .map(([id, name]) => [id, name] as const);
+
 const seedPreview = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  yield* runMigrations({ toMigrationInclusive: 52 });
+  yield* seedPublishedPrefix;
   yield* Migrator.make({})({
     loader: Migrator.fromRecord({ "53_OrchestrationV2": OrchestrationV2 }),
   });
@@ -32,26 +51,12 @@ describe("V2 preview upgrade", () => {
       const sql = yield* SqlClient.SqlClient;
       yield* seedPreview;
       const imports = yield* sql`SELECT * FROM orchestration_v2_legacy_imports`;
-      assert.deepStrictEqual(yield* runMigrations(), [
-        [53, "PullRequestFilesViewed"],
-        [54, "ProjectionThreadsAutoSettleDisabledAt"],
-        [56, "RemoveRedundantProjectionIndexes"],
-        [57, "ScheduledTaskWebhooks"],
-        [58, "WebhookRelayDeliveries"],
-        [59, "McpAppModelContext"],
-        [60, "ThreadSnapshotWindowIndexes"],
-        [61, "PullRequestReviewGuides"],
-        [62, "ThreadFailureLookupIndex"],
-        [63, "DropUnusedV1Projections"],
-        [64, "CanonicalizeThreadPullRequestLinks"],
-        [65, "CodexUsageNativeTurnIndex"],
-        [66, "RepairClientSettlementTimestamps"],
-        [67, "WebhookDedupe"],
-        [68, "ShellStopRequestIndex"],
-        [69, "ThreadMessageSearch"],
-      ]);
+      assert.deepStrictEqual(yield* runMigrations(), expectedPreviewUpgrade);
       assert.deepStrictEqual(yield* runMigrations(), []);
-      assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
+      assert.deepStrictEqual(
+        yield* sql`SELECT * FROM orchestration_v2_legacy_imports`,
+        imports.map((row) => ({ ...row, activity_imported_at: null })),
+      );
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
         SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id
       `;
@@ -60,7 +65,7 @@ describe("V2 preview upgrade", () => {
         migrationManifest,
       );
       assert.deepStrictEqual(
-        yield* sql`SELECT created_at FROM effect_sql_migrations WHERE migration_id = 55`,
+        yield* sql`SELECT created_at FROM effect_sql_migrations WHERE migration_id = 61`,
         [{ created_at: "2026-09-15 00:00:00" }],
       );
       yield* sql`
@@ -77,7 +82,7 @@ describe("V2 preview upgrade", () => {
     (withIndexes) =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        yield* runMigrations({ toMigrationInclusive: 52 });
+        yield* seedPublishedPrefix;
         yield* Migrator.make({})({
           loader: Migrator.fromRecord({
             "53_PullRequestFilesViewed": PullRequestFilesViewed,
@@ -124,24 +129,7 @@ describe("V2 preview upgrade", () => {
       );
       assert.strictEqual((yield* sql`SELECT * FROM orchestration_v2_legacy_imports`).length, 1);
       yield* sql`DROP TRIGGER fail_preview_upgrade`;
-      assert.deepStrictEqual(yield* runMigrations(), [
-        [53, "PullRequestFilesViewed"],
-        [54, "ProjectionThreadsAutoSettleDisabledAt"],
-        [56, "RemoveRedundantProjectionIndexes"],
-        [57, "ScheduledTaskWebhooks"],
-        [58, "WebhookRelayDeliveries"],
-        [59, "McpAppModelContext"],
-        [60, "ThreadSnapshotWindowIndexes"],
-        [61, "PullRequestReviewGuides"],
-        [62, "ThreadFailureLookupIndex"],
-        [63, "DropUnusedV1Projections"],
-        [64, "CanonicalizeThreadPullRequestLinks"],
-        [65, "CodexUsageNativeTurnIndex"],
-        [66, "RepairClientSettlementTimestamps"],
-        [67, "WebhookDedupe"],
-        [68, "ShellStopRequestIndex"],
-        [69, "ThreadMessageSearch"],
-      ]);
+      assert.deepStrictEqual(yield* runMigrations(), expectedPreviewUpgrade);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
