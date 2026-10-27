@@ -1,3 +1,4 @@
+// @effect-diagnostics globalFetchInEffect:off - Consumer bridge fixtures exercise real loopback HTTP without a browser or vault.
 import * as NodeEvents from "node:events";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -1917,6 +1918,105 @@ it.live("a desktop page that comes back reconnects without waiting for a viewer"
       expect(desktopConnections).toHaveLength(2);
     }),
   ).pipe(Effect.provide(layer)),
+);
+
+it.live.each([false, true])(
+  "script access uses the existing page and ends on human takeover (desktop=%s)",
+  (desktop) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        desktopRendersNext = desktop;
+        const { browser, broker, tabId } = yield* ready;
+        yield* broker.invoke({
+          scope,
+          tabId,
+          operation: "navigate",
+          input: { url: "https://example.com/login" },
+        });
+        const page = desktop ? desktopConnections[0]!.context.page : contexts[0]!.page;
+        const fill = vi.fn(async (_value: string) => {});
+        page.locator.mockReturnValue({ fill } as never);
+        const input = {
+          threadId: testThread.threadId,
+          tabId,
+          site: "example.com",
+          agentSessionId: `${scope.environmentId}\u0000${testThread.providerSessionId}`,
+        };
+        expect(
+          (yield* browser
+            .scriptBridge({ ...input, threadId: ThreadId.make("wrong-thread") })
+            .pipe(Effect.flip)).code,
+        ).toBe("browser_unavailable");
+        expect(
+          (yield* browser.scriptBridge({ ...input, site: "other.example" }).pipe(Effect.flip)).code,
+        ).toBe("browser_unavailable");
+        expect(
+          (yield* browser
+            .scriptBridge({ ...input, agentSessionId: "other-agent" })
+            .pipe(Effect.flip)).code,
+        ).toBe("browser_unavailable");
+        let endpoint = "";
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const bridge = yield* browser.scriptBridge(input);
+            endpoint = bridge.endpoint;
+            const response = yield* Effect.promise(() =>
+              fetch(endpoint, {
+                method: "POST",
+                body: JSON.stringify({
+                  operation: "fill",
+                  selector: "#password",
+                  value: "fake-password",
+                }),
+              }),
+            );
+            expect(response.status).toBe(200);
+            expect(fill).toHaveBeenCalledExactlyOnceWith("fake-password", { timeout: 10_000 });
+            expect(contexts).toHaveLength(desktop ? 0 : 1);
+            expect(desktopConnections).toHaveLength(desktop ? 1 : 0);
+            page.emit("console", { type: () => "log", text: () => "fake-password" });
+            const snapshotError = yield* broker
+              .invoke<PreviewAutomationSnapshot>({ scope, tabId, operation: "snapshot", input: {} })
+              .pipe(Effect.flip);
+            expect(JSON.stringify(snapshotError)).toContain("approved script");
+            const reopenError = yield* broker
+              .invoke<PreviewAutomationStatus>({
+                scope,
+                tabId,
+                operation: "open",
+                input: { url: "https://example.com/other" },
+              })
+              .pipe(Effect.flip);
+            expect(JSON.stringify(reopenError)).toContain("approved script");
+            const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+            yield* viewer.input({ type: "takeControl" });
+            const interrupted = yield* Effect.promise(() =>
+              fetch(endpoint, {
+                method: "POST",
+                body: JSON.stringify({
+                  operation: "fill",
+                  selector: "#password",
+                  value: "another-fake-password",
+                }),
+              }),
+            );
+            expect(interrupted.status).toBe(400);
+            expect(fill).toHaveBeenCalledTimes(1);
+            yield* viewer.input({ type: "releaseControl" });
+          }),
+        );
+        yield* Effect.promise(async () => {
+          await expect(fetch(endpoint, { method: "POST" })).rejects.toThrow();
+        });
+        const snapshot = yield* broker.invoke<PreviewAutomationSnapshot>({
+          scope,
+          tabId,
+          operation: "snapshot",
+          input: {},
+        });
+        expect(JSON.stringify(snapshot.consoleEntries)).not.toContain("fake-password");
+      }),
+    ).pipe(Effect.provide(layer)),
 );
 
 it.live("a missing desktop attachment cannot silently create a separate headless session", () =>

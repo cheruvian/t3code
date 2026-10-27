@@ -86,7 +86,7 @@ test("CLI interruption sends request cancellation without echoing transport erro
 });
 
 test("CLI preserves safe admission diagnostics and terminal failure codes without foreign output", async () => {
-  for (const code of ["consumer_unavailable", "vault_locked", "unknown"]) {
+  for (const code of ["consumer_unavailable", "browser_unavailable", "vault_locked", "unknown"]) {
     await assert.rejects(
       executeInT3(input, {
         endpoint: "https://fake.invalid/mcp",

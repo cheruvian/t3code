@@ -8,6 +8,7 @@ import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import { loadCaller, unavailable } from "../mcp/threadAccess.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as ServerBrowser from "../preview/ServerBrowser.ts";
 import { T3CredentialBroker } from "@t3tools/credential-broker";
 import {
   CredentialBrokerError,
@@ -143,6 +144,7 @@ export const bindToolCall = (
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const path = yield* Path.Path;
+  const browser = yield* ServerBrowser.ServerBrowser;
   const registry = yield* McpSessionRegistry.McpSessionRegistry;
   const argv = yield* HostProcessArguments;
   const executable = yield* HostProcessIsExecutable;
@@ -171,17 +173,42 @@ const make = Effect.gen(function* () {
     );
   }
   const execute = (caller: CredentialCaller, input: CredentialExecInput) =>
-    Effect.tryPromise({
-      try: (signal) => broker.execute(caller, input, signal),
-      catch: safeBrokerFailure,
-    }).pipe(
-      Effect.ensuring(
-        Effect.promise(() => broker.cancelCall(caller.toolCallId)).pipe(Effect.ignore),
-      ),
+    Effect.scoped(
+      Effect.gen(function* () {
+        const bridge =
+          input.browserTabId === undefined
+            ? undefined
+            : yield* browser.scriptBridge({
+                threadId: caller.threadId,
+                tabId: input.browserTabId,
+                site: input.site,
+                agentSessionId: `${caller.environmentId}\u0000${caller.providerSessionId}`,
+              });
+        return yield* Effect.tryPromise({
+          try: (signal) =>
+            broker.execute(
+              caller,
+              input,
+              signal,
+              bridge ? { T3_BROWSER_URL: bridge.endpoint } : undefined,
+            ),
+          catch: safeBrokerFailure,
+        }).pipe(
+          Effect.ensuring(
+            Effect.promise(() => broker.cancelCall(caller.toolCallId)).pipe(Effect.ignore),
+          ),
+        );
+      }),
     );
   return CredentialBroker.of({
     execute,
-    executeFromTool: (input) => bindToolCall(input, execute),
+    executeFromTool: (input) =>
+      (input.browserTabId === undefined
+        ? Effect.void
+        : McpInvocationContext.requireThreadMcpCapability("preview").pipe(
+            Effect.mapError(unavailable),
+          )
+      ).pipe(Effect.andThen(bindToolCall(input, execute))),
     action: (sessionId, input) =>
       Effect.tryPromise({
         try: () => broker.action(sessionId, input),

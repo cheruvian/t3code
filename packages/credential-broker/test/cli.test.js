@@ -37,6 +37,8 @@ test("T3 CLI forwards command names for broker-side lookup instead of resolving 
       cli,
       "exec",
       "--t3",
+      "--browser-tab",
+      "tab-existing",
       "--site",
       "example.com",
       "--reason",
@@ -54,6 +56,7 @@ test("T3 CLI forwards command names for broker-side lookup instead of resolving 
     },
   );
   assert.deepEqual(requested.argv, [program, "--consumer-option"]);
+  assert.equal(requested.browserTabId, "tab-existing");
   assert.equal(JSON.parse(stdout).state, "completed");
 });
 

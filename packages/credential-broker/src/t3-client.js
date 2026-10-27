@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { BrokerError } from "./common.js";
 
 const failureMessages = {
+  browser_unavailable:
+    "Credential Broker browser_unavailable: choose an available tab for this site in the calling thread and release human control before running the script.",
   consumer_unavailable:
     "Credential Broker consumer_unavailable: check the command on this environment’s PATH (or the supplied absolute executable) and its working directory. No vault search or approval was started.",
   vault_locked: "Credential Broker vault_locked: unlock the vault privately in T3.",

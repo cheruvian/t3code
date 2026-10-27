@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Playwright callbacks run outside the Effect runtime.
 // Screencasts ignore emulated device scale; real 2x keeps captures sharp.
 import {
+  CredentialBrokerError,
   BUILT_IN_BROWSER_PROFILES,
   DEFAULT_BROWSER_PROFILE_ID,
   FILL_PREVIEW_VIEWPORT,
@@ -84,6 +85,7 @@ import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
+import { createBrowserScriptBridge } from "./BrowserScriptBridge.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
@@ -215,6 +217,12 @@ export interface ServerBrowserViewer {
 export class ServerBrowser extends Context.Service<
   ServerBrowser,
   {
+    readonly scriptBridge: (input: {
+      readonly threadId: ThreadId;
+      readonly tabId: string;
+      readonly site: string;
+      readonly agentSessionId: string;
+    }) => Effect.Effect<{ readonly endpoint: string }, CredentialBrokerError, Scope.Scope>;
     readonly attachViewer: (input: {
       readonly threadId: string;
       readonly tabId: string;
@@ -309,6 +317,7 @@ interface ServerTab {
   readonly networkEntries: Array<PreviewAutomationNetworkEntry>;
   readonly actionTimeline: Array<PreviewAutomationActionEvent>;
   readonly control: SessionControl;
+  scriptActive: boolean;
   /** The tab's own storage context, closed with it. Popups share their opener's. */
   readonly isolatedContext: boolean;
   /**
@@ -734,6 +743,7 @@ const make = Effect.gen(function* () {
 
   const settledThreads = new Set<ThreadId>();
   const canRelease = (tab: ServerTab) =>
+    !tab.scriptActive &&
     tab.desktop === null &&
     tab.viewers.size === 0 &&
     tab.control.idle &&
@@ -859,6 +869,7 @@ const make = Effect.gen(function* () {
       networkEntries: [],
       actionTimeline: [],
       control,
+      scriptActive: false,
       isolatedContext,
       desktop: desktop === null ? null : { close: desktop.close },
       profileId: snapshot.profileId,
@@ -906,14 +917,15 @@ const make = Effect.gen(function* () {
     if (adopted) for (const frame of page.frames()) void recordFrameCopies(tab, frame);
     page.on("requestfailed", (request) => {
       const errorText = request.failure()?.errorText ?? "";
-      pushBounded(tab.networkEntries, {
-        url: request.url(),
-        method: request.method(),
-        status: null,
-        failed: true,
-        errorText,
-        timestamp: new Date().toISOString(),
-      });
+      if (!tab.scriptActive)
+        pushBounded(tab.networkEntries, {
+          url: request.url(),
+          method: request.method(),
+          status: null,
+          failed: true,
+          errorText,
+          timestamp: new Date().toISOString(),
+        });
       if (!isMainNavigation(request)) return;
       // A navigation a newer one replaced leaves the status to the newer one. A
       // popup's first request can predate the listener, so it is untracked and
@@ -947,20 +959,22 @@ const make = Effect.gen(function* () {
       });
     });
     page.on("response", (response) => {
-      pushBounded(tab.networkEntries, {
-        url: response.url(),
-        method: response.request().method(),
-        status: response.status(),
-        failed: false,
-        timestamp: new Date().toISOString(),
-      });
+      if (!tab.scriptActive)
+        pushBounded(tab.networkEntries, {
+          url: response.url(),
+          method: response.request().method(),
+          status: response.status(),
+          failed: false,
+          timestamp: new Date().toISOString(),
+        });
     });
     page.on("console", (message) => {
-      pushBounded(tab.consoleEntries, {
-        level: message.type(),
-        text: message.text().slice(0, 2_000),
-        timestamp: new Date().toISOString(),
-      });
+      if (!tab.scriptActive)
+        pushBounded(tab.consoleEntries, {
+          level: message.type(),
+          text: message.text().slice(0, 2_000),
+          timestamp: new Date().toISOString(),
+        });
     });
     page.on("dialog", (dialog) => {
       tab.dialog = dialog;
@@ -1888,6 +1902,11 @@ const make = Effect.gen(function* () {
           found && (request.tabIdExplicit || found.control.agentId === request.agentSessionId)
             ? found
             : undefined;
+        if (existing?.scriptActive)
+          throw new ServerBrowserPage.ServerBrowserOperationError(
+            "PreviewAutomationExecutionError",
+            "An approved script is using this tab. Wait for credential_broker_exec to finish before inspecting or operating it.",
+          );
         const navigationTimeout = Math.min(request.timeoutMs, NAVIGATION_TIMEOUT_MS);
         const profileId = existing ? undefined : resolveOpenProfile(open.profileId);
         if (!existing) {
@@ -2033,6 +2052,11 @@ const make = Effect.gen(function* () {
   };
 
   const executeTabOperation = async (tab: ServerTab, request: PreviewAutomationRequest) => {
+    if (tab.scriptActive)
+      throw new ServerBrowserPage.ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        "An approved script is using this tab. Wait for credential_broker_exec to finish before inspecting or operating it.",
+      );
     const input = request.input;
     switch (request.operation) {
       case "navigate": {
@@ -2698,7 +2722,68 @@ const make = Effect.gen(function* () {
       catch: (cause) => new PreviewClearProfileError({ profileId, cause }),
     });
 
+  const scriptBridge = (input: {
+    readonly threadId: ThreadId;
+    readonly tabId: string;
+    readonly site: string;
+    readonly agentSessionId: string;
+  }) =>
+    Effect.acquireRelease(
+      Effect.tryPromise({
+        try: async () => {
+          const tab = tabs.get(tabKey(input.threadId, input.tabId));
+          const site = new URL(input.site.includes("://") ? input.site : `https://${input.site}`);
+          if (
+            !tab ||
+            tab.closing ||
+            tab.scriptActive ||
+            tab.recording ||
+            tab.recordingStart ||
+            tab.capturing ||
+            !tab.control.idle ||
+            !tab.control.agentCanActNow(input.agentSessionId)
+          )
+            throw new Error();
+          const target = new URL(tab.page.url());
+          if (!["http:", "https:"].includes(target.protocol) || target.hostname !== site.hostname)
+            throw new Error();
+          const generation = tab.control.generation;
+          tab.scriptActive = true;
+          ServerBrowserPage.invalidateRefs(tab.page);
+          try {
+            const bridge = await createBrowserScriptBridge({
+              page: tab.page,
+              run: (action) =>
+                tab.control.agent(input.agentSessionId, async () => {
+                  if (!tab.scriptActive || tab.closing || tab.control.generation !== generation)
+                    throw new Error();
+                  return action();
+                }),
+            });
+            return { ...bridge, tab };
+          } catch (error) {
+            tab.scriptActive = false;
+            throw error;
+          }
+        },
+        catch: () => new CredentialBrokerError({ code: "browser_unavailable" }),
+      }),
+      ({ close, tab }) =>
+        Effect.promise(async () => {
+          await close();
+          const reset = async () => {
+            tab.scriptActive = false;
+            tab.consoleEntries.length = 0;
+            tab.networkEntries.length = 0;
+            ServerBrowserPage.invalidateRefs(tab.page);
+          };
+          if (tab.closing || tab.page.isClosed()) await reset();
+          else await tab.control.system(reset);
+        }),
+    );
+
   return ServerBrowser.of({
+    scriptBridge,
     attachViewer,
     clearProfile,
     reportProfiles,

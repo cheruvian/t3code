@@ -8,6 +8,7 @@ const help = `Credential Broker — T3-approved temporary credential files
 
   credential-broker exec --site HOST --reason REASON
       [--field password|username|login] [--label LABEL] [--ttl 60] [--cwd DIR]
+      [--browser-tab TAB_ID]
       -- PROGRAM ARGS...
 
 Requires an attached T3 request-only provider session. Approval and vault unlock
@@ -22,6 +23,7 @@ async function main() {
     allowPositionals: true,
     options: {
       site: { type: "string" },
+      "browser-tab": { type: "string" },
       field: { type: "string", default: "password" },
       label: { type: "string" },
       reason: { type: "string" },
@@ -59,6 +61,7 @@ async function main() {
     const result = await executeInT3(
       {
         site: values.site,
+        ...(values["browser-tab"] ? { browserTabId: values["browser-tab"] } : {}),
         field: values.field,
         label: values.label ?? values.site,
         reason: values.reason,

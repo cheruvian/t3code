@@ -280,7 +280,7 @@ export class T3CredentialBroker {
     else throw new BrokerError("Unknown operator operation.");
     this.#publish();
   }
-  async execute(origin, input, signal) {
+  async execute(origin, input, signal, consumerEnvironment) {
     if (signal?.aborted)
       return Promise.reject(
         new BrokerError("Credential caller was cancelled.", 409, "caller_cancelled"),
@@ -360,6 +360,7 @@ export class T3CredentialBroker {
     if (this.#closing || !broker || this.#status !== "ready")
       throw new BrokerError("Broker unavailable.", 503, "broker_unavailable");
     const request = broker.request(parsed, origin, {
+      consumerEnvironment,
       allowSave: true,
       argv0: parsedArgv0,
     });

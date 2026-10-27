@@ -122,7 +122,7 @@ export class Broker {
       notices: this.notices(),
     };
   }
-  request(input, origin, { allowSave = false, argv0 } = {}) {
+  request(input, origin, { allowSave = false, argv0, consumerEnvironment } = {}) {
     if (this.#closing) throw new BrokerError("Broker is shutting down.", 503);
     const data = parseRequest(input);
     if ([...this.#requests.values()].filter((r) => !terminal.has(r.state)).length >= 100)
@@ -137,6 +137,8 @@ export class Broker {
       approval_deadline: this.approvalTimeout === null ? null : this.now() + this.approvalTimeout,
     };
     // Only the embedding host can supply origin; parseRequest rejects it on the CLI wire.
+    if (consumerEnvironment)
+      request.consumerEnvironment = Object.freeze({ ...consumerEnvironment });
     if (origin) request.origin = Object.freeze({ ...origin });
     let state = request.state;
     Object.defineProperty(request, "state", {
@@ -537,6 +539,8 @@ export class Broker {
       if (process.env[key] !== undefined) env[key] = process.env[key];
     }
     if (this.workerEntrypoint || process.versions.electron) env.ELECTRON_RUN_AS_NODE = "1";
+    if (request.consumerEnvironment?.T3_BROWSER_URL)
+      env.T3_BROWSER_URL = request.consumerEnvironment.T3_BROWSER_URL;
     const runner = fork(
       this.workerEntrypoint?.[0] ??
         (this.runnerProgram ? "-e" : fileURLToPath(new URL("./runner.js", import.meta.url))),

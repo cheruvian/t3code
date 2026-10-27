@@ -43,6 +43,30 @@ T3 hosts them through its hidden worker command so Electron and single-executabl
 runtimes preserve IPC and cleanup. Direct package use embeds those programs. After changing either program, run
 node scripts/embed-programs.mjs. The check command detects stale embedded source.
 
+## Existing browser tabs
+
+Pass `browserTabId` from `preview_status` to `credential_broker_exec` when the
+consumer needs the integrated page. The server binds access to that thread, site,
+agent session, and tab for the invocation's lifetime. The consumer receives
+`T3_BROWSER_URL` in its environment, never in the tool result or approval metadata.
+It sends POST requests with JSON commands to this endpoint:
+
+- `{operation: "fill", selector, value}`
+- `{operation: "click", selector}`
+- `{operation: "press", selector, key}`
+- `{operation: "waitFor", selector, state}` (state defaults to `visible`)
+- `{operation: "isVisible", selector}`
+- `{operation: "url"}`
+
+Responses contain `{result}`; failed actions return HTTP 400 with
+`{error: "browser_action_failed"}`. Raw browser errors are withheld because they
+can contain a filled value. Read secrets directly from `CB_CREDENTIAL_FILE` in the
+consumer; never interpolate them into a tool call. This bridge uses the existing
+page on desktop and server hosts. It creates no browser context or page.
+Other preview actions and diagnostic capture wait while the script owns access.
+Human takeover prevents subsequent script actions. Cancellation, denial, expiry,
+and completion close the endpoint along with the credential invocation.
+
 ## CLI compatibility
 
 Agents with an attached T3 request-only provider session can run:

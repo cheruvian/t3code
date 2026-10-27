@@ -1,3 +1,4 @@
+import { PreviewTabId } from "./preview.ts";
 import * as Schema from "effect/Schema";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { EnvironmentId, ThreadId, ProjectId } from "./baseSchemas.ts";
@@ -17,6 +18,10 @@ export const CredentialCaller = Schema.Struct({
 });
 export type CredentialCaller = typeof CredentialCaller.Type;
 export const CredentialExecInput = Schema.Struct({
+  browserTabId: Schema.optional(PreviewTabId).annotate({
+    description:
+      "Existing tab from preview_status for this script to operate. The consumer receives T3_BROWSER_URL; no new page is created. Omit for non-browser scripts.",
+  }),
   site: Schema.String,
   field: Schema.Literals(["login", "username", "password"]),
   label: Schema.String,
@@ -26,6 +31,28 @@ export const CredentialExecInput = Schema.Struct({
   cwd: Schema.optional(Schema.String),
 });
 export type CredentialExecInput = typeof CredentialExecInput.Type;
+
+export const CredentialBrowserCommand = Schema.Union([
+  Schema.Struct({
+    operation: Schema.Literal("fill"),
+    selector: Schema.String,
+    value: Schema.String,
+  }),
+  Schema.Struct({ operation: Schema.Literal("click"), selector: Schema.String }),
+  Schema.Struct({
+    operation: Schema.Literal("press"),
+    selector: Schema.String,
+    key: Schema.String,
+  }),
+  Schema.Struct({
+    operation: Schema.Literal("waitFor"),
+    selector: Schema.String,
+    state: Schema.optional(Schema.Literals(["visible", "hidden", "attached", "detached"])),
+  }),
+  Schema.Struct({ operation: Schema.Literal("isVisible"), selector: Schema.String }),
+  Schema.Struct({ operation: Schema.Literal("url") }),
+]);
+export type CredentialBrowserCommand = typeof CredentialBrowserCommand.Type;
 
 export const CredentialExecutionFailureCode = Schema.Literals([
   "no_matching_login",
@@ -136,6 +163,7 @@ export const CredentialBrokerFailureCode = Schema.Literals([
   "vault_locked",
   "vault_unlocking",
   "unsupported_platform",
+  "browser_unavailable",
   "invalid_request",
   "consumer_unavailable",
   "caller_cancelled",
@@ -153,6 +181,8 @@ export class CredentialBrokerError extends Schema.TaggedError<CredentialBrokerEr
         return "Credential Broker vault_unlocking: wait for the human's private vault unlock to finish.";
       case "unsupported_platform":
         return "Credential Broker unsupported_platform: this host's security adapters are unavailable.";
+      case "browser_unavailable":
+        return "Credential Broker browser_unavailable: choose an available tab for this site in the calling thread, release human control, and stop recording before running the script.";
       case "invalid_request":
         return "Credential Broker invalid_request: use a valid hostname, a command name or absolute executable path, an absolute working directory, and an integer lifetime of 5–300 seconds.";
       case "consumer_unavailable":

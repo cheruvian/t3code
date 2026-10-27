@@ -23,6 +23,12 @@ exit code; script output is discarded. The temporary file is deleted when the
 program finishes, expires, or is stopped. An existing private credential file can
 also be used directly by a script when you authorize it.
 
+For an operation in the integrated browser, ask the agent to use the existing
+tab with `credential_broker_exec`. The approved script receives both the credential
+file and access to that tab. It fills and submits the visible page without opening
+a private page or another browser. Release browser control before the script runs;
+taking control interrupts its next browser action.
+
 To add a login, choose **Enter and save a new login** in the request dialog.
 Enter the requested site's username and password, then choose
 **Save to Bitwarden & allow once**. This creates a new login for the site and

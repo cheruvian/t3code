@@ -92,6 +92,7 @@ it.effect.each([
       reportProfiles: () => Effect.void,
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
+      scriptBridge: () => Effect.die("Script bridge not exercised by stream tests"),
       attachViewer: (input) =>
         Effect.sync(() => {
           attachments.push(input);
@@ -168,6 +169,7 @@ it.effect.each([
       reportProfiles: () => Effect.void,
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
+      scriptBridge: () => Effect.die("Script bridge not exercised by stream tests"),
       attachViewer: () => {
         attachments++;
         return Effect.die("unauthorized viewer must not attach");
@@ -216,6 +218,7 @@ it.effect("serves a tab's download only to an authorized session", () =>
             : Option.none();
         }),
       answerFileChooser: () => Effect.succeed(false),
+      scriptBridge: () => Effect.die("Script bridge not exercised by stream tests"),
       attachViewer: () => Effect.die("unused"),
     });
     const serve = (scopes: ReadonlyArray<AuthEnvironmentScope>, url: string) =>
@@ -266,6 +269,7 @@ it.effect("passes uploaded files to the page's open picker and needs operate sco
           });
           return input.chooserId === "chooser-1";
         }),
+      scriptBridge: () => Effect.die("Script bridge not exercised by stream tests"),
       attachViewer: () => Effect.die("unused"),
     });
     const upload = (scopes: ReadonlyArray<AuthEnvironmentScope>, chooser: string) =>
@@ -329,6 +333,7 @@ it.effect.each([
       reportProfiles: () => Effect.void,
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
+      scriptBridge: () => Effect.die("Script bridge not exercised by stream tests"),
       attachViewer: () => Effect.fail(new ServerBrowser.ServerBrowserLaunchError({ cause: error })),
     });
     const services = yield* Layer.build(

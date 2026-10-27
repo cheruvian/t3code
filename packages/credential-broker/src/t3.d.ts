@@ -18,6 +18,7 @@ export class T3CredentialBroker {
     origin: CredentialCaller,
     input: CredentialExecInput,
     signal?: AbortSignal,
+    consumerEnvironment?: { readonly T3_BROWSER_URL: string },
   ): Promise<CredentialExecution>;
   cancelCall(toolCallId: string): Promise<void>;
   cancelSession(providerSessionId: string): Promise<void>;
