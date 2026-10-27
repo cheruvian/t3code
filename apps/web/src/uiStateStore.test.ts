@@ -145,7 +145,7 @@ describe("parsePersistedState", () => {
 
     expect(parsed).toEqual({
       fullWidthThreadMessages: false,
-      wrapTableCells: true,
+      wrapTableCells: null,
       projectExpandedById: {
         logical: false,
       },

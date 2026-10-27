@@ -16,6 +16,7 @@ import {
   resolveEnvironmentIdentificationPillLabel,
   useEnvironmentStageLabel,
 } from "../SidebarStageBackdrop";
+import { useUiStateStore } from "../../uiStateStore";
 import { useCustomThemes } from "../../hooks/useCustomThemes";
 import { useTheme } from "../../hooks/useTheme";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
@@ -66,6 +67,8 @@ export function AppearanceSettingsPanel() {
   const [isImportThemeOpen, setIsImportThemeOpen] = useState(false);
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
+  const tableWrap = useUiStateStore((state) => state.wrapTableCells);
+  const setTableWrap = useUiStateStore((state) => state.setWrapTableCells);
   const environmentStageLabel = useEnvironmentStageLabel();
   const showEnvironmentIdentification =
     resolveEnvironmentIdentificationPillLabel(environmentStageLabel) !== null;
@@ -111,6 +114,22 @@ export function AppearanceSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection id="appearance-interface" title="Interface">
+        <SettingsRow
+          {...searchableSetting("setting-table-cell-wrap")}
+          description="Wrap long text inside Markdown table cells."
+          resetAction={
+            tableWrap !== null ? (
+              <SettingResetButton label="table cell wrapping" onClick={() => setTableWrap(null)} />
+            ) : null
+          }
+          control={
+            <Switch
+              aria-label="Wrap table cell text"
+              checked={tableWrap ?? settings.wordWrap}
+              onCheckedChange={setTableWrap}
+            />
+          }
+        />
         <SettingsRow
           {...searchableSetting("setting-appearance-contrast")}
           description="Adjust the contrast of colors and borders across the interface."

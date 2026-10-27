@@ -2,7 +2,8 @@ import { Check, Copy, Maximize2, Minimize2 } from "lucide";
 import { useRef, useState, type ComponentProps } from "react";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
-import { getClientSettings } from "../../hooks/useSettings";
+import { useClientSettings } from "../../hooks/useSettings";
+import { useUiStateStore } from "../../uiStateStore";
 import { observeResize } from "../../lib/observeResize";
 import {
   serializeTableElementToCsv,
@@ -42,7 +43,15 @@ function tableHasClippedCells(container: HTMLElement, table: HTMLTableElement): 
 
 export function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [expanded, setExpanded] = useState(() => getClientSettings().wordWrap);
+  const wordWrap = useClientSettings((settings) => settings.wordWrap);
+  const tableWrap = useUiStateStore((state) => state.wrapTableCells);
+  const defaultExpanded = tableWrap ?? wordWrap;
+  const [wrapping, setWrapping] = useState({ defaultExpanded, expanded: defaultExpanded });
+  if (wrapping.defaultExpanded !== defaultExpanded) {
+    setWrapping({ defaultExpanded, expanded: defaultExpanded });
+  }
+  const expanded =
+    wrapping.defaultExpanded === defaultExpanded ? wrapping.expanded : defaultExpanded;
   const [hasClippedCells, setHasClippedCells] = useState(false);
   const { copyToClipboard, isCopied: copied } = useCopyToClipboard<"markdown" | "csv">({
     timeout: 1200,
@@ -102,7 +111,7 @@ export function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
                   variant={expanded ? "secondary" : "ghost-muted"}
                   size="icon-xs"
                   aria-pressed={expanded}
-                  onClick={() => setExpanded((value) => !value)}
+                  onClick={() => setWrapping({ defaultExpanded, expanded: !expanded })}
                   aria-label={expandLabel}
                 />
               }

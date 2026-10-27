@@ -214,6 +214,7 @@ import {
   sortProviderInstanceEntries,
 } from "../providerInstances";
 import {
+  getClientSettings,
   useClientSettings,
   useClientSettingsHydrated,
   useEnvironmentSettings,
@@ -2673,6 +2674,12 @@ export default function ChatView(props: ChatViewProps) {
       "thread.toggleMessageWidth": ({ event }) => {
         if (!event.repeat)
           setFullWidthThreadMessages(!useUiStateStore.getState().fullWidthThreadMessages);
+      },
+      "thread.toggleTableCellWrap": ({ event }) => {
+        if (!event.repeat) {
+          const state = useUiStateStore.getState();
+          state.setWrapTableCells(!(state.wrapTableCells ?? getClientSettings().wordWrap));
+        }
       },
       "chat.find": () => {
         if (!isServerThread || serverConfig?.threadFind !== true || activeThreadKey === null)

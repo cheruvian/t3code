@@ -1,3 +1,4 @@
+import { useUiStateStore } from "../../uiStateStore";
 import { AudioPreview } from "../files/AudioPreview";
 import { onTestFinished } from "vite-plus/test";
 import { stubGlobal } from "../../../test/render";
@@ -992,4 +993,20 @@ it("renders automatic compaction as one live divider that finishes with its reas
     .toBeVisible();
   expect(container.querySelectorAll('[role="separator"]')).toHaveLength(1);
   expect(container.textContent).not.toContain("Compacting before");
+});
+
+it("applies message width changes to already mounted timeline rows", async () => {
+  useUiStateStore.setState({ fullWidthThreadMessages: false });
+  await using screen = await renderTimeline([message("Width preference")]);
+  const row = screen.container.querySelector<HTMLElement>("[data-timeline-root]");
+  await expect.element(row).toBeVisible();
+  await act(() => useUiStateStore.setState({ fullWidthThreadMessages: true }));
+  await expect
+    .element(row?.closest<HTMLElement>("[data-thread-full-width]") ?? null)
+    .toHaveAttribute("data-thread-full-width", "true");
+  expect(screen.container.querySelector("[data-timeline-root]")).toBe(row);
+  await act(() => useUiStateStore.setState({ fullWidthThreadMessages: false }));
+  await expect
+    .element(row?.closest<HTMLElement>("[data-thread-full-width]") ?? null)
+    .toHaveAttribute("data-thread-full-width", "false");
 });

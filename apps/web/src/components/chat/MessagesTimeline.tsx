@@ -1,3 +1,4 @@
+import { useUiStateStore } from "../../uiStateStore";
 import { getMessageSpeechPlayer } from "~/lib/messageSpeech";
 import { useEffect, useMemo } from "react";
 import { useClientSettings, useClientSettingsHydrated } from "~/hooks/useSettings";
@@ -690,6 +691,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     rows.flatMap((row) => (row.kind === "assistant-meta" ? [row.message.id] : [])),
   );
   useEffect(() => () => getMessageSpeechPlayer()?.stop(), [listIdentityKey]);
+  const fullWidthThreadMessages = useUiStateStore((state) => state.fullWidthThreadMessages);
   const htmlPreviewDefaultMode = useClientSettings((settings) => settings.htmlPreviewDefaultMode);
   const clientSettingsHydrated = useClientSettingsHydrated();
   const latestHtmlRender = useMemo(
@@ -1326,6 +1328,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
             ref={attachTimelineViewportElement}
             className="relative h-full min-h-0"
             data-assistant-citation-viewport="true"
+            data-thread-full-width={fullWidthThreadMessages ? "true" : "false"}
           >
             {onCiteAssistantText && citationThreadRef ? (
               <AssistantSelectionToolbar
