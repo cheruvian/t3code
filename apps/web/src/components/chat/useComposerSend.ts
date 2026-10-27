@@ -1,3 +1,4 @@
+import { rememberUncertainSend } from "./useUncertainSendRecovery";
 import { offlineMessages } from "../../state/offlineMessages";
 import type { OfflineMessage } from "../../lib/offlineMessageQueue";
 import { CommandId } from "@t3tools/contracts";
@@ -32,7 +33,10 @@ import {
   RuntimeMode,
 } from "@t3tools/contracts";
 import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
-import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
+import {
+  isTransportConnectionErrorMessage,
+  wasBootstrapThreadDeleted,
+} from "@t3tools/client-runtime/errors";
 import {
   declinePendingApprovals,
   sendApprovalFeedback,
@@ -1358,6 +1362,7 @@ export function useComposerSend(input: ComposerSendInput) {
     }
 
     let backgroundDraftOpened = false;
+    let turnStartAttempted = false;
     let turnStartSucceeded = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
       const bootstrap =
@@ -1394,6 +1399,7 @@ export function useComposerSend(input: ComposerSendInput) {
           ? scopeThreadRef(environmentId, threadIdForSend)
           : null;
       if (backgroundThreadRef) beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
+      turnStartAttempted = true;
       const startPromise = startThreadTurn({
         environmentId,
         input: {
@@ -1516,6 +1522,20 @@ export function useComposerSend(input: ComposerSendInput) {
         // The restored draft clones its images, so the sent copies are no longer used.
         optimisticBlobPreviews.release(optimisticMessage);
         const retryComposerImages = restoreComposerDraft(composerDraftTarget, sendSnapshot);
+        const restoredDraft = useComposerDraftStore
+          .getState()
+          .getComposerDraft(composerDraftTarget);
+        if (
+          turnStartAttempted &&
+          restoredDraft &&
+          isTransportConnectionErrorMessage(String(squashAtomCommandFailure(failure)))
+        ) {
+          rememberUncertainSend(routeThreadKey, {
+            threadId: threadIdForSend,
+            messageId: messageIdForSend,
+            restoredDraft,
+          });
+        }
         if (currentRouteThreadKeyRef.current === routeThreadKey) {
           promptRef.current = messageTextForSend;
           composerImagesRef.current = retryComposerImages;

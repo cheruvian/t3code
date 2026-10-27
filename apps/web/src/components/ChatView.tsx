@@ -32,6 +32,7 @@ import { useTimelineRewind } from "./chat/useTimelineRewind";
 import { useThreadLifecycle } from "./chat/useThreadLifecycle";
 import { useRightPanelActions } from "./chat/useRightPanelActions";
 import { type TerminalLaunchContext, useChatTerminalActions } from "./chat/useChatTerminalActions";
+import { useUncertainSendRecovery } from "./chat/useUncertainSendRecovery";
 import { useComposerSend } from "./chat/useComposerSend";
 import { useComposerResume } from "./chat/useComposerResume";
 import { useImplementPlanInNewThread } from "./chat/useProposedPlanSend";
@@ -2823,6 +2824,18 @@ export default function ChatView(props: ChatViewProps) {
     activeEnvironmentUnavailable,
     defaultRuntimeMode,
   });
+  useUncertainSendRecovery({
+    routeKey: routeThreadKey,
+    threadId: isServerThread ? activeThreadId : null,
+    messages: serverProjection?.messages ?? [],
+    target: composerDraftTarget,
+    onClear: (threadId) => {
+      promptRef.current = "";
+      composerRef.current?.resetCursorState();
+      setThreadError(threadId, null);
+    },
+  });
+
   const { onSend } = useComposerSend({
     resourceActionRunning,
     environmentId,
