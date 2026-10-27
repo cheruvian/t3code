@@ -27,8 +27,8 @@ it("retains descriptive emphasis and a filename while copying each authored occu
   const markdown =
     "[validates **the input**](/repo/a.ts:12) and [opens `the output`](/repo/a.ts:12)";
   const result = enrichedFileLinks(markdown);
-  expect(result.markdown).toContain("[validates **the input** a.ts:12]");
-  expect(result.markdown).toContain("[opens `the output` a.ts:12]");
+  expect(result.markdown).toContain("[validates **the input** a.ts · L12]");
+  expect(result.markdown).toContain("[opens `the output` a.ts · L12]");
   expect([...result.links.values()]).toEqual([
     { href: "/repo/a.ts:12", source: "[validates **the input**](/repo/a.ts:12)" },
     { href: "/repo/a.ts:12", source: "[opens `the output`](/repo/a.ts:12)" },

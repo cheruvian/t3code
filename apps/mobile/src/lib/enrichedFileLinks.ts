@@ -30,7 +30,7 @@ function textContent(node: {
 export function enrichedFileLinks(markdown: string, resolutions?: MarkdownFileResolutions) {
   if (!markdown.includes("`") && !markdown.includes("[") && !markdown.includes("@"))
     return { markdown, links: new Map<string, EnrichedFileLink>() };
-  const document = parseMarkdownDocument(markdown);
+  const document = parseMarkdownDocument(markdown, true);
   const definitions = new Map(
     document.children.flatMap((node) =>
       node.type === "definition" ? [[node.identifier.toLowerCase(), node.url] as const] : [],
