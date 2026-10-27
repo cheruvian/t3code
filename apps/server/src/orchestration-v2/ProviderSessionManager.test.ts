@@ -1,3 +1,4 @@
+import * as Statement from "effect/sql/Statement";
 import * as NetAddress from "effect/net/NetAddress";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -4286,5 +4287,43 @@ it.effect("ProviderSessionManagerV2 terminalizes a pending input transcript item
     });
 
     yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
+  }),
+);
+
+it.effect("opens a known thread without reading unrelated provider session projections", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    yield* Effect.gen(function* () {
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const sink = yield* EventSink.EventSinkV2;
+      const ids = yield* IdAllocator.IdAllocatorV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:targeted-open");
+      const providerSessionId = yield* ids.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      yield* sink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator: ids, threadId, now })],
+      });
+      const queries: Array<readonly [string, ReadonlyArray<unknown>]> = [];
+      const record: Statement.Transformer = (statement) =>
+        Effect.sync(() => {
+          queries.push(statement.compile());
+          return statement;
+        });
+      yield* manager
+        .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+        .pipe(Effect.provideService(Statement.CurrentTransformer, record));
+      const reads = queries.filter(([text]) => /^\s*(SELECT|WITH)\b/i.test(text));
+      assert.isAbove(reads.length, 0);
+      for (const [query, parameters] of reads) {
+        if (!query.includes("orchestration_v2_projection_provider_sessions")) continue;
+        assert.isTrue(
+          parameters.includes(threadId) || parameters.includes(providerSessionId),
+          query,
+        );
+      }
+    }).pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 60_000 })));
   }),
 );
