@@ -132,7 +132,7 @@ const networkPathChanges = Stream.callback<"network-changed">((queue) =>
 const layerWakeups = Wakeups.layer({
   changes: Stream.mergeAll(
     [
-      Stream.callback<"application-active" | "application-active-reconnect">((queue) =>
+      Stream.callback<"application-active" | "application-active-long">((queue) =>
         Effect.acquireRelease(
           Effect.sync(() => {
             const client = clientMetadata();
@@ -146,7 +146,7 @@ const layerWakeups = Wakeups.layer({
                 Queue.offerUnsafe(
                   queue,
                   isIosWeb && hiddenAtMs !== null && Date.now() - hiddenAtMs >= 10_000
-                    ? "application-active-reconnect"
+                    ? "application-active-long"
                     : "application-active",
                 );
                 hiddenAtMs = null;

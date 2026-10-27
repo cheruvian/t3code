@@ -126,7 +126,7 @@ describe("QueuedRunsControl attachments and edit mode", () => {
     expect(html).toContain("https://assets.test/attachment-1");
     expect(html).toContain("Queued with a screenshot");
     expect(html).toContain("Edit queued message");
-    expect(html).toContain("Reorder queued message");
+    expect(html).not.toContain("Reorder queued message");
     expect(html).not.toContain("Move queued message up");
   });
 

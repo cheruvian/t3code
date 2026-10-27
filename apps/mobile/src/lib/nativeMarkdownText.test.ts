@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { parseMarkdown } from "react-native-enriched-markdown/src/web/parseMarkdown";
 import { recognizeTextLinks } from "react-native-enriched-markdown/src/web/recognizeTextLinks";
 import type { ASTNode } from "react-native-enriched-markdown/src/web/types";
-import { markdownWithAuthoredImagePaths, markdownWithHtml } from "./markdownDocument";
+import { markdownForNativeParsing } from "./markdownDocument";
 import { enrichedSkillLinkRegex } from "./enrichedLinkPresentation";
 import { enrichedFileLinks } from "./enrichedFileLinks";
 
@@ -11,7 +11,7 @@ function descendants(node: ASTNode): ASTNode[] {
 }
 const text = (node: ASTNode): string => node.content ?? node.children?.map(text).join("") ?? "";
 const parse = (markdown: string, hardSoftBreaks = false) =>
-  parseMarkdown(markdownWithAuthoredImagePaths(markdownWithHtml(markdown)), {
+  parseMarkdown(markdownForNativeParsing(markdown), {
     latexMath: false,
     hardSoftBreaks,
   });
@@ -115,7 +115,7 @@ describe("native Markdown source contracts in the MD4C replacement", () => {
     const rendered = enrichedFileLinks("[see **the input** and `the output`](/repo/a.ts:12)");
     const ast = await parse(rendered.markdown);
     const link = descendants(ast).find((node) => node.type === "Link")!;
-    expect(text(link)).toBe("see the input and the output a.ts:12");
+    expect(text(link)).toBe("see the input and the output a.ts · L12");
     expect(descendants(link).some((node) => node.type === "Strong")).toBe(true);
     expect(descendants(link).some((node) => node.type === "Code")).toBe(true);
   });

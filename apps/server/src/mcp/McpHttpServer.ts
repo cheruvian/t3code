@@ -988,6 +988,35 @@ const withToolAnalytics =
     return yield* registration.pipe(Effect.provideService(McpServer.McpServer, recordingServer));
   });
 
+/** `McpServer.registerToolkit` advertises the full codec schema; agents get the compact one. */
+const withAdvertisedSchemas = Effect.fn("McpHttpServer.withAdvertisedSchemas")(function* <
+  Tools extends Record<string, Tool.Any>,
+  A,
+  E,
+  R,
+>(toolkit: Toolkit.Toolkit<Tools>, registration: Effect.Effect<A, E, R>) {
+  const server = yield* McpServer.McpServer;
+  const tools: Record<string, Tool.Any> = toolkit.tools;
+  const advertisingServer = McpServer.McpServer.of({
+    ...server,
+    addTool: Effect.fn("McpServer.addTool")(function (options) {
+      const tool = tools[options.tool.name];
+      return server.addTool(
+        tool === undefined
+          ? options
+          : {
+              ...options,
+              tool: new McpSchema.Tool({
+                ...options.tool,
+                inputSchema: advertisedJsonSchema(tool),
+              }),
+            },
+      );
+    }),
+  });
+  return yield* registration.pipe(Effect.provideService(McpServer.McpServer, advertisingServer));
+});
+
 /**
  * `McpServer.toolkit` for handlers that declared their access (see
  * `McpToolAccess`). Every toolkit on `/mcp` registers through this.
@@ -1002,7 +1031,9 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
   handlers: McpToolAccess.HandlersLayer<Tools, EX, RX>,
 ) => {
   const registration = Layer.effectDiscard(
-    withToolAnalytics(McpServer.registerToolkit(decodeAsAdvertised(toolkit))),
+    withToolAnalytics(
+      withAdvertisedSchemas(toolkit, McpServer.registerToolkit(decodeAsAdvertised(toolkit))),
+    ),
   ).pipe(Layer.provide(McpServer.McpServer.layer));
   // @effect-diagnostics-next-line unsafeEffectTypeAssertion:off - the auth middleware provides it per request.
   const registered = registration as Layer.Layer<
@@ -1099,7 +1130,8 @@ export const layerMcpTransport = McpServer.layerHttp({
   allowSessionTermination: true,
 }).pipe(Layer.provide(layerMcpAuthMiddleware));
 
-const layerStandardToolkits = Layer.mergeAll(
+/** Every tool the T3 MCP server advertises. AgentContextBudget.test.ts measures this set. */
+export const layerTools = Layer.mergeAll(
   toolkitRegistration(CredentialsToolkit, CredentialsHandlers.layer),
   layerPreviewToolkit,
   layerOrchestratorToolkit,
@@ -1122,10 +1154,8 @@ const layerHelperTransport = McpServer.layerHttp({
   protocols: [McpProtocol.v2025_06_18],
 }).pipe(Layer.provide(McpHelperAuthMiddlewareLive));
 export const layer = Layer.mergeAll(
-  layerStandardToolkits.pipe(Layer.provideMerge(layerMcpTransport)),
+  layerTools.pipe(Layer.provideMerge(layerMcpTransport)),
   Layer.fresh(
-    Layer.mergeAll(layerStandardToolkits, layerApiToolkit).pipe(
-      Layer.provideMerge(layerHelperTransport),
-    ),
+    Layer.mergeAll(layerTools, layerApiToolkit).pipe(Layer.provideMerge(layerHelperTransport)),
   ),
 );

@@ -33,7 +33,6 @@ export function resolveChatCanvasLayout({
   composerHeight = 0,
   detailsCard = null,
   findBar = null,
-  centerBesideDetails = false,
 }: {
   container: PreviewMiniPlayerSize;
   preview: ChatCanvasPreview | null;
@@ -44,8 +43,6 @@ export function resolveChatCanvasLayout({
   detailsCard?: PreviewMiniPlayerObstacles["detailsCard"];
   /** The open find bar. It only keeps the floating preview clear; chat stays put. */
   findBar?: PreviewMiniPlayerObstacles["detailsCard"];
-  /** Center the chat in the space left of the details card when it would otherwise crowd it. */
-  centerBesideDetails?: boolean;
 }) {
   const centeredWidth = Math.max(0, Math.min(maxChatWidth, container.width - padding * 2));
   // Keep chat centered until a workspace card requires room on either side.
@@ -65,10 +62,9 @@ export function resolveChatCanvasLayout({
   const clearance = cardOnLeft
     ? canvasCenterLeft - laneLeft
     : laneRight - canvasCenterLeft - normalWidth;
-  const besideShift =
-    detailsCard && centerBesideDetails
-      ? Math.min(cardExtent / 2, Math.max(0, cardExtent / 2 - clearance))
-      : 0;
+  const besideShift = detailsCard
+    ? Math.min(cardExtent / 2, Math.max(0, cardExtent / 2 - clearance))
+    : 0;
   const normalLeft = Math.max(
     laneLeft,
     Math.min(canvasCenterLeft + (cardOnLeft ? besideShift : -besideShift), laneRight - normalWidth),

@@ -7,11 +7,11 @@ import {
   formatComposerContextReference,
 } from "@t3tools/shared/composerContextReferences";
 import {
-  markdownWithAuthoredImagePaths,
   markdownForNativeRendering,
   markdownWithFileEmbeds,
-  markdownWithInlineFileLinks,
+  markdownForNativeParsing,
   markdownWithHtml,
+  markdownWithInlineFileLinks,
   markdownWithTableBreaks,
 } from "../lib/markdownDocument";
 import type { Definition, RootContent } from "mdast";
@@ -168,11 +168,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
 function EnrichedMarkdownDocument(
   props: SelectableMarkdownTextProps & { readonly authoredImagePaths?: boolean },
 ) {
-  const authoredMarkdown = useMemo(
-    () =>
-      props.authoredImagePaths ? markdownWithAuthoredImagePaths(props.markdown) : props.markdown,
-    [props.markdown, props.authoredImagePaths],
-  );
+  const authoredMarkdown = props.markdown;
   const { renderImage, resolveImageSource, fileEmbedLabel } = props;
   const { themeAppearance, mathRenderingEnabled } = useAppearancePreferences();
   const { markdown: normalizedMarkdown, fileHrefs } = useMemo(() => {
@@ -180,14 +176,23 @@ function EnrichedMarkdownDocument(
     const fileLink = props.fileResolutions ? undefined : ENRICHED_INLINE_FILE_LINK_REGEX;
     if (!fileEmbedLabel) {
       return {
-        markdown: markdownForNativeRendering(authoredMarkdown, fileLink),
+        markdown: markdownForNativeRendering(
+          authoredMarkdown,
+          fileLink,
+          props.authoredImagePaths !== false,
+        ),
         fileHrefs: new Set<string>(),
       };
     }
-    const content = markdownWithInlineFileLinks(markdownWithHtml(authoredMarkdown), fileLink);
+    const content = markdownWithInlineFileLinks(
+      props.authoredImagePaths === false
+        ? markdownWithHtml(props.markdown)
+        : markdownForNativeParsing(props.markdown),
+      fileLink,
+    );
     const files = markdownWithFileEmbeds(content, fileEmbedLabel);
     return { ...files, markdown: markdownWithTableBreaks(files.markdown) };
-  }, [authoredMarkdown, fileEmbedLabel, props.fileResolutions]);
+  }, [authoredMarkdown, fileEmbedLabel, props.fileResolutions, props.authoredImagePaths]);
   const mermaid = useMemo(
     () =>
       Platform.OS === "web"

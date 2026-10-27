@@ -1,0 +1,26 @@
+diff --git a/lib/module/web/recognizeTextLinks.js b/lib/module/web/recognizeTextLinks.js
+index 7318295548685e901a033e572802a144404f9f64..17f57ac4acc7738e6cfc883a83c77d7fb17c811e 100644
+--- a/lib/module/web/recognizeTextLinks.js
++++ b/lib/module/web/recognizeTextLinks.js
+@@ -11,6 +11,8 @@ function flagsOf(regex, extra) {
+   let flags = extra;
+   if (regex.ignoreCase) flags += 'i';
+   if (regex.dotAll) flags += 's';
++  if (regex.unicodeSets) flags += 'v';
++  else if (regex.unicode) flags += 'u';
+   return flags;
+ }
+ function compile(regex, wholeSpan) {
+diff --git a/src/web/recognizeTextLinks.ts b/src/web/recognizeTextLinks.ts
+index d52f45d9df12613907be5e4999d53c72148b9177..c16228cff90ab7c1f1cabb7d8aa6ed9f73f8c542 100644
+--- a/src/web/recognizeTextLinks.ts
++++ b/src/web/recognizeTextLinks.ts
+@@ -19,6 +19,8 @@ function flagsOf(regex: RegExp, extra: string): string {
+   let flags = extra;
+   if (regex.ignoreCase) flags += 'i';
+   if (regex.dotAll) flags += 's';
++  if (regex.unicodeSets) flags += 'v';
++  else if (regex.unicode) flags += 'u';
+   return flags;
+ }
+ 

@@ -93,7 +93,6 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as Statement from "effect/sql/Statement";
-import { ReadOnlySqlClient } from "../persistence/Services/ReadOnlySqlClient.ts";
 
 import { MCP_APP_OUTPUT_KEY } from "@t3tools/shared/mcpApp";
 import { threadHtmlRenderAttachmentIds } from "../attachmentStore.ts";
@@ -7181,22 +7180,7 @@ const layerSql: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> = Lay
   }),
 );
 
-export const layer = Layer.effect(
-  ProjectionStoreV2,
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const readSql = Option.getOrElse(yield* Effect.serviceOption(ReadOnlySqlClient), () => sql);
-    const writes = yield* ProjectionStoreV2.pipe(Effect.provide(layerSql));
-    if (readSql === sql) return writes;
-    const reads = yield* ProjectionStoreV2.pipe(
-      Effect.provide(layerSql),
-      Effect.provideService(SqlClient.SqlClient, readSql),
-    );
-    // Both clients share a transaction context: reads inside an existing write
-    // transaction use its connection and see its uncommitted projection rows.
-    return ProjectionStoreV2.of({ ...reads, apply: writes.apply });
-  }),
-);
+export const layer = layerSql;
 
 export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
   ProjectionStoreV2,

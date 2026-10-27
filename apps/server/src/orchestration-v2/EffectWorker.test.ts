@@ -674,7 +674,7 @@ it.effect.each([true, false])(
       );
       assert.deepEqual(
         yield* Ref.get(events),
-        willRetry ? [] : ["runtime-request.response-failed"],
+        willRetry ? [] : ["runtime-request.response-failed", "runtime-request.delivery.fail"],
       );
     }),
 );

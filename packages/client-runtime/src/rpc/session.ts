@@ -52,6 +52,8 @@ export interface RpcSession {
   ) => ServerConfigSubscription;
   readonly ready: Effect.Effect<void, ConnectionAttemptError>;
   readonly probe: Effect.Effect<void, ConnectionAttemptError>;
+  /** Frames received so far: proof the socket is alive that needs no reply. */
+  readonly inboundFrames: Effect.Effect<number>;
   readonly closed: Effect.Effect<never, ConnectionAttemptError>;
 }
 
@@ -212,9 +214,21 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
         Effect.asVoid,
       ),
     });
+    // The protocol never reopens its socket, so every frame counted here came
+    // from this session's one socket.
+    let inboundFrames = 0;
+    const countingWebSocketConstructor: typeof webSocketConstructor = (url, options) => {
+      const socket = webSocketConstructor(url, options);
+      socket.addEventListener("message", () => {
+        inboundFrames += 1;
+      });
+      return socket;
+    };
     const layerSocket = Socket.layerWebSocket(connection.socketUrl, {
       openTimeout: `${timing.setupSeconds} seconds`,
-    }).pipe(Layer.provide(Layer.succeed(Socket.WebSocketConstructor, webSocketConstructor)));
+    }).pipe(
+      Layer.provide(Layer.succeed(Socket.WebSocketConstructor, countingWebSocketConstructor)),
+    );
     const layerProtocol = Layer.effect(
       RpcClient.Protocol,
       RpcClient.makeProtocolSocket({
@@ -421,6 +435,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
         Effect.raceFirst(Deferred.await(disconnected)),
       ),
       probe,
+      inboundFrames: Effect.sync(() => inboundFrames),
       closed: Effect.raceFirst(
         Deferred.await(disconnected),
         Deferred.await(configSubscriptionClosed),

@@ -26,7 +26,7 @@ export function enrichedMermaidBlocks(markdown: string) {
   const edits: Array<{ start: number; end: number; replacement: string }> = [];
   if (!/[`~]{3,}[ \t]*mermaid(?:[ \t\r\n]|$)/i.test(markdown))
     return { markdown, blocks, definitions: [] as Definition[] };
-  const document = parseMarkdownDocument(markdown);
+  const document = parseMarkdownDocument(markdown, true);
   const definitions = document.children.filter(
     (node): node is Definition => node.type === "definition",
   );
