@@ -1,4 +1,4 @@
-import { type MessageId, type RunId, type RunAttemptId } from "@t3tools/contracts";
+import type { MessageId, RunId, RunAttemptId } from "@t3tools/contracts";
 
 export interface TimelineRunObservation {
   readonly threadKey: string | null;
@@ -74,10 +74,9 @@ export function getRowBottom(state: TimelineListMeasurementState, index: number)
 }
 
 /**
- * Whether the timeline's real rows extend past the viewport left above the
- * composer. The list's own content length includes the composer inset
- * spacer, so this measures from the last row instead. Unknown row geometry
- * or an unmeasured viewport counts as fitting.
+ * The list's own content length includes the composer inset spacer, so this
+ * measures from the last row instead. Unknown row positions or an unmeasured
+ * viewport counts as fitting.
  */
 export function timelineContentOverflowsViewport(
   state: TimelineListMeasurementState | undefined,
@@ -90,7 +89,12 @@ export function timelineContentOverflowsViewport(
   if (typeof scrollLength !== "number" || !Number.isFinite(scrollLength) || scrollLength <= 0) {
     return false;
   }
-  const lastBottom = getRowBottom(state, state.data.length - 1);
+  const lastIndex = state.data.length - 1;
+  // Overflow can use an unmeasured tail's lower bound; anchored-turn metrics need its height.
+  const lastTop = state.positionAtIndex(lastIndex);
+  const lastBottom =
+    getRowBottom(state, lastIndex) ??
+    (typeof lastTop === "number" && Number.isFinite(lastTop) ? lastTop + 1 : null);
   if (lastBottom === null) {
     return false;
   }

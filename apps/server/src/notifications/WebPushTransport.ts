@@ -38,7 +38,7 @@ export function isSupportedPushEndpoint(endpoint: string): boolean {
 
 export const layer = Layer.succeed(WebPushTransport, {
   generateKeys: Effect.sync(() => webpush.generateVAPIDKeys()),
-  send: (subscription, payload, keys) =>
+  send: Effect.fn("WebPushTransport.send")((subscription, payload, keys) =>
     Effect.tryPromise({
       try: () =>
         webpush
@@ -61,4 +61,5 @@ export const layer = Layer.succeed(WebPushTransport, {
           }),
       catch: () => new WebPushError({ reason: "delivery" }),
     }),
+  ),
 });

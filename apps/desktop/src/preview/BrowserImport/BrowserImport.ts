@@ -49,8 +49,7 @@ export class BrowserImportFailedError extends Schema.TaggedError<BrowserImportFa
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
-  // The reason token is part of the message on purpose: IPC flattens the error
-  // to its message, and the renderer maps that token back to user-facing copy.
+  // IPC preserves only the message; the renderer needs its reason token for user-facing copy.
   override get message(): string {
     return `Importing cookies from ${this.sourceId} failed: ${this.reason}.`;
   }
@@ -94,11 +93,7 @@ const unavailableReason = Effect.fn("BrowserImport.unavailableReason")(function*
   if (!definition.platforms.includes(context.platform)) return "unsupportedPlatform";
   if (!(yield* isSourceInstalled(definition, context))) return "notInstalled";
   if (yield* isSourceRunning(definition, context)) return "browserRunning";
-  // Safari's jar is found by `stat`, which TCC permits without Full Disk
-  // Access — so a Safari that lists as ready may still refuse the read. Probe
-  // the grant here, so the wizard can open on the permission step and a
-  // post-grant recheck can tell granted from still-denied, rather than only
-  // discovering it by attempting the import.
+  // TCC permits stat without Full Disk Access, so a listed Safari jar may still be unreadable.
   if (definition.engine === "safari") {
     const jar = yield* resolveCookieDatabase(definition, context, ".");
     if (jar !== undefined && (yield* safariAccessDenied(jar))) return "needsFullDiskAccess";
@@ -129,8 +124,7 @@ export const writeCookies = Effect.fn("BrowserImport.writeCookies")(function* (
           url: cookie.url,
           name: cookie.name,
           value: cookie.value,
-          // Omitted for host-only cookies: Electron reads any `domain` as a
-          // domain cookie and re-adds the leading dot, widening its scope.
+          // Electron widens any supplied domain; omit it for host-only cookies.
           ...(cookie.domain === undefined ? {} : { domain: cookie.domain }),
           path: cookie.path,
           secure: cookie.secure,
@@ -151,11 +145,7 @@ export const writeCookies = Effect.fn("BrowserImport.writeCookies")(function* (
       skippedDomains.add(cookieHost(cookie.url));
     }
   }
-  // `set` resolves once the cookie is in memory; Chromium writes the store to
-  // disk on its own schedule. Flush before reporting "Done", so a crash right
-  // after does not lose what the user was just told was imported. A failed
-  // flush is logged rather than surfaced: the cookies are still in the
-  // session and land on disk at the next scheduled write.
+  // Cookie writes settle in memory; flush to disk before reporting a durable import.
   if (imported > 0) {
     yield* Effect.tryPromise(() => session.cookies.flushStore()).pipe(
       Effect.tapError((error) =>
@@ -167,7 +157,7 @@ export const writeCookies = Effect.fn("BrowserImport.writeCookies")(function* (
   return { imported, skipped, skippedDomains: [...skippedDomains].slice(0, 20) };
 });
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* BrowserImportMake() {
   const browserSession = yield* BrowserSession.BrowserSession;
   const platform = yield* HostProcess.Platform;
@@ -219,19 +209,14 @@ export const make = Effect.gen(function* BrowserImportMake() {
     }
 
     if (platform === "darwin" && definition.engine === "chromium") {
-      // macOS attributes the Keychain prompt and the resulting ACL grant to the
-      // executable that asks, so record which one that was — in a packaged build
-      // it is the signed app, in dev whatever binary hosts the main process.
+      // macOS attributes Keychain prompts and ACL grants to the executable, which differs in dev and packaged builds.
       yield* Effect.logInfo("Reading browser cookie key from the keychain", {
         sourceId: definition.id,
         executablePath,
       });
     }
 
-    // The profile directory arrives over IPC, so it is only honoured when the
-    // source itself reported it. Forwarding it unchecked would let `..`
-    // segments walk out of the browser's user-data directory and read any
-    // cookie database reachable on disk.
+    // IPC profile paths must match the source's listing to prevent traversal outside browser user-data.
     const sourceProfiles = yield* listSourceProfiles(definition, pathContext).pipe(
       Effect.provide(platformServices),
     );
@@ -245,8 +230,7 @@ export const make = Effect.gen(function* BrowserImportMake() {
       });
     }
 
-    // The profile was listed against a database moments ago; resolve it again
-    // rather than assume a path, since a Chromium jar may sit under `Network/`.
+    // Re-resolve listed paths because Chromium jars may be under Network/.
     const databasePath = yield* resolveCookieDatabase(
       definition,
       pathContext,
@@ -327,8 +311,7 @@ export const make = Effect.gen(function* BrowserImportMake() {
         ),
       );
 
-    // Written one at a time rather than in parallel: Chromium's cookie store
-    // serialises writes anyway, and a rejected cookie should only cost itself.
+    // Chromium serializes writes; a rejected cookie should not prevent the others.
     return yield* writeCookies(session, result);
   });
 

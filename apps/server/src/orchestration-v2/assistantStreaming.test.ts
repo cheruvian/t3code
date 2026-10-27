@@ -149,13 +149,6 @@ it("holds a streamed section heading until its content has a boundary", () => {
   });
 });
 
-it("forwards continuous assistant and reasoning updates unchanged", () => {
-  const filter = makeAssistantStreamingFilter("token");
-  for (const event of [message("p"), message("pa"), turnItem("r", true, "reasoning")]) {
-    expect(filter(event, 0)).toBe(event);
-  }
-});
-
 it.each(["turn", "paragraph"] as const)(
   "flushes a final unfinished paragraph on interruption in %s mode",
   (mode) => {

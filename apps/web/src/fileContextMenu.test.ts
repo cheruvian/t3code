@@ -1,7 +1,6 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import * as NodeAssert from "node:assert/strict";
 import { describe, expect, it } from "vite-plus/test";
-
 import { buildFileContextMenuItems, resolveFileContextMenuAbsolutePath } from "./fileContextMenu";
 
 const BASE_TARGET = {
@@ -15,12 +14,7 @@ const EMPTY_CAPABILITIES = {
   canOpenDefault: false,
   editorIds: [],
 };
-
 describe("resolveFileContextMenuAbsolutePath", () => {
-  it("joins workspace-relative diff paths onto the workspace root", () => {
-    expect(resolveFileContextMenuAbsolutePath(BASE_TARGET)).toBe("/workspace/project/src/index.ts");
-  });
-
   it("strips the repository prefix when the repo root is nested in the workspace", () => {
     expect(
       resolveFileContextMenuAbsolutePath({

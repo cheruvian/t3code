@@ -4,7 +4,6 @@ import type { ConfirmDialogRequest, TextInputDialogRequest } from "./Dialog.type
 
 export type { ConfirmDialogRequest, TextInputDialogRequest } from "./Dialog.types";
 
-/** Informational and multi-action alerts share the same platform presenter. */
 export function alert(...args: Parameters<typeof Alert.alert>): void {
   Alert.alert(...args);
 }
@@ -27,7 +26,7 @@ export function confirm(request: ConfirmDialogRequest): void {
 export function prompt(request: TextInputDialogRequest): void {
   Alert.prompt(
     request.title,
-    undefined,
+    request.message,
     [
       { text: request.cancelText ?? "Cancel", style: "cancel", onPress: request.onCancel },
       { text: request.confirmText, onPress: (value) => request.onConfirm(value ?? "") },
@@ -37,7 +36,6 @@ export function prompt(request: TextInputDialogRequest): void {
   );
 }
 
-/** Standard iOS alerts are native; option confirmations use a shared presenter. */
 export function Host() {
   return <OptionsDialogHost />;
 }

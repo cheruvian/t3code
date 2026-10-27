@@ -33,41 +33,40 @@ export const makeEnvironmentHttpClient = (origin: string) =>
 export const encodeCliJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 /** Use only the running environment selected by --base-dir; never start offline state. */
-export const withLocalEnvironment = <A, E, R>(
+export const withLocalEnvironment = Effect.fn("withLocalEnvironment")(function* <A, E, R>(
   flags: CliAuthLocationFlags,
   run: (input: {
     readonly origin: string;
     readonly token: string;
     readonly sessionId: AuthSessionId;
   }) => Effect.Effect<A, E, R>,
-) =>
-  Effect.gen(function* () {
-    const logLevel = yield* GlobalFlag.LogLevel;
-    const config = yield* resolveCliAuthConfig(flags, logLevel);
-    const runtime = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
-    if (Option.isNone(runtime)) {
-      return yield* new CliEnvironmentError({
-        detail: "A running T3 Code server is required for this command.",
-      });
-    }
-    const origin = runtime.value.origin;
-    return yield* Effect.gen(function* () {
-      const auth = yield* EnvironmentAuth.EnvironmentAuth;
-      return yield* Effect.acquireUseRelease(
-        auth.issueSession({
-          scopes: [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
-          label: "t3 cli",
-        }),
-        (issued) => run({ origin, token: issued.token, sessionId: issued.sessionId }),
-        (issued) => auth.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
-      );
-    }).pipe(
-      Effect.provide(
-        EnvironmentAuth.layerRuntime.pipe(
-          Layer.provideMerge(FetchHttpClient.layer),
-          Layer.provide(ServerConfig.layer(config)),
-          Layer.provide(Layer.succeed(References.MinimumLogLevel, config.logLevel)),
-        ),
-      ),
+) {
+  const logLevel = yield* GlobalFlag.LogLevel;
+  const config = yield* resolveCliAuthConfig(flags, logLevel);
+  const runtime = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+  if (Option.isNone(runtime)) {
+    return yield* new CliEnvironmentError({
+      detail: "A running T3 Code server is required for this command.",
+    });
+  }
+  const origin = runtime.value.origin;
+  return yield* Effect.gen(function* () {
+    const auth = yield* EnvironmentAuth.EnvironmentAuth;
+    return yield* Effect.acquireUseRelease(
+      auth.issueSession({
+        scopes: [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+        label: "t3 cli",
+      }),
+      (issued) => run({ origin, token: issued.token, sessionId: issued.sessionId }),
+      (issued) => auth.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
     );
-  });
+  }).pipe(
+    Effect.provide(
+      EnvironmentAuth.layerRuntime.pipe(
+        Layer.provideMerge(FetchHttpClient.layer),
+        Layer.provide(ServerConfig.layer(config)),
+        Layer.provide(Layer.succeed(References.MinimumLogLevel, config.logLevel)),
+      ),
+    ),
+  );
+});

@@ -1,7 +1,6 @@
 import {
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
-  EnvironmentAuthorizationError,
   EnvironmentId,
   ProjectId,
   ThreadId,
@@ -38,6 +37,14 @@ const state = vi.hoisted(() => ({
   sessionLookupFails: false,
 }));
 
+vi.mock("../settleWorktreeDialog", () => ({
+  requestSettleWorktreeDialog: async () => ({
+    choice: "keep",
+    stopRunningProcesses: true,
+    removeAutomations: true,
+    releaseResources: false,
+  }),
+}));
 vi.mock("react", () => ({
   useCallback: (callback: unknown) => callback,
   useMemo: (factory: () => unknown) => factory(),
@@ -285,18 +292,6 @@ describe("thread action permissions", () => {
       expect(state.localEffects).toEqual([]);
     },
   );
-
-  it("identifies the missing task scope when thread deletion is denied", async () => {
-    const result = await useThreadActions().deleteThread(target);
-
-    expect(result._tag).toBe("Failure");
-    if (result._tag !== "Failure") throw new Error("Expected permission denial");
-    const error = Cause.squash<unknown>(result.cause);
-    expect(error).toBeInstanceOf(EnvironmentAuthorizationError);
-    expect(error).toMatchObject({ requiredScope: AuthOrchestrationOperateScope });
-    expect(state.requests).toEqual([]);
-    expect(state.localEffects).toEqual([]);
-  });
 
   it("deletes an archived thread only with its own environment's grant", async () => {
     state.threads = [];

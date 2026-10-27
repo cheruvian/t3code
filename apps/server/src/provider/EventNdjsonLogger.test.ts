@@ -1,12 +1,11 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off - Native process and filesystem fixtures exercise provider boundaries.
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-
 import { ThreadId } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { makeAsyncRotatingFileSink } from "@t3tools/shared/logging";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -14,7 +13,6 @@ import * as Fiber from "effect/Fiber";
 import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
-
 import * as ResourceAttribution from "../resourceTelemetry/ResourceAttribution.ts";
 import {
   makeEventNdjsonLogger,
@@ -22,9 +20,8 @@ import {
   type EventNdjsonLogStore,
   type EventNdjsonLogStoreOptions,
   type EventNdjsonSinkFactory,
-  type PendingRecord,
-  writeBatchedMessages,
 } from "./EventNdjsonLogger.ts";
+// @effect-diagnostics nodeBuiltinImport:off
 
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const decodeUnknownJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
@@ -100,7 +97,7 @@ type TestEventNdjsonAdmission =
       readonly reason: "protected-buffer-full";
     } & TestEventNdjsonAdmissionCounts);
 
-describe("EventNdjsonLogger", () => {
+it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
   it.effect("summarizes circular events without exposing their contents in diagnostics", () => {
     const messages: Array<unknown> = [];
     const logCapture = Logger.make<unknown, void>(({ message }) => {
@@ -423,11 +420,7 @@ describe("EventNdjsonLogger", () => {
       const threadPath = ownedLogPath(basePath, "thread-interrupted");
 
       try {
-        const flushed = yield* Deferred.make<void>();
-        const store = yield* makeEventNdjsonLogStore(basePath, {
-          batchWindowMs: 1_000,
-          sinkFactory: observedAsyncSinkFactory(flushed),
-        });
+        const store = yield* makeEventNdjsonLogStore(basePath, { batchWindowMs: 1_000 });
         const logger = store.logger("native");
         const interruptedWrite = yield* logger
           .write({ id: "possibly-interrupted" }, ThreadId.make("thread-interrupted"))
@@ -437,11 +430,10 @@ describe("EventNdjsonLogger", () => {
         yield* logger.write({ id: "accepted" }, ThreadId.make("thread-interrupted"));
 
         yield* TestClock.adjust(1_000);
-        yield* Deferred.await(flushed);
+        yield* store.close();
 
         assert.equal(NodeFS.existsSync(threadPath), true);
         assert.include(NodeFS.readFileSync(threadPath, "utf8"), '{"id":"accepted"}');
-        yield* store.close();
       } finally {
         NodeFS.rmSync(tempDir, { recursive: true, force: true });
       }
@@ -955,39 +947,101 @@ describe("EventNdjsonLogger", () => {
     }),
   );
 
-  it("attributes batches that were written before a later chunk fails", () => {
-    const records: ReadonlyArray<PendingRecord> = [
-      {
-        stream: "native",
-        threadSegment: "thread",
-        line: "first",
-        bytes: 5,
-      },
-      {
-        stream: "canonical",
-        threadSegment: "thread",
-        line: "second",
-        bytes: 6,
-      },
-    ];
-    const attributed: Array<PendingRecord> = [];
-    let writes = 0;
+  it.effect("attributes batches that were written before a later chunk fails", () =>
+    Effect.gen(function* () {
+      const attribution = yield* ResourceAttribution.make();
+      let writes = 0;
+      const failed = yield* Deferred.make<void>();
+      const store = yield* makeEventNdjsonLogStore("/tmp/provider-attribution-fixture.ndjson", {
+        batchWindowMs: 0,
+        retryDelayMs: 1,
+        attribution,
+        sinkFactory: () => ({
+          write: () =>
+            Effect.gen(function* () {
+              writes += 1;
+              if (writes === 2) {
+                yield* Deferred.succeed(failed, undefined);
+                return yield* Effect.die(new Error("simulated disk exhaustion"));
+              }
+            }),
+        }),
+      });
+      yield* store.logger("native").write({ id: "first" }, ThreadId.make("first"));
+      yield* store.drain();
+      const before = yield* attribution.snapshot;
+      yield* store.logger("canonical").write({ id: "second" }, ThreadId.make("second"));
+      const drained = yield* store.drain().pipe(Effect.forkChild);
+      yield* Deferred.await(failed);
+      yield* TestClock.adjust(1);
+      yield* Fiber.join(drained);
+      const after = yield* attribution.snapshot;
+      assert.isAtLeast(writes, 2);
+      assert.deepEqual(
+        after.entries.filter((entry) => entry.operation === "native.append"),
+        before.entries,
+      );
+      assert.equal(after.entries[0]?.count, 1);
+      yield* store.close();
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 
-    assert.throws(() =>
-      writeBatchedMessages(
-        {
-          write: () => {
-            writes += 1;
-            if (writes === 2) throw new Error("simulated disk exhaustion");
-          },
-        },
-        records,
-        5,
-        (written) => attributed.push(...written),
-      ),
-    );
-    assert.deepEqual(attributed, [records[0]]);
-  });
+  it.effect(
+    "keeps unrelated work responsive and drains before close while a disk write is held",
+    () =>
+      Effect.gen(function* () {
+        const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-"));
+        const basePath = NodePath.join(tempDir, "events.log");
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let writes = 0;
+        try {
+          const store = yield* makeEventNdjsonLogStore(basePath, {
+            batchWindowMs: 0,
+            sinkFactory: (input) => {
+              let sink: Effect.Success<ReturnType<typeof makeAsyncRotatingFileSink>> | undefined;
+              return {
+                write: (lines) =>
+                  Effect.gen(function* () {
+                    if (++writes === 1) {
+                      yield* Deferred.succeed(started, undefined);
+                      yield* Deferred.await(release);
+                    }
+                    sink ??= yield* makeAsyncRotatingFileSink(input).pipe(
+                      Effect.provide(NodeServices.layer),
+                      Effect.orDie,
+                    );
+                    yield* sink.write(lines).pipe(Effect.orDie);
+                  }),
+              };
+            },
+          });
+          const first = yield* store
+            .logger("native")
+            .write({ id: "first" }, ThreadId.make("held"))
+            .pipe(Effect.forkChild);
+          yield* Deferred.await(started);
+          const closed = yield* Deferred.make<void>();
+          const close = yield* store
+            .close()
+            .pipe(Effect.andThen(Deferred.succeed(closed, undefined)), Effect.forkChild);
+          assert.equal(yield* Deferred.isDone(closed), false);
+
+          const heartbeat = yield* Deferred.make<void>();
+          yield* Effect.forkChild(Deferred.succeed(heartbeat, undefined));
+          yield* Deferred.await(heartbeat);
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(first);
+          yield* Fiber.join(close);
+          assert.include(
+            NodeFS.readFileSync(ownedLogPath(basePath, "held"), "utf8"),
+            '{"id":"first"}',
+          );
+        } finally {
+          NodeFS.rmSync(tempDir, { recursive: true, force: true });
+        }
+      }),
+  );
 
   it.effect("reports logical provider log writes to resource attribution", () =>
     Effect.gen(function* () {

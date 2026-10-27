@@ -57,7 +57,7 @@ export function resolveMobileGitStatusTarget(
 }
 
 export function isMobileGitInspectorActive(input: {
-  readonly mode: "files" | "git" | "route";
+  readonly mode: "files" | "git" | "route" | "preview";
   readonly paneVisible: boolean;
   readonly registrationActive?: boolean;
 }): boolean {

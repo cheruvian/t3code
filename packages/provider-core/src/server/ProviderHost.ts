@@ -63,11 +63,9 @@ export class ProviderHost extends Context.Service<
     };
     /** Whether background work for `scope` should run now (client demand and host power). */
     readonly shouldRunBackgroundWork: (scope: BackgroundScope) => Effect.Effect<boolean>;
-    /**
-     * Absolute path of a stored chat attachment, or `null` when its id does not
-     * resolve inside the attachments directory.
-     */
+    /** Absolute attachment path, or null if the ID does not resolve inside attachmentsDir. */
     readonly resolveAttachmentPath: (attachment: ChatAttachment) => string | null;
+    readonly resolveExtractedTextPath?: (path: string) => Effect.Effect<string | undefined>;
     /** The credentials stored for `bindingId`, usually an instance id, under a provider-chosen namespace. */
     readonly credentials: (
       namespace: string,

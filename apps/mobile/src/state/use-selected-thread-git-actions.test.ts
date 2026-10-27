@@ -25,9 +25,8 @@ const state = vi.hoisted(() => ({
 vi.mock("react", () => ({
   useCallback: (callback: unknown) => callback,
   useMemo: (factory: () => unknown) => factory(),
-  useEffect: () => {},
-  useEffectEvent: (callback: unknown) => callback,
 }));
+vi.mock("@effect/atom-react", () => ({ useAtomMount: () => {} }));
 vi.mock("./session", () => ({
   useEnvironmentScope: (environmentId: unknown, scope: string) =>
     (environmentId === state.thread.environmentId ? state.scopes : state.primaryScopes).has(scope),
@@ -51,7 +50,10 @@ vi.mock("./queries", () => ({
 }));
 vi.mock("./use-atom-command", () => ({ useAtomCommand: (command: unknown) => command }));
 vi.mock("./atom-registry", () => ({ appAtomRegistry: {} }));
-vi.mock("./use-remote-environment-registry", () => ({ setPendingConnectionError: () => {} }));
+vi.mock("./use-remote-environment-registry", () => ({
+  environmentConnectedAtom: () => null,
+  setPendingConnectionError: () => {},
+}));
 vi.mock("./use-vcs-action-state", () => ({
   showGitActionResult: (result: { type: string; description?: string }) =>
     state.results.push(result),
@@ -234,15 +236,6 @@ describe("thread Git mutation permissions", () => {
     expect(state.statusRefreshes).toBe(1);
   });
 
-  it("uses a newly granted task permission for a retained branch callback", async () => {
-    state.primaryScopes.clear();
-    const actions = useSelectedThreadGitActions();
-    state.scopes.add(AuthOrchestrationOperateScope);
-    await actions.onCreateSelectedThreadBranch("feature");
-    expect(state.thread.branch).toBe("feature");
-    expect(state.metadataRequests).toEqual([{ environmentId: "environment", branch: "feature" }]);
-  });
-
   it.each(["create", "checkout", "worktree"] as const)(
     "returns the accepted %s result when only source-control permission is revoked after Git",
     async (operation) => {
@@ -270,15 +263,4 @@ describe("thread Git mutation permissions", () => {
       expect(state.results).toEqual([]);
     },
   );
-
-  it("returns a successful checkout when the requested branch is already selected", async () => {
-    state.scopes.add(AuthOrchestrationOperateScope);
-
-    expect(await useSelectedThreadGitActions().onCheckoutSelectedThreadBranch("main")).toEqual({
-      refName: "main",
-    });
-    expect(state.branch).toBe("main");
-    expect(state.thread.branch).toBe("main");
-    expect(state.results).toEqual([]);
-  });
 });

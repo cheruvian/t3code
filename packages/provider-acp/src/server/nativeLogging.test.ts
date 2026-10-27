@@ -4,7 +4,6 @@ import { assert, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
 import * as AcpErrors from "effect-acp/errors";
 

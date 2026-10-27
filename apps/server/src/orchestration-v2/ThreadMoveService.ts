@@ -207,14 +207,19 @@ const make = Effect.gen(function* () {
 
   return ThreadMoveService.of({
     fence,
-    reclaim: (input) =>
+    reclaim: Effect.fn("ThreadMoveService.reclaim")((input) =>
       dispatch("abort", input.threadId, { type: "thread.move.reclaim", ...input }),
-    abort: (input) => dispatch("abort", input.threadId, { type: "thread.move.abort", ...input }),
-    prepareActivation: (input) =>
+    ),
+    abort: Effect.fn("ThreadMoveService.abort")((input) =>
+      dispatch("abort", input.threadId, { type: "thread.move.abort", ...input }),
+    ),
+    prepareActivation: Effect.fn("ThreadMoveService.prepareActivation")((input) =>
       dispatch("activate", input.threadId, { type: "thread.move.activate", ...input }),
-    finalize: (input) =>
+    ),
+    finalize: Effect.fn("ThreadMoveService.finalize")((input) =>
       dispatch("finalize", input.threadId, { type: "thread.move.finalize", ...input }),
-    status: (input) =>
+    ),
+    status: Effect.fn("ThreadMoveService.status")((input) =>
       load(input.threadId, "status").pipe(
         Effect.map(({ thread }) => ({
           state: thread.environmentMove?.status ?? "idle",
@@ -222,6 +227,7 @@ const make = Effect.gen(function* () {
           destinationEnvironmentId: thread.environmentMove?.destinationEnvironmentId ?? null,
         })),
       ),
+    ),
   });
 });
 

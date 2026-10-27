@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock("../state/entities", () => ({
   useThreadShell: () => state.thread,
+  useQuietThreadShell: () => state.thread,
   useProject: () => ({ id: "project-1", environmentId: "env-1", workspaceRoot: "/repo" }),
 }));
 vi.mock("../composerDraftStore", () => ({

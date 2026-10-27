@@ -105,31 +105,30 @@ const makeRunner = <I extends Schema.Top, O extends Schema.Top, E, R>(
 
 // Use the live dispatcher so helper mutations share startup gating, attachment
 // intake, worktree preparation, and event delivery with connected clients.
-const withLiveRpc = <A, E, R>(
+const withLiveRpc = Effect.fn("withLiveRpc")(function* <A, E, R>(
   operation: string,
   run: Parameters<typeof withEnvironmentRpc<A, E, R>>[1],
-) =>
-  Effect.gen(function* () {
-    const config = yield* ServerConfig.ServerConfig;
-    const runtime = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
-    if (Option.isNone(runtime)) {
-      return yield* new AgentApiCallError({
-        operation,
-        reason: "unavailable",
-        message: "The running T3 Code server is required for orchestration operations.",
-      });
-    }
-    const auth = yield* EnvironmentAuth.EnvironmentAuth;
-    return yield* Effect.acquireUseRelease(
-      auth.issueSession({
-        scopes: [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
-        label: "t3 helper API bridge",
-      }),
-      (issued) =>
-        withEnvironmentRpc({ origin: runtime.value.origin, sessionId: issued.sessionId }, run),
-      (issued) => auth.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
-    );
-  });
+) {
+  const config = yield* ServerConfig.ServerConfig;
+  const runtime = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+  if (Option.isNone(runtime)) {
+    return yield* new AgentApiCallError({
+      operation,
+      reason: "unavailable",
+      message: "The running T3 Code server is required for orchestration operations.",
+    });
+  }
+  const auth = yield* EnvironmentAuth.EnvironmentAuth;
+  return yield* Effect.acquireUseRelease(
+    auth.issueSession({
+      scopes: [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+      label: "t3 helper API bridge",
+    }),
+    (issued) =>
+      withEnvironmentRpc({ origin: runtime.value.origin, sessionId: issued.sessionId }, run),
+    (issued) => auth.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
+  );
+});
 
 const runners = {
   [WS_METHODS.notificationsSend]: makeRunner(
@@ -344,18 +343,19 @@ const lookupRunner = (operation: string) =>
  * keeps the tool safe against ever being mounted elsewhere. The capability
  * is granted at credential issuance exclusively to T3 Chat Helper threads.
  */
-const requireEnvironmentCapability = (operation: string) =>
-  Effect.gen(function* () {
-    const invocation = yield* McpInvocationContext.McpInvocationContext;
-    if (!invocation.capabilities.has("environment")) {
-      return yield* new AgentApiCallError({
-        operation,
-        reason: "unavailable",
-        message:
-          "api_call is only available to agent sessions running in the T3 Chat Helper project.",
-      });
-    }
-  });
+const requireEnvironmentCapability = Effect.fn("requireEnvironmentCapability")(function* (
+  operation: string,
+) {
+  const invocation = yield* McpInvocationContext.McpInvocationContext;
+  if (!invocation.capabilities.has("environment")) {
+    return yield* new AgentApiCallError({
+      operation,
+      reason: "unavailable",
+      message:
+        "api_call is only available to agent sessions running in the T3 Chat Helper project.",
+    });
+  }
+});
 
 export const ApiToolkitHandlersLive = McpToolAccess.toLayer(ApiToolkit, {
   api_call: McpToolAccess.actsAsCaller(({ operation, input }) =>

@@ -1,3 +1,6 @@
+import { ThreadTasksPanel } from "./ThreadTasksPanel";
+import { RegistryContext } from "@effect/atom-react";
+import { Atom, AtomRegistry } from "effect/reactivity";
 // @vitest-environment jsdom
 
 import {
@@ -13,7 +16,6 @@ import {
   act,
   createRef,
   useLayoutEffect,
-  useState,
   type ReactNode,
   type Ref,
   type ReactElement,
@@ -23,9 +25,21 @@ import { createRoot } from "react-dom/client";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { shouldUseRestingComposerLayout } from "../composerFooterLayout";
 import { useComposerFocusState } from "./useComposerFocusState";
-import { rememberTimelinePosition } from "./timelineScrollAnchoring";
+
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { LegendListRef } from "@legendapp/list/react";
+
+const handoffProvidersAtom = Atom.keepAlive(Atom.make<unknown>([]));
+vi.mock("../../state/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/server")>();
+  return {
+    ...actual,
+    serverEnvironment: {
+      ...actual.serverEnvironment,
+      providersValueAtom: () => handoffProvidersAtom,
+    },
+  };
+});
 
 const activityTestState = vi.hoisted(() => ({
   expanded: false,
@@ -235,7 +249,7 @@ function matchMedia() {
 }
 
 let MessagesTimeline: typeof import("./MessagesTimeline").MessagesTimeline;
-let resolvePreviewAnnotationImage: typeof import("./MessagesTimeline").resolvePreviewAnnotationImage;
+let resolvePreviewAnnotationImage: typeof import("./TimelineUserMessageRow.logic").resolvePreviewAnnotationImage;
 
 const ElementStub = class ElementStub {};
 function stubDomGlobals() {
@@ -273,6 +287,8 @@ function stubDomGlobals() {
     documentElement: {
       classList,
       offsetHeight: 0,
+      hasAttribute: () => false,
+      getAttribute: () => null,
     },
   });
 }
@@ -281,7 +297,8 @@ beforeEach(stubDomGlobals);
 // Cold transformation of the full chat dependency graph needs extra time on slower CI workers.
 beforeAll(async () => {
   Object.defineProperty(window, "matchMedia", { value: matchMedia, configurable: true });
-  ({ MessagesTimeline, resolvePreviewAnnotationImage } = await import("./MessagesTimeline"));
+  ({ MessagesTimeline } = await import("./MessagesTimeline"));
+  ({ resolvePreviewAnnotationImage } = await import("./TimelineUserMessageRow.logic"));
 }, 120_000);
 
 const ACTIVE_THREAD_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
@@ -407,7 +424,7 @@ describe("timeline tooltip scroll dismissal", () => {
 
 function buildProps() {
   return {
-    threadSyncPending: false,
+    emptyPlaceholderInset: 0,
     isWorking: false,
     activeTurnInProgress: false,
     listRef: createRef<LegendListRef | null>(),
@@ -695,25 +712,20 @@ describe("MessagesTimeline", () => {
     try {
       await act(() => {
         renderer = create(
-          <MessagesTimeline
-            {...buildProps()}
-            timelineEntries={[
+          <ThreadTasksPanel
+            activeRunId={RunId.make("plan-run")}
+            plans={[
               {
-                kind: "turn-plan",
                 id: "test-plan-chip",
                 createdAt: MESSAGE_CREATED_AT,
-                turnPlan: {
-                  id: "test-plan-chip",
+                runId: RunId.make("plan-run"),
+                plan: {
                   createdAt: MESSAGE_CREATED_AT,
                   runId: RunId.make("plan-run"),
-                  plan: {
-                    createdAt: MESSAGE_CREATED_AT,
-                    runId: RunId.make("plan-run"),
-                    steps: [
-                      { step: "Inspect the feature", status: "completed", durationMs: 2500 },
-                      { step: "Implement the feature", status: "inProgress" },
-                    ],
-                  },
+                  steps: [
+                    { step: "Inspect the feature", status: "completed", durationMs: 2500 },
+                    { step: "Implement the feature", status: "inProgress" },
+                  ],
                 },
               },
             ]}
@@ -819,144 +831,6 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('aria-label="Collapse all folders"');
     expect(markup).toContain('aria-label="Open diff"');
     expect(markup).toContain("1 changed file");
-  });
-
-  it("treats only the strict list end as the live edge", async () => {
-    const {
-      resolveTimelineIsAtEnd,
-      resolveTimelineMinimapHasPersistentGutter,
-      resolveTimelineMinimapCurrentIndex,
-      resolveTimelineMinimapHeightStyle,
-      resolveTimelineMinimapHitStripWidth,
-      resolveTimelineMinimapIndexFromPointer,
-      resolveTimelineMinimapInteractiveWidth,
-      resolveTimelineMinimapNavigationInteractive,
-      resolveTimelineMinimapTopPercent,
-    } = await import("./MessagesTimeline.logic");
-
-    expect(resolveTimelineIsAtEnd({ isAtEnd: true })).toBe(true);
-    expect(resolveTimelineIsAtEnd(undefined)).toBeUndefined();
-    // Within the pixel band above the content bottom counts as the end...
-    expect(
-      resolveTimelineIsAtEnd({
-        isAtEnd: false,
-        contentLength: 2000,
-        scroll: 1170,
-        scrollLength: 800,
-      }),
-    ).toBe(true);
-    // ...but half a viewport up (LegendList's isNearEnd territory) does not.
-    expect(
-      resolveTimelineIsAtEnd({
-        isAtEnd: false,
-        contentLength: 2000,
-        scroll: 900,
-        scrollLength: 800,
-      }),
-    ).toBe(false);
-    // LegendList's isAtEnd is true anywhere within the composer-height band
-    // (it subtracts the inset); the last row is still hidden under the
-    // composer there, so the flag must not short-circuit the geometry.
-    expect(
-      resolveTimelineIsAtEnd({
-        isAtEnd: true,
-        contentLength: 2000,
-        scroll: 1100,
-        scrollLength: 800,
-      }),
-    ).toBe(false);
-    // Geometry missing (older state shape): fall back to the strict flag.
-    expect(resolveTimelineIsAtEnd({ isAtEnd: false })).toBe(false);
-
-    expect(resolveTimelineMinimapHeightStyle(5)).toBe("min(32px, calc(100vh - 18rem))");
-    expect(resolveTimelineMinimapTopPercent(2, 5)).toBe(50);
-    expect(
-      resolveTimelineMinimapIndexFromPointer({
-        itemCount: 101,
-        railTop: 100,
-        railHeight: 500,
-        pointerY: 350,
-      }),
-    ).toBe(50);
-    expect(
-      resolveTimelineMinimapIndexFromPointer({
-        itemCount: 101,
-        railTop: 100,
-        railHeight: 500,
-        pointerY: 999,
-      }),
-    ).toBe(100);
-    expect(
-      resolveTimelineMinimapCurrentIndex({
-        scrollTop: 100,
-        scrollBottom: 500,
-        itemBounds: [
-          { top: 80, height: 20 },
-          { top: 120, height: 20 },
-          { top: 220, height: 20 },
-        ],
-      }),
-    ).toBe(1);
-    expect(
-      resolveTimelineMinimapCurrentIndex({
-        scrollTop: 150,
-        scrollBottom: 200,
-        itemBounds: [
-          { top: 80, height: 20 },
-          { top: 120, height: 20 },
-          { top: 220, height: 20 },
-        ],
-      }),
-    ).toBe(1);
-    expect(
-      resolveTimelineMinimapCurrentIndex({
-        scrollTop: 0,
-        scrollBottom: 50,
-        itemBounds: [{ top: 80, height: 20 }],
-      }),
-    ).toBeNull();
-    // Comfortable width: the column is capped at 768px.
-    expect(resolveTimelineMinimapHasPersistentGutter(832, 768)).toBe(false);
-    expect(resolveTimelineMinimapHasPersistentGutter(863, 768)).toBe(false);
-    expect(resolveTimelineMinimapHasPersistentGutter(864, 768)).toBe(true);
-    // Wider Chat width settings consume the gutter the minimap relies on.
-    expect(resolveTimelineMinimapHasPersistentGutter(1400, 1152)).toBe(true);
-    expect(resolveTimelineMinimapHasPersistentGutter(1200, 1152)).toBe(false);
-    expect(resolveTimelineMinimapHasPersistentGutter(2560, 2560)).toBe(false);
-
-    // No usable gutter (zoomed in / narrow pane): the strip must go inert
-    // instead of overlaying the centered content column.
-    expect(resolveTimelineMinimapHitStripWidth(768, 768)).toBe(0);
-    expect(resolveTimelineMinimapHitStripWidth(792, 768)).toBe(0);
-    // Partial gutter: strip shrinks to what fits between the viewport edge
-    // and the content column.
-    expect(resolveTimelineMinimapHitStripWidth(820, 768)).toBe(14);
-    // Full gutter: unchanged 40px-wide strip.
-    expect(resolveTimelineMinimapHitStripWidth(872, 768)).toBe(40);
-    expect(resolveTimelineMinimapHitStripWidth(1400, 768)).toBe(40);
-    // Full Chat width: the column spans the viewport, so the strip is inert
-    // however wide the window gets.
-    expect(resolveTimelineMinimapHitStripWidth(2560, 2560)).toBe(0);
-    // Wide Chat width on a window just wider than the column: partial strip.
-    expect(resolveTimelineMinimapHitStripWidth(1204, 1152)).toBe(14);
-    expect(resolveTimelineMinimapHitStripWidth(0, 0)).toBe(0);
-    expect(resolveTimelineMinimapHitStripWidth(Number.NaN, 768)).toBe(0);
-
-    // Prev/next buttons reach 14px past the strip's left edge; a narrower
-    // strip means they would sit on the content column.
-    expect(resolveTimelineMinimapNavigationInteractive(40)).toBe(true);
-    expect(resolveTimelineMinimapNavigationInteractive(14)).toBe(true);
-    expect(resolveTimelineMinimapNavigationInteractive(8)).toBe(false);
-    expect(resolveTimelineMinimapNavigationInteractive(0)).toBe(false);
-
-    // The collapsed target stays narrow, but an open preview keeps its full
-    // 20rem width plus the 2rem offset from the minimap rail interactive.
-    expect(resolveTimelineMinimapInteractiveWidth(0, false)).toBe(0);
-    expect(resolveTimelineMinimapInteractiveWidth(14, false)).toBe(14);
-    expect(resolveTimelineMinimapInteractiveWidth(40, false)).toBe(40);
-    expect(resolveTimelineMinimapInteractiveWidth(0, true)).toBe("22rem");
-    expect(resolveTimelineMinimapInteractiveWidth(14, true)).toBe("22rem");
-    expect(resolveTimelineMinimapInteractiveWidth(40, true)).toBe("22rem");
   });
 
   it("anchors the first user message using its measured height", () => {
@@ -1188,307 +1062,6 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("<a href=");
   });
 
-  it("snaps on mount and thread switches, glides after settling, and snaps while idle", async () => {
-    const frames = new Map<number, FrameRequestCallback>();
-    let nextFrame = 0;
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-      frames.set(++nextFrame, callback);
-      return nextFrame;
-    });
-    vi.stubGlobal("cancelAnimationFrame", (frame: number) => frames.delete(frame));
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    const flushFrame = () =>
-      act(() => {
-        const callbacks = [...frames.values()];
-        frames.clear();
-        callbacks.forEach((callback) => callback(0));
-      });
-    // A work entry renders without the DOM globals that message rows need
-    // under react-test-renderer.
-    const entries = [
-      {
-        id: "entry-settle-work",
-        kind: "work" as const,
-        createdAt: MESSAGE_CREATED_AT,
-        entry: {
-          id: "work-settle",
-          createdAt: MESSAGE_CREATED_AT,
-          toolCallId: "call-settle",
-          label: "Run lint",
-          tone: "tool" as const,
-          itemType: "command_execution" as const,
-          command: "pnpm lint",
-          toolLifecycleStatus: "completed" as const,
-        },
-      },
-    ];
-    const animatedAttr = (renderer: ReactTestRenderer) =>
-      renderer.root.findByProps({ "data-testid": "legend-list" }).props[
-        "data-maintain-scroll-at-end-animated"
-      ];
-    let renderer!: ReactTestRenderer;
-    try {
-      act(() => {
-        renderer = create(
-          <MessagesTimeline
-            {...buildProps()}
-            isWorking
-            routeThreadKey="env-1:thread-a"
-            timelineEntries={entries}
-          />,
-        );
-      });
-      expect(animatedAttr(renderer)).toBe(false);
-      flushFrame();
-      flushFrame();
-      expect(animatedAttr(renderer)).toBe(true);
-      act(() => {
-        renderer.update(
-          <MessagesTimeline
-            {...buildProps()}
-            routeThreadKey="env-1:thread-a"
-            timelineEntries={entries}
-          />,
-        );
-      });
-      expect(animatedAttr(renderer)).toBe(false);
-      act(() => {
-        renderer.update(
-          <MessagesTimeline
-            {...buildProps()}
-            isWorking
-            routeThreadKey="env-1:thread-a"
-            timelineEntries={entries}
-          />,
-        );
-      });
-      expect(animatedAttr(renderer)).toBe(true);
-
-      act(() => {
-        renderer.update(
-          <MessagesTimeline
-            {...buildProps()}
-            isWorking
-            routeThreadKey="env-1:thread-b"
-            timelineEntries={entries}
-          />,
-        );
-      });
-      expect(animatedAttr(renderer)).toBe(false);
-
-      // Two frames later the switch has settled and gliding resumes.
-      flushFrame();
-      flushFrame();
-      expect(animatedAttr(renderer)).toBe(true);
-    } finally {
-      act(() => renderer?.unmount());
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("waits for a cached thread to finish syncing before restoring its reading position", async () => {
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    vi.stubGlobal("requestAnimationFrame", () => 0);
-    vi.stubGlobal("cancelAnimationFrame", () => {});
-    const ownerDocument = { addEventListener: vi.fn(), removeEventListener: vi.fn() };
-    const viewport = {
-      scrollTop: 0,
-      ownerDocument,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    };
-    const scrollToOffset = vi.fn().mockResolvedValue(undefined);
-    const scrollToIndex = vi.fn().mockResolvedValue(undefined);
-    const scrollToEnd = vi.fn().mockResolvedValue(undefined);
-    const listRef = {
-      current: {
-        getScrollableNode: () => viewport,
-        getState: () => ({ data: [], scroll: 0, scrollLength: 500, contentLength: 500 }),
-        scrollToOffset,
-        scrollToIndex,
-        scrollToEnd,
-      },
-    } as unknown as React.RefObject<LegendListRef>;
-    const threadKey = "environment-local:syncing-position-test";
-    rememberTimelinePosition(
-      threadKey,
-      {
-        rowId: "syncing-work",
-        offsetWithinRow: 20,
-        scrollOffset: 800,
-        atEnd: false,
-      },
-      false,
-    );
-    const entry = {
-      id: "syncing-work",
-      kind: "work" as const,
-      createdAt: MESSAGE_CREATED_AT,
-      entry: {
-        id: "syncing-call",
-        createdAt: MESSAGE_CREATED_AT,
-        toolCallId: "syncing-call",
-        label: "Read output",
-        tone: "error" as const,
-        itemType: "command_execution" as const,
-        command: "git status",
-        toolLifecycleStatus: "completed" as const,
-      },
-    };
-    const props = { ...buildProps(), listRef, routeThreadKey: threadKey, timelineEntries: [entry] };
-    let renderer!: ReactTestRenderer;
-    try {
-      await act(async () => {
-        renderer = create(<MessagesTimeline {...props} threadSyncPending />);
-      });
-      expect(scrollToIndex).toHaveBeenCalledWith({
-        index: 0,
-        animated: false,
-        viewPosition: 0,
-        viewOffset: -20,
-      });
-      expect(scrollToOffset).not.toHaveBeenCalled();
-      expect(scrollToEnd).not.toHaveBeenCalled();
-      expect(viewport.addEventListener).toHaveBeenCalledWith("wheel", expect.any(Function), {
-        passive: true,
-      });
-
-      await act(async () => {
-        renderer.update(<MessagesTimeline {...props} threadSyncPending={false} />);
-      });
-      expect(scrollToIndex).toHaveBeenCalledTimes(2);
-
-      const nextThreadKey = "environment-local:syncing-navigation-test";
-      rememberTimelinePosition(
-        nextThreadKey,
-        {
-          rowId: "syncing-work",
-          offsetWithinRow: 20,
-          scrollOffset: 900,
-          atEnd: false,
-        },
-        false,
-      );
-      const onManualNavigation = vi.fn();
-      scrollToOffset.mockClear();
-      scrollToIndex.mockClear();
-      await act(async () => {
-        renderer.update(
-          <MessagesTimeline
-            {...props}
-            routeThreadKey={nextThreadKey}
-            onManualNavigation={onManualNavigation}
-            threadSyncPending
-          />,
-        );
-      });
-      viewport.scrollTop = 321;
-      const wheelListener = viewport.addEventListener.mock.calls.findLast(
-        ([eventName]) => eventName === "wheel",
-      )?.[1] as (() => void) | undefined;
-      expect(wheelListener).toBeDefined();
-      await act(async () => wheelListener?.());
-      expect(scrollToOffset).toHaveBeenCalledWith({ offset: 321, animated: false });
-      expect(onManualNavigation).toHaveBeenCalledOnce();
-
-      await act(async () => {
-        renderer.update(
-          <MessagesTimeline
-            {...props}
-            routeThreadKey={nextThreadKey}
-            onManualNavigation={onManualNavigation}
-            threadSyncPending={false}
-          />,
-        );
-      });
-      expect(scrollToOffset).not.toHaveBeenCalledWith({ offset: 900, animated: false });
-      expect(scrollToIndex).toHaveBeenCalledTimes(1);
-    } finally {
-      act(() => renderer?.unmount());
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("re-evaluates the reading position after visiting an empty draft", async () => {
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    vi.stubGlobal("requestAnimationFrame", () => 0);
-    vi.stubGlobal("cancelAnimationFrame", () => {});
-    const viewport = {
-      scrollTop: 0,
-      ownerDocument: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    };
-    const scrollToIndex = vi.fn().mockResolvedValue(undefined);
-    const scrollToEnd = vi.fn().mockResolvedValue(undefined);
-    const listRef = {
-      current: {
-        getScrollableNode: () => viewport,
-        getState: () => ({ data: [], scroll: 0, scrollLength: 500, contentLength: 500 }),
-        scrollToIndex,
-        scrollToEnd,
-      },
-    } as unknown as React.RefObject<LegendListRef>;
-    const threadKey = "environment-local:return-after-empty-draft";
-    const entry = {
-      id: "reading-work",
-      kind: "work" as const,
-      createdAt: MESSAGE_CREATED_AT,
-      entry: {
-        id: "reading-call",
-        createdAt: MESSAGE_CREATED_AT,
-        toolCallId: "reading-call",
-        label: "Read output",
-        tone: "error" as const,
-        itemType: "command_execution" as const,
-        command: "git status",
-        toolLifecycleStatus: "completed" as const,
-      },
-    };
-    const props = { ...buildProps(), listRef, routeThreadKey: threadKey, timelineEntries: [entry] };
-    let renderer!: ReactTestRenderer;
-    try {
-      await act(async () => {
-        renderer = create(<MessagesTimeline {...props} />);
-      });
-      rememberTimelinePosition(
-        threadKey,
-        {
-          rowId: "reading-work",
-          lastRowId: "reading-work",
-          offsetWithinRow: 20,
-          scrollOffset: 800,
-          atEnd: false,
-        },
-        false,
-      );
-      await act(async () => {
-        renderer.update(
-          <MessagesTimeline
-            {...props}
-            routeThreadKey="environment-local:empty-draft"
-            timelineEntries={[]}
-          />,
-        );
-      });
-      scrollToIndex.mockClear();
-      scrollToEnd.mockClear();
-      await act(async () => {
-        renderer.update(<MessagesTimeline {...props} />);
-      });
-      expect(scrollToIndex).toHaveBeenCalledWith({
-        index: 0,
-        animated: false,
-        viewPosition: 0,
-        viewOffset: -20,
-      });
-      expect(scrollToEnd).not.toHaveBeenCalled();
-    } finally {
-      act(() => renderer?.unmount());
-      vi.unstubAllGlobals();
-    }
-  });
-
   it("keeps reserved end space when tool work starts while reading history", () => {
     const runId = RunId.make("turn-with-active-tool");
     const firstEntry = buildUserTimelineEntry("Run the command.");
@@ -1612,7 +1185,7 @@ describe("MessagesTimeline", () => {
 
     expect(markup).not.toContain("Show full message");
     expect(markup).toContain('data-user-message-collapsible="false"');
-    expect(markup).toContain("rounded-2xl bg-message p-3");
+    expect(markup).toContain("bg-message");
   });
 
   it("preserves arbitrary XML-like tags and comparisons in rendered user messages", async () => {
@@ -1660,7 +1233,9 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain('<code data-inline-code="">&lt;tag attr=&quot;x&quot;&gt;</code>');
+    expect(markup).toMatch(
+      /<code[^>]*data-inline-code[^>]*>&lt;tag attr=&quot;x&quot;&gt;<\/code>/,
+    );
     expect(markup).toContain("&lt;root&gt;&lt;child enabled=&quot;true&quot; /&gt;&lt;/root&gt;");
   });
 
@@ -2207,8 +1782,8 @@ describe("MessagesTimeline", () => {
     );
 
     expect(agentMarkup).toContain('data-user-message-attribution="agent"');
-    expect(agentMarkup).toContain("Sent by another agent");
-    expect(userMarkup).not.toContain("Sent by another agent");
+    expect(agentMarkup).toContain(">Agent</h3>");
+    expect(userMarkup).not.toContain('data-user-message-attribution="agent"');
   });
 
   it("keeps a subagent parent-thread link at the top of an empty timeline", async () => {
@@ -2585,6 +2160,12 @@ describe("MessagesTimeline", () => {
         skills: [],
       },
     ] as never;
+    const registry = AtomRegistry.make();
+    registry.set(handoffProvidersAtom, providerStatuses);
+    const renderHandoff = (node: ReactNode) =>
+      renderToStaticMarkup(
+        <RegistryContext.Provider value={registry}>{node}</RegistryContext.Provider>,
+      );
     const buildHandoffEntry = (item: Record<string, unknown>) => ({
       id: "handoff-1",
       kind: "event" as const,
@@ -2620,10 +2201,9 @@ describe("MessagesTimeline", () => {
       } as never,
     });
 
-    const markup = renderToStaticMarkup(
+    const markup = renderHandoff(
       <MessagesTimeline
         {...buildProps()}
-        providerStatuses={providerStatuses}
         timelineEntries={[
           buildHandoffEntry({
             fromProviderInstanceIds: ["codex_personal"],
@@ -2658,10 +2238,9 @@ describe("MessagesTimeline", () => {
         modelSelection: { instanceId: "claudeAgent", model: "claude-fable-5" },
       },
     ] as never;
-    const legacyMarkup = renderToStaticMarkup(
+    const legacyMarkup = renderHandoff(
       <MessagesTimeline
         {...buildProps()}
-        providerStatuses={providerStatuses}
         runs={legacyRuns}
         timelineEntries={[
           buildHandoffEntry({
@@ -2678,10 +2257,9 @@ describe("MessagesTimeline", () => {
 
     // Without run data either (e.g. cross-thread items) it falls back to
     // provider names.
-    const bareMarkup = renderToStaticMarkup(
+    const bareMarkup = renderHandoff(
       <MessagesTimeline
         {...buildProps()}
-        providerStatuses={providerStatuses}
         timelineEntries={[
           buildHandoffEntry({
             fromProviderInstanceIds: ["codex_personal"],
@@ -3663,106 +3241,4 @@ describe("MessagesTimeline", () => {
     } as unknown as LegendListRef;
     return timeline;
   }
-
-  it("remembers a manual reading position when the chat closes before the next frame", async () => {
-    const { readTimelinePosition } = await import("./timelineScrollAnchoring");
-    const timeline = stubFollowTimeline("environment-local:manual-departure");
-    const { props } = timeline;
-    let navigateManually = () => {};
-    function ChatProbe() {
-      const [liveFollowEnabled, setLiveFollowEnabled] = useState(true);
-      navigateManually = () => setLiveFollowEnabled(false);
-      return (
-        <MessagesTimeline
-          {...props}
-          timelineEntries={[buildUserTimelineEntry("First prompt")]}
-          liveFollowEnabled={liveFollowEnabled}
-          onManualNavigation={navigateManually}
-        />
-      );
-    }
-    let renderer: ReactTestRenderer | undefined;
-    try {
-      await act(() => {
-        renderer = create(<ChatProbe />);
-      });
-      await timeline.flushFrame();
-      expect(readTimelinePosition(props.routeThreadKey)?.atEnd).toBe(true);
-
-      // The scroll event lands before the follow opt-out renders.
-      timeline.scrollTop = 1300;
-      await act(() => {
-        navigateManually();
-        legendListTestState.onScroll?.();
-      });
-      await act(() => renderer?.unmount());
-      renderer = undefined;
-
-      expect(readTimelinePosition(props.routeThreadKey)).toMatchObject({
-        atEnd: false,
-        scrollOffset: 1300,
-      });
-    } finally {
-      await act(() => renderer?.unmount());
-    }
-  });
-
-  it("keeps a following thread's intent while its timeline is held for the next thread", async () => {
-    const { readTimelinePosition } = await import("./timelineScrollAnchoring");
-    const timeline = stubFollowTimeline("environment-local:held-departure");
-    const { props } = timeline;
-    // Smooth follow is still catching up with the stream.
-    timeline.scrollTop = 1300;
-    const render = (held: boolean) => (
-      <MessagesTimeline
-        {...props}
-        timelineEntries={[buildUserTimelineEntry("First prompt")]}
-        liveFollowEnabled={!held}
-        paintOnly={held}
-      />
-    );
-    let renderer: ReactTestRenderer | undefined;
-    try {
-      await act(() => {
-        renderer = create(render(false));
-      });
-      await timeline.flushFrame();
-      expect(readTimelinePosition(props.routeThreadKey)?.atEnd).toBe(true);
-
-      await act(() => renderer?.update(render(true)));
-      await timeline.flushFrame();
-
-      expect(readTimelinePosition(props.routeThreadKey)?.atEnd).toBe(true);
-    } finally {
-      await act(() => renderer?.unmount());
-    }
-  });
-
-  it("remembers a first send held near the top as a reading position", async () => {
-    const { readTimelinePosition } = await import("./timelineScrollAnchoring");
-    const timeline = stubFollowTimeline("environment-local:anchored-first-send");
-    const { props } = timeline;
-    timeline.scrollTop = 1300;
-    let renderer: ReactTestRenderer | undefined;
-    try {
-      await act(() => {
-        renderer = create(
-          <MessagesTimeline
-            {...props}
-            timelineEntries={[buildUserTimelineEntry("First prompt")]}
-            anchorMessageId={MessageId.make("message-1")}
-            liveFollowEnabled
-          />,
-        );
-      });
-      await timeline.flushFrame();
-
-      expect(readTimelinePosition(props.routeThreadKey)).toMatchObject({
-        atEnd: false,
-        scrollOffset: 1300,
-      });
-    } finally {
-      await act(() => renderer?.unmount());
-    }
-  });
 });

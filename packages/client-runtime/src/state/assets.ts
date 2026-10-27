@@ -8,12 +8,13 @@ import {
   type ProjectCloneSnapshot,
   WS_METHODS,
 } from "@t3tools/contracts";
-import { mediaMimeTypeFromExtension } from "@t3tools/shared/filePreview";
+import { mediaMimeTypeFromExtension } from "@t3tools/shared/mediaPreview";
 import { isWindowsAbsolutePath } from "@t3tools/shared/path";
 import {
   getProjectFaviconResourceKey,
   isProjectFaviconFallbackUrl,
 } from "@t3tools/shared/projectFavicon";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as Exit from "effect/Exit";
@@ -88,6 +89,7 @@ export type AssetUrlState =
       readonly sourcePath?: string;
       /** Pixel size from the image header, when the server could read one. */
       readonly imageDimensions?: AssetImageDimensions;
+      readonly fileRevision?: string;
     };
 
 /** Shown in place of a host file the session lacks `filesystem:read` for. */
@@ -140,6 +142,7 @@ export function assetUrlStateFromResult(
     ...(result.value.imageDimensions !== undefined
       ? { imageDimensions: result.value.imageDimensions }
       : {}),
+    ...(result.value.fileRevision !== undefined ? { fileRevision: result.value.fileRevision } : {}),
   };
 }
 
@@ -228,8 +231,10 @@ export function createAssetEnvironmentAtoms<R, E>(
     )
       return yield* error;
     const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-    const asset = yield* registry.run(local.environmentId, read(input));
-    // Callers resolve against the thread's server, so preserve the local server's origin.
+    // Map the full cause so retry defects and interruption survive.
+    const asset = yield* registry
+      .run(local.environmentId, read(input))
+      .pipe(Effect.catchCause((cause) => Effect.failCause(Cause.map(cause, () => error))));
     return { ...asset, relativeUrl: new URL(asset.relativeUrl, local.httpBaseUrl).href };
   });
   const createUrl = createEnvironmentQueryAtomFamily(runtime, {

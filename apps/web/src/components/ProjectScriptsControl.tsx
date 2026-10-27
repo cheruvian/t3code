@@ -28,7 +28,7 @@ import {
   SettingsIcon,
   WrenchIcon,
 } from "lucide-react";
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useState } from "react";
 
 import { commandForProjectScript, primaryProjectScript } from "~/projectScripts";
 import { shortcutLabelForCommand } from "~/keybindings";
@@ -177,17 +177,14 @@ export default function ProjectScriptsControl({
     return relevant.some(({ lock }) => lock.phase === "checkout" || lock.phase === "release");
   };
 
-  const primaryScript = useMemo(() => {
+  const primaryScript = (() => {
     if (preferredScriptId) {
       const preferred = scripts.find((script) => script.id === preferredScriptId);
       if (preferred) return preferred;
     }
     return primaryProjectScript(scripts);
-  }, [preferredScriptId, scripts]);
-  const importableScripts = useMemo(
-    () => importableProjectFileScripts(fileScripts, scripts),
-    [fileScripts, scripts],
-  );
+  })();
+  const importableScripts = (() => importableProjectFileScripts(fileScripts, scripts))();
 
   const openAddDialog = () => {
     setEditorRequest({ scriptId: null, initial: EMPTY_PROJECT_SCRIPT_INPUT });
@@ -205,11 +202,8 @@ export default function ProjectScriptsControl({
     setEditorRequest({ ...editorRequestForScript(script, keybindings), scriptId: null });
   };
 
-  const submitScript = useCallback(
-    (scriptId: string | null, input: NewProjectScriptInput) =>
-      scriptId === null ? onAddScript(input) : onUpdateScript(scriptId, input),
-    [onAddScript, onUpdateScript],
-  );
+  const submitScript = (scriptId: string | null, input: NewProjectScriptInput) =>
+    scriptId === null ? onAddScript(input) : onUpdateScript(scriptId, input);
 
   const importFileScript = async (fileScript: T3ProjectFileScript) => {
     const payload: NewProjectScriptInput = {

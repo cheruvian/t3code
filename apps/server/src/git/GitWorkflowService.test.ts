@@ -1,14 +1,11 @@
-import { assert, describe, expect, it, vi } from "@effect/vitest";
+import { assert, expect, it, vi } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-
 import { VcsRepositoryDetectionError } from "@t3tools/contracts";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as FileSystem from "effect/FileSystem";
-
 import * as ServerConfig from "../config.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as GitManager from "./GitManager.ts";
@@ -30,7 +27,7 @@ function layer(input: {
   );
 }
 
-describe("GitWorkflowService", () => {
+it.layer(NodeServices.layer)("GitWorkflowService", (it) => {
   it.effect("reports a non-Git VCS repository as not a Git repository", () =>
     Effect.gen(function* () {
       const workflow = yield* GitWorkflowService.GitWorkflowService;

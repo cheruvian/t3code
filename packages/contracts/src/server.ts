@@ -23,7 +23,7 @@ import {
   ResolvedKeybindingsConfig,
 } from "./keybindings.ts";
 import { EditorId, FileManagerRevealKind, RemoteOpenTarget } from "./editor.ts";
-import { ModelCapabilities } from "./model.ts";
+import { ModelCapabilities, ProviderOptionDescriptor } from "./model.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./providerUsageLimits.ts";
@@ -125,17 +125,9 @@ export const ServerProviderSkill = Schema.Struct({
   enabled: Schema.Boolean,
   displayName: Schema.optional(TrimmedNonEmptyString),
   shortDescription: Schema.optional(TrimmedNonEmptyString),
-  /**
-   * The skill is hidden from the agent's own skill tool, so only the user can
-   * start it — Claude Code's `disable-model-invocation`. Composers must offer
-   * it as a slash command; naming it in prose does nothing.
-   */
+  /** Claude disable-model-invocation: only users can invoke; composers must offer a slash command. */
   userInvocationOnly: Schema.optional(Schema.Boolean),
-  /**
-   * The mirror of {@link ServerProviderSkill.userInvocationOnly}: Claude Code's
-   * `user-invocable: false` keeps the skill out of its own slash commands, so
-   * only the agent can start it. Composers must not offer it under `/`.
-   */
+  /** Claude user-invocable:false: only agents can invoke; composers must hide the slash command. */
   userInvocable: Schema.optional(Schema.Boolean),
 });
 export type ServerProviderSkill = typeof ServerProviderSkill.Type;
@@ -147,6 +139,7 @@ export const ServerProviderWorkspaceSnapshot = Schema.Struct({
   /** Skills are available, but command discovery still needs a retry. */
   slashCommandsPending: Schema.optional(Schema.Boolean),
   skills: Schema.Array(ServerProviderSkill),
+  optionDescriptors: Schema.optional(Schema.Array(ProviderOptionDescriptor)),
 });
 export type ServerProviderWorkspaceSnapshot = typeof ServerProviderWorkspaceSnapshot.Type;
 
@@ -164,23 +157,7 @@ export function isProviderWorkspaceSnapshotCurrent(
   return nowMs - Date.parse(snapshot.checkedAt) < PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS;
 }
 
-/**
- * Availability of a configured provider instance from the runtime's POV.
- *
- *  - `available` — the build ships this driver and an instance is wired
- *    up. Default for legacy snapshots produced from the closed
- *    `ServerSettings.providers` map.
- *  - `unavailable` — the user's `ServerSettings.providerInstances` (or a
- *    persisted thread / session binding) references a driver this build
- *    doesn't ship. Common after rolling back from a fork or PR branch
- *    that introduced a new driver. The snapshot is preserved so the UI
- *    can render "missing driver" affordances and so the data round-trips
- *    when the user moves back to the fork.
- *
- * Snapshots with `availability: "unavailable"` MUST set
- * `installed: false` and `enabled: false`; the runtime refuses turn
- * starts against them with a structured error.
- */
+/** Unavailable snapshots must set installed and enabled false. */
 export const ServerProviderAvailability = Schema.Literals(["available", "unavailable"]);
 export type ServerProviderAvailability = typeof ServerProviderAvailability.Type;
 
@@ -266,16 +243,14 @@ export const ServerProviderUpdateState = Schema.Struct({
 export type ServerProviderUpdateState = typeof ServerProviderUpdateState.Type;
 
 export const ServerProvider = Schema.Struct({
-  // Routing key for the configured instance this snapshot represents. This
-  // is the only stable identity consumers may use for provider routing.
+  // Only instanceId is stable enough for provider routing.
   instanceId: ProviderInstanceId,
   // Open driver kind slug that selects the implementation handling this
   // instance. It is metadata/capability context, not a routing key.
   driver: ProviderDriverKind,
   displayName: Schema.optional(TrimmedNonEmptyString),
   accentColor: Schema.optional(TrimmedNonEmptyString),
-  // Optional visual identity supplied by the owning provider driver. Clients
-  // must still validate remote URLs against that driver's trusted origin.
+  // Validate driver-supplied remote icons against the driver's trusted origin.
   iconUrl: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(2_048))),
   badgeLabel: Schema.optional(TrimmedNonEmptyString),
   continuation: Schema.optional(ServerProviderContinuation),
@@ -312,6 +287,9 @@ export const ServerProvider = Schema.Struct({
   enabled: Schema.Boolean,
   installed: Schema.Boolean,
   version: Schema.NullOr(TrimmedNonEmptyString),
+  // Version reported by the installed CLI for a local provider with a separate
+  // server. Null means unknown; absence keeps legacy snapshots on `version`.
+  installedVersion: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   status: ServerProviderState,
   auth: ServerProviderAuth,
   checkedAt: IsoDateTime,
@@ -361,24 +339,27 @@ export type ServerProviders = typeof ServerProviders.Type;
 export const isProviderAvailable = (snapshot: ServerProvider): boolean =>
   snapshot.availability !== "unavailable";
 
-/**
- * Treat an absent `supportsTextGeneration` as supported so legacy
- * producers, which all support application text generation, keep working
- * without resending the field.
- */
+/** Legacy producers omit this field and support text generation. */
 export const isProviderTextGenerationCapable = (snapshot: ServerProvider): boolean =>
   snapshot.supportsTextGeneration !== false;
+
+export const OtlpEndpointSource = Schema.Literals(["environment", "bootstrap", "settings"]);
+export type OtlpEndpointSource = typeof OtlpEndpointSource.Type;
 
 export const ServerObservability = Schema.Struct({
   logsDirectoryPath: TrimmedNonEmptyString,
   localTracingEnabled: Schema.Boolean,
   otlpTracesUrl: Schema.optional(TrimmedNonEmptyString),
+  otlpTracesSource: Schema.optional(OtlpEndpointSource),
+  otlpTracesVariable: Schema.optional(TrimmedNonEmptyString),
   otlpTracesEnabled: Schema.Boolean,
   otlpMetricsUrl: Schema.optional(TrimmedNonEmptyString),
+  otlpMetricsSource: Schema.optional(OtlpEndpointSource),
+  otlpMetricsVariable: Schema.optional(TrimmedNonEmptyString),
   otlpMetricsEnabled: Schema.Boolean,
   otlpLogsUrl: Schema.optional(TrimmedNonEmptyString),
-  // Absent on servers from before the log signal shipped, so a newer client
-  // reads those as having no log export rather than rejecting the whole config.
+  otlpLogsSource: Schema.optional(OtlpEndpointSource),
+  otlpLogsVariable: Schema.optional(TrimmedNonEmptyString),
   otlpLogsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 });
 export type ServerObservability = typeof ServerObservability.Type;
@@ -610,12 +591,7 @@ export const EnvironmentThemeColor = Schema.String.check(
 );
 export type EnvironmentThemeColor = typeof EnvironmentThemeColor.Type;
 
-/**
- * Matches the client-side theme id rule, so a published id is selectable.
- * The appearance keywords are excluded outright: a published `dark.json`
- * would otherwise capture every client whose stored preference is the stock
- * `"dark"`, retinting people who never chose it.
- */
+/** Reserve appearance keywords so published themes cannot replace stock preferences. */
 export const EnvironmentThemeId = Schema.String.check(
   Schema.isPattern(/^(?!(?:system|light|dark)$)[a-z0-9](?:[a-z0-9-]{0,47})$/),
 );
@@ -643,11 +619,7 @@ const environmentThemeFields = {
   /** Shown on the theme card, e.g. the desktop theme's own name. */
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(48)),
   appearance: Schema.Literals(["light", "dark"]),
-  /**
-   * Seed colors. When present, clients derive the full palette from them with
-   * the guided theme editor's generator and layer `colors` on top; when
-   * absent, `colors` is the palette, as in an exported theme file.
-   */
+  /** Derive the palette from canvas/accent, then overlay colors; without them, colors is the palette. */
   canvas: Schema.optional(EnvironmentThemeColor),
   accent: Schema.optional(EnvironmentThemeColor),
   colors: Schema.optional(EnvironmentThemeColors),
@@ -685,10 +657,7 @@ export function environmentThemeFileHasColors(file: EnvironmentThemeFile): boole
   );
 }
 
-/**
- * "tailnet" when the address is on this machine's Tailscale interface, "lan"
- * for any other private address, including other VPNs in 100.64.0.0/10.
- */
+/** tailnet means this machine's Tailscale interface; other private addresses are lan. */
 export const ServerDirectEndpointKind = Schema.Literals(["lan", "tailnet"]);
 export type ServerDirectEndpointKind = typeof ServerDirectEndpointKind.Type;
 
@@ -697,6 +666,19 @@ export const ServerDirectEndpoint = Schema.Struct({
   httpBaseUrl: TrimmedNonEmptyString,
 });
 export type ServerDirectEndpoint = typeof ServerDirectEndpoint.Type;
+
+/**
+ * A stretch where the server's event loop could not run, so it answered
+ * nothing and clients may have dropped the connection.
+ */
+export const ServerEventLoopStall = Schema.Struct({
+  detectedAt: IsoDateTime,
+  durationMs: NonNegativeInt,
+  /** One-minute load average when the stall was seen. Absent on Windows, which has none. */
+  loadAverage: Schema.optionalKey(Schema.Number),
+  cpuCount: PositiveInt,
+});
+export type ServerEventLoopStall = typeof ServerEventLoopStall.Type;
 
 export const ServerConfig = Schema.Struct({
   environment: ExecutionEnvironmentDescriptor,
@@ -715,19 +697,22 @@ export const ServerConfig = Schema.Struct({
    * sshd or no advertisable name.
    */
   remoteOpenTargets: Schema.optionalKey(ForwardCompatibleArray(RemoteOpenTarget)),
-  /**
-   * Direct addresses this server listens on right now (LAN and tailnet), so a
-   * client connected one way can learn the others. Hints only: the client
-   * checks each address answers as this environment before using it. Absent on
-   * servers that predate the feature; empty when bound to loopback only.
-   */
+  /** Hints only; verify each address answers as this environment. */
   directEndpoints: Schema.optionalKey(ForwardCompatibleArray(ServerDirectEndpoint)),
   observability: ServerObservability,
   settings: ServerSettings,
   /** Whether shell subscriptions can emit an opt-in catch-up completion marker. */
   shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
-  /** Whether shell.openInEditor honors `LaunchEditorInput.reveal` for the
-      file-manager editor. */
+  /**
+   * The shell can leave idle subagent children out of snapshots (`omitIdleSubagents`), and
+   * `getThreadFamily` and `getWorktreeThreadIds` serve the rows it leaves out.
+   */
+  shellThreadFamilies: Schema.optionalKey(Schema.Boolean),
+  /**
+   * The shell can leave older settled threads out of snapshots (`omitOlderSettled`), and
+   * `getOlderSettledThreads` serves them. Only servers that also advertise `shellThreadFamilies`.
+   */
+  shellOlderSettled: Schema.optionalKey(Schema.Boolean),
   shellRevealInFileManager: Schema.optionalKey(Schema.Boolean),
   /** File-manager wording clients should use for reveal actions. */
   shellRevealInFileManagerKind: Schema.optionalKey(FileManagerRevealKind),
@@ -735,11 +720,7 @@ export const ServerConfig = Schema.Struct({
   assistantPreviews: Schema.optionalKey(Schema.Boolean),
   /** Whether thread subscriptions can emit an opt-in catch-up completion marker. */
   threadResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
-  /**
-   * Whether thread detail reads accept a turn window (`turnLimit`/
-   * `beforeCursor`) and return `page` metadata. Clients must not send window
-   * fields to servers that don't advertise this.
-   */
+  /** Send window fields only when advertised. */
   threadSnapshotPagination: Schema.optionalKey(Schema.Boolean),
   /** Whether thread reads accept the reasoningMessages opt-in. */
   reasoningMessages: Schema.optionalKey(Schema.Boolean),
@@ -757,18 +738,18 @@ export const ServerConfig = Schema.Struct({
    */
   newProjectsRoot: Schema.optionalKey(TrimmedNonEmptyString),
   /**
-   * Palettes published by this environment's machine. Never sent in a config
-   * snapshot: the theme stream emits the current set before any change, so a
-   * snapshot carrying it too would hand every subscriber the same array twice
-   * per connect. Clients populate this by projecting `environmentThemesUpdated`,
-   * and it stays absent for subscribers that did not opt in.
+   * The latest stall long enough to notice, sent only for a few minutes after
+   * it. A client that reconnects reads it to say why the host stopped
+   * answering. Clients do not cache it, since it describes the host at connect.
+   */
+  lastEventLoopStall: Schema.optionalKey(ServerEventLoopStall),
+  /**
+   * Never sent in a config snapshot: the theme stream emits the current set
+   * before any change, so a snapshot carrying it too would hand every
+   * subscriber the same array twice per connect.
    */
   environmentThemes: Schema.optional(Schema.Array(EnvironmentTheme)),
-  /**
-   * Quota reported by configured `usageLimitSources`. Like themes, never in
-   * a snapshot: the source stream emits the current set on subscribe, and it
-   * stays absent for subscribers that did not opt in.
-   */
+  /** Stream-only and opt-in; the source stream emits the current set on subscribe. */
   usageLimitSources: Schema.optional(UsageLimitSourceSnapshots),
 });
 export type ServerConfig = typeof ServerConfig.Type;
@@ -1006,8 +987,7 @@ export class ServerProviderUpdateError extends Schema.TaggedError<ServerProvider
 }
 
 export const ServerSelfUpdateInput = Schema.Struct({
-  /** Exact npm version of the `t3` package to install (never a dist-tag, so
-      the server and the acknowledging client agree on what was requested). */
+  /** Exact npm version, never a dist-tag, so server and client agree on the request. */
   targetVersion: TrimmedNonEmptyString,
   /** Opt-in recovery for provider turns that are running when the server
       hands off to its replacement. Missing and false keep restart behavior

@@ -152,18 +152,20 @@ const make = Effect.gen(function* () {
       }),
     ),
   );
-  const writeDecision = (id: string, action: "apply" | "cancel") =>
-    Effect.gen(function* () {
-      yield* fs.makeDirectory(directory, { recursive: true });
-      const temporary = `${decisionPath}.${process.pid}.tmp`;
-      const encoded = yield* encodeDecision({
-        id,
-        action,
-        expiresAt: (yield* Clock.currentTimeMillis) + 30_000,
-      });
-      yield* fs.writeFileString(temporary, encoded, { mode: 0o600 });
-      yield* fs.rename(temporary, decisionPath);
+  const writeDecision = Effect.fn("writeDecision")(function* (
+    id: string,
+    action: "apply" | "cancel",
+  ) {
+    yield* fs.makeDirectory(directory, { recursive: true });
+    const temporary = `${decisionPath}.${process.pid}.tmp`;
+    const encoded = yield* encodeDecision({
+      id,
+      action,
+      expiresAt: (yield* Clock.currentTimeMillis) + 30_000,
     });
+    yield* fs.writeFileString(temporary, encoded, { mode: 0o600 });
+    yield* fs.rename(temporary, decisionPath);
+  });
   const thaw = () => {
     admission.thaw();
     approved = undefined;

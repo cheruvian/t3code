@@ -8,6 +8,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { SourceControlProviderKind } from "./sourceControl.ts";
 
 /** Wire version for orchestration snapshots, streams, commands, and RPC payloads. */
 export const ORCHESTRATION_PROTOCOL_VERSION = 2;
@@ -53,11 +54,7 @@ export const ExecutionEnvironmentPlatform = Schema.Struct({
   machine: ForwardCompatibleOptional(EnvironmentMachineKind),
 });
 
-/**
- * Where a new thread runs: the project's current checkout ("local") or a
- * fresh git worktree ("worktree"). Lives here (not settings.ts) so
- * orchestration contracts can reference it without an import cycle.
- */
+// Kept outside settings.ts to avoid an orchestration import cycle.
 export const ThreadEnvMode = Schema.Literals(["local", "worktree"]);
 export type ThreadEnvMode = typeof ThreadEnvMode.Type;
 
@@ -114,9 +111,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       servers from before the pull-request workspace shipped, so clients must not probe them. */
   pullRequests: Schema.optionalKey(Schema.Boolean),
   pullRequestChecks: Schema.optionalKey(Schema.Boolean),
-  /** Server understands canonical inline context links plus their message context records.
-      Absent on servers from before inline context shipped, which drop the records and forward
-      the links as literal text -- so a client must serialize context the legacy way for them. */
+  /** Absent on older servers; serialize context as legacy text for them. */
   inlineMessageContext: Schema.optionalKey(Schema.Boolean),
   /** Server rejects required worktrees instead of falling back to the project checkout. */
   requiredWorktreeBootstrap: Schema.optionalKey(Schema.Boolean),
@@ -128,9 +123,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadAutoSettlement: Schema.optionalKey(Schema.Boolean),
   storageCleanup: Schema.optionalKey(Schema.Boolean),
   storageCleanupRun: Schema.optionalKey(Schema.Boolean),
-  /** Server streams database size and reclaimable space for the Storage settings notice. */
   databaseStorage: Schema.optionalKey(Schema.Boolean),
-  /** Server checks OTLP endpoints for the telemetry export settings. */
   otlpEndpointCheck: Schema.optionalKey(Schema.Boolean),
   projectWorktreeCleanup: Schema.optionalKey(Schema.Boolean),
   settledWorktreeCleanup: Schema.optionalKey(Schema.Boolean),
@@ -144,23 +137,19 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadEnvironmentMove: Schema.optionalKey(Schema.Boolean),
   /** Server resolves `projectSettingsOverrides`; older servers ignore the key. */
   projectSettingsOverrides: Schema.optionalKey(Schema.Boolean),
-  /** Server resolves a project's `providerInstances` override entry. Older
-      servers decode the key away (unknown fields are stripped, not
-      rejected), so the per-project provider switch would silently do
-      nothing; clients hide it instead of sending a patch that goes nowhere. */
+  /** Hide the switch when absent; older servers silently drop per-project provider patches. */
   projectProviderInstanceOverrides: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.snooze / thread.unsnooze commands. Same
       version-skew contract as threadSettlement. */
   threadSnooze: Schema.optionalKey(Schema.Boolean),
-  /** Server streams themes an environment publishes. Absent on servers from
-      before environment themes shipped, which never emit the events -- so a
-      client reconnecting to one must drop published themes rather than keep
-      showing a set nothing will ever update. */
+  /** Clear published themes when absent; older servers never send updates. */
   environmentThemes: Schema.optionalKey(Schema.Boolean),
   /** Server streams quota from configured usage-limit sources. Same
       version-skew contract as environmentThemes. */
   usageLimitSources: Schema.optionalKey(Schema.Boolean),
   /** Server persists custom model rates and applies them to usage summaries. */
+  /** Honors `workspaceSnapshotsOnDemand`; older servers send every snapshot and drop them in the stream. */
+  providerWorkspaceSnapshotsOnDemand: Schema.optionalKey(Schema.Boolean),
   usagePriceOverrides: Schema.optionalKey(Schema.Boolean),
   /** Server persists model mappings and folds mapped usage into the target model. */
   usageModelAliases: Schema.optionalKey(Schema.Boolean),
@@ -189,6 +178,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       identified rollback readiness. Clients retain projection-based command
       shaping and validation when this is absent. */
   serverResolvedCommandContext: Schema.optionalKey(Schema.Boolean),
+  threadStop: Schema.optionalKey(Schema.Boolean),
   threadPullRequests: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.pull-request.watch and wakes agents on pull request changes. */
   threadPullRequestWatch: Schema.optionalKey(Schema.Boolean),
@@ -205,11 +195,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server can durably mark running provider turns before a self-update and
       continue them after the replacement process starts. */
   serverUpdateThreadContinuation: Schema.optionalKey(Schema.Boolean),
-  /** Agent-activity publishes (push notifications and Live Activities)
-      currently leave this environment: the publish opt-in is enabled and the
-      relay link credentials exist. Clients skip seeding a Live Activity when
-      this is false — no update would ever repaint it. Absent on older
-      servers, which may still publish, so only an explicit false skips. */
+  /** Only explicit false skips Live Activity seeding; older servers may still publish. */
   agentActivityPublishing: Schema.optionalKey(Schema.Boolean),
   /** Server runs repository clones for new projects in the background and
       streams their progress (`projectClone.*`, `subscribeProjectClones`).
@@ -219,6 +205,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server detects `platform.machine` and persists the `environmentIcon`
       setting. Older servers drop the key on write, so clients show the
       picker inert rather than offering a choice that would never stick. */
+  /** Server answers projects.listIgnoredFiles. */
+  ignoredFileListing: Schema.optionalKey(Schema.Boolean),
   environmentIcon: Schema.optionalKey(Schema.Boolean),
   environmentIconProject: Schema.optionalKey(Schema.Boolean),
   /** The desktop app supervising this server can be driven over RPC:
@@ -226,12 +214,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       desktop servers whose app predates the remote trigger, where clients
       must keep telling the user to update the app on that machine. */
   desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
-  /** Server answers orchestration.subscribeCommandOutput. Absent on older servers,
-      which never send command output, so clients must not subscribe. */
+  /** Subscribe to command output only when advertised; older servers never send it. */
   commandOutputStreaming: Schema.optionalKey(Schema.Boolean),
-  /** Server hosts preview tabs in its own headless Chromium (`runtime:
-      "server"`) and streams them over `/api/preview-stream`. Clients
-      without a local browser runtime open server tabs here. */
+  /** Hosts headless Chromium tabs streamed over /api/preview-stream for clients without a local runtime. */
   serverBrowser: Schema.optionalKey(Schema.Boolean),
   /** Server browser automation uses the hosting desktop app’s native tabs. */
   nativeDesktopBrowser: Schema.optionalKey(Schema.Boolean),
@@ -266,6 +251,7 @@ export type RepositoryIdentityLocator = typeof RepositoryIdentityLocator.Type;
  */
 export const RepositoryOrigin = Schema.Struct({
   canonicalKey: TrimmedNonEmptyString,
+  remoteUrl: Schema.optionalKey(TrimmedNonEmptyString),
   displayName: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type RepositoryOrigin = typeof RepositoryOrigin.Type;
@@ -275,9 +261,10 @@ export const RepositoryIdentity = Schema.Struct({
   locator: RepositoryIdentityLocator,
   /** Repository browser URL resolved from the server's configured hosting account. */
   webUrl: Schema.optionalKey(TrimmedNonEmptyString),
+  /** Work tree root, or the git dir for a bare repository. */
   rootPath: Schema.optionalKey(TrimmedNonEmptyString),
   displayName: Schema.optionalKey(TrimmedNonEmptyString),
-  provider: Schema.optionalKey(TrimmedNonEmptyString),
+  provider: Schema.optionalKey(SourceControlProviderKind),
   owner: Schema.optionalKey(TrimmedNonEmptyString),
   name: Schema.optionalKey(TrimmedNonEmptyString),
   origin: Schema.optionalKey(RepositoryOrigin),

@@ -41,8 +41,8 @@ it("renders real diagrams in both themes and recovers after invalid source", asy
     act(async () => {
       root.render(
         <Suspense fallback={<p>Rendering</p>}>
-          <MermaidDiagram source={code} theme="light" onExpand={() => {}} />
-          {both ? <MermaidDiagram source={code} theme="dark" onExpand={() => {}} /> : null}
+          <MermaidDiagram source={code} onExpand={() => {}} />
+          {both ? <MermaidDiagram source={code} onExpand={() => {}} /> : null}
         </Suspense>,
       );
     });
@@ -57,7 +57,12 @@ it("renders real diagrams in both themes and recovers after invalid source", asy
       expect.stringContaining("Start"),
       expect.stringContaining("Finish"),
     ]);
-    expect(diagrams[0]!.id).not.toBe(diagrams[1]!.id);
+    const firstIds = new Set(
+      [...diagrams[0]!.querySelectorAll("[id]")].map((element) => element.id),
+    );
+    expect(
+      [...diagrams[1]!.querySelectorAll("[id]")].some((element) => firstIds.has(element.id)),
+    ).toBe(false);
 
     await render("not a diagram");
     await vi.waitFor(async () => {

@@ -71,6 +71,7 @@ describe("QueuedRunsControl automatic completion delivery", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        editBlockedReason={null}
         environmentId={"environment:test" as never}
         optimisticMessages={[]}
         threadId={"thread:test" as never}
@@ -112,6 +113,7 @@ describe("QueuedRunsControl attachments and edit mode", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        editBlockedReason={null}
         environmentId={"environment:test" as never}
         optimisticMessages={[]}
         threadId={"thread:test" as never}
@@ -141,6 +143,7 @@ describe("QueuedRunsControl attachments and edit mode", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        editBlockedReason={null}
         environmentId={"environment:test" as never}
         optimisticMessages={[
           {
@@ -166,6 +169,7 @@ describe("QueuedRunsControl attachments and edit mode", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        editBlockedReason={null}
         environmentId={"environment:test" as never}
         optimisticMessages={[]}
         threadId={"thread:test" as never}

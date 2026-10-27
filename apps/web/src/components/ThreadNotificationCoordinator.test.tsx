@@ -1,9 +1,11 @@
-vi.mock("../webPush", () => ({ useWebPushEnabled: () => state.push }));
+import { WORKING_EXIT_GRACE_MS } from "@t3tools/client-runtime/state/thread-inbox";
+import { threadNotificationTag } from "../threadNotifications";
+vi.mock("../webPush", () => ({ isWebPushEnabled: () => state.push }));
 import type { ClientSettings } from "@t3tools/contracts/settings";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
-import { act } from "react";
-import { create, type ReactTestRenderer } from "react-test-renderer";
+import { Atom, AtomRegistry } from "effect/reactivity";
+import type { AnyRouter } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
@@ -128,14 +130,23 @@ vi.mock("../hooks/useSettings", () => ({
       settings: Pick<ClientSettings, "notificationMode" | "inAppNotificationsEnabled">,
     ) => unknown,
   ) => select({ notificationMode: state.mode, inAppNotificationsEnabled: state.inApp }),
-  getClientSettings: () => ({ notificationMode: state.mode, sessionFinishSoundEnabled: false }),
+  getClientSettings: () => ({
+    notificationMode: state.mode,
+    inAppNotificationsEnabled: state.inApp,
+  }),
+  subscribeClientSettings: (listener: () => void) => {
+    settingsListeners.add(listener);
+    return () => settingsListeners.delete(listener);
+  },
 }));
-vi.mock("../state/environments", () => ({
-  useEnvironmentIds: () => ["env-1"],
+vi.mock("../state/presentation", () => ({
+  environmentSummaries: {
+    get environmentIdsAtom() {
+      return environmentIdsAtom;
+    },
+  },
 }));
-vi.mock("../state/shell", () => ({
-  environmentShell: { stateValueAtom: vi.fn() },
-}));
+vi.mock("../state/shell", () => ({ environmentShell: { stateValueAtom: () => shellAtom } }));
 vi.mock("../threadNotifications", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../threadNotifications")>()),
   playNotificationSound: state.sound,
@@ -145,15 +156,30 @@ vi.mock("./ui/toast", () => ({
   toastManager: { add: state.add, close: state.close },
 }));
 
-import { ThreadNotificationCoordinator } from "./ThreadNotificationCoordinator";
+import { startThreadNotifications } from "./ThreadNotificationCoordinator";
 
-let renderer: ReactTestRenderer | undefined;
+let stopNotifications: (() => void) | undefined;
+let registry = AtomRegistry.make();
+const environmentIdsAtom = Atom.make<readonly string[]>([]);
+const settingsListeners = new Set<() => void>();
+const shellAtom = Atom.keepAlive(
+  Atom.make<unknown>({ status: "disconnected", snapshot: Option.none() }),
+);
 
 async function render() {
-  await act(() => {
-    if (renderer) renderer.update(<ThreadNotificationCoordinator />);
-    else renderer = create(<ThreadNotificationCoordinator />);
+  registry.set(environmentIdsAtom, ["env-1"]);
+  registry.set(shellAtom, {
+    status: state.live ? "live" : "disconnected",
+    snapshot: Option.some({ threads: mockThreads() }),
   });
+  for (const listener of settingsListeners) listener();
+  stopNotifications ??= startThreadNotifications(registry, {
+    navigate: state.navigate,
+    get state() {
+      return { matches: [{ params: state.active }] };
+    },
+  } as unknown as AnyRouter);
+  await vi.advanceTimersByTimeAsync(WORKING_EXIT_GRACE_MS);
 }
 
 async function complete() {
@@ -162,6 +188,9 @@ async function complete() {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers();
+  registry = AtomRegistry.make();
+  settingsListeners.clear();
   state.push = false;
   vi.clearAllMocks();
   Object.assign(state, {
@@ -197,8 +226,10 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await act(() => renderer?.unmount());
-  renderer = undefined;
+  stopNotifications?.();
+  stopNotifications = undefined;
+  registry.dispose();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -303,7 +334,8 @@ describe("thread notifications", () => {
     expect(state.notification).toHaveBeenCalledTimes(1);
     expect(state.notification).toHaveBeenCalledWith(title, {
       body: "Fix the login form",
-      tag: "env-1:thread-1",
+      tag: threadNotificationTag("env-1" as never, "thread-1" as never),
+      requireInteraction: false,
       silent: true,
     });
   });
@@ -376,7 +408,8 @@ describe("thread notifications", () => {
     expect(state.add).not.toHaveBeenCalled();
     expect(state.notification).toHaveBeenCalledWith("Thread completed", {
       body: "Fix the login form",
-      tag: "env-1:thread-1",
+      tag: threadNotificationTag("env-1" as never, "thread-1" as never),
+      requireInteraction: false,
       silent: true,
     });
   });

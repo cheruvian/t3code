@@ -34,6 +34,7 @@ const SHADOW_LOCAL_ENTRY_NAMES = new Set([
   "log",
   "memories",
   "tmp",
+  ".DS_Store",
   "app-server-control",
   "app-server-daemon",
   "tui-thread-reference-capabilities",

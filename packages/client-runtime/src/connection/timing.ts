@@ -92,7 +92,7 @@ export const makeConnectionTiming = Effect.fn("makeConnectionTiming")(function* 
   return ConnectionTiming.of({
     get: SubscriptionRef.get(state),
     changes: SubscriptionRef.changes(state),
-    set: (settings) =>
+    set: Effect.fn("ConnectionTiming.set")((settings) =>
       lock.withPermits(1)(
         Effect.gen(function* () {
           const decoded = yield* decodeTiming(settings).pipe(
@@ -109,5 +109,6 @@ export const makeConnectionTiming = Effect.fn("makeConnectionTiming")(function* 
           yield* SubscriptionRef.set(state, decoded);
         }),
       ),
+    ),
   });
 });

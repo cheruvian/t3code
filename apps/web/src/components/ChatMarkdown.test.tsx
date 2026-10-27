@@ -13,18 +13,26 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
-import { GitHubIcon } from "./Icons";
+import { getSourceControlPresentationForKind } from "../sourceControlPresentation";
+const GitHubIcon = getSourceControlPresentationForKind("github").Icon;
 import { Button } from "./ui/button";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
 import { FileMarkdownPreview } from "./files/FileMarkdownPreview";
 
 vi.mock("../hooks/useFileMetadata", () => ({ useFileMetadata: () => null }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
+vi.mock("@effect/atom-react", async () => {
+  const { AtomRegistry } = await import("effect/reactivity");
+  const registry = AtomRegistry.make();
+  return { useAtomValue: (atom: Parameters<typeof registry.get>[0]) => registry.get(atom) };
+});
 vi.mock("./chat/MermaidDiagram", () => ({
   // Real Mermaid needs layout APIs jsdom lacks; a rendered diagram is an SVG.
   MermaidDiagram: () => <svg aria-label="Diagram" />,
 }));
-vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
+vi.mock("../hooks/useTheme", () => ({
+  useTheme: () => ({ resolvedTheme: "dark" }),
+  useRenderedAppearance: () => "dark",
+}));
 vi.mock("../hooks/useSettings", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../hooks/useSettings")>();
   const settings = actual.getClientSettings();
@@ -96,11 +104,12 @@ vi.mock("~/lib/openPullRequestLink", () => ({
   useOpenChangeRequestLink: () => vi.fn(),
 }));
 
-import ChatMarkdown, {
+import ChatMarkdown from "./ChatMarkdown";
+import {
   canUseMarkdownFileShellActions,
   hasMarkdownFilePrimaryAction,
   shouldUseMarkdownFileBrowserPrimaryAction,
-} from "./ChatMarkdown";
+} from "./chat/MarkdownFileLink.logic";
 
 function codeButton(renderer: ReactTestRenderer, label: string) {
   const button = renderer.root
@@ -125,6 +134,7 @@ it.each(["chat", "file preview"])(
             <ChatMarkdown cwd={undefined} text={text} />
           ) : (
             <FileMarkdownPreview
+              workspaceMutationId={null}
               cwd="/workspace"
               relativePath="docs/diagram.md"
               text={text}
@@ -445,7 +455,7 @@ describe("ChatMarkdown streaming", () => {
 
   it("does not retokenize completed lines when streaming finishes", async () => {
     const highlighter = await getSyntaxHighlighterPromise("typescript");
-    const highlight = vi.spyOn(highlighter, "codeToHast");
+    const highlight = vi.spyOn(highlighter, "codeToTokens");
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     let renderer: ReactTestRenderer | undefined;
     const text = "```typescript\nconst completed = 1;\nconst current = 2;";
@@ -468,9 +478,9 @@ describe("ChatMarkdown streaming", () => {
 
   it("recovers highlighting after a failed fence changes without resetting its controls", async () => {
     const highlighter = await getSyntaxHighlighterPromise("text");
-    const codeToHast = highlighter.codeToHast.bind(highlighter);
+    const codeToHast = highlighter.codeToTokens.bind(highlighter);
     let fail = true;
-    vi.spyOn(highlighter, "codeToHast").mockImplementation((...args) => {
+    vi.spyOn(highlighter, "codeToTokens").mockImplementation((...args) => {
       if (fail) throw new Error("Temporary highlighter failure");
       return codeToHast(...args);
     });
@@ -512,8 +522,9 @@ describe("ChatMarkdown streaming", () => {
 
   it("preserves code controls and details without highlighting an unchanged fence again", async () => {
     const highlighter = await getSyntaxHighlighterPromise("text");
-    const highlight = vi.spyOn(highlighter, "codeToHast");
+    const highlight = vi.spyOn(highlighter, "codeToTokens");
     const writeText = vi.fn(async (_text: string) => {});
+    const tokenizer = vi.spyOn(highlighter, "createStreamTokenizer");
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -583,7 +594,8 @@ describe("ChatMarkdown streaming", () => {
         copyUpdated.onClick?.({} as Parameters<NonNullable<typeof copyUpdated.onClick>>[0]);
       });
       expect(writeText).toHaveBeenLastCalledWith("Updated code block\n");
-      expect(highlight).toHaveBeenCalledTimes(2);
+      expect(highlight).toHaveBeenCalledTimes(1);
+      expect(tokenizer).toHaveBeenCalledTimes(2);
     } finally {
       await act(async () => renderer?.unmount());
       vi.useRealTimers();
@@ -626,7 +638,7 @@ describe("ChatMarkdown streaming", () => {
           currentTarget: {
             checked: true,
             closest: () => ({
-              dataset: { taskMarkerOffset: String(listItem.props["data-task-marker-offset"]) },
+              dataset: { listItemOffset: String(listItem.props["data-list-item-offset"]) },
             }),
           },
         } as unknown as Parameters<typeof onChange>[0]);
@@ -719,8 +731,8 @@ describe("ChatMarkdown skill chips", () => {
             cwd="/tmp/project"
             text={text}
             skills={[
-              { name: "2spec", displayName: "2Spec" },
-              { name: "20k", displayName: "MoneySkill" },
+              { name: "2spec", displayName: "2Spec", path: "/skills/2spec", enabled: true },
+              { name: "20k", displayName: "MoneySkill", path: "/skills/20k", enabled: true },
             ]}
           />,
         );
@@ -999,15 +1011,17 @@ describe("ChatMarkdown heading levels", () => {
       />,
     );
 
-    expect(html).toContain('<h1 id="user-content-top" aria-level="4">Top</h1>');
-    expect(html).toContain('<h2 id="user-content-section" aria-level="5">Section</h2>');
-    expect(html).toContain('<h6 id="user-content-fine-print" aria-level="6">Fine print</h6>');
+    expect(html).toContain('<h1 id="user-content-top" dir="ltr" aria-level="4">Top</h1>');
+    expect(html).toContain('<h2 id="user-content-section" dir="ltr" aria-level="5">Section</h2>');
+    expect(html).toContain(
+      '<h6 id="user-content-fine-print" dir="ltr" aria-level="6">Fine print</h6>',
+    );
   });
 
   it("leaves heading levels alone when the markdown is not nested", () => {
     const html = renderToStaticMarkup(<ChatMarkdown cwd="/tmp/project" text="# Top" />);
 
-    expect(html).toContain('<h1 id="user-content-top">Top</h1>');
+    expect(html).toContain('<h1 id="user-content-top" dir="ltr">Top</h1>');
   });
 });
 
@@ -1371,7 +1385,11 @@ it.each([
                       }
                     : undefined
                 }
-                skills={skills}
+                skills={skills.map((skill) => ({
+                  ...skill,
+                  path: `/skills/${skill.name}`,
+                  enabled: true,
+                }))}
                 lineBreaks={lineBreaks ?? false}
                 parseRawHtml={!user}
                 onUseArtifactTemplate={useTemplate ? () => undefined : undefined}

@@ -7,6 +7,8 @@ import {
   WS_METHODS,
 } from "@t3tools/contracts";
 import { applyGitStatusStreamEvent } from "@t3tools/shared/git";
+import * as Duration from "effect/Duration";
+import * as Schedule from "effect/Schedule";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
@@ -237,17 +239,25 @@ export const makeCachedVcsRefsChanges = Effect.fn("CachedVcsRefsState.makeChange
       }),
     ),
   );
-  const refreshedRefs: Stream.Stream<VcsListRefsResult, VcsListRefsRefreshError> = Stream.concat(
-    Stream.fromEffect(SubscriptionRef.get(supervisor.state)),
+  const refreshedRefs = Stream.zipLatest(
     SubscriptionRef.changes(supervisor.state),
+    SubscriptionRef.changes(supervisor.session),
   ).pipe(
-    Stream.map((connection) => (connection.phase === "connected" ? connection.generation : null)),
-    Stream.changes,
-    Stream.switchMap((generation) =>
-      generation === null
+    Stream.map(([connection, session]) =>
+      connection.phase === "connected" && Option.isSome(session)
+        ? { generation: connection.generation, session: session.value }
+        : null,
+    ),
+    Stream.changesWith(
+      (left, right) => left?.generation === right?.generation && left?.session === right?.session,
+    ),
+    Stream.switchMap((connection) =>
+      connection === null
         ? Stream.empty
         : Stream.fromEffect(
             refresh().pipe(
+              // Session removal can precede switchMap cancelling this refresh.
+              Effect.catchTags({ EnvironmentRpcUnavailableError: () => Effect.never }),
               Effect.tapError((error) =>
                 Effect.logWarning("Could not refresh Git refs.").pipe(
                   Effect.annotateLogs({
@@ -257,6 +267,18 @@ export const makeCachedVcsRefsChanges = Effect.fn("CachedVcsRefsState.makeChange
                   }),
                 ),
               ),
+              Effect.retry({
+                schedule: Schedule.exponential("1 second").pipe(
+                  Schedule.modifyDelay(({ duration }) =>
+                    Effect.succeed(Duration.min(duration, Duration.seconds(30))),
+                  ),
+                ),
+                while: (error) =>
+                  typeof error === "object" &&
+                  error !== null &&
+                  "_tag" in error &&
+                  String(error._tag) === "VcsProcessExitError",
+              }),
             ),
           ).pipe(
             Stream.catch((error) => Stream.fromEffect(onRefreshFailure(error)).pipe(Stream.drain)),
@@ -372,6 +394,10 @@ export function createVcsEnvironmentAtoms<R, E>(
 
   return {
     listRefs,
+    readRefs: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vcs:read-refs",
+      tag: WS_METHODS.vcsListRefs,
+    }),
     status: createStatusFamily(false, "environment-data:vcs:status"),
     remoteStatus: createStatusFamily(true, "environment-data:vcs:remote-status"),
     localStatus: createEnvironmentRpcCommand(runtime, {
@@ -458,3 +484,4 @@ export function createVcsEnvironmentAtoms<R, E>(
 export * from "./gitActions.ts";
 export * from "./vcsAction.ts";
 export * from "./vcsRef.ts";
+export * from "./vcsStatusRevalidation.ts";

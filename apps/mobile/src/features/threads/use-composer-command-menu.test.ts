@@ -9,30 +9,92 @@ import { act, createElement, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 const refreshProviders = vi.hoisted(() => vi.fn());
+const providerAtoms = vi.hoisted(
+  () =>
+    new Map<
+      string,
+      import("effect/reactivity").Atom.Writable<
+        ReadonlyArray<ServerProvider> | null,
+        ReadonlyArray<ServerProvider> | null
+      >
+    >(),
+);
+
 vi.mock("react-native", () => ({ Alert: { alert: vi.fn() } }));
 
 vi.mock("../../state/queries", () => ({
+  useThreadSearch: () => {},
   useComposerPathSearch: () => ({ entries: [], isPending: false }),
   useComposerPullRequestSearch: () => ({ entries: [], isPending: false, error: null }),
 }));
 vi.mock("../../state/use-composer-drafts", () => ({
   getComposerDraftSnapshot: vi.fn(),
-  readComposerDraftSelection: vi.fn(),
   setComposerDraftContext: vi.fn(),
+  useComposerDraftSelection: vi.fn(),
 }));
 vi.mock("../../lib/uuid", () => ({ uuidv4: () => "context-id" }));
-vi.mock("../../state/server", () => ({
-  serverEnvironment: { refreshProviders: Symbol("refreshProviders") },
-}));
-vi.mock("../../state/use-atom-command", () => ({
-  useAtomCommand: () => refreshProviders,
-}));
+vi.mock("../../state/server", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    serverEnvironment: {
+      providersValueAtom: (id: string) => {
+        if (!providerAtoms.has(id))
+          providerAtoms.set(id, Atom.make<ReadonlyArray<ServerProvider> | null>(null));
+        return providerAtoms.get(id);
+      },
+      refreshProviders: {
+        label: "refresh",
+        run: (_registry: unknown, input: unknown) => refreshProviders(input),
+      },
+    },
+  };
+});
+
+import { RegistryContext } from "@effect/atom-react";
+import { AtomRegistry } from "effect/reactivity";
+import { serverEnvironment } from "../../state/server";
 
 import {
+  useComposerCommandMenu,
   buildComposerSlashCommandItems,
   resolveComposerCommandSelection,
-  useComposerCommandMenu,
+  resolveComposerMenuSelection,
 } from "./use-composer-command-menu";
+
+describe("resolveComposerMenuSelection", () => {
+  it("prefers the caret an insertion placed in the current draft text", () => {
+    expect(
+      resolveComposerMenuSelection({
+        draftMessage: "hello @chip ",
+        ownerKey: "draft-a",
+        inserted: { start: 12, end: 12 },
+        local: { ownerKey: "draft-a", start: 2, end: 2 },
+      }),
+    ).toEqual({ start: 12, end: 12 });
+  });
+
+  it("clamps the composer's own caret when the draft shrinks", () => {
+    expect(
+      resolveComposerMenuSelection({
+        draftMessage: "hi",
+        ownerKey: "draft-a",
+        inserted: null,
+        local: { ownerKey: "draft-a", start: 5, end: 9 },
+      }),
+    ).toEqual({ start: 2, end: 2 });
+  });
+
+  it("starts at the end of the draft after switching owners", () => {
+    expect(
+      resolveComposerMenuSelection({
+        draftMessage: "other draft",
+        ownerKey: "draft-b",
+        inserted: null,
+        local: { ownerKey: "draft-a", start: 1, end: 1 },
+      }),
+    ).toEqual({ start: 11, end: 11 });
+  });
+});
 
 describe("mobile slash commands", () => {
   const antigravity = {
@@ -66,18 +128,6 @@ describe("mobile slash commands", () => {
       ).toEqual({ text: "/plan ", cursor: 6, interactionMode: null });
     },
   );
-
-  it("does not offer a native command inside the message", () => {
-    expect(
-      buildComposerSlashCommandItems({
-        query: "plan",
-        atMessageStart: false,
-        hasThread: false,
-        allowInteractionMode: true,
-        selectedProviderStatus: antigravity,
-      }),
-    ).toEqual([]);
-  });
 
   it("still applies the T3 plan command for supported providers", () => {
     const items = buildComposerSlashCommandItems({
@@ -114,6 +164,7 @@ describe("mobile slash commands", () => {
 
 describe("workspace command discovery retry", () => {
   let root: Root;
+  let registry: AtomRegistry.AtomRegistry;
   const environmentId = EnvironmentId.make("test-environment");
   const instanceId = ProviderInstanceId.make("claude");
   const provider = {
@@ -139,7 +190,16 @@ describe("workspace command discovery retry", () => {
     ],
   } satisfies ServerProvider;
 
-  function Probe({ cwd, status = provider }: { cwd: string; status?: ServerProvider }) {
+  function Probe(props: { cwd: string; status?: ServerProvider }) {
+    serverEnvironment.providersValueAtom(environmentId);
+    registry.set(providerAtoms.get(environmentId)!, [props.status ?? provider]);
+    return createElement(
+      RegistryContext.Provider,
+      { value: registry },
+      createElement(ComposerProbe, props),
+    );
+  }
+  function ComposerProbe({ cwd, status = provider }: { cwd: string; status?: ServerProvider }) {
     useComposerCommandMenu({
       draftMessage: "/project",
       ownerKey: null,
@@ -155,6 +215,7 @@ describe("workspace command discovery retry", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    registry = AtomRegistry.make();
     refreshProviders.mockReset();
     refreshProviders.mockResolvedValue({ _tag: "Success", value: { providers: [provider] } });
     const document = { nodeType: 9, addEventListener() {}, removeEventListener() {} };
@@ -176,6 +237,7 @@ describe("workspace command discovery retry", () => {
     await act(async () => {
       root.unmount();
     });
+    registry.dispose();
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });

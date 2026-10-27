@@ -10,6 +10,7 @@ import {
   ThreadEnvMode,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -103,7 +104,7 @@ export class ProjectStoreV2 extends Context.Service<
   }
 >()("t3/orchestration-v2/ProjectStore/ProjectStoreV2") {}
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const readSql = Option.getOrElse(yield* Effect.serviceOption(ReadOnlySqlClient), () => sql);
@@ -208,6 +209,7 @@ export const make = Effect.gen(function* () {
 
   const get: ProjectStoreV2["Service"]["get"] = (projectId, options) =>
     selectRows({ projectId, includeDeleted: options?.includeDeleted === true }).pipe(
+      NodeSqliteClient.readOnly,
       Effect.map((rows) => Option.fromUndefinedOr(rows[0])),
       mapError("get"),
     );
@@ -216,12 +218,13 @@ export const make = Effect.gen(function* () {
     selectRows({
       ...(options?.projectIds === undefined ? {} : { projectIds: options.projectIds }),
       includeDeleted: options?.includeDeleted === true,
-    }).pipe(mapError("list"));
+    }).pipe(NodeSqliteClient.readOnly, mapError("list"));
 
   const findActiveByWorkspaceRoot: ProjectStoreV2["Service"]["findActiveByWorkspaceRoot"] = (
     workspaceRoot,
   ) =>
     selectRows({ workspaceRoot, includeDeleted: false }).pipe(
+      NodeSqliteClient.readOnly,
       Effect.map((rows) => Option.fromUndefinedOr(rows[0])),
       mapError("findActiveByWorkspaceRoot"),
     );
@@ -286,11 +289,14 @@ export const make = Effect.gen(function* () {
     get,
     list,
     findActiveByWorkspaceRoot,
-    getShell: (projectId) => get(projectId).pipe(Effect.map(Option.map(toShell))),
-    listShells: (options) =>
-      list(options?.projectIds === undefined ? undefined : { projectIds: options.projectIds }).pipe(
-        Effect.map((rows) => rows.map(toShell)),
-      ),
+    getShell: Effect.fn("ProjectStoreV2.getShell")(function (projectId) {
+      return get(projectId).pipe(Effect.map(Option.map(toShell)));
+    }),
+    listShells: Effect.fn("ProjectStoreV2.listShells")(function (options) {
+      return list(
+        options?.projectIds === undefined ? undefined : { projectIds: options.projectIds },
+      ).pipe(Effect.map((rows) => rows.map(toShell)));
+    }),
   });
 });
 

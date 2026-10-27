@@ -968,8 +968,8 @@ export const layer = Layer.effect(
         });
         return { state: "cancelled" as const, cancellation };
       }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.gen(function* () {
+        Effect.catchCause(
+          Effect.fn(function* (cause) {
             const status = yield* moves.status({ threadId: current.id });
             if (status.state === "fenced") {
               yield* moves.abort({
@@ -1366,7 +1366,7 @@ export const layer = Layer.effect(
       );
     });
     return ThreadMoveTransferService.of({
-      execute: (input, projectScopeId) =>
+      execute: Effect.fn("ThreadMoveTransferService.execute")((input, projectScopeId) =>
         lane
           .withLock(
             `thread:${input.threadId}`,
@@ -1438,7 +1438,8 @@ export const layer = Layer.effect(
             ),
           )
           .pipe(Effect.catchCause((cause) => Effect.fail(failure(Cause.squash(cause))))),
-      readChunk: (token, offset) =>
+      ),
+      readChunk: Effect.fn("ThreadMoveTransferService.readChunk")((token, offset) =>
         Effect.gen(function* () {
           const claims = yield* validateToken(token, "source");
           if (!Number.isSafeInteger(offset) || offset < 0)
@@ -1457,7 +1458,8 @@ export const layer = Layer.effect(
             }
           });
         }).pipe(Effect.mapError(failure)),
-      writeChunk: (token, offset, chunks) =>
+      ),
+      writeChunk: Effect.fn("ThreadMoveTransferService.writeChunk")((token, offset, chunks) =>
         Effect.gen(function* () {
           const claims = yield* validateToken(token, "destination");
           return yield* lane.withLock(
@@ -1506,6 +1508,7 @@ export const layer = Layer.effect(
             }),
           );
         }).pipe(Effect.mapError(failure)),
+      ),
     });
   }),
 );

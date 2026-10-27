@@ -81,10 +81,6 @@ export class PrimaryEnvironmentPairingCredentialRejectedError extends Schema.Tag
   }
 }
 
-export const isPrimaryEnvironmentPairingCredentialRejectedError = Schema.is(
-  PrimaryEnvironmentPairingCredentialRejectedError,
-);
-
 export class PrimaryEnvironmentAuthSessionTimeoutError extends Schema.TaggedError<PrimaryEnvironmentAuthSessionTimeoutError>()(
   "PrimaryEnvironmentAuthSessionTimeoutError",
   {
@@ -432,9 +428,7 @@ export async function revokeOtherServerClientSessions(): Promise<number> {
 }
 
 export async function resolveInitialServerAuthGateState(): Promise<ServerAuthGateState> {
-  // An explicit pairing link replaces this browser's grant, even when the
-  // current cookie or a cached gate already authenticates it. Keep that intent
-  // after stripping the token, which causes the router to load this gate again.
+  // Preserve explicit grant replacement across the auth-gate reload triggered by token removal.
   if (window.location.pathname.replace(/\/+$/, "") !== "/pair") {
     explicitPairingRequested = false;
   } else if (peekPairingTokenFromUrl()) {

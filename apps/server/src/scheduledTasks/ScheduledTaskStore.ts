@@ -58,10 +58,14 @@ const make = Effect.gen(function* () {
   return ScheduledTaskStore.of({
     changes,
     deletions,
-    delete: (id) => remove({ id }).pipe(Effect.flatMap(publishDeleted)),
-    deleteForThread: (threadId) => remove({ threadId }),
+    delete: Effect.fn("ScheduledTaskStore.delete")((id) =>
+      remove({ id }).pipe(Effect.flatMap(publishDeleted)),
+    ),
+    deleteForThread: Effect.fn("ScheduledTaskStore.deleteForThread")((threadId) =>
+      remove({ threadId }),
+    ),
     publishDeleted,
-    exists: (id) =>
+    exists: Effect.fn("ScheduledTaskStore.exists")((id) =>
       sql`SELECT 1 FROM scheduled_tasks WHERE task_id = ${id}`.pipe(
         Effect.map((rows) => rows.length > 0),
         Effect.mapError(
@@ -73,6 +77,7 @@ const make = Effect.gen(function* () {
             }),
         ),
       ),
+    ),
   });
 });
 

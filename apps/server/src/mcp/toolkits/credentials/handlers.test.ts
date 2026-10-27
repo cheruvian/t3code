@@ -82,17 +82,15 @@ it.effect(
           }),
           Layer.mock(ProjectService.ProjectService)({
             getShell: () =>
-              Effect.succeed(
-                Option.some({
-                  id: caller.projectId,
-                  title: "Project",
-                  workspaceRoot: "/project/root",
-                  defaultModelSelection: null,
-                  scripts: [],
-                  createdAt: "2026-01-01T00:00:00Z",
-                  updatedAt: "2026-01-01T00:00:00Z",
-                }),
-              ),
+              Effect.succeedSome({
+                id: caller.projectId,
+                title: "Project",
+                workspaceRoot: "/project/root",
+                defaultModelSelection: null,
+                scripts: [],
+                createdAt: "2026-01-01T00:00:00Z",
+                updatedAt: "2026-01-01T00:00:00Z",
+              }),
           }),
           Layer.mock(CredentialBroker.CredentialBroker)({
             execute: (identity) =>

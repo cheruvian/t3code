@@ -8,9 +8,10 @@ import {
   type HtmlRenderReference,
 } from "@t3tools/shared/htmlRender";
 import { Maximize2Icon, PanelRightOpenIcon } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
+import { useAssetUrlRefresh } from "~/assets/assetUrls";
+import { useLongLivedAssetUrl } from "~/assets/longLivedAssetUrls";
 import type { ChatFileAttachment } from "~/types";
 import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
@@ -43,18 +44,13 @@ export function HtmlRenderFrame(props: {
   const defaultMode = useClientSettings((settings) => settings.htmlPreviewDefaultMode);
   const [collapsedOverride, setCollapsed] = useState<boolean | null>(null);
   const collapsed = collapsedOverride ?? defaultMode !== "inline";
-  // The frame takes the page's measured height at its own width, read before
-  // first paint so the reserved box is already the right size.
-  const boxRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(HTML_RENDER_COLUMN_WIDTH);
-  useLayoutEffect(() => {
-    const box = boxRef.current;
-    if (!box) return;
+  const observeBox = (box: HTMLDivElement) => {
     setWidth(box.clientWidth);
     return observeResize(box, ([entry]) => {
       if (entry) setWidth(entry.contentRect.width);
     });
-  }, []);
+  };
   // Client fonts can wrap a page taller than the server measured it; a frame
   // left short would scroll inside the thread and take the reader's scroll.
   const [contentHeight, setContentHeight] = useState<number>();
@@ -70,13 +66,18 @@ export function HtmlRenderFrame(props: {
     }),
     [attachmentId, fileName],
   );
-  // A cached URL with life left is reused, so the browser's cache serves the
-  // page again; one near expiry is minted afresh, since a frame cannot report a
-  // failed load. The page keeps its first URL for its lifetime.
-  const [src, setSrc] = useState<string | null>(null);
-  // Full screen reuses the inline URL while it has life left, so the page
-  // comes from the browser's cache instead of a new mint and download.
-  const srcExpiresAt = useRef(0);
+  // Keep the loaded URL stable while the page is mounted.
+  const [loaded, setLoaded] = useState<{ src: string; expiresAt: number } | null>(null);
+  const assetUrl = useLongLivedAssetUrl(
+    !collapsed && loaded === null ? props.environmentId : null,
+    resource,
+  );
+  if (!collapsed && loaded === null && assetUrl._tag === "Success") {
+    setLoaded({ src: assetUrl.url, expiresAt: assetUrl.expiresAt });
+  }
+  const src = loaded?.src ?? null;
+  const failed = loaded === null && assetUrl._tag === "Failure";
+  const refresh = useAssetUrlRefresh(props.environmentId, resource);
   const [expandedSrc, setExpandedSrc] = useState<string | null>(null);
   // The page stays hidden behind a skeleton until it reports its content.
   const [ready, setReady] = useState(false);
@@ -91,38 +92,6 @@ export function HtmlRenderFrame(props: {
     onFullscreenChange?.(true);
     return () => onFullscreenChange?.(false);
   }, [expandedSrc, onFullscreenChange]);
-  const [failed, setFailed] = useState(false);
-  const assetUrl = useAssetUrlState(
-    !collapsed && src === null ? props.environmentId : null,
-    resource,
-  );
-  const cachedUrl = assetUrl._tag === "Success" ? assetUrl.url : null;
-  const cachedExpiresAt = assetUrl._tag === "Success" ? assetUrl.expiresAt : 0;
-  const cacheFailed = assetUrl._tag === "Failure";
-  const refresh = useAssetUrlRefresh(props.environmentId, resource);
-  // At most one mint per inline viewing: expiry is server time and the check uses the
-  // client clock, so a skewed clock must not mint again on every update.
-  const minting = useRef(false);
-  useEffect(() => {
-    if (collapsed || src !== null || minting.current) return;
-    if (cacheFailed) {
-      // oxlint-disable-next-line react/set-state-in-effect -- Mirrors the cached URL's failure.
-      setFailed(true);
-      return;
-    }
-    if (cachedUrl === null) return;
-    if (cachedExpiresAt - Date.now() > MIN_URL_LIFE_MS) {
-      srcExpiresAt.current = cachedExpiresAt;
-      setSrc(cachedUrl);
-      return;
-    }
-    minting.current = true;
-    void refresh().then(
-      (url) => (url === null ? setFailed(true) : setSrc(url)),
-      () => setFailed(true),
-    );
-  }, [cacheFailed, cachedExpiresAt, cachedUrl, collapsed, refresh, src]);
-
   const openPreview = () => {
     props.onOpen?.({
       type: "file",
@@ -137,16 +106,14 @@ export function HtmlRenderFrame(props: {
   };
   const showInline = () => {
     // A collapsed page can outlive its signed URL. Resolve it again before remounting.
-    minting.current = false;
-    setSrc(null);
-    setFailed(false);
+    setLoaded(null);
     setContentHeight(undefined);
     setReady(false);
     setCollapsed(false);
   };
 
   return (
-    <div ref={boxRef} className="min-w-0">
+    <div ref={observeBox} className="min-w-0">
       <div className="flex min-w-0 items-center gap-2 py-1">
         <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{title}</span>
         {collapsed ? (
@@ -194,7 +161,7 @@ export function HtmlRenderFrame(props: {
                         variant="glass"
                         onClick={async () => {
                           const url =
-                            srcExpiresAt.current - Date.now() > MIN_URL_LIFE_MS
+                            (loaded?.expiresAt ?? 0) - Date.now() > MIN_URL_LIFE_MS
                               ? src
                               : await refresh().catch(() => null);
                           if (url !== null) setExpandedSrc(url);

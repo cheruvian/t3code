@@ -243,7 +243,7 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const send: WebPush["Service"]["send"] = (input) =>
+  const send: WebPush["Service"]["send"] = Effect.fn("send")((input) =>
     Effect.gen(function* () {
       const message = yield* decodeNotification(input).pipe(
         Effect.mapError(() => new WebPushError({ reason: "invalid-message" })),
@@ -262,7 +262,8 @@ const make = Effect.gen(function* () {
       Effect.mapError((error) =>
         isWebPushError(error) ? error : new WebPushError({ reason: "storage" }),
       ),
-    );
+    ),
+  );
 
   const notifyUnsafe = Effect.fnUntraced(function* (event: OrchestrationV2DomainEvent) {
     if (

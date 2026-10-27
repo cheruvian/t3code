@@ -1,12 +1,13 @@
-"use client";
-
 import { FILL_PREVIEW_VIEWPORT, type ScopedThreadRef } from "@t3tools/contracts";
+import { previewPdfAssetUrl } from "@t3tools/shared/preview";
+import { useAtomValue } from "@effect/atom-react";
+import { useEnvironmentHttpBaseUrl } from "~/state/environments";
 import { PanelRightIcon, PictureInPicture2, XIcon } from "lucide-react";
 import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
-  useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -30,6 +31,7 @@ import {
   supportsServerPictureInPicture,
   useServerPictureInPictureKey,
 } from "~/browser/serverPictureInPicture";
+import { useBrowserLayoutZoomFactor } from "~/browser/useBrowserLayoutZoomFactor";
 import { Button } from "~/components/ui/button";
 import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -46,7 +48,7 @@ import { useRightPanelStore } from "~/rightPanelStore";
 import { useDeviceState } from "~/state/device";
 
 import { DeviceStreamView } from "../device/DeviceStreamView";
-import type { DeviceScreenSize } from "@t3tools/client-runtime/device/stream";
+import { deviceStreamScreenAtom } from "../device/deviceStreamSession";
 import type { PreviewStreamViewport } from "@t3tools/client-runtime/preview/server-browser-stream";
 import { previewBridge } from "./previewBridge";
 import { showPreviewPopup } from "./showPreviewPopup";
@@ -115,6 +117,7 @@ export function ThreadPreviewMiniPlayer({ threadRef, miniPlayer }: Props) {
 }
 
 function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly tabId: string }) {
+  const httpBaseUrl = useEnvironmentHttpBaseUrl(threadRef.environmentId);
   const previewState = useThreadPreviewState(threadRef);
   const snapshot = previewState.sessions[tabId] ?? null;
   const runtimeTabId = previewRuntimeTabId(threadRef, previewState.serverEpoch, tabId);
@@ -123,6 +126,7 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
     recordingTabIds.has(runtimeTabId) ||
     findActiveBrowserRecordingRuntimeTabId(threadRef, tabId) !== null;
   const desktopOverlay = previewState.desktopByTabId[tabId] ?? null;
+  const layoutZoomFactor = useBrowserLayoutZoomFactor(desktopOverlay?.zoomFactor ?? 1);
   const fittedSourceContent = useBrowserSurfaceStore(
     (state) => state.byTabId[runtimeTabId]?.fittedSourceContent ?? null,
   );
@@ -138,7 +142,7 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
       : resolvePreviewMiniPlayerSourceSize(
           snapshot?.viewport ?? FILL_PREVIEW_VIEWPORT,
           fittedSourceContent,
-          desktopOverlay?.zoomFactor ?? 1,
+          layoutZoomFactor,
         );
 
   const openInPanel = () => {
@@ -172,8 +176,14 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
   };
 
   if (!snapshot) return null;
+  const pdfUrl =
+    snapshot.navStatus._tag === "Success"
+      ? previewPdfAssetUrl(snapshot.navStatus.url, httpBaseUrl)
+      : null;
   const poppedOut = serverTab ? serverPictureInPicture : Boolean(desktopOverlay?.pictureInPicture);
-  const canPopOut = serverTab ? supportsServerPictureInPicture() : true;
+  const canPopOut = serverTab
+    ? poppedOut || (pdfUrl === null && supportsServerPictureInPicture())
+    : true;
 
   return (
     <MiniPlayerShell
@@ -220,6 +230,7 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
               environmentId={threadRef.environmentId}
               threadId={threadRef.threadId}
               tabId={tabId}
+              pdfUrl={pdfUrl}
               visible
               followSize={false}
               controlPosition="bottom"
@@ -257,17 +268,16 @@ function DeviceMiniPlayer({
   miniPlayer,
 }: Props & { readonly source: Extract<PreviewMiniPlayerSource, { kind: "device" }> }) {
   const { state: deviceState } = useDeviceState(threadRef.environmentId);
-  const [screen, setScreen] = useState<DeviceScreenSize | null>(null);
+  const viewId = useId();
+  const screen = useAtomValue(deviceStreamScreenAtom(viewId));
   const sourceSize = resolveDeviceMiniPlayerSourceSize(source.platform, screen);
   const device = deviceState.devices.find(
     (entry) => entry.hostId === source.hostId && entry.id === source.deviceId,
   );
   const hostLabel =
     deviceState.hosts.find((host) => host.id === source.hostId)?.label ?? "Device host";
-  const cornerRadius = useCallback(
-    (player: PreviewMiniPlayerSize) => resolveDeviceMiniPlayerCornerRadius(source.platform, player),
-    [source.platform],
-  );
+  const cornerRadius = (player: PreviewMiniPlayerSize) =>
+    resolveDeviceMiniPlayerCornerRadius(source.platform, player);
 
   const openInPanel = () => {
     usePreviewMiniPlayerStore.getState().close(threadRef);
@@ -301,7 +311,7 @@ function DeviceMiniPlayer({
             deviceName={device?.name ?? source.name}
             deviceDescription={`${hostLabel} · ${device?.version ?? source.platform}`}
             visible
-            onScreen={setScreen}
+            viewId={viewId}
           />
         </div>
       )}
@@ -309,10 +319,7 @@ function DeviceMiniPlayer({
   );
 }
 
-/**
- * Native clipping and the DOM frame use the same radius so their separately
- * composited edges stay aligned.
- */
+/** Match native clipping and DOM radii to align their separately composited edges. */
 function MiniPlayerShell({
   threadRef,
   miniPlayer,
@@ -336,8 +343,7 @@ function MiniPlayerShell({
 }) {
   const canvas = useChatCanvas();
   const gestureRef = useRef<PointerGesture | null>(null);
-  // Touch has no hover, so tapping the handle toggles the pill instead. The
-  // toggle waits for the tap's click, which would otherwise land on the pill.
+  // Touch toggles the pill after the tap's click so that click cannot land on the newly opened pill.
   const [pillOpen, setPillOpen] = useState(false);
   const handleTappedRef = useRef(false);
   const handleRef = useRef<HTMLDivElement | null>(null);

@@ -8,10 +8,8 @@ import { useAtomSet } from "@effect/atom-react";
 import {
   createContext,
   createElement,
-  useCallback,
   useContext,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type PropsWithChildren,
@@ -73,10 +71,7 @@ export function HomeListOptionsProvider({
     saved.current = { environmentId, projectKey };
     savePreferences({ threadListFilters: saved.current });
   }, [environmentId, projectKey, savePreferences]);
-  const value = useMemo(
-    () => ({ options, setOptions, projectGroupingMode }),
-    [options, projectGroupingMode],
-  );
+  const value = { options, setOptions, projectGroupingMode };
   return createElement(HomeListOptionsContext, { value }, children);
 }
 
@@ -99,18 +94,15 @@ export function useHomeListOptions(availableEnvironmentIds: ReadonlySet<Environm
     projectGroupingMode: shared?.projectGroupingMode ?? "repository",
   };
 
-  const setSelectedEnvironmentId = useCallback((value: EnvironmentId | null) => {
+  const setSelectedEnvironmentId = (value: EnvironmentId | null) => {
     setOptions((current) => ({ ...current, selectedEnvironmentId: value }));
-  }, []);
-  const setSelectedProjectKey = useCallback(
-    (value: string | null) => {
-      setOptions((current) => ({ ...current, selectedProjectKey: value }));
-    },
-    [setOptions],
-  );
-  const setProjectSortOrder = useCallback((value: HomeProjectSortOrder) => {
+  };
+  const setSelectedProjectKey = (value: string | null) => {
+    setOptions((current) => ({ ...current, selectedProjectKey: value }));
+  };
+  const setProjectSortOrder = (value: HomeProjectSortOrder) => {
     setOptions((current) => ({ ...current, projectSortOrder: value }));
-  }, []);
+  };
   return {
     options: resolvedOptions,
     setSelectedEnvironmentId,

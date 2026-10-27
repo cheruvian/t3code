@@ -28,35 +28,35 @@ export const layer = Layer.effect(
       { bus: PubSub.PubSub<OrchestrationV2AssistantMessageItem>; count: number }
     >();
     return AssistantPreviewBus.of({
-      publish: (item) =>
+      publish: Effect.fn("AssistantPreviewBus.publish")((item) =>
         Effect.suspend(() => {
           const entry = subscribers.get(item.threadId);
           return entry ? PubSub.publish(entry.bus, item).pipe(Effect.asVoid) : Effect.void;
         }),
-      subscribe: (threadId) =>
-        Effect.gen(function* () {
-          const entry = yield* Effect.acquireRelease(
-            Effect.gen(function* () {
-              let entry = subscribers.get(threadId);
-              if (!entry) {
-                entry = {
-                  bus: yield* PubSub.sliding<OrchestrationV2AssistantMessageItem>(64),
-                  count: 0,
-                };
-                subscribers.set(threadId, entry);
-              }
-              entry.count++;
-              return entry;
+      ),
+      subscribe: Effect.fn("AssistantPreviewBus.subscribe")(function* (threadId) {
+        const entry = yield* Effect.acquireRelease(
+          Effect.gen(function* () {
+            let entry = subscribers.get(threadId);
+            if (!entry) {
+              entry = {
+                bus: yield* PubSub.sliding<OrchestrationV2AssistantMessageItem>(64),
+                count: 0,
+              };
+              subscribers.set(threadId, entry);
+            }
+            entry.count++;
+            return entry;
+          }),
+          (entry) =>
+            Effect.suspend(() => {
+              if (--entry.count !== 0) return Effect.void;
+              subscribers.delete(threadId);
+              return PubSub.shutdown(entry.bus);
             }),
-            (entry) =>
-              Effect.suspend(() => {
-                if (--entry.count !== 0) return Effect.void;
-                subscribers.delete(threadId);
-                return PubSub.shutdown(entry.bus);
-              }),
-          );
-          return yield* PubSub.subscribe(entry.bus);
-        }),
+        );
+        return yield* PubSub.subscribe(entry.bus);
+      }),
     });
   }),
 );

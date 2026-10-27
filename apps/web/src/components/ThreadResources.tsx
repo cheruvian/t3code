@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { resourceActionLogs, formatResourceActionLog } from "@t3tools/shared/resourceActions";
-import type { OrchestrationV2TurnItem } from "@t3tools/contracts";
+
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "./ui/dialog";
 import { LockIcon, ScrollTextIcon } from "lucide-react";
 import { Menu, MenuTrigger, MenuPopup, MenuItem } from "./ui/menu";
@@ -10,7 +10,7 @@ import type { ThreadId } from "@t3tools/contracts";
 import { projectEnvironment } from "../state/projects";
 import { useAtomCommand } from "../state/use-atom-command";
 
-const EMPTY_TURN_ITEMS: readonly OrchestrationV2TurnItem[] = [];
+const EMPTY_TURN_ITEMS: Parameters<typeof resourceActionLogs>[0] = [];
 
 export function ThreadResources({
   project,
@@ -19,7 +19,7 @@ export function ThreadResources({
 }: {
   project: EnvironmentProject;
   threadId: ThreadId;
-  turnItems?: readonly OrchestrationV2TurnItem[];
+  turnItems?: Parameters<typeof resourceActionLogs>[0];
 }) {
   const [logsOpen, setLogsOpen] = useState(false);
   const logs = useMemo(() => resourceActionLogs(turnItems), [turnItems]);

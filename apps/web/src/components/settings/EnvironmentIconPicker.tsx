@@ -10,7 +10,7 @@ import {
 import { useProjects } from "../../state/entities";
 import { EnvironmentIcon } from "../EnvironmentIcon";
 import { ProjectFavicon } from "../ProjectFavicon";
-import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
+import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironmentScope } from "../../state/session";
 import { ENVIRONMENT_MACHINE_KIND_LABELS, EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import {
@@ -24,7 +24,7 @@ import {
 } from "../ui/menu";
 
 export function resolveEnvironmentIconPickerLock(input: {
-  readonly serverConfig: ServerConfig | null;
+  readonly serverConfig: Pick<ServerConfig, "environment"> | null;
   readonly operateAccess: "granted" | "denied" | "pending";
 }): string | null {
   if (input.serverConfig === null) {
@@ -44,10 +44,13 @@ export function EnvironmentIconMenu({
   serverConfig,
 }: {
   readonly environmentId: EnvironmentId;
-  readonly serverConfig: ServerConfig | null;
+  readonly serverConfig: Pick<ServerConfig, "environment"> | null;
 }) {
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
-  const projectId = serverConfig?.settings.environmentIconProjectId ?? null;
+  const projectId = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.environmentIconProjectId,
+  );
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const operateAccess = useEnvironmentScope(environmentId, AuthSettingsWriteScope)
     ? "granted"

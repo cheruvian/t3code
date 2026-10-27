@@ -1,9 +1,11 @@
-vi.mock("../webPush", () => ({ useWebPushEnabled: () => false }));
+import { WORKING_EXIT_GRACE_MS } from "@t3tools/client-runtime/state/thread-inbox";
+import { threadNotificationTag } from "../threadNotifications";
+vi.mock("../webPush", () => ({ isWebPushEnabled: () => false }));
 import { EnvironmentId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
-import { act } from "react";
-import { create, type ReactTestRenderer } from "react-test-renderer";
+import { Atom, AtomRegistry } from "effect/reactivity";
+import type { AnyRouter } from "@tanstack/react-router";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
@@ -22,15 +24,28 @@ vi.mock("@tanstack/react-router", () => ({
   useParams: () => ({}),
 }));
 vi.mock("./ui/toast", () => ({ toastManager: { add: state.toast } }));
-vi.mock("../state/shell", () => ({ environmentShell: { stateValueAtom: (id: string) => id } }));
-vi.mock("../state/environments", () => ({
-  useEnvironmentIds: () => state.environmentIds,
+vi.mock("../state/shell", () => ({
+  environmentShell: { stateValueAtom: (id: string) => shellAtom(id) },
+}));
+vi.mock("../state/presentation", () => ({
+  environmentSummaries: {
+    get environmentIdsAtom() {
+      return environmentIdsAtom;
+    },
+  },
 }));
 vi.mock("../hooks/useSettings", () => ({
   useClientSettings: (
     select: (settings: { notificationMode: string; inAppNotificationsEnabled: boolean }) => unknown,
   ) => select({ notificationMode: state.mode, inAppNotificationsEnabled: state.inApp }),
-  getClientSettings: () => ({ notificationMode: state.mode }),
+  getClientSettings: () => ({
+    notificationMode: state.mode,
+    inAppNotificationsEnabled: state.inApp,
+  }),
+  subscribeClientSettings: (listener: () => void) => {
+    settingsListeners.add(listener);
+    return () => settingsListeners.delete(listener);
+  },
 }));
 vi.mock("../threadNotifications", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../threadNotifications")>()),
@@ -39,7 +54,7 @@ vi.mock("../threadNotifications", async (importOriginal) => ({
   setNotificationBadge: state.badge,
 }));
 
-import { ThreadNotificationCoordinator } from "./ThreadNotificationCoordinator";
+import { startThreadNotifications } from "./ThreadNotificationCoordinator";
 
 class TestNotification extends EventTarget {
   static permission = "granted";
@@ -66,7 +81,19 @@ const thread = {
   session: null as { status: string } | null,
   latestTurn: { turnId: "turn", state: "running", completedAt: null as string | null },
 };
-let renderer: ReactTestRenderer | undefined;
+let stopNotifications: (() => void) | undefined;
+let registry = AtomRegistry.make();
+const environmentIdsAtom = Atom.make<readonly string[]>([]);
+const settingsListeners = new Set<() => void>();
+const shellAtoms = new Map<string, Atom.Writable<unknown>>();
+function shellAtom(id: string) {
+  let atom = shellAtoms.get(id);
+  if (!atom) {
+    atom = Atom.make<unknown>(null);
+    shellAtoms.set(id, atom);
+  }
+  return atom;
+}
 let focused = false;
 let visibility = "visible";
 
@@ -139,13 +166,22 @@ function complete(environment = "one", completedAt = "2026-09-13T08:00:00Z") {
   );
 }
 async function render() {
-  await act(async () => {
-    if (renderer) renderer.update(<ThreadNotificationCoordinator />);
-    else renderer = create(<ThreadNotificationCoordinator />);
-  });
+  registry.set(environmentIdsAtom, state.environmentIds);
+  for (const [id, value] of state.shells) registry.set(shellAtom(id), value);
+  for (const listener of settingsListeners) listener();
+  stopNotifications ??= startThreadNotifications(registry, {
+    navigate: state.navigate,
+    get state() {
+      return { matches: [{ params: {} }] };
+    },
+  } as unknown as AnyRouter);
+  await vi.advanceTimersByTimeAsync(WORKING_EXIT_GRACE_MS);
 }
 
 beforeEach(() => {
+  vi.useFakeTimers();
+  registry = AtomRegistry.make();
+  settingsListeners.clear();
   vi.clearAllMocks();
   state.mode = "notifications";
   state.inApp = false;
@@ -171,8 +207,10 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await act(async () => renderer?.unmount());
-  renderer = undefined;
+  stopNotifications?.();
+  stopNotifications = undefined;
+  registry.dispose();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -251,8 +289,8 @@ it("counts delivered desktop notifications and clears them with the native badge
   await render();
   expect(state.badge).toHaveBeenLastCalledWith(1);
   expect(TestNotification.sent).toHaveLength(2);
-  await act(async () => renderer!.unmount());
-  renderer = undefined;
+  stopNotifications?.();
+  stopNotifications = undefined;
   expect(unsubscribe).toHaveBeenCalledOnce();
   expect(state.badge).toHaveBeenLastCalledWith(0);
 });

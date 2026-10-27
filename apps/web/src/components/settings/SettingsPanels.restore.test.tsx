@@ -1,28 +1,14 @@
 import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { reactHookHarness as hooks } from "../../test/reactHookHarness";
+import { createElement } from "react";
+import { create, act } from "react-test-renderer";
 
 const state = vi.hoisted(() => ({
   settings: null as UnifiedSettings | null,
   update: vi.fn(),
   confirm: vi.fn(),
 }));
-
-vi.mock("react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("react")>();
-  const { reactHookHarness } = await import("../../test/reactHookHarness");
-  return {
-    ...actual,
-    useCallback: reactHookHarness.useCallback,
-    useMemo: reactHookHarness.useMemo,
-  };
-});
-
-vi.mock("react/compiler-runtime", async () => {
-  const { reactHookHarness } = await import("../../test/reactHookHarness");
-  return { c: reactHookHarness.useMemoCache };
-});
 
 vi.mock("../../hooks/useTheme", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../hooks/useTheme")>()),
@@ -51,10 +37,23 @@ vi.mock("../../localApi", async (importOriginal) => ({
   readLocalApi: () => ({ dialogs: { confirm: state.confirm } }),
 }));
 
-import { useSettingsRestore } from "./SettingsPanels";
+import { useSettingsRestore } from "./useSettingsRestore";
+
+function renderRestore() {
+  let result: ReturnType<typeof useSettingsRestore> | undefined;
+  function Hook() {
+    result = useSettingsRestore();
+    return null;
+  }
+  let root: ReturnType<typeof create>;
+  act(() => {
+    root = create(createElement(Hook));
+  });
+  act(() => root.unmount());
+  return result!;
+}
 
 beforeEach(() => {
-  hooks.reset();
   vi.clearAllMocks();
   state.settings = { ...DEFAULT_UNIFIED_SETTINGS };
   state.confirm.mockResolvedValue(true);
@@ -63,12 +62,11 @@ beforeEach(() => {
 describe("restoring V2 settings", () => {
   it.each([
     ["persistComposerContextStrip", "Composer context"],
-    ["autoResumeLimitedThreads", "Auto-resume limited threads"],
-    ["snoozeLimitedThreads", "Snooze limited threads"],
+    ["autoResumeLimitedThreads", "Resume after usage limits"],
+    ["snoozeLimitedThreads", "Snooze until limits reset"],
   ] as const)("restores %s when it is the only changed setting", async (key, label) => {
     state.settings = { ...DEFAULT_UNIFIED_SETTINGS, [key]: true };
-    hooks.beginRender();
-    const restore = useSettingsRestore();
+    const restore = renderRestore();
 
     expect(restore.changedSettingLabels).toEqual([label]);
     await restore.restoreDefaults();
@@ -82,8 +80,7 @@ describe("restoring V2 settings", () => {
     "restores the %s HTML preview default",
     async (htmlPreviewDefaultMode) => {
       state.settings = { ...DEFAULT_UNIFIED_SETTINGS, htmlPreviewDefaultMode };
-      hooks.beginRender();
-      const restore = useSettingsRestore();
+      const restore = renderRestore();
 
       expect(restore.changedSettingLabels).toEqual(["HTML previews"]);
       await restore.restoreDefaults();
@@ -96,9 +93,8 @@ describe("restoring V2 settings", () => {
   it("does not reset settings after cancellation", async () => {
     state.settings = { ...DEFAULT_UNIFIED_SETTINGS, autoResumeLimitedThreads: true };
     state.confirm.mockResolvedValue(false);
-    hooks.beginRender();
 
-    await useSettingsRestore().restoreDefaults();
+    await renderRestore().restoreDefaults();
 
     expect(state.confirm).toHaveBeenCalledOnce();
     expect(state.update).not.toHaveBeenCalled();

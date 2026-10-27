@@ -71,75 +71,74 @@ const toolBrokerFailure = (error: CredentialBrokerError) =>
   new OrchestratorMcpFailure({ code: "credential_broker_error", message: error.message });
 
 /** Bind one authenticated tool invocation to its thread and committed lifetime. */
-export const bindToolCall = (
+export const bindToolCall = Effect.fn("bindToolCall")(function* (
   input: CredentialExecInput,
   execute: (
     caller: CredentialCaller,
     input: CredentialExecInput,
   ) => Effect.Effect<CredentialExecution, CredentialBrokerError>,
-) =>
-  Effect.gen(function* () {
-    const context = yield* loadCaller();
-    const { thread } = yield* McpInvocationContext.requireThreadScope(
-      context.scope,
-      "Credential Broker",
-    );
-    const caller = context.caller;
-    if (!caller || !caller.activeRunId) return yield* unavailable();
-    const projects = yield* ProjectService.ProjectService;
-    const project = yield* projects.getShell(caller.projectId).pipe(Effect.mapError(unavailable));
-    if (Option.isNone(project)) return yield* unavailable();
-    const crypto = yield* Crypto.Crypto;
+) {
+  const context = yield* loadCaller();
+  const { thread } = yield* McpInvocationContext.requireThreadScope(
+    context.scope,
+    "Credential Broker",
+  );
+  const caller = context.caller;
+  if (!caller || !caller.activeRunId) return yield* unavailable();
+  const projects = yield* ProjectService.ProjectService;
+  const project = yield* projects.getShell(caller.projectId).pipe(Effect.mapError(unavailable));
+  if (Option.isNone(project)) return yield* unavailable();
+  const crypto = yield* Crypto.Crypto;
 
-    // The UUID names this exact handler invocation and its cancellable fiber.
-    // Thread/session/run/workspace come from authenticated server state, never shell labels.
-    const toolCallId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
-    const sequence = yield* context.threads
-      .getThreadEventSequence(thread.threadId)
-      .pipe(Effect.mapError(unavailable));
-    const current = yield* context.threads
-      .getThreadShell(thread.threadId)
-      .pipe(Effect.mapError(unavailable));
-    if (
-      !current ||
-      current.activeRunId !== caller.activeRunId ||
-      current.providerInstanceId !== thread.providerInstanceId
-    )
-      return yield* unavailable();
-    const stopped = context.threads
-      .streamStoredEventsFrom({ threadId: thread.threadId, afterSequence: sequence })
-      .pipe(
-        Stream.filter(
-          ({ event }) =>
-            (event.type === "run.updated" &&
-              event.payload.id === caller.activeRunId &&
-              ["completed", "failed", "interrupted", "cancelled", "rolled_back"].includes(
-                event.payload.status,
-              )) ||
-            ["thread.archived", "thread.deleted", "thread.provider-switched"].includes(event.type),
-        ),
-        Stream.take(1),
-        Stream.runDrain,
-        Effect.mapError(unavailable),
-        Effect.andThen(
-          Effect.fail(toolBrokerFailure(new CredentialBrokerError({ code: "caller_cancelled" }))),
-        ),
-      );
-    return yield* execute(
-      {
-        environmentId: context.scope.environmentId,
-        ...thread,
-        threadTitle: caller.title,
-        projectId: caller.projectId,
-        projectName: project.value.title,
-        runId: caller.activeRunId,
-        toolCallId,
-        workspace: caller.worktreePath ?? project.value.workspaceRoot,
-        agent: caller.modelSelection.model,
-      },
-      input,
-    ).pipe(Effect.mapError(toolBrokerFailure), Effect.raceFirst(stopped));
-  });
+  // The UUID names this exact handler invocation and its cancellable fiber.
+  // Thread/session/run/workspace come from authenticated server state, never shell labels.
+  const toolCallId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+  const sequence = yield* context.threads
+    .getThreadEventSequence(thread.threadId)
+    .pipe(Effect.mapError(unavailable));
+  const current = yield* context.threads
+    .getThreadShell(thread.threadId)
+    .pipe(Effect.mapError(unavailable));
+  if (
+    !current ||
+    current.activeRunId !== caller.activeRunId ||
+    current.providerInstanceId !== thread.providerInstanceId
+  )
+    return yield* unavailable();
+  const stopped = context.threads
+    .streamStoredEventsFrom({ threadId: thread.threadId, afterSequence: sequence })
+    .pipe(
+      Stream.filter(
+        ({ event }) =>
+          (event.type === "run.updated" &&
+            event.payload.id === caller.activeRunId &&
+            ["completed", "failed", "interrupted", "cancelled", "rolled_back"].includes(
+              event.payload.status,
+            )) ||
+          ["thread.archived", "thread.deleted", "thread.provider-switched"].includes(event.type),
+      ),
+      Stream.take(1),
+      Stream.runDrain,
+      Effect.mapError(unavailable),
+      Effect.andThen(
+        Effect.fail(toolBrokerFailure(new CredentialBrokerError({ code: "caller_cancelled" }))),
+      ),
+    );
+  return yield* execute(
+    {
+      environmentId: context.scope.environmentId,
+      ...thread,
+      threadTitle: caller.title,
+      projectId: caller.projectId,
+      projectName: project.value.title,
+      runId: caller.activeRunId,
+      toolCallId,
+      workspace: caller.worktreePath ?? project.value.workspaceRoot,
+      agent: caller.modelSelection.model,
+    },
+    input,
+  ).pipe(Effect.mapError(toolBrokerFailure), Effect.raceFirst(stopped));
+});
 
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
@@ -202,18 +201,20 @@ const make = Effect.gen(function* () {
     );
   return CredentialBroker.of({
     execute,
-    executeFromTool: (input) =>
+    executeFromTool: Effect.fn("CredentialBroker.executeFromTool")((input) =>
       (input.browserTabId === undefined
         ? Effect.void
         : McpInvocationContext.requireThreadMcpCapability("preview").pipe(
             Effect.mapError(unavailable),
           )
       ).pipe(Effect.andThen(bindToolCall(input, execute))),
-    action: (sessionId, input) =>
+    ),
+    action: Effect.fn("CredentialBroker.action")((sessionId, input) =>
       Effect.tryPromise({
         try: () => broker.action(sessionId, input),
         catch: () => new CredentialBrokerError({}),
       }),
+    ),
     subscribe: (sessionId, viewId) =>
       Stream.callback<CredentialBrokerState, CredentialBrokerError>(
         (queue) =>

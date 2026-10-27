@@ -40,7 +40,7 @@ describe("connection timing preferences", () => {
   it.effect("preserves current settings if persistence fails or input is invalid", () =>
     Effect.gen(function* () {
       const timing = yield* makeConnectionTiming({
-        read: Effect.succeed(undefined),
+        read: Effect.sync(() => undefined),
         write: () =>
           Effect.fail(
             new ConnectionTransientError({ reason: "transport", detail: "Storage unavailable" }),

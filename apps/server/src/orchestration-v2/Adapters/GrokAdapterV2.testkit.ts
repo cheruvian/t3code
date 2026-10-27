@@ -33,7 +33,7 @@ import {
   makeAcpReplayRuntime,
 } from "./AcpAdapterV2.testkit.ts";
 
-const DEFAULT_GROK_SETTINGS = Schema.decodeUnknownSync(GrokSettings)({});
+const DEFAULT_GROK_SETTINGS = Schema.decodeSync(GrokSettings)({});
 
 function layerGrokProviderAdapterRegistryReplay(
   transcript: AcpReplayTranscript,

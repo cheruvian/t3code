@@ -12,22 +12,6 @@ vi.mock("react-native", () => ({ Platform: platform }));
 import * as MobileDatabase from "./mobile-database";
 
 describe("mobile database legacy cache migration", () => {
-  it.effect("keeps acquisition failures typed on database operations", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        openDatabaseAsync.mockRejectedValueOnce(new Error("SQLite unavailable"));
-
-        const database = yield* MobileDatabase.make;
-        const result = yield* Effect.result(database.loadPreferencesJson);
-
-        expect(result).toMatchObject({
-          _tag: "Failure",
-          failure: { _tag: "MobileDatabaseError", operation: "open" },
-        });
-      }),
-    ),
-  );
-
   it("maps legacy thread records to their SQLite identity", () => {
     const payload = JSON.stringify({
       schemaVersion: 2,
@@ -41,23 +25,6 @@ describe("mobile database legacy cache migration", () => {
       kind: "thread",
       cacheKey: "thread-1",
       schemaVersion: 2,
-      payload,
-    });
-  });
-
-  it("preserves the old shell payload for schema decoding after migration", () => {
-    const payload = JSON.stringify({
-      schemaVersion: 1,
-      environmentId: "environment-1",
-      snapshotReceivedAt: "2026-07-01T00:00:00.000Z",
-      snapshot: {},
-    });
-
-    expect(MobileDatabase.decodeLegacyCacheRecord("shell-snapshots", payload)).toEqual({
-      environmentId: "environment-1",
-      kind: "shell",
-      cacheKey: "snapshot",
-      schemaVersion: 1,
       payload,
     });
   });

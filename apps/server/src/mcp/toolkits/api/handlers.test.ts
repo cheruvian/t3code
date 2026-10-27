@@ -138,6 +138,7 @@ const unusedServicesLayer = Layer.mergeAll(
   Layer.succeed(
     WorkspaceEntries.WorkspaceEntries,
     WorkspaceEntries.WorkspaceEntries.of({
+      listIgnoredFiles: () => Effect.die("unused"),
       browse: () => Effect.die("unused"),
       list: () => Effect.die("unused"),
       search: () => Effect.die("unused"),
@@ -366,6 +367,8 @@ const stubRegistryLayer = Layer.succeed(
 
 const HttpTestLayer = HttpRouter.serve(
   McpHttpServer.layer.pipe(
+    Layer.provide(Layer.mock(DocumentText.DocumentText)({})),
+    Layer.provide(McpProviderSessions.layer),
     Layer.provide(stubRegistryLayer),
     Layer.provide(Layer.mock(DeviceService.DeviceService)({})),
     Layer.provide(Layer.mock(ScheduledTaskService)({})),
@@ -463,3 +466,5 @@ it.effect("lists the API bridge only on the helper endpoint", () =>
     expect(rejected.status).toBe(401);
   }).pipe(Effect.provide(HttpTestLayer)),
 );
+import * as DocumentText from "../../../provider/DocumentText.ts";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";

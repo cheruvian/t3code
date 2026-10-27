@@ -20,7 +20,7 @@ import {
 
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
-import { type MouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useEffectEvent, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
   CheckIcon,
@@ -52,6 +52,7 @@ import {
   requiresDefaultBranchConfirmation,
   resolveDefaultBranchActionDialogCopy,
   resolveGitStatusForActions,
+  resolveFeatureBranchUnavailableReason,
   resolveGitActionProgressPresentation,
   resolveGitActionResultToastTiming,
   resolveLiveThreadBranchUpdate,
@@ -98,7 +99,7 @@ import {
   useVcsInitAction,
   useVcsPullAction,
 } from "~/lib/sourceControlActions";
-import { useThreadProjection, useThreadShell } from "~/state/entities";
+import { useThreadProjection, useQuietThreadShell } from "~/state/entities";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
@@ -120,6 +121,7 @@ import { getSourceControlPresentation, sourceControlIcon } from "~/sourceControl
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import { useOpenLink } from "~/browser/useOpenLink";
+import { useClientSettings } from "~/hooks/useSettings";
 
 interface GitActionsControlProps {
   presentation?: "toolbar" | "menu";
@@ -209,7 +211,7 @@ function getPublishProviderReadiness(input: {
   if (!discovered) {
     return {
       ready: false,
-      hint: "Provider status unavailable. Open Settings -> Source Control and rescan.",
+      hint: "Provider status unavailable. Open Settings -> Source control and rescan.",
     };
   }
   if (discovered.status !== "available") {
@@ -220,7 +222,7 @@ function getPublishProviderReadiness(input: {
       ready: false,
       hint:
         Option.getOrNull(discovered.auth.detail) ??
-        `${discovered.label} is not authenticated. Open Settings -> Source Control for setup guidance.`,
+        `${discovered.label} is not authenticated. Open Settings -> Source control for setup guidance.`,
     };
   }
   return { ready: true, hint: null };
@@ -491,48 +493,38 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   const [publishResult, setPublishResult] = useState<SourceControlPublishRepositoryResult | null>(
     null,
   );
-  const sourceControlScope = useMemo(
-    () => ({
-      environmentId: props.environmentId,
-      cwd: props.gitCwd,
-    }),
-    [props.environmentId, props.gitCwd],
-  );
+  const sourceControlScope = {
+    environmentId: props.environmentId,
+    cwd: props.gitCwd,
+  };
   const publishRepositoryAction = useSourceControlPublishRepositoryAction(sourceControlScope);
-  const publishAccountByProvider = useMemo(() => {
-    const accounts = new Map<string, string | null>();
-    for (const provider of sourceControlDiscovery.data?.sourceControlProviders ?? []) {
-      accounts.set(provider.kind, Option.getOrNull(provider.auth.account));
-    }
-    return accounts;
-  }, [sourceControlDiscovery.data]);
-  const publishProviderReadiness = useMemo(() => {
-    const sourceControlProviders = sourceControlDiscovery.data?.sourceControlProviders ?? [];
-    const readiness = new Map(
-      PUBLISH_PROVIDER_OPTIONS.map((option) => [
-        option.value,
-        getPublishProviderReadiness({ provider: option.value, sourceControlProviders }),
-      ]),
-    );
-    return (provider: SourceControlProviderKind) =>
-      readiness.get(provider) ?? { ready: false, hint: null };
-  }, [sourceControlDiscovery.data]);
-  const hasReadyPublishProvider = useMemo(
-    () => PUBLISH_PROVIDER_OPTIONS.some((option) => publishProviderReadiness(option.value).ready),
-    [publishProviderReadiness],
-  );
-  const sortedPublishProviderOptions = useMemo(
-    () =>
-      PUBLISH_PROVIDER_OPTIONS.toSorted((left, right) => {
-        const leftReady = publishProviderReadiness(left.value).ready;
-        const rightReady = publishProviderReadiness(right.value).ready;
-        if (leftReady !== rightReady) {
-          return leftReady ? -1 : 1;
-        }
-        return left.label.localeCompare(right.label);
+  const publishAccountByProvider = new Map<string, string | null>();
+  for (const provider of sourceControlDiscovery.data?.sourceControlProviders ?? []) {
+    publishAccountByProvider.set(provider.kind, Option.getOrNull(provider.auth.account));
+  }
+  const publishSourceControlProviders = sourceControlDiscovery.data?.sourceControlProviders ?? [];
+  const publishReadinessByProvider = new Map(
+    PUBLISH_PROVIDER_OPTIONS.map((option) => [
+      option.value,
+      getPublishProviderReadiness({
+        provider: option.value,
+        sourceControlProviders: publishSourceControlProviders,
       }),
-    [publishProviderReadiness],
+    ]),
   );
+  const publishProviderReadiness = (provider: SourceControlProviderKind) =>
+    publishReadinessByProvider.get(provider) ?? { ready: false, hint: null };
+  const hasReadyPublishProvider = PUBLISH_PROVIDER_OPTIONS.some(
+    (option) => publishProviderReadiness(option.value).ready,
+  );
+  const sortedPublishProviderOptions = PUBLISH_PROVIDER_OPTIONS.toSorted((left, right) => {
+    const leftReady = publishProviderReadiness(left.value).ready;
+    const rightReady = publishProviderReadiness(right.value).ready;
+    if (leftReady !== rightReady) {
+      return leftReady ? -1 : 1;
+    }
+    return left.label.localeCompare(right.label);
+  });
   const firstReadyPublishProvider = sortedPublishProviderOptions.find(
     (option) => publishProviderReadiness(option.value).ready,
   )?.value;
@@ -563,22 +555,17 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
     null,
   ] as const;
 
-  const canSubmitPublishRepository = useMemo(() => {
-    if (!publishRepositoryAction.isAllowed || !selectedPublishProviderReadiness.ready) return false;
-    if (publishRepositoryAction.isPending) return false;
-    const repositoryParts = publishRepository.trim().split("/");
-    const owner = repositoryParts[0]?.trim() ?? "";
-    const rest = repositoryParts.slice(1);
-    const name = rest.join("/").trim();
-    return owner.length > 0 && name.length > 0;
-  }, [
-    publishRepository,
-    publishRepositoryAction.isAllowed,
-    publishRepositoryAction.isPending,
-    selectedPublishProviderReadiness,
-  ]);
+  const publishRepositoryParts = publishRepository.trim().split("/");
+  const publishRepositoryOwner = publishRepositoryParts[0]?.trim() ?? "";
+  const publishRepositoryName = publishRepositoryParts.slice(1).join("/").trim();
+  const canSubmitPublishRepository =
+    publishRepositoryAction.isAllowed &&
+    selectedPublishProviderReadiness.ready &&
+    !publishRepositoryAction.isPending &&
+    publishRepositoryOwner.length > 0 &&
+    publishRepositoryName.length > 0;
 
-  const submitPublishRepository = useCallback(() => {
+  const submitPublishRepository = () => {
     if (!canSubmitPublishRepository) {
       return;
     }
@@ -607,41 +594,28 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
         setPublishWizardStep(2);
       });
     })();
-  }, [
-    canSubmitPublishRepository,
-    props.environmentId,
-    props.gitCwd,
-    publishProtocol,
-    publishProvider,
-    publishRemoteName,
-    publishRepository,
-    publishRepositoryAction,
-    publishVisibility,
-  ]);
+  };
 
-  const resetState = useCallback(() => {
+  const resetState = () => {
     setPublishRemoteName("origin");
     setPublishRepositoryOverride(null);
     setPublishWizardStep(0);
     setPublishAdvancedOpen(false);
     setPublishError(null);
     setPublishResult(null);
-  }, []);
+  };
 
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      props.onOpenChange(open);
-      if (!open) {
-        resetState();
-      }
-    },
-    [props, resetState],
-  );
+  const handleOpenChange = (open: boolean) => {
+    props.onOpenChange(open);
+    if (!open) {
+      resetState();
+    }
+  };
 
-  const openSourceControlSettings = useCallback(() => {
+  const openSourceControlSettings = () => {
     handleOpenChange(false);
     void navigate({ to: "/settings/source-control" });
-  }, [handleOpenChange, navigate]);
+  };
 
   return (
     <Dialog open={props.open} onOpenChange={handleOpenChange}>
@@ -709,7 +683,7 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
                         />
                         <TooltipPopup side="top" align="end">
                           {readiness.hint ??
-                            "Open Settings -> Source Control to configure this provider."}
+                            "Open Settings -> Source control to configure this provider."}
                         </TooltipPopup>
                       </Tooltip>
                     </div>
@@ -1019,11 +993,8 @@ export default function GitActionsControl({
     activeEnvironmentId,
     serverConfig?.availableEditors ?? [],
   );
-  const threadToastData = useMemo(
-    () => (activeThreadRef ? { threadRef: activeThreadRef } : undefined),
-    [activeThreadRef],
-  );
-  const activeServerThreadShell = useThreadShell(activeThreadRef);
+  const threadToastData = activeThreadRef ? { threadRef: activeThreadRef } : undefined;
+  const activeServerThreadShell = useQuietThreadShell(activeThreadRef);
   const openPrLink = useOpenPrLink(activeThreadRef ?? undefined);
   const activeDraftThread = useComposerDraftStore((store) =>
     draftId
@@ -1048,10 +1019,7 @@ export default function GitActionsControl({
   const [inlineSuccess, setInlineSuccess] = useState<InlineGitActionSuccess | null>(null);
   const [pendingDefaultBranchAction, setPendingDefaultBranchAction] =
     useState<PendingDefaultBranchAction | null>(null);
-  const sourceControlScope = useMemo(
-    () => ({ environmentId: activeEnvironmentId, cwd: gitCwd }),
-    [activeEnvironmentId, gitCwd],
-  );
+  const sourceControlScope = { environmentId: activeEnvironmentId, cwd: gitCwd };
   const vcsActionState = useAtomValue(vcsActionManager.stateAtom(sourceControlScope));
   const visibleInlineSuccess = inlineSuccess?.scopeKey === successScopeKey ? inlineSuccess : null;
 
@@ -1063,65 +1031,55 @@ export default function GitActionsControl({
     return () => window.clearTimeout(timeoutId);
   }, [inlineSuccess]);
 
-  const persistThreadBranchSync = useCallback(
-    (branch: string | null, manualSelection = false) => {
-      if (!activeThreadRef) {
+  const persistThreadBranchSync = (branch: string | null, manualSelection = false) => {
+    if (!activeThreadRef) {
+      return;
+    }
+
+    if (activeServerThread) {
+      if (
+        !readEnvironmentScope(activeThreadRef.environmentId, AuthOrchestrationOperateScope) ||
+        activeServerThread.branch === branch
+      ) {
         return;
       }
 
-      if (activeServerThread) {
-        if (
-          !readEnvironmentScope(activeThreadRef.environmentId, AuthOrchestrationOperateScope) ||
-          activeServerThread.branch === branch
-        ) {
-          return;
-        }
-
-        void updateThreadMetadata({
-          environmentId: activeThreadRef.environmentId,
-          input: {
-            threadId: activeThreadRef.threadId,
-            ...resolveThreadBranchMetadataPatch(branch, activeServerThread.branch),
-          },
-        });
-
-        return;
-      }
-
-      if (!activeDraftThread || activeDraftThread.branch === branch) {
-        return;
-      }
-
-      setDraftThreadContext(draftId ?? activeThreadRef, {
-        branch,
-        worktreePath: activeDraftThread.worktreePath,
-        environmentSelection: manualSelection
-          ? "manual"
-          : (activeDraftThread.environmentSelection ??
-            (activeDraftThread.branch ? "manual" : "auto")),
+      void updateThreadMetadata({
+        environmentId: activeThreadRef.environmentId,
+        input: {
+          threadId: activeThreadRef.threadId,
+          ...resolveThreadBranchMetadataPatch(branch, activeServerThread.branch),
+        },
       });
-    },
-    [
-      activeDraftThread,
-      activeServerThread,
-      activeThreadRef,
-      draftId,
-      setDraftThreadContext,
-      updateThreadMetadata,
-    ],
-  );
 
-  const syncThreadBranchAfterGitAction = useCallback(
-    (result: GitRunStackedActionResult) => {
-      const branchUpdate = resolveThreadBranchUpdate(result);
-      if (!branchUpdate) {
-        return;
-      }
+      return;
+    }
 
-      persistThreadBranchSync(branchUpdate.branch, true);
-    },
-    [persistThreadBranchSync],
-  );
+    if (!activeDraftThread || activeDraftThread.branch === branch) {
+      return;
+    }
+
+    setDraftThreadContext(draftId ?? activeThreadRef, {
+      branch,
+      worktreePath: activeDraftThread.worktreePath,
+      environmentSelection: manualSelection
+        ? "manual"
+        : (activeDraftThread.environmentSelection ??
+          (activeDraftThread.branch ? "manual" : "auto")),
+    });
+  };
+  const persistLiveThreadBranch = useEffectEvent((branch: string | null) => {
+    persistThreadBranchSync(branch);
+  });
+
+  const syncThreadBranchAfterGitAction = (result: GitRunStackedActionResult) => {
+    const branchUpdate = resolveThreadBranchUpdate(result);
+    if (!branchUpdate) {
+      return;
+    }
+
+    persistThreadBranchSync(branchUpdate.branch, true);
+  };
 
   const gitStatusQuery = useEnvironmentQuery(
     activeEnvironmentId !== null && gitCwd !== null
@@ -1135,10 +1093,7 @@ export default function GitActionsControl({
     reportFailure: false,
   });
   const { data: gitStatus, error: gitStatusError } = gitStatusQuery;
-  const sourceControlPresentation = useMemo(
-    () => getSourceControlPresentation(gitStatus?.sourceControlProvider),
-    [gitStatus?.sourceControlProvider],
-  );
+  const sourceControlPresentation = getSourceControlPresentation(gitStatus?.sourceControlProvider);
   const changeRequestTerminology = sourceControlPresentation.terminology;
   const SourceControlIcon = sourceControlPresentation.Icon;
   // Default to true while loading so we don't flash init controls.
@@ -1150,6 +1105,9 @@ export default function GitActionsControl({
   const changesTotals = gitStatusForActions?.branchChanges ?? gitStatusForActions?.workingTree;
 
   const allFiles = gitStatusForActions?.workingTree.files ?? [];
+  // Changed-file paths are repository-relative, so they must resolve against
+  // the worktree root from the same status snapshot, not the project cwd.
+  const workingTreeRoot = gitStatusForActions?.workingTree.rootPath ?? null;
   const selectedFiles = allFiles.filter((f) => !excludedFiles.has(f.path));
   const allSelected = excludedFiles.size === 0;
   const noneSelected = selectedFiles.length === 0;
@@ -1179,33 +1137,27 @@ export default function GitActionsControl({
       return;
     }
 
-    persistThreadBranchSync(branchUpdate.branch);
+    persistLiveThreadBranch(branchUpdate.branch);
   }, [
     activeServerThread,
     activeDraftThread?.branch,
     gitStatusForActions,
     isGitActionRunning,
     isSelectingWorktreeBase,
-    persistThreadBranchSync,
   ]);
 
-  const isDefaultRef = useMemo(() => {
-    return gitStatusForActions?.isDefaultRef ?? false;
-  }, [gitStatusForActions?.isDefaultRef]);
+  const isDefaultRef = gitStatusForActions?.isDefaultRef ?? false;
 
-  const gitActionMenuItems = useMemo(
-    () => buildMenuItems(gitStatusForActions, isGitActionRunning, actionHasPrimaryRemote),
-    [actionHasPrimaryRemote, gitStatusForActions, isGitActionRunning],
+  const gitActionMenuItems = buildMenuItems(
+    gitStatusForActions,
+    isGitActionRunning,
+    actionHasPrimaryRemote,
   );
-  const quickAction = useMemo(
-    () =>
-      resolveQuickAction(
-        gitStatusForActions,
-        isGitActionRunning,
-        isDefaultRef,
-        actionHasPrimaryRemote,
-      ),
-    [actionHasPrimaryRemote, gitStatusForActions, isDefaultRef, isGitActionRunning],
+  const quickAction = resolveQuickAction(
+    gitStatusForActions,
+    isGitActionRunning,
+    isDefaultRef,
+    actionHasPrimaryRemote,
   );
   const quickActionDisabledReason = !canWriteSourceControl
     ? "This connection cannot change source control."
@@ -1213,12 +1165,30 @@ export default function GitActionsControl({
       ? (quickAction.hint ?? "This action is currently unavailable.")
       : null;
   const gitActionProgress = resolveGitActionProgressPresentation(vcsActionState);
+  const redesign = useClientSettings((s) => s.redesignEnabled);
+  // A fresh draft or a thread with no turns hides commit, push, and diff rows until there is work.
+  const quietEmptyDraft =
+    redesign &&
+    isPanel &&
+    (draftId !== undefined || activeServerThreadShell?.latestRun === null) &&
+    gitActionProgress === null &&
+    !gitStatusError &&
+    quickAction.disabled &&
+    !changesTotals?.insertions &&
+    !changesTotals?.deletions;
   const pendingDefaultBranchActionCopy = pendingDefaultBranchAction
     ? resolveDefaultBranchActionDialogCopy({
         action: pendingDefaultBranchAction.action,
         branchName: pendingDefaultBranchAction.branchName,
         includesCommit: pendingDefaultBranchAction.includesCommit,
         terminology: changeRequestTerminology,
+      })
+    : null;
+  // Keep enabled until live status loads; the server rejects stale requests.
+  const featureBranchUnavailableReason = pendingDefaultBranchAction
+    ? resolveFeatureBranchUnavailableReason({
+        branchName: pendingDefaultBranchAction.branchName,
+        hasWorkingTreeChanges: gitStatus?.hasWorkingTreeChanges ?? true,
       })
     : null;
 
@@ -1255,183 +1225,173 @@ export default function GitActionsControl({
     };
   }, [activeEnvironmentId, gitCwd, refreshVcsStatus]);
 
-  // React 19.2 leaves useEffectEvent stale inside the memoized details panel.
-  // Bind each render's actions to its checkout and thread, including retained toast actions.
-  const runGitActionWithToast = useCallback(
-    async function runGitActionWithToast({
-      action,
-      commitMessage,
-      onConfirmed,
-      skipDefaultBranchPrompt = false,
-      statusOverride,
-      featureBranch = false,
-      filePaths,
-    }: RunGitActionWithToastInput) {
+  // Toast actions must retain their original checkout/thread, so do not use an effect event.
+  async function runGitActionWithToast({
+    action,
+    commitMessage,
+    onConfirmed,
+    skipDefaultBranchPrompt = false,
+    statusOverride,
+    featureBranch = false,
+    filePaths,
+  }: RunGitActionWithToastInput) {
+    if (
+      activeEnvironmentId === null ||
+      !readEnvironmentScope(activeEnvironmentId, AuthSourceControlWriteScope) ||
+      (featureBranch &&
+        !isLocalDraftThread &&
+        !readEnvironmentScope(activeEnvironmentId, AuthOrchestrationOperateScope))
+    )
+      return;
+    const actionStatus = statusOverride ?? gitStatusForActions;
+    const actionBranch = actionStatus?.refName ?? null;
+    const actionIsDefaultBranch = featureBranch ? false : isDefaultRef;
+    const actionCanCommit =
+      action === "commit" || action === "commit_push" || action === "commit_push_pr";
+    const includesCommit =
+      actionCanCommit &&
+      (action === "commit" || !!actionStatus?.hasWorkingTreeChanges || featureBranch);
+    if (
+      !skipDefaultBranchPrompt &&
+      requiresDefaultBranchConfirmation(action, actionIsDefaultBranch) &&
+      actionBranch
+    ) {
       if (
-        activeEnvironmentId === null ||
-        !readEnvironmentScope(activeEnvironmentId, AuthSourceControlWriteScope) ||
-        (featureBranch &&
-          !isLocalDraftThread &&
-          !readEnvironmentScope(activeEnvironmentId, AuthOrchestrationOperateScope))
-      )
-        return;
-      const actionStatus = statusOverride ?? gitStatusForActions;
-      const actionBranch = actionStatus?.refName ?? null;
-      const actionIsDefaultBranch = featureBranch ? false : isDefaultRef;
-      const actionCanCommit =
-        action === "commit" || action === "commit_push" || action === "commit_push_pr";
-      const includesCommit =
-        actionCanCommit &&
-        (action === "commit" || !!actionStatus?.hasWorkingTreeChanges || featureBranch);
-      if (
-        !skipDefaultBranchPrompt &&
-        requiresDefaultBranchConfirmation(action, actionIsDefaultBranch) &&
-        actionBranch
+        action !== "push" &&
+        action !== "create_pr" &&
+        action !== "commit_push" &&
+        action !== "commit_push_pr"
       ) {
-        if (
-          action !== "push" &&
-          action !== "create_pr" &&
-          action !== "commit_push" &&
-          action !== "commit_push_pr"
-        ) {
-          return;
-        }
-        setPendingDefaultBranchAction({
-          action,
-          branchName: actionBranch,
-          includesCommit,
-          ...(commitMessage ? { commitMessage } : {}),
-          ...(onConfirmed ? { onConfirmed } : {}),
-          ...(filePaths ? { filePaths } : {}),
-        });
         return;
       }
-      onConfirmed?.();
-      setInlineSuccess(null);
-
-      const scopedToastData = threadToastData ? { ...threadToastData } : undefined;
-      const actionId = randomUUID();
-
-      const result = await runImmediateGitAction.run({
-        actionId,
+      setPendingDefaultBranchAction({
         action,
+        branchName: actionBranch,
+        includesCommit,
         ...(commitMessage ? { commitMessage } : {}),
-        ...(featureBranch ? { featureBranch } : {}),
+        ...(onConfirmed ? { onConfirmed } : {}),
         ...(filePaths ? { filePaths } : {}),
         // A pull request the action opens is linked to the thread it ran beside. Drafts
         // have no server thread yet, so there is nothing to link to.
         ...(activeServerThread ? { threadId: activeServerThread.id } : {}),
         ...(activeDraftThread ? { projectId: activeDraftThread.projectId } : {}),
       });
+      return;
+    }
+    onConfirmed?.();
+    setInlineSuccess(null);
 
-      if (result._tag === "Failure") {
-        if (isAtomCommandInterrupted(result)) {
-          return;
-        }
+    const scopedToastData = threadToastData ? { ...threadToastData } : undefined;
+    const actionId = randomUUID();
 
-        const error = squashAtomCommandFailure(result);
-        const errorToastTiming = resolveGitActionResultToastTiming("error");
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Action failed",
-            description: error instanceof Error ? error.message : "An error occurred.",
-            timeout: errorToastTiming.timeout,
-            ...(scopedToastData !== undefined ? { data: scopedToastData } : {}),
-          }),
-        );
+    const result = await runImmediateGitAction.run({
+      actionId,
+      action,
+      ...(commitMessage ? { commitMessage } : {}),
+      ...(featureBranch ? { featureBranch } : {}),
+      ...(filePaths ? { filePaths } : {}),
+      ...(activeServerThread ? { threadId: activeServerThread.id } : {}),
+      ...(activeDraftThread ? { projectId: activeDraftThread.projectId } : {}),
+    });
+
+    if (result._tag === "Failure") {
+      if (isAtomCommandInterrupted(result)) {
         return;
       }
 
-      const actionResult = result.value;
-      syncThreadBranchAfterGitAction(actionResult);
-      if (isPanel) {
-        setInlineSuccess({
-          title: actionResult.toast.title,
-          description: actionResult.toast.description ?? null,
-          scopeKey: successScopeKey,
-        });
-        return;
+      const error = squashAtomCommandFailure(result);
+      const errorToastTiming = resolveGitActionResultToastTiming("error");
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Action failed",
+          description: error instanceof Error ? error.message : "An error occurred.",
+          timeout: errorToastTiming.timeout,
+          ...(scopedToastData !== undefined ? { data: scopedToastData } : {}),
+        }),
+      );
+      return;
+    }
+
+    const actionResult = result.value;
+    syncThreadBranchAfterGitAction(actionResult);
+    if (isPanel) {
+      const createdPullRequest = actionResult.pr.status === "created";
+      setInlineSuccess({
+        title: createdPullRequest
+          ? `Created ${changeRequestTerminology.shortLabel}`
+          : actionResult.toast.title,
+        description: createdPullRequest ? null : (actionResult.toast.description ?? null),
+        scopeKey: successScopeKey,
+      });
+      return;
+    }
+    let resultToastId: GitActionToastId | null = null;
+    const closeResultToast = () => {
+      if (resultToastId !== null) {
+        toastManager.close(resultToastId);
       }
-      let resultToastId: GitActionToastId | null = null;
-      const closeResultToast = () => {
-        if (resultToastId !== null) {
-          toastManager.close(resultToastId);
-        }
+    };
+
+    const toastCta = actionResult.toast.cta;
+    let toastActionProps: {
+      children: string;
+      onClick: (event: MouseEvent<HTMLButtonElement>) => void;
+    } | null = null;
+    if (toastCta.kind === "run_action") {
+      toastActionProps = {
+        children: toastCta.label,
+        onClick: () => {
+          closeResultToast();
+          void runGitActionWithToast({
+            action: toastCta.action.kind,
+          });
+        },
       };
-
-      const toastCta = actionResult.toast.cta;
-      let toastActionProps: {
-        children: string;
-        onClick: (event: MouseEvent<HTMLButtonElement>) => void;
-      } | null = null;
-      if (toastCta.kind === "run_action") {
-        toastActionProps = {
-          children: toastCta.label,
-          onClick: () => {
-            closeResultToast();
-            void runGitActionWithToast({
-              action: toastCta.action.kind,
-            });
-          },
-        };
-      } else if (toastCta.kind === "open_pr") {
-        toastActionProps = {
-          children: toastCta.label,
-          onClick: (event) => {
-            closeResultToast();
-            openPrLink(event, toastCta.url);
-          },
-        };
-      }
-
-      const successToastTiming = resolveGitActionResultToastTiming("success");
-      const successToastData = {
-        ...scopedToastData,
-        ...(successToastTiming.dismissAfterVisibleMs !== null
-          ? { dismissAfterVisibleMs: successToastTiming.dismissAfterVisibleMs }
-          : {}),
+    } else if (toastCta.kind === "open_pr") {
+      toastActionProps = {
+        children: toastCta.label,
+        onClick: (event) => {
+          closeResultToast();
+          openPrLink(event, toastCta.url);
+        },
       };
+    }
 
-      if (toastActionProps) {
-        resultToastId = toastManager.add(
-          stackedThreadToast({
-            type: "success",
-            title: actionResult.toast.title,
-            description: actionResult.toast.description,
-            timeout: successToastTiming.timeout,
-            actionProps: toastActionProps,
-            data: successToastData,
-          }),
-        );
-      } else {
-        resultToastId = toastManager.add({
+    const successToastTiming = resolveGitActionResultToastTiming("success");
+    const successToastData = {
+      ...scopedToastData,
+      ...(successToastTiming.dismissAfterVisibleMs !== null
+        ? { dismissAfterVisibleMs: successToastTiming.dismissAfterVisibleMs }
+        : {}),
+    };
+
+    if (toastActionProps) {
+      resultToastId = toastManager.add(
+        stackedThreadToast({
           type: "success",
           title: actionResult.toast.title,
           description: actionResult.toast.description,
           timeout: successToastTiming.timeout,
+          actionProps: toastActionProps,
           data: successToastData,
-        });
-      }
-    },
-    [
-      activeDraftThread,
-      activeEnvironmentId,
-      activeServerThread,
-      gitStatusForActions,
-      isDefaultRef,
-      isLocalDraftThread,
-      isPanel,
-      openPrLink,
-      runImmediateGitAction,
-      successScopeKey,
-      syncThreadBranchAfterGitAction,
-      threadToastData,
-    ],
-  );
+        }),
+      );
+    } else {
+      resultToastId = toastManager.add({
+        type: "success",
+        title: actionResult.toast.title,
+        description: actionResult.toast.description,
+        timeout: successToastTiming.timeout,
+        data: successToastData,
+      });
+    }
+  }
 
-  const continuePendingDefaultBranchAction = () => {
-    if (!pendingDefaultBranchAction) return;
+  const continuePendingDefaultBranchAction = (featureBranch: boolean) => {
+    if (!pendingDefaultBranchAction || !canWriteSourceControl) return;
+    if (featureBranch && (!canChangeThreadBranch || featureBranchUnavailableReason !== null))
+      return;
     const { action, commitMessage, onConfirmed, filePaths } = pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
     void runGitActionWithToast({
@@ -1439,26 +1399,13 @@ export default function GitActionsControl({
       ...(commitMessage ? { commitMessage } : {}),
       ...(onConfirmed ? { onConfirmed } : {}),
       ...(filePaths ? { filePaths } : {}),
-      skipDefaultBranchPrompt: true,
-    });
-  };
-
-  const checkoutFeatureBranchAndContinuePendingAction = () => {
-    if (!canChangeThreadBranch || !pendingDefaultBranchAction) return;
-    const { action, commitMessage, onConfirmed, filePaths } = pendingDefaultBranchAction;
-    setPendingDefaultBranchAction(null);
-    void runGitActionWithToast({
-      action,
-      ...(commitMessage ? { commitMessage } : {}),
-      ...(onConfirmed ? { onConfirmed } : {}),
-      ...(filePaths ? { filePaths } : {}),
-      featureBranch: true,
+      featureBranch,
       skipDefaultBranchPrompt: true,
     });
   };
 
   const runDialogActionOnNewBranch = () => {
-    if (!canChangeThreadBranch || !isCommitDialogOpen) return;
+    if (!isCommitDialogOpen) return;
     const commitMessage = dialogCommitMessage.trim();
 
     setIsCommitDialogOpen(false);
@@ -1571,35 +1518,32 @@ export default function GitActionsControl({
     });
   };
 
-  const openChangedFileInEditor = useCallback(
-    (filePath: string) => {
-      if (!gitCwd) {
-        toastManager.add({
-          type: "error",
-          title: "Editor opening is unavailable.",
-          data: threadToastData,
-        });
+  const openChangedFileInEditor = (filePath: string) => {
+    if (workingTreeRoot === null) {
+      toastManager.add({
+        type: "error",
+        title: "Editor opening is unavailable.",
+        data: threadToastData,
+      });
+      return;
+    }
+    const target = resolvePathLinkTarget(filePath, workingTreeRoot);
+    void (async () => {
+      const result = await openInPreferredEditor(target);
+      if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
         return;
       }
-      const target = resolvePathLinkTarget(filePath, gitCwd);
-      void (async () => {
-        const result = await openInPreferredEditor(target);
-        if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
-          return;
-        }
-        const error = squashAtomCommandFailure(result);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Unable to open file",
-            description: error instanceof Error ? error.message : "An error occurred.",
-            ...(threadToastData !== undefined ? { data: threadToastData } : {}),
-          }),
-        );
-      })();
-    },
-    [gitCwd, openInPreferredEditor, threadToastData],
-  );
+      const error = squashAtomCommandFailure(result);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Unable to open file",
+          description: error instanceof Error ? error.message : "An error occurred.",
+          ...(threadToastData !== undefined ? { data: threadToastData } : {}),
+        }),
+      );
+    })();
+  };
 
   const canPublishRepository =
     canWriteSourceControl && isRepo && gitStatusForActions !== null && !hasPrimaryRemote;
@@ -1693,7 +1637,8 @@ export default function GitActionsControl({
       ) : null}
       {gitStatusForActions?.refName === null && (
         <p className="px-2 py-1.5 text-xs text-warning">
-          Detached HEAD: create and check out a branch to enable push and pull request actions.
+          Detached HEAD: create and check out a branch to enable push and{" "}
+          {changeRequestTerminology.singular} actions.
         </p>
       )}
       {gitStatusForActions &&
@@ -1771,7 +1716,7 @@ export default function GitActionsControl({
             {initAction.isPending ? "Initializing..." : "Initialize Git"}
           </span>
         </ThreadDetailsControl>
-      ) : compact && !gitActionProgress && !visibleInlineSuccess ? null : (
+      ) : quietEmptyDraft || (compact && !gitActionProgress && !visibleInlineSuccess) ? null : (
         <ActionGroup
           role="group"
           aria-label="Git actions"
@@ -1912,7 +1857,7 @@ export default function GitActionsControl({
         </ActionGroup>
       )}
 
-      {isPanel && isRepo ? (
+      {isPanel && isRepo && !quietEmptyDraft ? (
         <ThreadDetailsControl
           type="button"
           variant="ghost"
@@ -1923,9 +1868,21 @@ export default function GitActionsControl({
         >
           <FileDiffIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} aria-hidden />
           <span className={cn("flex-1 text-left", THREAD_DETAILS_PANEL_LABEL_CLASS)}>Changes</span>
-          <span className="flex items-center gap-1 font-mono text-2xs tabular-nums">
-            <span className="text-success">+{formatDiffCount(changesTotals?.insertions ?? 0)}</span>
-            <span className="text-destructive">
+          <span className="flex items-center gap-1.5 font-mono text-xs tabular-nums">
+            <span
+              className={
+                changesTotals?.insertions
+                  ? "text-diff-addition-foreground"
+                  : "text-muted-foreground"
+              }
+            >
+              +{formatDiffCount(changesTotals?.insertions ?? 0)}
+            </span>
+            <span
+              className={
+                changesTotals?.deletions ? "text-diff-deletion-foreground" : "text-muted-foreground"
+              }
+            >
               -{formatDiffCount(changesTotals?.deletions ?? 0)}
             </span>
           </span>
@@ -2022,8 +1979,8 @@ export default function GitActionsControl({
                                 )}
                                 <button
                                   type="button"
-                                  className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left"
-                                  disabled={!canOperateThread}
+                                  className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left enabled:cursor-pointer"
+                                  disabled={!canOperateThread || workingTreeRoot === null}
                                   aria-label={`Open ${file.path} in editor`}
                                   onClick={() => openChangedFileInEditor(file.path)}
                                 >
@@ -2119,9 +2076,7 @@ export default function GitActionsControl({
       <Dialog
         open={pendingDefaultBranchAction !== null}
         onOpenChange={(open) => {
-          if (!open) {
-            setPendingDefaultBranchAction(null);
-          }
+          if (!open) setPendingDefaultBranchAction(null);
         }}
       >
         <DialogPopup className="max-w-xl">
@@ -2130,6 +2085,9 @@ export default function GitActionsControl({
               {pendingDefaultBranchActionCopy?.title ?? "Run action on default branch?"}
             </DialogTitle>
             <DialogDescription>{pendingDefaultBranchActionCopy?.description}</DialogDescription>
+            {featureBranchUnavailableReason && (
+              <p className="text-xs text-muted-foreground">{featureBranchUnavailableReason}</p>
+            )}
           </DialogHeader>
           <DialogFooter variant="bare" className="sm:flex-wrap sm:items-center">
             <Button
@@ -2144,7 +2102,7 @@ export default function GitActionsControl({
               className="w-full max-w-full sm:w-auto"
               variant="outline"
               size="sm-multiline"
-              onClick={continuePendingDefaultBranchAction}
+              onClick={() => continuePendingDefaultBranchAction(false)}
               disabled={!canWriteSourceControl}
             >
               {pendingDefaultBranchActionCopy?.continueLabel ?? "Continue"}
@@ -2152,8 +2110,8 @@ export default function GitActionsControl({
             <Button
               className="w-full max-w-full sm:w-auto"
               size="sm-multiline"
-              onClick={checkoutFeatureBranchAndContinuePendingAction}
-              disabled={!canChangeThreadBranch}
+              onClick={() => continuePendingDefaultBranchAction(true)}
+              disabled={!canChangeThreadBranch || featureBranchUnavailableReason !== null}
             >
               Check out feature branch & continue
             </Button>

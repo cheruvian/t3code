@@ -9,7 +9,7 @@ import {
 } from "../connection/catalog.ts";
 import { type ConnectionTarget, PersistedConnectionTarget } from "../connection/model.ts";
 import * as TokenStore from "../authorization/tokenStore.ts";
-import { StoredGitHubRoutingPermission } from "../connection/githubRoutingPermissions.ts";
+import { StoredPullRequestRoutingPermission } from "../connection/pullRequestRoutingPermissions.ts";
 
 import { ConnectionTimingSettings } from "../connection/timing.ts";
 
@@ -26,7 +26,9 @@ export const ConnectionCatalogDocument = Schema.Struct({
   profiles: Schema.Array(ConnectionProfile),
   credentials: Schema.Array(StoredConnectionCredential),
   remoteDpopTokens: Schema.Array(TokenStore.RemoteDpopAccessToken),
-  githubRoutingPermissions: Schema.optionalKey(Schema.Array(StoredGitHubRoutingPermission)),
+  // Pull request routing grants. The field name predates the rename and stays, so older and
+  // newer clients sharing this document keep reading and revoking the same grants.
+  githubRoutingPermissions: Schema.optionalKey(Schema.Array(StoredPullRequestRoutingPermission)),
   disabledEnvironmentIds: Schema.Array(EnvironmentId).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed([])),
   ),
@@ -136,6 +138,7 @@ export function registerConnectionInCatalog(
     case "RelayConnectionRegistration":
       return next;
     case "BearerConnectionRegistration":
+    case "SshConnectionRegistration":
       return {
         ...next,
         profiles: replaceCatalogValue(
@@ -147,15 +150,6 @@ export function registerConnectionInCatalog(
           connectionId: registration.target.connectionId,
           credential: registration.credential,
         }),
-      };
-    case "SshConnectionRegistration":
-      return {
-        ...next,
-        profiles: replaceCatalogValue(
-          next.profiles,
-          (value) => value.connectionId,
-          registration.profile,
-        ),
       };
   }
 }

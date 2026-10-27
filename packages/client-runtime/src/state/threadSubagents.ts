@@ -29,16 +29,30 @@ function orderKey(subagent: Subagent): number {
 export function deriveThreadTurnSubagents(
   projection: Pick<Projection, "runs" | "subagents">,
 ): ThreadTurnSubagents | null {
-  if (projection.subagents.length === 0) return null;
+  const rolledBackRunIds = new Set(
+    projection.runs.filter((run) => run.status === "rolled_back").map((run) => run.id),
+  );
+  const eligible = projection.subagents.filter(
+    (subagent) => subagent.runId === null || !rolledBackRunIds.has(subagent.runId),
+  );
+  const [first] = eligible;
+  if (first === undefined) return null;
   const activeRun = resolveActiveThreadRun(projection);
-  const latestUpdated = projection.subagents.reduce((latest, subagent) =>
-    DateTime.toEpochMillis(subagent.updatedAt) > DateTime.toEpochMillis(latest.updatedAt)
-      ? subagent
-      : latest,
+  const latestUpdated = eligible.reduce(
+    (latest, subagent) =>
+      DateTime.toEpochMillis(subagent.updatedAt) > DateTime.toEpochMillis(latest.updatedAt)
+        ? subagent
+        : latest,
+    first,
   );
   const runId = activeRun?.id ?? latestUpdated.runId;
   const subagents = copySorted(
-    projection.subagents.filter((subagent) => subagent.runId === runId),
+    eligible.filter(
+      (subagent) =>
+        subagent.runId === runId ||
+        isActiveSubagentStatus(subagent.status) ||
+        subagent.workflow !== undefined,
+    ),
     (left, right) => orderKey(left) - orderKey(right) || left.id.localeCompare(right.id),
   );
   if (subagents.length === 0) return null;
@@ -56,7 +70,13 @@ export function resolveSubagentPillSegment(
   turn: ThreadTurnSubagents | null,
 ): SubagentPillSegment | null {
   if (turn === null) return null;
-  if (!turn.turnActive && turn.liveCount === 0) return null;
+  if (
+    !turn.turnActive &&
+    turn.liveCount === 0 &&
+    !turn.subagents.some((subagent) => subagent.workflow !== undefined)
+  ) {
+    return null;
+  }
   const total = turn.subagents.length;
   if (turn.liveCount > 0) {
     return {
@@ -65,7 +85,7 @@ export function resolveSubagentPillSegment(
     };
   }
   return {
-    label: `${total} done`,
-    accessibilityLabel: `${total} ${total === 1 ? "agent" : "agents"} done`,
+    label: `${turn.settledCount} done`,
+    accessibilityLabel: `${turn.settledCount} ${turn.settledCount === 1 ? "agent" : "agents"} done`,
   };
 }

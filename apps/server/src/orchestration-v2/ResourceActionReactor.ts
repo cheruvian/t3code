@@ -223,7 +223,7 @@ export const make = Effect.gen(function* () {
   const worker = yield* makeKeyedDrainableWorker({
     concurrency: 16,
     key: (work: Work) => work.lock.threadId,
-    process: (work: Work) =>
+    process: Effect.fn("process")((work: Work) =>
       Effect.gen(function* () {
         const output: { stdout: string; stderr: string; truncated: boolean; promptRunId?: RunId } =
           { stdout: "", stderr: "", truncated: false };
@@ -299,27 +299,26 @@ export const make = Effect.gen(function* () {
               recordLog(work, { ...log, ...output, status: "succeeded" }).pipe(
                 Effect.andThen(complete(work)),
               ),
-            onFailure: (error) =>
-              Effect.gen(function* () {
-                if (output.promptRunId) {
-                  yield* engine
-                    .dispatch({
-                      type: "run.interrupt",
-                      commandId: CommandId.make(`resource-interrupt-${work.lock.operationId}`),
-                      threadId: work.lock.threadId,
-                      runId: output.promptRunId,
-                      holdQueue: true,
-                    })
-                    .pipe(Effect.ignore);
-                }
-                yield* recordLog(work, {
-                  ...log,
-                  ...output,
-                  status: "failed",
-                  error: error.message,
-                });
-                yield* complete(work, error.message);
-              }),
+            onFailure: Effect.fn("onFailure")(function* (error) {
+              if (output.promptRunId) {
+                yield* engine
+                  .dispatch({
+                    type: "run.interrupt",
+                    commandId: CommandId.make(`resource-interrupt-${work.lock.operationId}`),
+                    threadId: work.lock.threadId,
+                    runId: output.promptRunId,
+                    holdQueue: true,
+                  })
+                  .pipe(Effect.ignore);
+              }
+              yield* recordLog(work, {
+                ...log,
+                ...output,
+                status: "failed",
+                error: error.message,
+              });
+              yield* complete(work, error.message);
+            }),
           }),
           Effect.ensuring(Effect.sync(() => abortSignals.delete(work.lock.operationId))),
         );
@@ -329,6 +328,7 @@ export const make = Effect.gen(function* () {
         ),
         Effect.asVoid,
       ),
+    ),
   });
 
   const start = Effect.fn("ResourceActionReactor.start")(function* () {
@@ -364,8 +364,8 @@ export const make = Effect.gen(function* () {
       }
     }
     yield* events.pipe(
-      Stream.runForEach((event) =>
-        Effect.gen(function* () {
+      Stream.runForEach(
+        Effect.fn("ResourceActionReactor.start")(function* (event) {
           if (
             !("type" in event) ||
             event.type !== "project.meta-updated" ||

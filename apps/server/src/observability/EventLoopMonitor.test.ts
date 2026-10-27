@@ -7,12 +7,11 @@ import * as Logger from "effect/Logger";
 import * as Tracer from "effect/Tracer";
 import * as TestClock from "effect/testing/TestClock";
 import * as Ref from "effect/Ref";
-
 import * as EventLoopMonitor from "./EventLoopMonitor.ts";
 
 const ms = (value: number) => value * 1e6;
 
-// Node's native timer interval is included in the reported gap.
+// Node includes the native sampling interval in each reported gap.
 const stalled: EventLoopMonitor.EventLoopReadings = {
   delayMaxNs: ms(4_970),
   delayP95Ns: ms(35),
@@ -28,7 +27,12 @@ const stalled: EventLoopMonitor.EventLoopReadings = {
     involuntaryContextSwitches: 57,
   },
   rssBytes: 1536 * 1024 * 1024,
+  heapUsedBytes: 512 * 1024 * 1024,
+  elapsedMs: 30_000,
+  loadAverage: 219.43,
+  cpuCount: 18,
 };
+
 // Over the threshold as read, but not once the resolution is subtracted.
 const quiet: EventLoopMonitor.EventLoopReadings = { ...stalled, delayMaxNs: ms(20) };
 
@@ -70,6 +74,7 @@ describe("EventLoopMonitor", () => {
       assert.equal(samples, 2);
     }),
   );
+
   it.effect("records a warning span only for samples that saw a stall", () =>
     Effect.gen(function* () {
       const spans: Array<Tracer.NativeSpan> = [];
@@ -169,7 +174,6 @@ describe("EventLoopMonitor", () => {
   });
 
   it("ignores delay the loop spent idle, such as a system sleep", () => {
-    // Waking from sleep reads as a long gap, but the loop was idle in poll for it.
     const asleep: EventLoopMonitor.EventLoopReadings = {
       ...stalled,
       delayMaxNs: ms(600_000),

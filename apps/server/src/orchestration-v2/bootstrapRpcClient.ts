@@ -22,37 +22,33 @@ import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 const makeWsRpcClient = RpcClient.make(WsRpcGroup);
 type WsRpcClient = Effect.Success<typeof makeWsRpcClient>;
 
-export const withEnvironmentRpc = <A, E, R>(
+export const withEnvironmentRpc = Effect.fn("withEnvironmentRpc")(function* <A, E, R>(
   input: {
     readonly origin: string;
     readonly sessionId: AuthSessionId;
   },
   run: (rpc: WsRpcClient) => Effect.Effect<A, E, R>,
-) =>
-  Effect.gen(function* () {
-    const auth = yield* EnvironmentAuth.EnvironmentAuth;
-    const ticket = yield* auth.issueWebSocketTicket({ sessionId: input.sessionId });
-    const url = new URL(input.origin);
-    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    url.pathname = "/ws";
-    url.searchParams.set("wsTicket", ticket.ticket);
-    url.searchParams.set(
-      ORCHESTRATION_PROTOCOL_QUERY_PARAM,
-      String(ORCHESTRATION_PROTOCOL_VERSION),
-    );
-    const protocolLayer = RpcClient.layerProtocolSocket().pipe(
-      Layer.provide(
-        Socket.layerWebSocket(url.toString()).pipe(
-          Layer.provide(NodeSocket.layerWebSocketConstructor),
-        ),
+) {
+  const auth = yield* EnvironmentAuth.EnvironmentAuth;
+  const ticket = yield* auth.issueWebSocketTicket({ sessionId: input.sessionId });
+  const url = new URL(input.origin);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "/ws";
+  url.searchParams.set("wsTicket", ticket.ticket);
+  url.searchParams.set(ORCHESTRATION_PROTOCOL_QUERY_PARAM, String(ORCHESTRATION_PROTOCOL_VERSION));
+  const protocolLayer = RpcClient.layerProtocolSocket().pipe(
+    Layer.provide(
+      Socket.layerWebSocket(url.toString()).pipe(
+        Layer.provide(NodeSocket.layerWebSocketConstructor),
       ),
-      Layer.provide(RpcSerialization.layerJson),
-    );
-    return yield* Effect.gen(function* () {
-      const rpc = yield* makeWsRpcClient;
-      return yield* run(rpc);
-    }).pipe(Effect.provide(protocolLayer), Effect.scoped);
-  });
+    ),
+    Layer.provide(RpcSerialization.layerJson),
+  );
+  return yield* Effect.gen(function* () {
+    const rpc = yield* makeWsRpcClient;
+    return yield* run(rpc);
+  }).pipe(Effect.provide(protocolLayer), Effect.scoped);
+});
 
 /** Route bootstrap through the WebSocket dispatcher, which owns checkout and turn ordering. */
 export const dispatchBootstrapRpc = Effect.fn("dispatchBootstrapRpc")(function* (input: {
@@ -61,8 +57,9 @@ export const dispatchBootstrapRpc = Effect.fn("dispatchBootstrapRpc")(function* 
   readonly command: OrchestrationV2ThreadLaunchInput;
   readonly waitForThread?: ThreadId;
 }) {
-  return yield* withEnvironmentRpc(input, (rpc) =>
-    Effect.gen(function* () {
+  return yield* withEnvironmentRpc(
+    input,
+    Effect.fn("dispatchBootstrapRpc")(function* (rpc) {
       const dispatch = yield* rpc[ORCHESTRATION_V2_WS_METHODS.launchThread](input.command);
       if (!input.waitForThread) return { dispatch, thread: null };
       const threadId = input.waitForThread;

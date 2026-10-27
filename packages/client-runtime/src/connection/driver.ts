@@ -14,7 +14,13 @@ import type {
 } from "./model.ts";
 import { ConnectionTransientError } from "./model.ts";
 import * as ConnectionResolver from "./resolver.ts";
-import { connectionRoutes, routeEntry, routeHttpBaseUrl } from "./routes.ts";
+import {
+  connectionRoutes,
+  routeEntry,
+  routeHttpBaseUrl,
+  sendsTokenInClear,
+  usableRoutes,
+} from "./routes.ts";
 import * as RpcSession from "../rpc/session.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 
@@ -35,6 +41,10 @@ export interface EnvironmentConnectionLease {
 export type RouteCheck = "answered" | "silent" | "unchecked";
 
 const ROUTE_CHECK_TIMEOUT_MS = 2_500;
+// Preferred direct routes share one head start, so a relay connection does not
+// wait the full probe timeout for a LAN the device has already left. A route
+// that misses it connects over relay, then upgrades with a second reconnect.
+const ROUTE_CHECK_HEAD_START_MS = 500;
 
 export class ConnectionDriver extends Context.Service<
   ConnectionDriver,
@@ -61,11 +71,12 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     route: ConnectionRoute,
   ) => Effect.Effect<EnvironmentConnectionLease, ConnectionAttemptError, R | Scope.Scope>,
 ) {
-  const routes = connectionRoutes(entry);
+  const routes = usableRoutes(entry);
   const checks =
     routes.length === 1
       ? []
       : yield* Effect.forEach(routes, (route) => Effect.forkChild(checkRoute(route)));
+  const headStart = yield* Effect.forkChild(Effect.sleep(ROUTE_CHECK_HEAD_START_MS));
   const attemptScope = yield* Scope.Scope;
   let transient: ConnectionAttemptError | undefined;
   let blocked: ConnectionAttemptError | undefined;
@@ -83,11 +94,17 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     }
     return result;
   });
-  const silent: Array<ConnectionRoute> = [];
+  const silent: Array<{ readonly route: ConnectionRoute; readonly index: number }> = [];
   for (const [index, route] of routes.entries()) {
-    const check = checks.length === 0 ? "unchecked" : yield* Fiber.join(checks[index]!);
+    const check =
+      checks.length === 0
+        ? "unchecked"
+        : yield* Effect.raceFirst(
+            Fiber.join(checks[index]!),
+            Fiber.join(headStart).pipe(Effect.as<RouteCheck>("silent")),
+          );
     if (check === "silent") {
-      silent.push(route);
+      silent.push({ route, index });
       continue;
     }
     const result = yield* attempt(route);
@@ -95,7 +112,16 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     // An incompatible server is the same server on every route.
     if (result.failure.reason === "unsupported") return yield* result.failure;
   }
-  for (const route of silent) {
+  // A slow route that answered after the head start goes before one that is
+  // still dead, which can hold an attempt open far longer than its probe.
+  const late = yield* Effect.forEach(silent, ({ index }) => Fiber.join(checks[index]!), {
+    concurrency: "unbounded",
+  });
+  const retry = [
+    ...silent.filter((_, position) => late[position] !== "silent"),
+    ...silent.filter((_, position) => late[position] === "silent"),
+  ];
+  for (const { route } of retry) {
     const result = yield* attempt(route);
     if (result._tag === "Success") return result.success;
     if (result.failure.reason === "unsupported") return yield* result.failure;
@@ -110,7 +136,7 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
   );
 });
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* () {
   const resolver = yield* ConnectionResolver.ConnectionResolver;
   const sessions = yield* RpcSession.RpcSessionFactory;
@@ -162,7 +188,10 @@ export const make = Effect.gen(function* () {
   });
 
   const preflight = (entry: ConnectionCatalogEntry, route: ConnectionRoute) =>
-    checkRoute(entry, route).pipe(
+    (sendsTokenInClear(connectionRoutes(entry), route)
+      ? Effect.succeed("silent" as const)
+      : checkRoute(entry, route)
+    ).pipe(
       Effect.flatMap((check) =>
         check === "answered"
           ? resolver.prepare(routeEntry(entry, route)).pipe(

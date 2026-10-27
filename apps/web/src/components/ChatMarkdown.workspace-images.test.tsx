@@ -8,7 +8,11 @@ const testState = vi.hoisted(() => ({
   imageDimensions: undefined as { width: number; height: number } | undefined,
 }));
 
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
+vi.mock("@effect/atom-react", async () => {
+  const { AtomRegistry } = await import("effect/reactivity");
+  const registry = AtomRegistry.make();
+  return { useAtomValue: (atom: Parameters<typeof registry.get>[0]) => registry.get(atom) };
+});
 vi.mock("../assets/assetUrls", () => ({
   useAssetUrlRefresh: () => vi.fn(),
   useAssetUrlState: (_environmentId: unknown, resource: unknown) => {
@@ -22,7 +26,10 @@ vi.mock("../assets/assetUrls", () => ({
     };
   },
 }));
-vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
+vi.mock("../hooks/useTheme", () => ({
+  useTheme: () => ({ resolvedTheme: "dark" }),
+  useRenderedAppearance: () => "dark",
+}));
 vi.mock("../state/use-atom-query-runner", () => {
   const query = vi.fn(async () => ({ _tag: "Success", value: [] }));
   return { useAtomQueryRunner: () => query };
@@ -64,7 +71,8 @@ vi.mock("~/lib/openPullRequestLink", () => ({
   useOpenChangeRequestLink: () => vi.fn(),
 }));
 
-import ChatMarkdown, { ChatMarkdownAssetImage } from "./ChatMarkdown";
+import ChatMarkdown from "./ChatMarkdown";
+import { ChatMarkdownAssetImage } from "./chat/ChatMarkdownMedia";
 import { FileMarkdownPreview } from "./files/FileMarkdownPreview";
 
 const threadRef = {
@@ -85,6 +93,7 @@ function renderWithoutThread(markdown: string): string {
 function renderFilePreview(cwd: string, relativePath: string): string {
   return renderToStaticMarkup(
     <FileMarkdownPreview
+      workspaceMutationId={null}
       cwd={cwd}
       relativePath={relativePath}
       text="![diagram](images/diagram.png)"
@@ -137,7 +146,7 @@ describe("ChatMarkdown workspace images", () => {
     ]);
   });
 
-  it("loads every Windows workspace path form through a signed asset URL", () => {
+  it("loads Windows workspace paths through signed URLs while blocking an external share", () => {
     const imagePath = "C:/Users/shawn/project/.t3/workspace-image.svg";
     const html = render(
       [
@@ -156,17 +165,12 @@ describe("ChatMarkdown workspace images", () => {
       },
       { _tag: "media-file", threadId: threadRef.threadId, path: imagePath },
       { _tag: "media-file", threadId: threadRef.threadId, path: imagePath },
-      {
-        _tag: "media-file",
-        threadId: threadRef.threadId,
-        path: "\\\\server\\share\\workspace-image.svg",
-      },
     ]);
     expect(html.match(/<img[^>]*src="https:\/\/signed\.test\/workspace-image\.svg"/g)).toHaveLength(
-      4,
+      3,
     );
-    expect(html.match(/max-w-\[min\(100%,30rem\)\]/g)).toHaveLength(4);
-    expect(html).not.toContain("Image unavailable");
+    expect(html.match(/max-w-\[min\(100%,30rem\)\]/g)).toHaveLength(3);
+    expect(html).not.toContain("file://server");
   });
 
   it("loads a POSIX absolute path and file URI through a signed asset URL", () => {
@@ -385,7 +389,7 @@ describe("ChatMarkdown workspace images", () => {
     expect(failure).toContain("Image unavailable");
     // The bytes are requested inside the frame but never paint at an unknown size.
     expect(loadingBytes).toMatch(/<img[^>]*src="https:\/\/signed[^>]*class="invisible/);
-    expect(loadingBytes).not.toContain('loading="lazy"');
+    expect(loadingBytes).toContain('loading="lazy"');
   });
 
   it("gives a standalone remote image the same frame instead of a bare tag", () => {

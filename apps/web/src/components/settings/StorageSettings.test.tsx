@@ -23,6 +23,7 @@ vi.mock("../../state/server", async () => {
   return {
     serverEnvironment: {
       storageCleanupReport: () => report,
+      databaseCompactionRecommendations: () => Atom.make([]),
       runStorageCleanup: { permissionAtom: () => allowed },
     },
   };
@@ -84,7 +85,7 @@ vi.mock("./settingsLayout", () => ({
 }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: vi.fn() } }));
 
-import { StorageSettingsPanel } from "./StorageSettings";
+import { StorageCleanupSections as StorageSettingsPanel } from "./StorageSettings";
 
 let root: Root;
 let container: HTMLDivElement;
@@ -198,6 +199,7 @@ it("shows an orphan's full path and size while keeping thread row titles unchang
     entries: [
       {
         kind: "worktree",
+        projectPath: null,
         outcome: "kept",
         path: "/worktrees/repo/orphan",
         threadId: null,
@@ -208,6 +210,7 @@ it("shows an orphan's full path and size while keeping thread row titles unchang
       },
       {
         kind: "worktree",
+        projectPath: null,
         outcome: "kept",
         path: "/worktrees/repo/thread-checkout",
         threadId: ThreadId.make("thread"),

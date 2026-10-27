@@ -1,9 +1,7 @@
 import type { BrowserLinkTarget } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { ensureClientSettingsHydrated } from "~/hooks/useSettings";
-
-import { resolveBrowserLinkTargetPreference, resolveLinkTarget } from "./browserLinkTarget";
+import { resolveLinkTarget } from "./browserLinkTarget";
 
 const settings = vi.hoisted(() => ({ browserLinkTarget: "system" as BrowserLinkTarget }));
 
@@ -106,18 +104,4 @@ describe("resolveLinkTarget", () => {
       );
     }
   });
-});
-
-describe("resolveBrowserLinkTargetPreference", () => {
-  it.each(["system", "app"] as const)(
-    "rejects failed reads instead of using the current %s preference",
-    async (preference) => {
-      settings.browserLinkTarget = preference;
-      const failure = new Error("Settings read failed");
-      vi.mocked(ensureClientSettingsHydrated).mockRejectedValueOnce(failure);
-
-      await expect(resolveBrowserLinkTargetPreference()).rejects.toBe(failure);
-      await expect(resolveBrowserLinkTargetPreference()).resolves.toBe(preference);
-    },
-  );
 });

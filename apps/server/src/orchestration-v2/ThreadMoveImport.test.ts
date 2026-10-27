@@ -339,7 +339,7 @@ async function fixture(options?: {
           deletedAt: null,
         } as unknown as Project;
         return Layer.mock(Projects.ProjectService)({
-          getById: () => Effect.succeed(Option.some(destinationProject)),
+          getById: () => Effect.succeedSome(destinationProject),
           withActiveProject: (_projectId, use) =>
             projectLifecycle.withLock(projectId, use(destinationProject)),
           delete: (input) =>

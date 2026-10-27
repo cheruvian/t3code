@@ -21,12 +21,7 @@ const CodexModelAdapter = Schema.Struct({
 });
 const decodeCodexModelAdapter = Schema.decodeUnknownOption(CodexModelAdapter);
 
-/**
- * Codex lists only the models its own build knows, so a model released after
- * the installed CLI never shows up. A current catalog entry with
- * `adapter.codex.minVersion` names that model, letting the picker say an update
- * unlocks it instead of leaving users to wonder where it is.
- */
+/** Codex catalogs omit models released after the installed CLI. */
 function codexUpdateRequiredModels(
   catalog: ModelCatalog.ProviderCatalog | undefined,
   draft: ServerProviderDraft,

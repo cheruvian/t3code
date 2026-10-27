@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Platform, ScrollView, Text as NativeText, View, type ColorValue } from "react-native";
 
 import { CopyTextButton } from "./CopyTextButton";
-import type { ReviewDiffTheme } from "../review/shikiReviewHighlighter";
+import type { HighlightScheme } from "../../lib/highlights";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 
 export function MarkdownCodeBlock(props: {
@@ -17,7 +17,7 @@ export function MarkdownCodeBlock(props: {
   readonly language?: string | null;
   readonly lineHeight: number;
   readonly textColor: string;
-  readonly theme: ReviewDiffTheme;
+  readonly theme: HighlightScheme;
 }) {
   const content = props.content.replace(/\n$/, "");
   const languageLabel = props.language?.trim() || "text";

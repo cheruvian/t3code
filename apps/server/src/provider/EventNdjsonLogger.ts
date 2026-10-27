@@ -1,10 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
-/**
- * Best-effort provider event logging with one shared writer per thread.
- *
- * Native and canonical views share batching, rotation, and retention state so
- * they cannot race while appending to the same thread-scoped file.
- */
+/** Native and canonical views share write state to avoid races on the same thread file. */
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
@@ -275,14 +270,13 @@ function logWarning(message: string, context: Record<string, unknown>): Effect.E
 const defaultSinkFactory: EventNdjsonSinkFactory = (input) => {
   let sink: Effect.Success<ReturnType<typeof makeAsyncRotatingFileSink>> | undefined;
   return {
-    write: (lines) =>
-      Effect.gen(function* () {
-        sink ??= yield* makeAsyncRotatingFileSink(input).pipe(
-          Effect.provide(NodeServices.layer),
-          Effect.orDie,
-        );
-        yield* sink.write(lines).pipe(Effect.orDie);
-      }),
+    write: Effect.fnUntraced(function* (lines) {
+      sink ??= yield* makeAsyncRotatingFileSink(input).pipe(
+        Effect.provide(NodeServices.layer),
+        Effect.orDie,
+      );
+      yield* sink.write(lines).pipe(Effect.orDie);
+    }),
   };
 };
 
@@ -324,8 +318,7 @@ export function shouldPersistProviderEvent(stream: EventNdjsonStream, event: unk
 
     const nested = Reflect.get(event, "event");
     const envelope = typeof nested === "object" && nested !== null ? nested : event;
-    // Decoded frames carry the same information as raw frames without another
-    // copy of every token delta. Decode failures have their own diagnostic frame.
+    // Decoded frames preserve raw-frame information without duplicating every token delta.
     if (Reflect.get(envelope, "stage") === "raw") return false;
     const decodedPayload = Reflect.get(envelope, "payload");
     const nativeEvent =
@@ -344,6 +337,9 @@ export function shouldPersistProviderEvent(stream: EventNdjsonStream, event: unk
     }
 
     const nativeType = Reflect.get(nativeEvent, "type");
+    if (nativeType === "system" && Reflect.get(nativeEvent, "subtype") === "thinking_tokens") {
+      return false;
+    }
     if (nativeType === "message.part.delta") return false;
     if (nativeType === "stream_event") {
       const streamEvent = Reflect.get(nativeEvent, "event");
@@ -1329,8 +1325,8 @@ export const makeEventNdjsonLogStore = Effect.fnUntraced(function* (
       return "Failed" as const;
     }
     const completedAt = yield* Clock.currentTimeMillis;
-    yield* acknowledgeBatch(prepared.records);
     yield* recordAttribution(prepared.records, Math.max(0, completedAt - startedAt));
+    yield* acknowledgeBatch(prepared.records);
     yield* enforceRetentionIfDue();
     return "Written" as const;
   });
@@ -1469,7 +1465,7 @@ export const makeEventNdjsonLogStore = Effect.fnUntraced(function* (
     filePath,
     logger,
     drain,
-    close: () => close().pipe(Effect.catch(() => Effect.void)),
+    close: () => close().pipe(Effect.ignore),
   } satisfies EventNdjsonLogStore;
 });
 

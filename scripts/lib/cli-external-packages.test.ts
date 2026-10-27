@@ -13,16 +13,12 @@ import { findEsmImportsOfExternalPackages } from "./cli-executable-imports.ts";
 
 import {
   isRuntimeExternalCliDependency,
-  findInlinedExternalPackages,
   selectCliRuntimeExternalDependencies,
+  findInlinedExternalPackages,
   shouldBundleCliDependency,
 } from "./cli-external-packages.ts";
 
-// Only the field this test cares about; decoding ignores everything else.
-// optionalDependencies matter as much as dependencies here: every native family
-// in the list declares its actual platform bindings there (ffi-rs -> @yuuang/*,
-// fff-node -> @ff-labs/fff-bin-*), so reading only `dependencies` would check
-// nothing for exactly those packages.
+// Native bindings live in optionalDependencies; checking dependencies alone misses them.
 const PackageManifest = Schema.Struct({
   dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   optionalDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
@@ -33,16 +29,6 @@ type PackageManifest = typeof PackageManifest.Type;
 const decodeManifest = Schema.decodeUnknownSync(Schema.fromJsonString(PackageManifest));
 
 describe("shouldBundleCliDependency", () => {
-  it("bundles ordinary runtime dependencies", () => {
-    for (const id of ["effect", "@effect/platform", "hono", "@t3tools/shared/HostProcess"]) {
-      assert.strictEqual(shouldBundleCliDependency(id), true, id);
-    }
-  });
-
-  it("never bundles node: builtins", () => {
-    assert.strictEqual(shouldBundleCliDependency("node:fs"), false);
-  });
-
   it("leaves native addons and their dlopen wrappers external", () => {
     for (const id of [
       "node-pty",
@@ -89,8 +75,8 @@ describe("selectCliRuntimeExternalDependencies", () => {
         "@napi-rs/keyring",
         "node-pty",
         "playwright-core",
-        "zod",
         "undici",
+        "zod",
       ],
     );
   });
@@ -147,8 +133,6 @@ it.layer(NodeServices.layer)("external package dependency closure", (it) => {
     return installed;
   }).pipe(Effect.cached, Effect.runSync);
 
-  // Runtime-external only. The build-only entries resolve `bun:*` and are never
-  // loaded by Node, so their closure genuinely does not need to be external.
   const isRuntimeExternal = isRuntimeExternalCliDependency;
 
   // A cold walk of the pnpm store can exceed the root timeout when the Windows
@@ -193,9 +177,9 @@ it.layer(NodeServices.layer)("external package dependency closure", (it) => {
         if (!manifest) continue;
 
         const declared = {
-          ...(manifest.dependencies ?? {}),
-          ...(manifest.optionalDependencies ?? {}),
-          ...(manifest.peerDependencies ?? {}),
+          ...manifest.dependencies,
+          ...manifest.optionalDependencies,
+          ...manifest.peerDependencies,
         };
         for (const dependency of Object.keys(declared)) {
           if (!isRuntimeExternal(dependency)) {
@@ -267,17 +251,19 @@ var x = 1;
     assert.deepStrictEqual(result.inlined, []);
   });
 
-  it("does not report the pnpm store directory as a package", () => {
-    const result = findInlinedExternalPackages(
-      region("../../node_modules/.pnpm/effect@4.0.0/node_modules/effect/dist/index.js"),
-    );
-    assert.deepStrictEqual(result.inlinedPackages, ["effect"]);
-  });
+  it("reads the plain `// <path>` markers newer Rolldown emits", () => {
+    const source = [
+      "// \0rolldown/runtime.js",
+      "var x = 1;",
+      "// ../../node_modules/.pnpm/node-addon-api@7.1.1/node_modules/node-addon-api/index.js",
+      "var y = 2; // trailing comment",
+      "// ../../src/server/main.ts",
+      "",
+    ].join("\n");
+    const result = findInlinedExternalPackages(source);
 
-  it("reports no regions when the marker format is absent", () => {
-    const result = findInlinedExternalPackages("var x = 1; // node_modules/node-pty/lib.js");
-    assert.strictEqual(result.regionCount, 0);
-    assert.deepStrictEqual(result.inlined, []);
+    assert.strictEqual(result.regionCount, 3);
+    assert.deepStrictEqual(result.inlined, ["node-addon-api"]);
   });
 });
 

@@ -1,3 +1,4 @@
+import { useMemo, useCallback, useState } from "react";
 import { ThreadResources } from "../ThreadResources";
 import {
   projectScriptsMatch,
@@ -6,15 +7,19 @@ import {
 import { projectEnvironment } from "../../state/projects";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useScopedSettingsWriteAllowed } from "./useScopedSettings";
-import { AuthSettingsWriteScope } from "@t3tools/contracts";
-import { EnvironmentId, type T3ProjectFileScript } from "@t3tools/contracts";
+import {
+  AuthSettingsWriteScope,
+  EnvironmentId,
+  type T3ProjectFileScript,
+} from "@t3tools/contracts";
+
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { ChevronDownIcon, PlusIcon } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+
 import { useT3ProjectFileState } from "../../hooks/useT3ProjectFileScripts";
 import { useEnvironments } from "../../state/environments";
 import {
@@ -66,9 +71,8 @@ export function ProjectActionsSettings() {
       );
       if (!environment?.serverConfig) return [];
       const member = candidate.projectId ? memberById.get(candidate.projectId) : undefined;
-      // An older server ignores the override record, so a project edit there
-      // would report success and vanish; such environments are left out and
-      // the legacy per-project map keeps serving them.
+      // Older servers ignore override records; exclude them from edits and retain their legacy per-project
+      // map.
       if (
         member &&
         environment.serverConfig.environment?.capabilities.projectSettingsOverrides !== true

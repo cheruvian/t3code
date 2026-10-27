@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act, useEffect, useReducer } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { AsyncResult } from "effect/reactivity";
+import { RegistryContext } from "@effect/atom-react";
+import { Atom, AtomRegistry, AsyncResult } from "effect/reactivity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const harness = vi.hoisted(() => ({
@@ -29,7 +30,16 @@ vi.mock("./use-atom-command", () => ({
       : async () => AsyncResult.success({}),
 }));
 vi.mock("./vcs", () => ({
-  vcsEnvironment: { refreshStatus: "refreshStatus" },
+  vcsEnvironment: {
+    refreshStatus: {
+      label: "refreshStatus",
+      run: async (_registry: unknown, input: unknown) => {
+        harness.refreshStatusCalls.push(input);
+        harness.onRefreshSettled();
+        return AsyncResult.success({});
+      },
+    },
+  },
   vcsActionManager: { runStackedAction: () => "runStackedAction", track: vi.fn() },
 }));
 vi.mock("./threads", () => ({ threadEnvironment: { updateMetadata: "updateMetadata" } }));
@@ -40,7 +50,12 @@ vi.mock("./session", () => ({
   readEnvironmentScope: () => true,
   useEnvironmentScope: () => true,
 }));
-vi.mock("./use-remote-environment-registry", () => ({ setPendingConnectionError: () => {} }));
+vi.mock("./use-remote-environment-registry", () => ({
+  environmentConnectedAtom: () => connectedAtom,
+  setPendingConnectionError: () => {},
+}));
+const connectedAtom = Atom.make(true);
+let registry: AtomRegistry.AtomRegistry;
 vi.mock("./use-vcs-action-state", () => ({ showGitActionResult: () => {} }));
 // Runs on every render: a refresh loop fails fast here instead of exhausting memory.
 vi.mock("./use-thread-selection", () => ({
@@ -64,9 +79,28 @@ let rerender: () => void = () => {};
 // Stands in for a Git sheet: every settled refresh causes a rerender, as the
 // refs invalidation does on device.
 function Consumer() {
+  registry.set(
+    connectedAtom,
+    (harness.selection.selectedEnvironmentRuntime as { connectionState: string })
+      .connectionState === "connected",
+  );
+  return (
+    <RegistryContext.Provider value={registry}>
+      <GitConsumer />
+    </RegistryContext.Provider>
+  );
+}
+function GitConsumer() {
   const [, bump] = useReducer((count: number) => count + 1, 0);
   useEffect(() => {
-    rerender = bump;
+    rerender = () => {
+      registry.set(
+        connectedAtom,
+        (harness.selection.selectedEnvironmentRuntime as { connectionState: string })
+          .connectionState === "connected",
+      );
+      bump();
+    };
   });
   useSelectedThreadGitActions({ active: harness.active });
   return null;
@@ -81,6 +115,7 @@ async function flush() {
 }
 
 beforeEach(() => {
+  registry = AtomRegistry.make();
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   harness.selection = {
     selectedThread: { environmentId: "environment-1", id: "thread-1" },
@@ -97,6 +132,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root?.unmount());
   root = null;
+  registry.dispose();
 });
 
 describe("useSelectedThreadGitActions", () => {

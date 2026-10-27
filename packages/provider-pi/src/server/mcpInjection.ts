@@ -102,9 +102,7 @@ function normalizePiBuiltInEqualsArguments(args: ReadonlyArray<string>): Readonl
 }
 
 export function resolvePiLaunchArgs(launchArgs: string): PiLaunchArgsResolution {
-  // Pi parses equals-form tokens only as extension flags, even when their name
-  // matches a built-in option. Split known built-ins while leaving arbitrary
-  // extension flags in their native form.
+  // Pi treats equals-form tokens as extension flags; split only known built-ins.
   const args = normalizePiBuiltInEqualsArguments(tokenizeCliArgs(launchArgs));
   let hasProvider = false;
   let hasModel = false;
@@ -138,8 +136,7 @@ export function resolvePiLaunchArgs(launchArgs: string): PiLaunchArgsResolution 
       continue;
     }
     if (arg.startsWith("--")) {
-      // Pi extensions may register arbitrary long flags. Treat one following
-      // non-flag token as that extension flag's value.
+      // Arbitrary extension flags may consume one following non-flag token.
       if (
         args[index + 1] !== undefined &&
         !args[index + 1]!.startsWith("-") &&
@@ -246,6 +243,7 @@ export function buildPiRpcLaunch(input: {
   readonly environment: NodeJS.ProcessEnv;
   readonly mcpSession: McpProviderSessionConfig | undefined;
   readonly extensionPath: string | undefined;
+  readonly sessionPath?: string | undefined;
   readonly ephemeral?: boolean;
   readonly runtimeInstructions?: string;
   readonly disableExtensions?: boolean;
@@ -267,10 +265,13 @@ export function buildPiRpcLaunch(input: {
   const args = [
     "--mode",
     "rpc",
-    ...(input.ephemeral === true ? ["--no-session"] : []),
+    ...(input.ephemeral === true
+      ? ["--no-session"]
+      : input.sessionPath !== undefined
+        ? ["--session", input.sessionPath]
+        : []),
     ...launchArgs,
-    // Restrictions follow user launch args so a configured --tools or
-    // --extension cannot silently re-enable unattended text-generation code.
+    // Restrictions must follow launch args so user flags cannot re-enable unattended tools/extensions.
     ...(input.disableExtensions === true ? ["--no-extensions"] : []),
     ...(input.disableTools === true ? ["--no-tools"] : []),
   ];

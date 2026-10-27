@@ -33,6 +33,7 @@ export function resolveChatCanvasLayout({
   composerHeight = 0,
   detailsCard = null,
   findBar = null,
+  centerBesideDetails = false,
 }: {
   container: PreviewMiniPlayerSize;
   preview: ChatCanvasPreview | null;
@@ -43,6 +44,8 @@ export function resolveChatCanvasLayout({
   detailsCard?: PreviewMiniPlayerObstacles["detailsCard"];
   /** The open find bar. It only keeps the floating preview clear; chat stays put. */
   findBar?: PreviewMiniPlayerObstacles["detailsCard"];
+  /** Center the chat in the space left of the details card when it would otherwise crowd it. */
+  centerBesideDetails?: boolean;
 }) {
   const centeredWidth = Math.max(0, Math.min(maxChatWidth, container.width - padding * 2));
   // Keep chat centered until a workspace card requires room on either side.
@@ -53,9 +56,22 @@ export function resolveChatCanvasLayout({
       ? detailsCard.left - DETAILS_CARD_CLEARANCE
       : container.width - padding;
   const normalWidth = Math.max(0, Math.min(centeredWidth, laneRight - laneLeft));
+  const canvasCenterLeft = (container.width - normalWidth) / 2;
+  const cardExtent = detailsCard
+    ? cardOnLeft
+      ? detailsCard.right
+      : container.width - detailsCard.left
+    : 0;
+  const clearance = cardOnLeft
+    ? canvasCenterLeft - laneLeft
+    : laneRight - canvasCenterLeft - normalWidth;
+  const besideShift =
+    detailsCard && centerBesideDetails
+      ? Math.min(cardExtent / 2, Math.max(0, cardExtent / 2 - clearance))
+      : 0;
   const normalLeft = Math.max(
     laneLeft,
-    Math.min((container.width - normalWidth) / 2, laneRight - normalWidth),
+    Math.min(canvasCenterLeft + (cardOnLeft ? besideShift : -besideShift), laneRight - normalWidth),
   );
   const placeChat = (left: number, width: number) => ({
     left,
@@ -68,8 +84,7 @@ export function resolveChatCanvasLayout({
   let overlapsChat = false;
   if (preview && container.width > 0 && container.height > 0) {
     frame = resolvePreviewMiniPlayerFrame({ ...preview, container });
-    // Reserve a readable chat lane only while it leaves room to drag. Otherwise
-    // the container's right edge would pin the preview at every pointer position.
+    // Reserve a chat lane only if the preview still has room to drag.
     const minimumPreviewX =
       preview.lastInteraction === "resize" ||
       container.width <= laneLeft + minChatWidth + frame.width + GAP * 2

@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import { cloneElement, isValidElement, type ReactElement, type FunctionComponent } from "react";
 import {
   DEFAULT_UNIFIED_SETTINGS,
   EnvironmentId,
@@ -12,9 +12,12 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { visitElements } from "../../test/reactElementTree";
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 
+vi.mock("./StorageSettings", () => ({ StorageCleanupSections: () => null }));
+
 const atoms = vi.hoisted(() => ({
   providers: null as ReadonlyArray<ServerProvider> | null,
   providersAtom: Symbol("providers"),
+  configAtom: Symbol("config"),
   refreshProviders: Symbol("refreshProviders"),
   updateProvider: Symbol("updateProvider"),
   uninstallAcpRegistryManagedBinary: Symbol("uninstallAcpRegistryManagedBinary"),
@@ -45,6 +48,8 @@ const settingsSearchState = vi.hoisted(() => ({
   effects: [] as Array<() => void>,
 }));
 
+vi.mock("../../state/entities", () => ({ useProjects: () => [] }));
+
 vi.mock("../EnvironmentIcon", () => ({ EnvironmentIcon: () => null }));
 
 vi.mock("react", async (importOriginal) => {
@@ -54,6 +59,7 @@ vi.mock("react", async (importOriginal) => {
     ...actual,
     useCallback: reactHookHarness.useCallback,
     useEffect: (effect: () => void) => settingsSearchState.effects.push(effect),
+    useInsertionEffect: (effect: () => void) => settingsSearchState.effects.push(effect),
     useMemo: reactHookHarness.useMemo,
     useRef: reactHookHarness.useRef,
     useState: reactHookHarness.useState,
@@ -75,13 +81,21 @@ vi.mock("react/compiler-runtime", async () => {
 });
 
 vi.mock("@effect/atom-react", () => ({
-  useAtomValue: () => atoms.providers,
+  useAtomValue: (atom: unknown, select?: (value: unknown) => unknown) => {
+    const value =
+      atom === atoms.configAtom
+        ? { environment: { capabilities: { projectProviderInstanceOverrides: true } } }
+        : atoms.providers;
+    return select ? select(value) : value;
+  },
 }));
 
 vi.mock("../../state/server", () => ({
   EMPTY_SERVER_PROVIDERS: [],
+  providersIgnoringCheckedAtAtom: () => atoms.providersAtom,
   serverEnvironment: {
     providersValueAtom: () => atoms.providersAtom,
+    configValueAtom: () => atoms.configAtom,
     refreshProviders: atoms.refreshProviders,
     updateProvider: atoms.updateProvider,
     uninstallAcpRegistryManagedBinary: atoms.uninstallAcpRegistryManagedBinary,
@@ -122,7 +136,8 @@ vi.mock("../../environments/primary", () => ({
   usePrimarySessionState: () => ({ data: null, error: null, isPending: false, refresh: vi.fn() }),
 }));
 
-vi.mock("../../state/session", () => ({
+vi.mock("../../state/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/session")>()),
   useEnvironmentSessionState: () => ({ data: null, hasError: false, isPending: true }),
   useEnvironmentScope: (environmentId: EnvironmentId, scope: string) =>
     environmentId === "remote-device" &&
@@ -177,19 +192,37 @@ function provider(): ServerProvider {
   };
 }
 
+function renderProviderRows(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(renderProviderRows);
+  if (!isValidElement<Record<string, unknown>>(value)) return value;
+  if (typeof value.type === "function" && value.type.name === "ProviderInstanceRow") {
+    return renderProviderRows(
+      (value.type as FunctionComponent<Record<string, unknown>>)(value.props),
+    );
+  }
+  return cloneElement(
+    value,
+    Object.fromEntries(
+      Object.entries(value.props).map(([key, child]) => [key, renderProviderRows(child)]),
+    ),
+  );
+}
+
 function renderPanel(options?: {
   readonly readOnly?: boolean;
   readonly targetInstanceId?: ProviderInstanceId;
 }): ReactElement<Record<string, unknown>> {
   hooks.beginRender();
-  return EnvironmentProviderSettings({
-    environmentId,
-    environmentLabel: "Remote device",
-    ...(options?.readOnly === undefined ? {} : { readOnly: options.readOnly }),
-    ...(options?.targetInstanceId === undefined
-      ? {}
-      : { targetInstanceId: options.targetInstanceId }),
-  }) as ReactElement<Record<string, unknown>>;
+  return renderProviderRows(
+    EnvironmentProviderSettings({
+      environmentId,
+      environmentLabel: "Remote device",
+      ...(options?.readOnly === undefined ? {} : { readOnly: options.readOnly }),
+      ...(options?.targetInstanceId === undefined
+        ? {}
+        : { targetInstanceId: options.targetInstanceId }),
+    }),
+  ) as ReactElement<Record<string, unknown>>;
 }
 
 function isRefreshButton(element: ReactElement<Record<string, unknown>>): boolean {

@@ -1,66 +1,96 @@
-import type { VcsStatusAccumulatedResult } from "@t3tools/contracts";
+import { SourceControlProviderKind, type VcsStatusResult } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildMenuItems, resolveQuickAction } from "./gitActions.ts";
+import { sourceControlClients } from "../sourceControlClients.ts";
+import {
+  buildMenuItems,
+  getGitActionDisabledReason,
+  resolveDefaultBranchActionDialogCopy,
+  resolveQuickAction,
+} from "./gitActions.ts";
 
-const unknownRemoteStatus: VcsStatusAccumulatedResult = {
-  isRepo: true,
-  hasPrimaryRemote: true,
-  isDefaultRef: false,
-  refName: "feature/mobile-status",
-  hasWorkingTreeChanges: true,
-  workingTree: {
-    files: [{ path: "src/mobile.ts", insertions: 1, deletions: 0 }],
-    insertions: 1,
-    deletions: 0,
+function status(overrides: Partial<VcsStatusResult> = {}): VcsStatusResult {
+  return {
+    isRepo: true,
+    hasPrimaryRemote: true,
+    isDefaultRef: false,
+    refName: "feature/test",
+    hasWorkingTreeChanges: false,
+    workingTree: { files: [], insertions: 0, deletions: 0 },
+    hasUpstream: true,
+    aheadCount: 0,
+    behindCount: 0,
+    pr: null,
+    ...overrides,
+  };
+}
+
+const gitLab = {
+  sourceControlProvider: {
+    kind: SourceControlProviderKind.make("gitlab"),
+    name: "GitLab",
+    baseUrl: "https://gitlab.com",
   },
-  hasUpstream: false,
-  aheadCount: 0,
-  behindCount: 0,
-  pr: null,
-  remoteStatusKnown: false,
 };
 
-describe("remote-unknown Git actions", () => {
-  it("withholds remote-shaped menu and quick actions until remote status is known", () => {
-    expect(buildMenuItems(unknownRemoteStatus, false, true)).toEqual([
-      {
-        id: "commit",
-        label: "Commit",
-        disabled: false,
-        icon: "commit",
-        kind: "open_dialog",
-        dialogAction: "commit",
-      },
-    ]);
-    expect(resolveQuickAction(unknownRemoteStatus, false, false, true)).toEqual({
-      label: "Commit",
-      disabled: false,
-      kind: "run_action",
-      action: "commit",
-    });
+const openPr = {
+  number: 7,
+  title: "Feature",
+  url: "https://example.com/pr/7",
+  baseRef: "main",
+  headRef: "feature/test",
+  state: "open" as const,
+};
+
+describe("git action copy", () => {
+  it("says PR for a GitHub ref", () => {
+    expect(resolveQuickAction(status({ aheadCount: 1 }), false).label).toBe("Push & create PR");
+    expect(resolveQuickAction(status({ pr: openPr }), false).label).toBe("View PR");
+    const [, , prItem] = buildMenuItems(status(), false);
+    expect(prItem?.label).toBe("Create PR");
+    expect(
+      getGitActionDisabledReason({
+        item: prItem!,
+        gitStatus: status(),
+        isBusy: false,
+        hasOriginRemote: true,
+      }),
+    ).toBe("No local commits to include in a PR.");
   });
 
-  it("reports remote status unavailable instead of treating clean placeholders as settled", () => {
-    const cleanUnknownStatus = {
-      ...unknownRemoteStatus,
-      hasWorkingTreeChanges: false,
-      workingTree: { files: [], insertions: 0, deletions: 0 },
-    };
-
-    expect(resolveQuickAction(cleanUnknownStatus, false, false, true)).toMatchObject({
-      disabled: true,
-      hint: "Remote Git status is unavailable.",
-    });
+  it("says MR for a GitLab ref", () => {
+    expect(resolveQuickAction(status({ ...gitLab, aheadCount: 1 }), false).label).toBe(
+      "Push & create MR",
+    );
+    expect(
+      resolveQuickAction(status({ ...gitLab, hasWorkingTreeChanges: true }), false).label,
+    ).toBe("Commit, push & MR");
+    expect(resolveQuickAction(status({ ...gitLab, pr: openPr }), false).label).toBe("View MR");
+    const [, , prItem] = buildMenuItems(status(gitLab), false);
+    expect(prItem?.label).toBe("Create MR");
+    expect(
+      getGitActionDisabledReason({
+        item: prItem!,
+        gitStatus: status(gitLab),
+        isBusy: false,
+        hasOriginRemote: true,
+      }),
+    ).toBe("No local commits to include in an MR.");
   });
 
-  it("restores the intended actions after the same status becomes known", () => {
-    const knownStatus = { ...unknownRemoteStatus, remoteStatusKnown: true };
-
-    expect(buildMenuItems(knownStatus, false, true)).toHaveLength(3);
-    expect(resolveQuickAction(knownStatus, false, false, true)).toMatchObject({
-      disabled: false,
-      action: "commit_push_pr",
-    });
+  it("names the host's change request in the default-branch dialog", () => {
+    const input = { action: "commit_push_pr", branchName: "main", includesCommit: true } as const;
+    expect(
+      resolveDefaultBranchActionDialogCopy({
+        ...input,
+        terminology: sourceControlClients.get("github").changeRequest,
+      }).title,
+    ).toBe("Commit, push & create PR from default branch?");
+    expect(
+      resolveDefaultBranchActionDialogCopy({
+        ...input,
+        terminology: sourceControlClients.get("gitlab").changeRequest,
+      }).continueLabel,
+    ).toBe("Commit, push & create MR");
   });
 });

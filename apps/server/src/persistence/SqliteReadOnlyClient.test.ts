@@ -25,15 +25,17 @@ const makeFilePersistenceLayer = () => {
   };
 };
 
-const countProjectionState = (sql: SqlClient.SqlClient) =>
-  sql<{ readonly total: number }>`SELECT COUNT(*) AS "total" FROM projection_state`.pipe(
+const countReceipts = (sql: SqlClient.SqlClient) =>
+  sql<{
+    readonly total: number;
+  }>`SELECT COUNT(*) AS "total" FROM orchestration_v2_command_receipts`.pipe(
     Effect.map((rows) => rows[0]?.total ?? -1),
   );
 
-const insertProjector = (sql: SqlClient.SqlClient, projector: string) =>
+const insertReceipt = (sql: SqlClient.SqlClient, projector: string) =>
   sql`
-    INSERT INTO projection_state (projector, last_applied_sequence, updated_at)
-    VALUES (${projector}, 1, '2024-01-01T00:00:00.000Z')
+    INSERT INTO orchestration_v2_command_receipts (command_id, thread_id, command_type, accepted_at, result_sequence, status)
+    VALUES (${projector}, 'test-thread', 'test-command', '2024-01-01T00:00:00.000Z', 1, 'accepted')
   `;
 
 // Gives every runnable fiber repeated turns on the scheduler. Everything the
@@ -50,8 +52,8 @@ it.effect("aliases the write client for in-memory databases", () =>
     // so the read client has to be the write client itself.
     assert.strictEqual(readSql, writeSql);
 
-    yield* insertProjector(writeSql, "memory-alias");
-    assert.equal(yield* countProjectionState(readSql), 1);
+    yield* insertReceipt(writeSql, "memory-alias");
+    assert.equal(yield* countReceipts(readSql), 1);
   }).pipe(Effect.provide(layerMemory)),
 );
 
@@ -66,10 +68,10 @@ it.effect("opens a distinct read-only connection on a freshly created database",
 
     // Reads a table that only exists because migrations ran on the write
     // connection first: the read connection cannot create or migrate one.
-    assert.equal(yield* countProjectionState(readSql), 0);
+    assert.equal(yield* countReceipts(readSql), 0);
 
-    yield* insertProjector(writeSql, "fresh-install");
-    assert.equal(yield* countProjectionState(readSql), 1);
+    yield* insertReceipt(writeSql, "fresh-install");
+    assert.equal(yield* countReceipts(readSql), 1);
   }).pipe(Effect.provide(layer));
 });
 
@@ -77,7 +79,7 @@ it.effect("refuses writes on the read connection", () => {
   const { layer } = makeFilePersistenceLayer();
   return Effect.gen(function* () {
     const readSql = yield* ReadOnlySqlClient;
-    const error = yield* Effect.flip(insertProjector(readSql, "rejected"));
+    const error = yield* Effect.flip(insertReceipt(readSql, "rejected"));
     assert.include(String(error.reason.cause), "readonly database");
   }).pipe(Effect.provide(layer));
 });
@@ -95,7 +97,7 @@ it.effect("lets a write commit while a read transaction is open", () => {
     const readFiber = yield* readSql
       .withTransaction(
         Effect.gen(function* () {
-          yield* countProjectionState(readSql);
+          yield* countReceipts(readSql);
           yield* Deferred.succeed(readOpened, undefined);
           yield* Deferred.await(releaseRead);
         }),
@@ -104,7 +106,7 @@ it.effect("lets a write commit while a read transaction is open", () => {
 
     yield* Deferred.await(readOpened);
 
-    const writeFiber = yield* insertProjector(writeSql, "concurrent-write").pipe(
+    const writeFiber = yield* insertReceipt(writeSql, "concurrent-write").pipe(
       Effect.andThen(Deferred.succeed(writeCommitted, undefined)),
       Effect.forkChild,
     );
@@ -118,7 +120,7 @@ it.effect("lets a write commit while a read transaction is open", () => {
     yield* Fiber.join(readFiber);
     yield* Fiber.join(writeFiber);
 
-    assert.equal(yield* countProjectionState(writeSql), 1);
+    assert.equal(yield* countReceipts(writeSql), 1);
   }).pipe(Effect.provide(layer));
 });
 
@@ -137,7 +139,7 @@ it.effect("blocks the same write behind a read transaction on the write connecti
     const readFiber = yield* writeSql
       .withTransaction(
         Effect.gen(function* () {
-          yield* countProjectionState(writeSql);
+          yield* countReceipts(writeSql);
           yield* Deferred.succeed(readOpened, undefined);
           yield* Deferred.await(releaseRead);
         }),
@@ -146,7 +148,7 @@ it.effect("blocks the same write behind a read transaction on the write connecti
 
     yield* Deferred.await(readOpened);
 
-    const writeFiber = yield* insertProjector(writeSql, "serialized-write").pipe(
+    const writeFiber = yield* insertReceipt(writeSql, "serialized-write").pipe(
       Effect.andThen(Deferred.succeed(writeCommitted, undefined)),
       Effect.forkChild,
     );
@@ -161,7 +163,7 @@ it.effect("blocks the same write behind a read transaction on the write connecti
     yield* Fiber.join(readFiber);
     yield* Fiber.join(writeFiber);
 
-    assert.equal(yield* countProjectionState(writeSql), 1);
+    assert.equal(yield* countReceipts(writeSql), 1);
   }).pipe(Effect.provide(layer));
 });
 
@@ -171,7 +173,7 @@ it.effect("never reads ahead of the write connection inside a read transaction",
     const writeSql = yield* SqlClient.SqlClient;
     const readSql = yield* ReadOnlySqlClient;
 
-    yield* insertProjector(writeSql, "before-read");
+    yield* insertReceipt(writeSql, "before-read");
 
     const readOpened = yield* Deferred.make<void>();
     const writeCommitted = yield* Deferred.make<void>();
@@ -180,27 +182,27 @@ it.effect("never reads ahead of the write connection inside a read transaction",
     const readFiber = yield* readSql
       .withTransaction(
         Effect.gen(function* () {
-          observed.push(yield* countProjectionState(readSql));
+          observed.push(yield* countReceipts(readSql));
           yield* Deferred.succeed(readOpened, undefined);
           yield* Deferred.await(writeCommitted);
           // Same transaction, after a concurrent commit: the WAL snapshot is
           // pinned at BEGIN, so the row committed since is invisible. A read
           // that could see it would let `getThreadDetailSnapshot` return a
           // sequence ahead of its rows and make the client drop events.
-          observed.push(yield* countProjectionState(readSql));
+          observed.push(yield* countReceipts(readSql));
         }),
       )
       .pipe(Effect.forkChild);
 
     yield* Deferred.await(readOpened);
-    yield* insertProjector(writeSql, "during-read");
+    yield* insertReceipt(writeSql, "during-read");
     yield* Deferred.succeed(writeCommitted, undefined);
     yield* Fiber.join(readFiber);
 
     assert.deepEqual(observed, [1, 1]);
     // Once the transaction closes, the read connection catches up; it lags,
     // it never leads.
-    assert.equal(yield* countProjectionState(readSql), 2);
-    assert.equal(yield* countProjectionState(writeSql), 2);
+    assert.equal(yield* countReceipts(readSql), 2);
+    assert.equal(yield* countReceipts(writeSql), 2);
   }).pipe(Effect.provide(layer));
 });

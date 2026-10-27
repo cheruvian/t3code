@@ -24,9 +24,10 @@ import {
   useFocusEffect,
   useIsFocused,
   useNavigation,
+  useRoute,
   type StaticScreenProps,
 } from "@react-navigation/native";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import {
@@ -43,11 +44,13 @@ import {
 import {
   projectScriptCwd,
   projectScriptRuntimeEnv,
+  projectScriptTerminalInput,
   resolveProjectScripts,
   resolveInheritedProjectScripts,
 } from "@t3tools/shared/projectScripts";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
-import { Alert, Platform, Pressable, ScrollView, View } from "react-native";
+import { Alert, Platform, Pressable, View } from "react-native";
+import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useMobileGitStatus } from "../../state/queries";
 import { useWorkspaceState, useConnectionsReady } from "../../state/workspace";
@@ -85,7 +88,10 @@ import {
   stagePendingTerminalLaunch,
 } from "../terminal/terminalLaunchContext";
 import { terminalDebugLog } from "../terminal/terminalDebugLog";
-import { ThreadDetailScreen, type ThreadDetailScreenProps } from "./ThreadDetailScreen";
+import type { ThreadDetailScreenProps } from "./ThreadDetailScreen";
+import { ThreadScreenBinding, ThreadScreenFallback, ThreadScreenHost } from "./ThreadScreenHost";
+import { draftRouteIdentity } from "./thread-route-state";
+import { NewTaskDraftRouteScreen, type NewTaskDraftRouteParams } from "./NewTaskDraftRouteScreen";
 import { GitOverviewSheet } from "./git/GitOverviewSheet";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useSelectedThreadGitActions } from "../../state/use-selected-thread-git-actions";
@@ -99,6 +105,9 @@ import { serverEnvironment } from "../../state/server";
 import { projectEnvironment } from "../../state/projects";
 import { resolveMergeBackTargetThreadId } from "@t3tools/client-runtime/state/thread-relationships";
 import { resolveLatestMergeBackRun } from "@t3tools/client-runtime/state/thread-workflows";
+import { useThreadFamily } from "../../state/threads";
+import { EMPTY_ENVIRONMENT_THREAD_STATE } from "@t3tools/client-runtime/state/threads";
+import { newTaskDestination } from "./new-task-project-selection";
 import { projectThreadContentPresentation } from "./threadContentPresentation";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import {
@@ -116,13 +125,17 @@ import { useThreadPromptLink } from "../prompt-links/useThreadPromptLink";
 import { ThreadHeader } from "./ThreadHeader";
 import {
   useAndroidWorkspaceBack,
-  useWorkspaceListNavigation,
+  useWorkspaceBackNavigation,
 } from "../workspace/useAndroidWorkspaceNavigation";
-
-interface ThreadInspectorSelection {
-  readonly routeThreadIdentity: string | null;
-  readonly mode: ThreadInspectorMode;
-}
+import { openSettings } from "../settings/settings-navigation";
+import {
+  InspectorContentScope,
+  ThreadInspectorHeader,
+  ThreadInspectorPreview,
+  type ThreadInspectorPresentation,
+} from "./thread-inspector-preview";
+import type { ThreadInspectorTarget } from "./thread-inspector-navigation";
+import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 
 function InspectorPaneRoleActivation() {
   useAdaptiveWorkspacePaneRole("inspector");
@@ -136,29 +149,22 @@ function firstRouteParam(value: string | string[] | undefined): string | null {
   return first === undefined || first.trim().length === 0 ? null : first;
 }
 
-function ThreadPane(props: { readonly children: ReactNode }) {
-  return (
-    <View className="flex-1 bg-screen android:overflow-hidden android:rounded-t-[28px] android:bg-thread-canvas">
-      {props.children}
-    </View>
-  );
-}
-
 function ThreadRouteFallbackLayout(props: { readonly children: ReactNode }) {
-  const returnToList = useWorkspaceListNavigation("threads");
+  const goBack = useWorkspaceBackNavigation("threads");
   const { layout } = useAdaptiveWorkspaceLayout();
   const { themeVariables } = useAppearancePreferences();
-  if (Platform.OS !== "android") return props.children;
+  if (Platform.OS !== "android")
+    return <ThreadScreenFallback>{props.children}</ThreadScreenFallback>;
 
   return (
     <>
       <AppBar
         title="Thread"
         options={{ contentStyle: { backgroundColor: themeVariables["--color-header"] } }}
-        onBack={layout.usesSplitView ? undefined : returnToList}
+        onBack={layout.usesSplitView ? undefined : goBack}
         hideBottomBorder
       />
-      <ThreadPane>{props.children}</ThreadPane>
+      <ThreadScreenFallback>{props.children}</ThreadScreenFallback>
     </>
   );
 }
@@ -176,13 +182,15 @@ function OpeningThreadLoadingScreen() {
 }
 
 type ThreadRouteScreenRouteProps = StaticScreenProps<{
-  readonly environmentId: string;
-  readonly threadId: string;
-  /** A prompt link's draft text. See useThreadPromptLink. */
+  readonly environmentId?: string;
+  readonly threadId?: string;
+  readonly draft?: NewTaskDraftRouteParams;
+  readonly inspector?: ThreadInspectorTarget;
   readonly prompt?: string | string[];
 }>;
 
 interface ThreadRouteScreenProps extends ThreadRouteScreenRouteProps {
+  readonly inspectorPresentation?: ThreadInspectorPresentation;
   readonly onReturnToThread?: () => void;
   readonly renderInspector?: (headerInset: number) => ReactNode;
 }
@@ -215,12 +223,54 @@ function ThreadUnavailableScreen(props: {
   );
 }
 
+/** A thread that can't load opens a new task in its environment instead of a dead end. */
+function UnavailableThreadDraftRedirect(props: { readonly environmentId: EnvironmentId }) {
+  const navigation = useNavigation();
+  const projects = useProjects();
+  const { layout } = useAdaptiveWorkspaceLayout();
+  const openDraft = useEffectEvent(() => {
+    const project = projects.find((candidate) => candidate.environmentId === props.environmentId);
+    navigation.dispatch(
+      StackActions.replace(
+        "Thread",
+        newTaskDestination(layout.usesSplitView, projects, project, uuidv4()),
+      ),
+    );
+  });
+  // oxlint-disable-next-line t3code/react-effect-budget -- replaces this route in the navigator
+  useEffect(() => {
+    openDraft();
+  }, []);
+  return <OpeningThreadLoadingScreen />;
+}
+
 export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
+  return (
+    <ThreadScreenHost>
+      {props.route.params?.draft ? (
+        <NewTaskDraftRouteScreen
+          key={draftRouteIdentity(props.route.params.draft)}
+          route={{ ...props.route, params: props.route.params.draft }}
+        />
+      ) : (
+        <LiveThreadRouteController {...props} />
+      )}
+    </ThreadScreenHost>
+  );
+}
+
+function LiveThreadRouteController(props: ThreadRouteScreenProps) {
   useAndroidWorkspaceBack("threads");
   const connectionsReady = useConnectionsReady();
   const { connectionState } = useRemoteConnectionStatus();
   const { selectedThread } = useThreadSelection();
-  const params = props.route.params;
+  // Subagent rows, the open child's own row and its ancestors come from the family when the
+  // shell leaves idle children out.
+  useThreadFamily(
+    selectedThread?.environmentId ?? null,
+    selectedThread?.lineage.rootThreadId ?? null,
+  );
+  const params = props.route.params ?? {};
   const environmentIdRaw = firstRouteParam(params.environmentId);
   const threadIdRaw = firstRouteParam(params.threadId);
   const environmentId = environmentIdRaw ? EnvironmentId.make(environmentIdRaw) : null;
@@ -228,6 +278,7 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
   const routeEnvironmentShellState = useEnvironmentShellReadiness(environmentId);
   const { onReconnectEnvironment } = useRemoteConnections();
   const navigation = useNavigation();
+  const routeName = useRoute().name;
   const routeConnectionState =
     routeEnvironmentRuntime?.connectionState ?? (environmentId ? "available" : connectionState);
   const routeThreadKey =
@@ -240,9 +291,20 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
       : scopedThreadKey(selectedThread.environmentId, selectedThread.id);
   const selectedThreadDetailState = useSelectedThreadDetailState();
   useThreadPromptLink(params, routeThreadKey);
+  const withInspectorHeader = (content: ReactNode) => (
+    <>
+      {props.inspectorPresentation ? (
+        <ThreadInspectorHeader
+          title={selectedThread?.title ?? "Thread"}
+          {...props.inspectorPresentation}
+        />
+      ) : null}
+      {content}
+    </>
+  );
 
   if (environmentId === null || threadIdRaw === null) {
-    return <OpeningThreadLoadingScreen />;
+    return withInspectorHeader(<OpeningThreadLoadingScreen />);
   }
 
   // Render the full thread chrome (header, feed, composer) as soon as the
@@ -251,11 +313,17 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
   // composer reports loading/syncing, and the composer's connection pill
   // reports connecting/reconnecting status.
   if (selectedThread !== null && selectedThreadKey === routeThreadKey) {
-    return <ThreadRouteContent {...props} selectedThreadDetailState={selectedThreadDetailState} />;
+    return withInspectorHeader(
+      <ThreadRouteContent {...props} selectedThreadDetailState={selectedThreadDetailState} />,
+    );
   }
 
   const stillHydrating = threadRouteIsHydrating({
     isLoadingConnections: !connectionsReady,
+    environmentRegistered: routeEnvironmentRuntime !== null,
+    localCacheRead:
+      routeEnvironmentShellState.cacheRead &&
+      selectedThreadDetailState !== EMPTY_ENVIRONMENT_THREAD_STATE,
     connectionState: routeConnectionState,
     shellStatus: routeEnvironmentShellState.status,
     shellHasError: routeEnvironmentShellState.hasError,
@@ -264,10 +332,14 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
   });
 
   if (stillHydrating) {
-    return <OpeningThreadLoadingScreen />;
+    return withInspectorHeader(<OpeningThreadLoadingScreen />);
   }
 
-  return (
+  if (routeName === "Thread" && !props.inspectorPresentation) {
+    return <UnavailableThreadDraftRedirect environmentId={environmentId} />;
+  }
+
+  return withInspectorHeader(
     <ThreadUnavailableScreen
       actionLabel={
         routeEnvironmentRuntime === null ? "Manage environments" : "Reconnect environment"
@@ -277,12 +349,9 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
           onReconnectEnvironment(environmentId);
           return;
         }
-        navigation.navigate("SettingsSheet", {
-          screen: "SettingsContent",
-          params: { screen: "SettingsEnvironments" },
-        });
+        openSettings(navigation, "SettingsEnvironments");
       }}
-    />
+    />,
   );
 }
 
@@ -307,27 +376,24 @@ function ThreadRouteContent(
   const projects = useProjects();
   const { environments } = useEnvironments();
   const groupingSettings = useMobileProjectGroupingSettings();
-  const groupedLocks = useMemo(
-    () =>
-      selectedThreadProject
-        ? groupedResourceLocks({
-            activeProject: selectedThreadProject,
-            projects,
-            settings: {
-              sidebarProjectGroupingMode: groupingSettings.sidebarProjectGroupingMode,
-              sidebarProjectGroupingOverrides: {},
-            },
-            primaryEnvironmentId: null,
-            connectedEnvironmentIds: new Set(
-              environments
-                .filter((entry) => entry.connection.phase === "connected")
-                .map((entry) => entry.environmentId),
-            ),
-          })
-        : [],
-    [selectedThreadProject, projects, groupingSettings.sidebarProjectGroupingMode, environments],
-  );
-  const resourceOwnerLabels = useMemo(() => {
+  const groupedLocks = (() =>
+    selectedThreadProject
+      ? groupedResourceLocks({
+          activeProject: selectedThreadProject,
+          projects,
+          settings: {
+            sidebarProjectGroupingMode: groupingSettings.sidebarProjectGroupingMode,
+            sidebarProjectGroupingOverrides: {},
+          },
+          primaryEnvironmentId: null,
+          connectedEnvironmentIds: new Set(
+            environments
+              .filter((entry) => entry.connection.phase === "connected")
+              .map((entry) => entry.environmentId),
+          ),
+        })
+      : [])();
+  const resourceOwnerLabels = (() => {
     const labels = new Map<string, string>();
     for (const { project, lock } of groupedLocks) {
       const owner = appAtomRegistry.get(
@@ -342,7 +408,7 @@ function ThreadRouteContent(
       );
     }
     return labels;
-  }, [groupedLocks, environments]);
+  })();
   const selectedServerSettings = useAtomValue(
     serverEnvironment.settingsValueAtom(
       selectedThread?.environmentId ?? EnvironmentId.make("unavailable"),
@@ -360,25 +426,22 @@ function ThreadRouteContent(
       : null,
   );
   const projectFileData = projectFileQuery.data as ProjectReadFileResult | null;
-  const fileScripts = useMemo(() => {
+  const fileScripts = (() => {
     if (projectFileData === null || projectFileData.truncated) return [];
     return parseT3ProjectFile(projectFileData.contents)?.scripts ?? [];
-  }, [projectFileData]);
-  const projectScripts = useMemo(
-    () =>
-      selectedThreadProject
-        ? resolveInheritedProjectScripts(
-            resolveProjectScripts(
-              selectedServerSettings ?? DEFAULT_SERVER_SETTINGS,
-              selectedThreadProject,
-            ),
-            fileScripts,
-            selectedServerSettings?.globalScripts ?? [],
-            selectedThreadProject.disabledInheritedScriptIds ?? [],
-          )
-        : [],
-    [fileScripts, selectedServerSettings?.globalScripts, selectedThreadProject],
-  );
+  })();
+  const projectScripts = (() =>
+    selectedThreadProject
+      ? resolveInheritedProjectScripts(
+          resolveProjectScripts(
+            selectedServerSettings ?? DEFAULT_SERVER_SETTINGS,
+            selectedThreadProject,
+          ),
+          fileScripts,
+          selectedServerSettings?.globalScripts ?? [],
+          selectedThreadProject.disabledInheritedScriptIds ?? [],
+        )
+      : [])();
   const canOperateThread = useEnvironmentScope(
     selectedThread?.environmentId ?? null,
     AuthOrchestrationOperateScope,
@@ -399,11 +462,12 @@ function ThreadRouteContent(
   const requests = useSelectedThreadRequests();
   const requestResource = useAtomCommand(projectEnvironment.resource, "resource action");
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
+  const resumeThreadQueue = useAtomCommand(threadEnvironment.resumeThreadQueue, "resume queue");
   const loadEarlierHistory = useAtomCommand(threadEnvironment.loadEarlierHistory, {
     label: "load earlier thread history",
     reportFailure: false,
   });
-  const historyControls = useMemo(() => {
+  const historyControls = (() => {
     const history = selectedThreadDetailState.history;
     if (!selectedThread) {
       return undefined;
@@ -421,17 +485,24 @@ function ThreadRouteContent(
           input: { threadId: selectedThread.id },
         });
       },
+      onLoadThrough: (throughEntryId: string) => {
+        void loadEarlierHistory({
+          environmentId: selectedThread.environmentId,
+          input: { threadId: selectedThread.id, throughEntryId },
+        });
+      },
     };
-  }, [loadEarlierHistory, selectedThread, selectedThreadDetailState.history]);
+  })();
   const navigation = useNavigation();
   const isFocused = useIsFocused();
+  const selectDetail = useSelectWorkspaceDetail();
   const openPullRequest = useOpenPullRequest();
   const mergeBack = useAtomCommand(threadEnvironment.mergeBack, "merge thread back");
   const mergeBackTargetThreadId = resolveMergeBackTargetThreadId(selectedThreadDetail);
   const mergeBackRun =
     selectedThreadDetail === null ? null : resolveLatestMergeBackRun(selectedThreadDetail);
   const mergeBackBusyRef = useRef(false);
-  const handleMergeBack = useCallback(async () => {
+  const handleMergeBack = async () => {
     if (
       mergeBackBusyRef.current ||
       !selectedThread ||
@@ -441,45 +512,47 @@ function ThreadRouteContent(
       return;
     }
     mergeBackBusyRef.current = true;
-    try {
-      const result = await mergeBack({
-        environmentId: selectedThread.environmentId,
-        input: {
-          sourceThreadId: selectedThread.id,
-          targetThreadId: mergeBackTargetThreadId,
-          runId: mergeBackRun.id,
-          creationSource: "mobile",
-        },
-      });
-      if (result._tag !== "Success") return;
-      navigation.navigate("Thread", {
-        environmentId: selectedThread.environmentId,
-        threadId: mergeBackTargetThreadId,
-      });
-    } finally {
-      mergeBackBusyRef.current = false;
-    }
-  }, [mergeBack, mergeBackRun, mergeBackTargetThreadId, navigation, selectedThread]);
-  const params = props.route.params;
+    const result = await mergeBack({
+      environmentId: selectedThread.environmentId,
+      input: {
+        sourceThreadId: selectedThread.id,
+        targetThreadId: mergeBackTargetThreadId,
+        runId: mergeBackRun.id,
+        creationSource: "mobile",
+      },
+    });
+    mergeBackBusyRef.current = false;
+    if (result._tag !== "Success") return;
+    selectDetail({
+      name: "Thread",
+      params: { environmentId: selectedThread.environmentId, threadId: mergeBackTargetThreadId },
+    });
+  };
+  const params = props.route.params ?? {};
   const environmentIdRaw = firstRouteParam(params.environmentId);
   const environmentId = environmentIdRaw ? EnvironmentId.make(environmentIdRaw) : null;
   const threadId = firstRouteParam(params.threadId);
   const routeThreadIdentity =
     environmentIdRaw !== null && threadId !== null ? `${environmentIdRaw}:${threadId}` : null;
-  const [inspectorSelection, setInspectorSelection] = useState<ThreadInspectorSelection | null>(
-    () => (props.renderInspector ? { routeThreadIdentity, mode: "route" } : null),
-  );
+  // The chosen mode survives thread switches; "route" only applies while the route
+  // supplies an inspector, which is also the default whenever it does.
+  const [chosenInspectorMode, setChosenInspectorMode] = useState<ThreadInspectorMode | null>(null);
+  const previewTarget = props.inspectorPresentation ? undefined : params.inspector;
   const inspectorMode = (() => {
-    if (inspectorSelection?.routeThreadIdentity === routeThreadIdentity) {
-      if (inspectorSelection.mode === "files" && selectedThreadCwd === null) {
-        return null;
-      }
-      return inspectorSelection.mode;
-    }
-    return null;
+    if (previewTarget) return "preview";
+    const mode =
+      props.renderInspector === undefined
+        ? chosenInspectorMode === "route"
+          ? null
+          : chosenInspectorMode
+        : chosenInspectorMode === null || chosenInspectorMode === "route"
+          ? "route"
+          : chosenInspectorMode;
+    return mode === "files" && selectedThreadCwd === null ? null : mode;
   })();
   useEffect(() => {
     if (
+      props.inspectorPresentation === undefined &&
       fileInspector.supported &&
       selectedThreadCwd === null &&
       inspectorMode === null &&
@@ -491,55 +564,27 @@ function ThreadRouteContent(
     fileInspector.supported,
     inspectorMode,
     panes.auxiliaryPaneVisible,
+    props.inspectorPresentation,
     selectedThreadCwd,
     toggleAuxiliaryPane,
   ]);
 
+  const revealPreview = useEffectEvent(() => showAuxiliaryPane("inspector"));
   useEffect(() => {
-    setInspectorSelection((current) => {
-      if (props.renderInspector === undefined) {
-        if (current === null || current.mode === "route") {
-          return null;
-        }
-        return { ...current, routeThreadIdentity };
-      }
-
-      if (current === null || current.mode === "route") {
-        return { routeThreadIdentity, mode: "route" };
-      }
-
-      return { ...current, routeThreadIdentity };
-    });
-  }, [props.renderInspector, routeThreadIdentity]);
-
-  useFocusEffect(
-    useCallback(() => {
-      return () => {
-        if (props.renderInspector === undefined) {
-          // Inspectors are contextual to this chat destination. Clear the
-          // hidden chat copy after a native push so returning from Files,
-          // Review, or Terminal cannot reserve an empty trailing pane.
-          setInspectorSelection(null);
-        }
-      };
-    }, [props.renderInspector]),
-  );
+    if (previewTarget) revealPreview();
+  }, [previewTarget]);
   const routeEnvironmentRuntime = useRemoteEnvironmentRuntime(environmentId);
   const routeConnectionState =
     routeEnvironmentRuntime?.connectionState ?? (environmentId ? "available" : connectionState);
   const routeConnectionError = routeEnvironmentRuntime?.connectionError ?? null;
-  const selectedThreadWithDraftSettings = useMemo(
-    () =>
-      selectedThread
-        ? {
-            ...selectedThread,
-            modelSelection: composer.modelSelection ?? selectedThread.modelSelection,
-            runtimeMode: composer.runtimeMode ?? selectedThread.runtimeMode,
-            interactionMode: composer.interactionMode ?? selectedThread.interactionMode,
-          }
-        : null,
-    [composer.interactionMode, composer.modelSelection, composer.runtimeMode, selectedThread],
-  );
+  const selectedThreadWithDraftSettings = selectedThread
+    ? {
+        ...selectedThread,
+        modelSelection: composer.modelSelection ?? selectedThread.modelSelection,
+        runtimeMode: composer.runtimeMode ?? selectedThread.runtimeMode,
+        interactionMode: composer.interactionMode ?? selectedThread.interactionMode,
+      }
+    : null;
 
   /* ─── Native header theming ──────────────────────────────────────── */
   const usesNativeHeaderGlass = NATIVE_LIQUID_GLASS_SUPPORTED;
@@ -570,33 +615,25 @@ function ThreadRouteContent(
     environmentId: selectedThread?.environmentId ?? null,
     threadId: selectedThread?.id ?? null,
   });
-  const terminalMenuSessions = useMemo(
-    () =>
-      buildTerminalMenuSessions({
-        knownSessions: knownTerminalSessions ?? [],
-        workspaceRoot: selectedThreadProject?.workspaceRoot ?? null,
-      }),
-    [knownTerminalSessions, selectedThreadProject?.workspaceRoot],
-  );
+  const terminalMenuSessions = buildTerminalMenuSessions({
+    knownSessions: knownTerminalSessions ?? [],
+    workspaceRoot: selectedThreadProject?.workspaceRoot ?? null,
+  });
   const selectedThreadDetailWorktreePath = selectedThreadDetail?.thread.worktreePath ?? null;
-  const handleReconnectEnvironment = useCallback(() => {
+  const handleReconnectEnvironment = () => {
     if (!environmentId) {
       return;
     }
     onReconnectEnvironment(environmentId);
-  }, [environmentId, onReconnectEnvironment]);
+  };
 
-  /* ─── Git action progress (for overlay banner) ──────────────────── */
-  const gitActionProgressTarget = useMemo(
-    () => ({
-      environmentId: selectedThread?.environmentId ?? null,
-      cwd: selectedThreadCwd,
-    }),
-    [selectedThread?.environmentId, selectedThreadCwd],
-  );
+  const gitActionProgressTarget = {
+    environmentId: selectedThread?.environmentId ?? null,
+    cwd: selectedThreadCwd,
+  };
   const gitActionProgress = useGitActionProgress(gitActionProgressTarget);
 
-  const handleOpenGitInspector = useCallback(() => {
+  const handleOpenGitInspector = () => {
     if (!fileInspector.supported) {
       if (selectedThread === null) {
         return;
@@ -607,10 +644,11 @@ function ThreadRouteContent(
       });
       return;
     }
-    setInspectorSelection({ routeThreadIdentity, mode: "git" });
+    navigation.setParams({ inspector: undefined });
+    setChosenInspectorMode("git");
     showAuxiliaryPane("inspector");
-  }, [fileInspector.supported, navigation, routeThreadIdentity, selectedThread, showAuxiliaryPane]);
-  const handleOpenFilesInspector = useCallback(() => {
+  };
+  const handleOpenFilesInspector = () => {
     if (selectedThread === null || selectedThreadCwd === null) {
       return;
     }
@@ -621,131 +659,94 @@ function ThreadRouteContent(
       });
       return;
     }
-    setInspectorSelection({
-      routeThreadIdentity,
-      mode: props.renderInspector === undefined ? "files" : "route",
-    });
+    navigation.setParams({ inspector: undefined });
+    setChosenInspectorMode(props.renderInspector === undefined ? "files" : "route");
     showAuxiliaryPane("inspector");
-  }, [
-    fileInspector.supported,
-    navigation,
-    props.renderInspector,
-    routeThreadIdentity,
-    selectedThread,
-    selectedThreadCwd,
-    showAuxiliaryPane,
-  ]);
-  const inspectorToggleActionRef = useRef({
-    inspectorMode,
-    openFilesInspector: handleOpenFilesInspector,
-    toggleAuxiliaryPane,
-  });
-  inspectorToggleActionRef.current = {
-    inspectorMode,
-    openFilesInspector: handleOpenFilesInspector,
-    toggleAuxiliaryPane,
   };
-  const handleToggleInspector = useCallback(() => {
-    const action = inspectorToggleActionRef.current;
-    if (action.inspectorMode === null) {
-      action.openFilesInspector();
+  const handleToggleInspector = () => {
+    if (inspectorMode === null) {
+      handleOpenFilesInspector();
       return;
     }
-    action.toggleAuxiliaryPane();
-  }, []);
-  const handleSelectInspectorFile = useCallback(
-    (path: string) => {
-      if (selectedThread === null) {
-        return;
-      }
-      const params = {
-        environmentId: String(selectedThread.environmentId),
-        threadId: String(selectedThread.id),
-        path: path.split("/").filter((segment) => segment.length > 0),
-      };
-      if (fileInspector.supported) {
-        navigation.navigate("ThreadFile", params);
-        return;
-      }
+    toggleAuxiliaryPane();
+  };
+  const handleSelectInspectorFile = (path: string) => {
+    if (selectedThread === null) {
+      return;
+    }
+    const params = {
+      environmentId: String(selectedThread.environmentId),
+      threadId: String(selectedThread.id),
+      path: path.split("/").filter((segment) => segment.length > 0),
+    };
+    if (fileInspector.supported) {
       navigation.navigate("ThreadFile", params);
-    },
-    [fileInspector.supported, navigation, selectedThread],
-  );
-  // The workspace inspector column spans the full window height. On iOS the
-  // panes bring their own nested native headers (which underlap the status
-  // bar); elsewhere the pane content pads itself below the top inset.
+      return;
+    }
+    navigation.navigate("ThreadFile", params);
+  };
   const safeAreaInsets = useSafeAreaInsets();
   const inspectorHeaderInset = Platform.OS === "ios" ? 0 : safeAreaInsets.top;
-  const GitInspector = useCallback(
-    ({ active }: { readonly active: boolean }) => (
-      <GitOverviewSheet
-        active={active}
+  const renderGitInspector = ({ active }: { readonly active: boolean }) => (
+    <GitOverviewSheet
+      active={active}
+      headerInset={inspectorHeaderInset}
+      presentation="inspector"
+      route={{ params: { environmentId: environmentId!, threadId: threadId! } }}
+    />
+  );
+  const renderFilesInspector = () =>
+    selectedThread !== null && selectedThreadCwd !== null ? (
+      <ThreadFileNavigatorPane
+        cwd={selectedThreadCwd}
+        environmentId={selectedThread.environmentId}
         headerInset={inspectorHeaderInset}
-        presentation="inspector"
-        route={{ params: props.route.params }}
+        projectName={selectedThreadProject?.title ?? "Files"}
+        selectedPath={null}
+        onSelectFile={handleSelectInspectorFile}
       />
-    ),
-    [inspectorHeaderInset, props.route.params],
-  );
-  const FilesInspector = useCallback(
-    () =>
-      selectedThread !== null && selectedThreadCwd !== null ? (
-        <ThreadFileNavigatorPane
-          cwd={selectedThreadCwd}
-          environmentId={selectedThread.environmentId}
-          headerInset={inspectorHeaderInset}
-          projectName={selectedThreadProject?.title ?? "Files"}
-          selectedPath={null}
-          onSelectFile={handleSelectInspectorFile}
-        />
-      ) : null,
-    [
-      handleSelectInspectorFile,
-      inspectorHeaderInset,
-      selectedThread,
-      selectedThreadCwd,
-      selectedThreadProject?.title,
-    ],
-  );
-  const RouteInspector = useCallback(
-    () => props.renderInspector?.(inspectorHeaderInset),
-    [inspectorHeaderInset, props.renderInspector],
-  );
-  const renderInspectorStack = useCallback(
-    (registrationActive: boolean) =>
-      inspectorMode === null ? null : (
-        <ThreadInspectorContentStack
-          renderFiles={FilesInspector}
-          renderGit={GitInspector}
-          mode={inspectorMode}
-          paneVisible={panes.auxiliaryPaneVisible}
-          registrationActive={registrationActive}
-          resetKeys={[routeThreadIdentity, selectedThreadCwd]}
-          renderRoute={props.renderInspector ? RouteInspector : undefined}
-        />
-      ),
-    [
-      FilesInspector,
-      GitInspector,
-      RouteInspector,
-      inspectorMode,
-      panes.auxiliaryPaneVisible,
-      props.renderInspector,
-      props.renderInspector,
-      routeThreadIdentity,
-      selectedThreadCwd,
-    ],
-  );
-  const activeInspectorRenderer = inspectorMode === null ? undefined : renderInspectorStack;
-  // Hand the inspector to the workspace so it renders beside the navigator,
-  // outside this screen's native header — the terminal/git/files toolbar
-  // stays anchored to the chat pane instead of floating above the inspector.
+    ) : null;
+  const renderRouteInspector = () => props.renderInspector?.(inspectorHeaderInset);
+  const renderPreviewInspector = () =>
+    previewTarget && panes.auxiliaryPaneVisible ? (
+      <ThreadInspectorPreview
+        target={previewTarget}
+        renderThread={(screen) => <ThreadRouteScreen {...screen} />}
+        onClose={toggleAuxiliaryPane}
+        onOpen={(inspector) => {
+          if (
+            inspector.type === "thread" &&
+            inspector.environmentId === environmentId &&
+            inspector.threadId === threadId
+          ) {
+            toggleAuxiliaryPane();
+            return;
+          }
+          navigation.setParams({ inspector });
+        }}
+      />
+    ) : null;
+  const renderInspectorStack = (registrationActive: boolean) =>
+    inspectorMode === null ? null : (
+      <ThreadInspectorContentStack
+        paneVisible={panes.auxiliaryPaneVisible}
+        registrationActive={registrationActive}
+        renderPreview={renderPreviewInspector}
+        renderFiles={renderFilesInspector}
+        renderGit={renderGitInspector}
+        mode={inspectorMode}
+        resetKeys={[routeThreadIdentity, selectedThreadCwd]}
+        renderRoute={props.renderInspector ? renderRouteInspector : undefined}
+      />
+    );
+  const activeInspectorRenderer =
+    props.inspectorPresentation || inspectorMode === null ? undefined : renderInspectorStack;
   useRegisterWorkspaceInspector(activeInspectorRenderer);
 
-  const handleOpenConnectionEditor = useCallback(() => {
+  const handleOpenConnectionEditor = () => {
     void navigation.navigate("Connections");
-  }, [navigation]);
-  const handleStopThread = useCallback(() => {
+  };
+  const handleStopThread = () => {
     if (
       !selectedThread ||
       !readEnvironmentScope(selectedThread.environmentId, AuthOrchestrationOperateScope) ||
@@ -760,35 +761,40 @@ function ThreadRouteContent(
         runId: composer.interruptibleRunId,
       },
     });
-  }, [composer.interruptibleRunId, interruptThreadTurn, selectedThread]);
+  };
 
-  const handleOpenTerminal = useCallback(
-    (nextTerminalId?: string | null) => {
-      terminalDebugLog("terminal-menu:open-existing", {
-        terminalId: nextTerminalId ?? null,
-        hasThread: Boolean(selectedThread),
-        hasWorkspaceRoot: Boolean(selectedThreadProject?.workspaceRoot),
-      });
+  const handleResumeQueue = async () => {
+    if (!selectedThread) return;
+    await resumeThreadQueue({
+      environmentId: selectedThread.environmentId,
+      input: { threadId: selectedThread.id },
+    });
+  };
 
-      if (
-        !selectedThread ||
-        !selectedThreadProject?.workspaceRoot ||
-        (!readEnvironmentScope(selectedThread.environmentId, AuthTerminalReadScope) &&
-          !readEnvironmentScope(selectedThread.environmentId, AuthTerminalOperateScope))
-      ) {
-        return;
-      }
+  const handleOpenTerminal = (nextTerminalId?: string | null) => {
+    terminalDebugLog("terminal-menu:open-existing", {
+      terminalId: nextTerminalId ?? null,
+      hasThread: Boolean(selectedThread),
+      hasWorkspaceRoot: Boolean(selectedThreadProject?.workspaceRoot),
+    });
 
-      void navigation.navigate("ThreadTerminal", {
-        environmentId: String(selectedThread.environmentId),
-        threadId: String(selectedThread.id),
-        ...(nextTerminalId ? { terminalId: nextTerminalId } : {}),
-      });
-    },
-    [navigation, selectedThread, selectedThreadProject?.workspaceRoot],
-  );
+    if (
+      !selectedThread ||
+      !selectedThreadProject?.workspaceRoot ||
+      (!readEnvironmentScope(selectedThread.environmentId, AuthTerminalReadScope) &&
+        !readEnvironmentScope(selectedThread.environmentId, AuthTerminalOperateScope))
+    ) {
+      return;
+    }
 
-  const handleOpenNewTerminal = useCallback(() => {
+    void navigation.navigate("ThreadTerminal", {
+      environmentId: String(selectedThread.environmentId),
+      threadId: String(selectedThread.id),
+      ...(nextTerminalId ? { terminalId: nextTerminalId } : {}),
+    });
+  };
+
+  const handleOpenNewTerminal = () => {
     terminalDebugLog("terminal-menu:open-new", {
       hasThread: Boolean(selectedThread),
       hasWorkspaceRoot: Boolean(selectedThreadProject?.workspaceRoot),
@@ -815,185 +821,178 @@ function ThreadRouteContent(
       threadId: String(selectedThread.id),
       terminalId: nextId,
     });
-  }, [
-    knownTerminalSessions,
-    navigation,
-    selectedThread,
-    selectedThreadProject?.workspaceRoot,
-    terminalMenuSessions,
-  ]);
+  };
 
-  const handleRunProjectScript = useCallback(
-    async (script: ProjectScript) => {
-      terminalDebugLog("project-script:press", {
+  const handleRunProjectScript = async (script: ProjectScript) => {
+    terminalDebugLog("project-script:press", {
+      scriptId: script.id,
+      command: script.command,
+      hasThread: Boolean(selectedThread),
+      hasWorkspaceRoot: Boolean(selectedThreadProject?.workspaceRoot),
+    });
+
+    if (
+      !selectedThread ||
+      !selectedThreadProject?.workspaceRoot ||
+      !readEnvironmentScope(selectedThread.environmentId, AuthTerminalOperateScope)
+    ) {
+      terminalDebugLog("project-script:abort", {
         scriptId: script.id,
-        command: script.command,
-        hasThread: Boolean(selectedThread),
-        hasWorkspaceRoot: Boolean(selectedThreadProject?.workspaceRoot),
+        reason: "no-thread-workspace-or-terminal-access",
       });
+      return;
+    }
 
-      if (
-        !selectedThread ||
-        !selectedThreadProject?.workspaceRoot ||
-        !readEnvironmentScope(selectedThread.environmentId, AuthTerminalOperateScope)
-      ) {
-        terminalDebugLog("project-script:abort", {
-          scriptId: script.id,
-          reason: "no-thread-workspace-or-terminal-access",
-        });
+    if (
+      !selectedThread ||
+      !selectedThreadProject?.workspaceRoot ||
+      !readEnvironmentScope(selectedThread.environmentId, AuthTerminalOperateScope)
+    ) {
+      terminalDebugLog("project-script:abort", {
+        scriptId: script.id,
+        reason: "no-thread-workspace-or-terminal-access",
+      });
+      return;
+    }
+
+    if (script.resource) {
+      const owners = resourceOwnersForAction(groupedLocks, script);
+      const local = owners.find(
+        (entry) =>
+          entry.project.environmentId === selectedThreadProject.environmentId &&
+          entry.project.id === selectedThreadProject.id,
+      );
+      const remote = owners.find((entry) => entry !== local);
+      if (owners.length > 1 && local?.lock.threadId !== selectedThread.id) {
+        Alert.alert(
+          "Resource conflict",
+          `Multiple threads hold ${script.name}. Release the conflicting checkouts first.`,
+        );
         return;
       }
-
-      if (script.resource) {
-        const owners = resourceOwnersForAction(groupedLocks, script);
-        const local = owners.find(
-          (entry) =>
-            entry.project.environmentId === selectedThreadProject.environmentId &&
-            entry.project.id === selectedThreadProject.id,
+      const lock = local?.lock ?? remote?.lock;
+      if (lock && (lock.phase === "checkout" || lock.phase === "release")) {
+        Alert.alert("Resource busy", "Resource hooks are still running.");
+        return;
+      }
+      const takingOver =
+        lock !== undefined &&
+        ((remote !== undefined && !local) || lock.threadId !== selectedThread.id);
+      if (takingOver) {
+        const ownerProject = local?.project ?? remote?.project;
+        const owner = appAtomRegistry.get(
+          environmentThreadShells.threadShellAtom({
+            environmentId: ownerProject?.environmentId ?? selectedThread.environmentId,
+            threadId: lock.threadId,
+          }),
         );
-        const remote = owners.find((entry) => entry !== local);
-        if (owners.length > 1 && local?.lock.threadId !== selectedThread.id) {
+        const environmentLabel =
+          ownerProject && ownerProject.environmentId !== selectedThread.environmentId
+            ? ` on ${environments.find((entry) => entry.environmentId === ownerProject.environmentId)?.label ?? ownerProject.environmentId}`
+            : "";
+        const confirmed = await new Promise<boolean>((resolve) => {
           Alert.alert(
-            "Resource conflict",
-            `Multiple threads hold ${script.name}. Release the conflicting checkouts first.`,
+            "Take over resource",
+            `Taking over resource from ${owner?.title ?? lock.threadId}${environmentLabel}.`,
+            [
+              { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+              { text: "Take over", style: "destructive", onPress: () => resolve(true) },
+            ],
+            { cancelable: true, onDismiss: () => resolve(false) },
           );
-          return;
-        }
-        const lock = local?.lock ?? remote?.lock;
-        if (lock && (lock.phase === "checkout" || lock.phase === "release")) {
-          Alert.alert("Resource busy", "Resource hooks are still running.");
-          return;
-        }
-        const takingOver =
-          lock !== undefined &&
-          ((remote !== undefined && !local) || lock.threadId !== selectedThread.id);
-        if (takingOver) {
-          const ownerProject = local?.project ?? remote?.project;
-          const owner = appAtomRegistry.get(
-            environmentThreadShells.threadShellAtom({
-              environmentId: ownerProject?.environmentId ?? selectedThread.environmentId,
-              threadId: lock.threadId,
-            }),
-          );
-          const environmentLabel =
-            ownerProject && ownerProject.environmentId !== selectedThread.environmentId
-              ? ` on ${environments.find((entry) => entry.environmentId === ownerProject.environmentId)?.label ?? ownerProject.environmentId}`
-              : "";
-          const confirmed = await new Promise<boolean>((resolve) => {
-            Alert.alert(
-              "Take over resource",
-              `Taking over resource from ${owner?.title ?? lock.threadId}${environmentLabel}.`,
-              [
-                { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
-                { text: "Take over", style: "destructive", onPress: () => resolve(true) },
-              ],
-              { cancelable: true, onDismiss: () => resolve(false) },
-            );
-          });
-          if (!confirmed) return;
-        }
-        if (remote && !local) {
-          const released = await requestResource({
-            environmentId: remote.project.environmentId,
-            input: {
-              projectId: remote.project.id,
-              threadId: remote.lock.threadId,
-              script: remote.lock.script,
-              action: "force-release",
-              expectedOperationId: remote.lock.operationId,
-            },
-          });
-          if (released._tag === "Failure") {
-            if (!isAtomCommandInterrupted(released)) {
-              const error = squashAtomCommandFailure(released);
-              Alert.alert(
-                "Resource action failed",
-                error instanceof Error ? error.message : "Could not release the other checkout.",
-              );
-            }
-            return;
-          }
-        }
-        const result = await requestResource({
-          environmentId: selectedThread.environmentId,
+        });
+        if (!confirmed) return;
+      }
+      if (remote && !local) {
+        const released = await requestResource({
+          environmentId: remote.project.environmentId,
           input: {
-            projectId: selectedThreadProject.id,
-            threadId: selectedThread.id,
-            script,
-            action: local ? (takingOver ? "takeover" : "release") : "checkout",
-            ...(local ? { expectedOperationId: local.lock.operationId } : {}),
+            projectId: remote.project.id,
+            threadId: remote.lock.threadId,
+            script: remote.lock.script,
+            action: "force-release",
+            expectedOperationId: remote.lock.operationId,
           },
         });
-        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          Alert.alert(
-            "Resource action failed",
-            error instanceof Error ? error.message : "Try again.",
-          );
+        if (released._tag === "Failure") {
+          if (!isAtomCommandInterrupted(released)) {
+            const error = squashAtomCommandFailure(released);
+            Alert.alert(
+              "Resource action failed",
+              error instanceof Error ? error.message : "Could not release the other checkout.",
+            );
+          }
+          return;
         }
-        return;
       }
-
-      const targetTerminalId = resolveProjectScriptTerminalId({
-        existingTerminalIds: terminalMenuSessions.map((session) => session.terminalId),
-        ...(knownTerminalSessions === null ||
-        !readEnvironmentScope(selectedThread.environmentId, AuthTerminalReadScope)
-          ? { uniqueSuffix: uuidv4() }
-          : {}),
-        hasRunningTerminal: terminalMenuSessions.some(
-          (session) => session.status === "running" || session.status === "starting",
-        ),
-      });
-      const preferredWorktreePath = resolvePreferredThreadWorktreePath({
-        threadShellWorktreePath: selectedThread.worktreePath ?? null,
-        threadDetailWorktreePath: selectedThreadDetailWorktreePath,
-      });
-      const cwd = projectScriptCwd({
-        project: { cwd: selectedThreadProject.workspaceRoot },
-        worktreePath: preferredWorktreePath,
-      });
-      const env = projectScriptRuntimeEnv({
-        project: { cwd: selectedThreadProject.workspaceRoot },
-        worktreePath: preferredWorktreePath,
-      });
-      stagePendingTerminalLaunch({
-        target: {
-          environmentId: selectedThread.environmentId,
+      const result = await requestResource({
+        environmentId: selectedThread.environmentId,
+        input: {
+          projectId: selectedThreadProject.id,
           threadId: selectedThread.id,
-          terminalId: targetTerminalId,
-        },
-        launch: {
-          cwd,
-          worktreePath: preferredWorktreePath,
-          env,
-          initialInput: `${script.command}\r`,
+          script,
+          action: local ? (takingOver ? "takeover" : "release") : "checkout",
+          ...(local ? { expectedOperationId: local.lock.operationId } : {}),
         },
       });
-      terminalDebugLog("project-script:staged", {
-        scriptId: script.id,
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        Alert.alert(
+          "Resource action failed",
+          error instanceof Error ? error.message : "Try again.",
+        );
+      }
+      return;
+    }
+
+    const targetTerminalId = resolveProjectScriptTerminalId({
+      existingTerminalIds: terminalMenuSessions.map((session) => session.terminalId),
+      ...(knownTerminalSessions === null ||
+      !readEnvironmentScope(selectedThread.environmentId, AuthTerminalReadScope)
+        ? { uniqueSuffix: uuidv4() }
+        : {}),
+      hasRunningTerminal: terminalMenuSessions.some(
+        (session) => session.status === "running" || session.status === "starting",
+      ),
+    });
+    const preferredWorktreePath = resolvePreferredThreadWorktreePath({
+      threadShellWorktreePath: selectedThread.worktreePath ?? null,
+      threadDetailWorktreePath: selectedThreadDetailWorktreePath,
+    });
+    const cwd = projectScriptCwd({
+      project: { cwd: selectedThreadProject.workspaceRoot },
+      worktreePath: preferredWorktreePath,
+    });
+    const env = projectScriptRuntimeEnv({
+      project: { cwd: selectedThreadProject.workspaceRoot },
+      worktreePath: preferredWorktreePath,
+    });
+    stagePendingTerminalLaunch({
+      target: {
+        environmentId: selectedThread.environmentId,
+        threadId: selectedThread.id,
         terminalId: targetTerminalId,
+      },
+      launch: {
         cwd,
         worktreePath: preferredWorktreePath,
-      });
+        env,
+        initialInput: projectScriptTerminalInput(script.command),
+      },
+    });
+    terminalDebugLog("project-script:staged", {
+      scriptId: script.id,
+      terminalId: targetTerminalId,
+      cwd,
+      worktreePath: preferredWorktreePath,
+    });
 
-      void navigation.navigate("ThreadTerminal", {
-        environmentId: String(selectedThread.environmentId),
-        threadId: String(selectedThread.id),
-        terminalId: targetTerminalId,
-      });
-    },
-    [
-      requestResource,
-      navigation,
-      selectedThread,
-      selectedThreadDetailWorktreePath,
-      selectedThreadProject,
-      groupedLocks,
-      environments,
-      terminalMenuSessions,
-      knownTerminalSessions,
-    ],
-  );
+    void navigation.navigate("ThreadTerminal", {
+      environmentId: String(selectedThread.environmentId),
+      threadId: String(selectedThread.id),
+      terminalId: targetTerminalId,
+    });
+  };
   const threadGitControlProps = {
     environmentId: environmentIdRaw ?? "",
     threadId: threadId ?? "",
@@ -1030,14 +1029,12 @@ function ThreadRouteContent(
     onPull: gitActions.onPullSelectedThreadBranch,
     onRunAction: gitActions.onRunSelectedThreadGitAction,
   };
-  const handleEditFailedCreation = useCallback(async () => {
+  const handleEditFailedCreation = async () => {
     const creation = selectedThreadCreation?.message;
     if (!creation?.creation || routeThreadIdentity === null) {
       return;
     }
-    // The drain restored the prompt and attachments into the recovery draft
-    // the rejected creation owns. Open that draft by id: without it the sheet
-    // mints a fresh empty one and the restored content is unreachable.
+    // Open recovery by draft id or the sheet creates an empty draft and strands restored content.
     try {
       await recoverFailedThreadDraft(creation);
     } catch (error) {
@@ -1049,9 +1046,8 @@ function ThreadRouteContent(
     }
     clearPendingThreadCreationOutcome(routeThreadIdentity);
     navigation.dispatch(
-      StackActions.replace("NewTaskSheet", {
-        screen: "NewTaskDraft",
-        params: {
+      StackActions.replace("Thread", {
+        draft: {
           draftId: restoredNewTaskDraftKey(creation.messageId),
           environmentId: String(creation.environmentId),
           projectId: String(creation.creation.projectId),
@@ -1059,7 +1055,7 @@ function ThreadRouteContent(
         },
       }),
     );
-  }, [navigation, routeThreadIdentity, selectedThreadCreation, selectedThreadProject]);
+  };
   const setupTurnStartedAt = composer.selectedThreadActivityRun?.startedAt ?? null;
   const { snapshot: worktreeSetupSnapshot, visible: worktreeSetup } = useWorktreeSetup({
     environmentId: selectedThread?.environmentId ?? null,
@@ -1083,66 +1079,59 @@ function ThreadRouteContent(
       ? worktreeSetup.phase === "running" && !worktreeSetupAgentStarted(worktreeSetup)
       : (selectedThreadDetail?.runs.some((run) => run.status === "preparing") ?? false);
   const cancelWorktreeSetup = useAtomCommand(vcsEnvironment.cancelWorktreeSetup);
-  const handleCancelWorktreeSetup = useCallback(() => {
+  const handleCancelWorktreeSetup = () => {
     if (!selectedThread) return;
     void cancelWorktreeSetup({
       environmentId: selectedThread.environmentId,
       input: { threadId: selectedThread.id },
     });
-  }, [cancelWorktreeSetup, selectedThread]);
+  };
   const startLocalThread = useAtomCommand(threadEnvironment.startTurn, "work locally");
   const localResendBusy = useRef(false);
   const setupMessage = selectedThreadDetail?.messages.find((message) => message.role === "user");
-  const handleWorkLocally = useCallback(async () => {
+  const handleWorkLocally = async () => {
     if (!selectedThread || !selectedThreadProject || !setupMessage || localResendBusy.current)
       return;
     localResendBusy.current = true;
-    try {
-      const result = await cancelWorktreeSetup({
-        environmentId: selectedThread.environmentId,
-        input: { threadId: selectedThread.id },
-      });
-      if (result._tag !== "Success" || !result.value.cancelled) return;
-      // V2 accepts the launch before setup runs, so cancellation never rejects
-      // the original outbox delivery. Reuse the server-owned prompt and uploads.
-      const metadata = makeTurnCommandMetadata();
-      const launched = await startLocalThread({
-        environmentId: selectedThread.environmentId,
-        input: buildProjectThreadStartTurnInput({
-          ...metadata,
-          projectId: selectedThread.projectId,
-          projectCwd: selectedThreadProject.workspaceRoot,
-          text: setupMessage.text,
-          ...(setupMessage.context ? { context: setupMessage.context } : {}),
-          uploadedAttachments: setupMessage.attachments,
-          modelSelection: selectedThread.modelSelection,
-          runtimeMode: selectedThread.runtimeMode,
-          interactionMode: selectedThread.interactionMode,
-          workspaceMode: "local",
-          branch: null,
-          worktreePath: null,
-          startFromOrigin: false,
-          worktreeBranchName: "",
-        }),
-      });
-      if (launched._tag !== "Success") return;
-      navigation.dispatch(
-        StackActions.replace("Thread", {
-          environmentId: String(selectedThread.environmentId),
-          threadId: metadata.threadId,
-        }),
-      );
-    } finally {
+    const result = await cancelWorktreeSetup({
+      environmentId: selectedThread.environmentId,
+      input: { threadId: selectedThread.id },
+    });
+    if (result._tag !== "Success" || !result.value.cancelled) {
       localResendBusy.current = false;
+      return;
     }
-  }, [
-    cancelWorktreeSetup,
-    navigation,
-    selectedThread,
-    selectedThreadProject,
-    setupMessage,
-    startLocalThread,
-  ]);
+    // V2 accepts launch before setup; cancellation cannot reject that delivery, so reuse server-owned prompt and uploads.
+    const metadata = makeTurnCommandMetadata();
+    const launched = await startLocalThread({
+      environmentId: selectedThread.environmentId,
+      input: buildProjectThreadStartTurnInput({
+        ...metadata,
+        projectId: selectedThread.projectId,
+        projectCwd: selectedThreadProject.workspaceRoot,
+        text: setupMessage.text,
+        titleText: selectedThread.title,
+        ...(setupMessage.context ? { context: setupMessage.context } : {}),
+        uploadedAttachments: setupMessage.attachments,
+        modelSelection: selectedThread.modelSelection,
+        runtimeMode: selectedThread.runtimeMode,
+        interactionMode: selectedThread.interactionMode,
+        workspaceMode: "local",
+        branch: null,
+        worktreePath: null,
+        startFromOrigin: false,
+        worktreeBranchName: "",
+      }),
+    });
+    localResendBusy.current = false;
+    if (launched._tag !== "Success") return;
+    navigation.dispatch(
+      StackActions.replace("Thread", {
+        environmentId: String(selectedThread.environmentId),
+        threadId: metadata.threadId,
+      }),
+    );
+  };
   const creationState = ((): ThreadDetailScreenProps["creationState"] => {
     if (selectedThreadCreation === null) {
       return awaitingBootstrapTurn
@@ -1170,9 +1159,7 @@ function ThreadRouteContent(
     return <OpeningThreadLoadingScreen />;
   }
 
-  // A queued creation renders as ready content: its prompt is the whole
-  // conversation until the server creates the thread. The subscription's
-  // not-found error for that window is expected, not a load failure.
+  // Queued creation displays its prompt before server creation; temporary not-found is expected.
   const contentPresentation =
     creationState !== null
       ? { kind: "ready" as const }
@@ -1191,7 +1178,7 @@ function ThreadRouteContent(
         onOpenPullRequest={openPullRequest}
       />
 
-      <ThreadPane>
+      <>
         {selectedThread &&
           selectedThreadProject?.resourceLocks
             ?.filter((lock) => lock.threadId === selectedThread.id)
@@ -1257,7 +1244,26 @@ function ThreadRouteContent(
               </View>
             ))}
         <ResourceActionLogs turnItems={selectedThreadDetail?.turnItems ?? []} />
-        <ThreadDetailScreen
+        <ThreadScreenBinding
+          header={
+            props.inspectorPresentation ? null : (
+              <ThreadHeader
+                title={selectedThread.title}
+                subtitle={headerSubtitle}
+                headerColor={headerColor}
+                usesNativeHeaderGlass={usesNativeHeaderGlass}
+                gitControls={threadGitControlProps}
+                hasThreadCwd={selectedThreadCwd !== null}
+                hasWorkspaceRoot={Boolean(selectedThreadProject?.workspaceRoot)}
+                fileInspectorSupported={fileInspector.supported}
+                inspectorMode={inspectorMode}
+                onToggleInspector={handleToggleInspector}
+                onOpenGitInspector={handleOpenGitInspector}
+                onOpenFilesInspector={handleOpenFilesInspector}
+                onReturnToThread={props.onReturnToThread}
+              />
+            )
+          }
           canOperateThread={canOperateThread}
           selectedThread={selectedThreadWithDraftSettings ?? selectedThread}
           selectedThreadDetailRef={selectedThreadDetailRef}
@@ -1302,13 +1308,12 @@ function ThreadRouteContent(
               : null
           }
           activePendingApproval={requests.activePendingApproval}
+          activePendingApprovals={requests.activePendingApprovals}
           respondingApprovalId={requests.respondingApprovalId}
           activePendingUserInput={requests.activePendingUserInput}
           activePendingUserInputDrafts={requests.activePendingUserInputDrafts}
           activePendingUserInputAnswers={requests.activePendingUserInputAnswers}
           respondingUserInputId={requests.respondingUserInputId}
-          draftMessage={composer.draftMessage}
-          draftAttachments={composer.draftAttachments}
           connectionStateLabel={routeConnectionState}
           threadSyncStatus={selectedThreadDetailState.status}
           historyControls={historyControls}
@@ -1325,7 +1330,11 @@ function ThreadRouteContent(
           projectWorkspaceRoot={selectedThreadProject?.workspaceRoot ?? null}
           threadCwd={selectedThreadCwd}
           selectedThreadQueueCount={composer.selectedThreadQueueCount}
-          queuedMessages={composer.selectedThreadQueuedMessages}
+          queuedMessages={
+            selectedThreadCreation && selectedThreadCreation.outcome?.kind !== "delivered"
+              ? [selectedThreadCreation.message, ...composer.selectedThreadQueuedMessages]
+              : composer.selectedThreadQueuedMessages
+          }
           dispatchingMessageId={composer.dispatchingQueuedMessageId}
           layoutVariant={layout.variant}
           usesAutomaticContentInsets={usesNativeHeaderGlass}
@@ -1338,11 +1347,10 @@ function ThreadRouteContent(
           onRemoveDraftImage={composer.onRemoveDraftImage}
           serverConfig={serverConfig}
           onStopThread={awaitingBootstrapTurn ? handleCancelWorktreeSetup : handleStopThread}
+          onResumeQueue={composer.queueHeld ? handleResumeQueue : null}
           onSendMessage={composer.onSendMessage}
           onReconnectEnvironment={handleReconnectEnvironment}
           canSwitchThreadProvider={composer.canSwitchThreadProvider}
-          onUpdateThreadModelSelection={composer.onUpdateModelSelection}
-          onUpdateThreadRuntimeMode={composer.onUpdateRuntimeMode}
           onUpdateThreadInteractionMode={composer.onUpdateInteractionMode}
           onRespondToApproval={requests.onRespondToApproval}
           onSelectUserInputOption={requests.onSelectUserInputOption}
@@ -1350,30 +1358,32 @@ function ThreadRouteContent(
           onSubmitUserInput={requests.onSubmitUserInput}
           onDismissUserInput={requests.onDismissUserInput}
         />
-      </ThreadPane>
+      </>
     </>
   );
 
   return (
     <>
       {activeInspectorRenderer ? <InspectorPaneRoleActivation /> : null}
-      <ThreadHeader
-        title={selectedThread.title}
-        subtitle={headerSubtitle}
-        headerColor={headerColor}
-        usesNativeHeaderGlass={usesNativeHeaderGlass}
-        gitControls={threadGitControlProps}
-        hasThreadCwd={selectedThreadCwd !== null}
-        hasWorkspaceRoot={Boolean(selectedThreadProject?.workspaceRoot)}
-        fileInspectorSupported={fileInspector.supported}
-        inspectorMode={inspectorMode}
-        onToggleInspector={handleToggleInspector}
-        onOpenGitInspector={handleOpenGitInspector}
-        onOpenFilesInspector={handleOpenFilesInspector}
-        onReturnToThread={props.onReturnToThread}
-      />
 
       {renderThreadRouteBody()}
     </>
+  );
+}
+
+export function FullscreenThreadRouteScreen(
+  props: StaticScreenProps<{
+    readonly environmentId: string;
+    readonly threadId: string;
+  }>,
+) {
+  const navigation = useNavigation();
+  return (
+    <InspectorContentScope>
+      <ThreadRouteScreen
+        route={props.route}
+        inspectorPresentation={{ onClose: () => navigation.goBack() }}
+      />
+    </InspectorContentScope>
   );
 }

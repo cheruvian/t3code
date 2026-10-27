@@ -12,7 +12,14 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 import { ThreadFindBar } from "./ThreadFindBar";
 import { useThreadFind } from "./useThreadFind";
-import { requestThreadFindOpen } from "./threadFindActionBus";
+import { openThreadFind } from "./threadFindStore";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+const projectionState = vi.hoisted(() => ({
+  projection: null as Pick<OrchestrationV2ThreadProjection, "visibleTurnItems" | "runs"> | null,
+}));
+vi.mock("~/state/entities", () => ({
+  useThreadProjection: () => ({ projection: projectionState.projection }),
+}));
 
 vi.mock("../ui/toast", () => ({ toastManager: { add: vi.fn() } }));
 const search = vi.hoisted(() => vi.fn());
@@ -54,6 +61,7 @@ it("finds loaded messages without server search or rendered rows and wraps navig
       },
     })),
   };
+  projectionState.projection = content;
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -64,7 +72,6 @@ it("finds loaded messages without server search or rendered rows and wraps navig
       thread: { environmentId: EnvironmentId.make("offline"), threadId },
       enabled: true,
       serverSearch: false,
-      content,
     });
     useLayoutEffect(() => {
       find = state;
@@ -73,7 +80,7 @@ it("finds loaded messages without server search or rendered rows and wraps navig
       <ThreadFindBar
         {...state.barProps}
         onClose={() => {
-          state.close();
+          state.barProps.onClose();
           onClose();
         }}
       />
@@ -81,7 +88,9 @@ it("finds loaded messages without server search or rendered rows and wraps navig
   }
   try {
     await act(async () => root.render(<Probe />));
-    await act(async () => requestThreadFindOpen());
+    await act(async () =>
+      openThreadFind(scopedThreadKey({ environmentId: EnvironmentId.make("offline"), threadId })),
+    );
     const input = host.querySelector("input")!;
     expect(document.activeElement).toBe(input);
     await act(async () => {

@@ -106,6 +106,14 @@ import Migration0062 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts"
 
 import Migration0063 from "./Migrations/063_ThreadWorkspaceMoveFence.ts";
 
+import Migration0074 from "./Migrations/063_DropUnusedV1Projections.ts";
+import Migration0075 from "./Migrations/064_CanonicalizeThreadPullRequestLinks.ts";
+import Migration0076 from "./Migrations/065_CodexUsageNativeTurnIndex.ts";
+import Migration0077 from "./Migrations/066_RepairClientSettlementTimestamps.ts";
+import Migration0078 from "./Migrations/067_WebhookDedupe.ts";
+import Migration0079 from "./Migrations/068_ShellStopRequestIndex.ts";
+import Migration0080 from "./Migrations/069_ThreadMessageSearch.ts";
+
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
@@ -180,6 +188,13 @@ export const migrationEntries = [
   [71, "ThreadFailureLookupIndex", Migration0071],
   [72, "AssistantMessageShellIndex", Migration0072],
   [73, "LegacyV1ActivityImport", Migration0073],
+  [74, "DropUnusedV1Projections", Migration0074],
+  [75, "CanonicalizeThreadPullRequestLinks", Migration0075],
+  [76, "CodexUsageNativeTurnIndex", Migration0076],
+  [77, "RepairClientSettlementTimestamps", Migration0077],
+  [78, "WebhookDedupe", Migration0078],
+  [79, "ShellStopRequestIndex", Migration0079],
+  [80, "ThreadMessageSearch", Migration0080],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

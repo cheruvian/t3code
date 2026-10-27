@@ -37,7 +37,7 @@
     }
   },
   "scripts": {
-    "typecheck": "node ../../scripts/effect-typescript.ts --noEmit",
+    "typecheck": "tsc --noEmit",
     "test": "vp test run --config ../../vite.config.ts --dir .",
     "generate": "node scripts/generate.ts"
   },

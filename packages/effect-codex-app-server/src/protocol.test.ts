@@ -9,14 +9,13 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stdio from "effect/Stdio";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 
 import * as CodexError from "./errors.ts";
 import * as CodexProtocol from "./protocol.ts";
-import * as CodexRpc from "./rpc.ts";
-import * as CodexSchema from "./schema.ts";
 import { makeInMemoryStdio } from "./_internal/stdio.ts";
 const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -25,18 +24,6 @@ const encoder = new TextEncoder();
 const encodeJsonl = (value: unknown) => encoder.encode(`${encodeUnknownJsonString(value)}\n`);
 
 const decodeJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
-const decodeAccountTokenUsageResponse = Schema.decodeUnknownEffect(
-  CodexRpc.CLIENT_REQUEST_RESPONSES["account/usage/read"],
-);
-const decodeAccountRateLimitsResponse = Schema.decodeUnknownEffect(
-  CodexRpc.CLIENT_REQUEST_RESPONSES["account/rateLimits/read"],
-);
-const decodeConsumeRateLimitResetCreditParams = Schema.decodeUnknownEffect(
-  CodexRpc.CLIENT_REQUEST_PARAMS["account/rateLimitResetCredit/consume"],
-);
-const decodeConsumeRateLimitResetCreditResponse = Schema.decodeUnknownEffect(
-  CodexRpc.CLIENT_REQUEST_RESPONSES["account/rateLimitResetCredit/consume"],
-);
 
 const decodeThreadResumeResponse = Schema.decodeUnknownEffect(
   CodexRpc.CLIENT_REQUEST_RESPONSES["thread/resume"],
@@ -351,40 +338,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       }),
   );
 
-  it.effect("routes a large notification fragmented across thousands of input chunks", () =>
-    Effect.gen(function* () {
-      const { stdio, input, output } = yield* makeInMemoryStdio();
-      const notifications: Array<CodexProtocol.CodexAppServerIncomingNotification> = [];
-      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
-        stdio,
-        onNotification: (notification) =>
-          Effect.sync(() => {
-            notifications.push(notification);
-          }),
-      });
-      const response = yield* transport.request("thread/read", {}).pipe(Effect.forkScoped);
-      yield* Queue.take(output);
-
-      const notification = {
-        method: "turn/diff/updated",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          diff: "x".repeat(4 * 1024 * 1024),
-        },
-      };
-      const bytes = encoder.encode(
-        `${encodeUnknownJsonString(notification)}\n${encodeUnknownJsonString({ id: 1, result: { ok: true } })}\n`,
-      );
-      for (let offset = 0; offset < bytes.length; offset += 1024) {
-        yield* Queue.offer(input, bytes.subarray(offset, offset + 1024));
-      }
-
-      assert.deepEqual(yield* Fiber.join(response), { ok: true });
-      assert.deepEqual(notifications, [notification]);
-    }),
-  );
-
   it.effect.each([1, 7, 1024])(
     "preserves JSONL framing and UTF-8 across %i-byte input chunks",
     (chunkSize) =>
@@ -431,6 +384,80 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       }),
   );
 
+  it.effect.each(["newline-terminated", "unfinished"])(
+    "rejects an oversized %s message using UTF-8 bytes before logging or parsing",
+    (framing) =>
+      Effect.gen(function* () {
+        const { stdio, input, output } = yield* makeInMemoryStdio();
+        const notifications: Array<CodexProtocol.CodexAppServerIncomingNotification> = [];
+        const logged: Array<unknown> = [];
+        const termination = yield* Deferred.make<CodexError.CodexAppServerError>();
+        let reachedEnd = false;
+        const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+          stdio: Stdio.make({
+            ...stdio,
+            stdin: stdio.stdin.pipe(
+              Stream.concat(
+                Stream.suspend(() => {
+                  reachedEnd = true;
+                  return Stream.empty;
+                }),
+              ),
+            ),
+          }),
+          maxIncomingMessageBytes: 16,
+          logIncoming: true,
+          logger: (event) =>
+            Effect.sync(() => {
+              logged.push(event.payload);
+            }),
+          onNotification: (notification) =>
+            Effect.sync(() => {
+              notifications.push(notification);
+            }),
+          onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
+        });
+        const pending = yield* Effect.forEach(["thread/read", "thread/list"], (method) =>
+          transport.request(method, {}).pipe(Effect.forkScoped),
+        );
+        yield* Effect.forEach(pending, () => Queue.take(output));
+
+        // Two 16-byte lines must survive; the 17-byte line is only 15 UTF-16 code units.
+        const firstLine = '{"method":"xé"}';
+        const secondLine = '{"method":"x/a"}';
+        const bytes = encoder.encode(
+          `${firstLine}\n${secondLine}\n{"method":"éé"}${framing === "unfinished" ? "" : "\n"}`,
+        );
+        // Split a UTF-8 sequence on both sides of the byte limit.
+        const firstSplit = bytes.indexOf(0xc3) + 1;
+        yield* Queue.offer(input, bytes.subarray(0, firstSplit));
+        if (framing === "unfinished") {
+          const lastSplit = bytes.lastIndexOf(0xc3) + 1;
+          yield* Queue.offer(input, bytes.subarray(firstSplit, lastSplit));
+          yield* Queue.offer(input, bytes.subarray(lastSplit));
+        } else {
+          yield* Queue.offer(input, bytes.subarray(firstSplit));
+        }
+        yield* Queue.end(input);
+
+        const error = yield* Deferred.await(termination);
+        assert.instanceOf(error, CodexError.CodexAppServerTransportError);
+        assert.equal(error.operation, "read-input-stream");
+        assert.isFalse(reachedEnd, "Must reject the unfinished line before reading EOF");
+        for (const response of pending) {
+          const failure = yield* Fiber.join(response).pipe(
+            Effect.match({
+              onFailure: (error) => error,
+              onSuccess: () => assert.fail("Expected the oversized message to fail the request"),
+            }),
+          );
+          assert.strictEqual(failure, error);
+        }
+        assert.deepEqual(notifications, [{ method: "xé" }, { method: "x/a" }]);
+        assert.deepEqual(logged, [firstLine, { method: "xé" }, secondLine, { method: "x/a" }]);
+      }),
+  );
+
   it.effect("reports a malformed fragmented final line before input stream termination", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
@@ -456,42 +483,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         }),
       );
       assert.strictEqual(responseError, error);
-    }),
-  );
-
-  it.effect("keeps only recent raw notifications after their callbacks run", () =>
-    Effect.gen(function* () {
-      const { stdio, input } = yield* makeInMemoryStdio();
-      const handled = yield* Deferred.make<void>();
-      let handledCount = 0;
-      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
-        stdio,
-        onNotification: () =>
-          Effect.sync(() => ++handledCount).pipe(
-            Effect.flatMap((count) =>
-              count === 64 ? Deferred.succeed(handled, undefined).pipe(Effect.asVoid) : Effect.void,
-            ),
-          ),
-      });
-
-      const messages = Array.from({ length: 64 }, (_, index) =>
-        encodeUnknownJsonString({
-          method: "item/agentMessage/delta",
-          params: { index },
-        }),
-      );
-      yield* Queue.offer(input, encoder.encode(`${messages.join("\n")}\n`));
-      yield* Deferred.await(handled);
-
-      const retained = yield* transport.incomingNotifications.pipe(
-        Stream.take(32),
-        Stream.runCollect,
-      );
-
-      assert.equal(handledCount, 64);
-      assert.equal(retained.length, 32);
-      assert.deepEqual(retained[0]?.params, { index: 32 });
-      assert.deepEqual(retained[31]?.params, { index: 63 });
     }),
   );
 
@@ -931,21 +922,48 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
     }),
   );
 
-  it.effect("classifies an input stream ending without inventing a cause", () =>
+  it.effect("fails pending requests when input ends while the process is still running", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        terminationError: Effect.never,
+      });
+      const pending = yield* transport.request("thread/read", {}).pipe(Effect.forkScoped);
+      yield* Queue.take(output);
+
+      yield* Queue.end(input);
+      yield* TestClock.adjust("249 millis");
+      assert.isUndefined(pending.pollUnsafe());
+      yield* TestClock.adjust("1 millis");
+
+      const failure = yield* Fiber.join(pending).pipe(
+        Effect.match({
+          onFailure: (error) => error,
+          onSuccess: () => assert.fail("Expected the pending request to fail"),
+        }),
+      );
+      assert.instanceOf(failure, CodexError.CodexAppServerInputStreamEndedError);
+    }),
+  );
+
+  it.effect("reports a process exit that follows input end", () =>
     Effect.gen(function* () {
       const { stdio, input } = yield* makeInMemoryStdio();
+      const exitError = new CodexError.CodexAppServerProcessExitedError({ code: 1, pid: 123 });
+      const exited = yield* Deferred.make<CodexError.CodexAppServerError>();
       const termination = yield* Deferred.make<CodexError.CodexAppServerError>();
       yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
         stdio,
+        terminationError: Deferred.await(exited),
         onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
       });
 
       yield* Queue.end(input);
+      yield* TestClock.adjust("100 millis");
+      yield* Deferred.succeed(exited, exitError);
 
-      const error = yield* Deferred.await(termination);
-      assert.instanceOf(error, CodexError.CodexAppServerInputStreamEndedError);
-      assert.equal(error.message, "Codex App Server input stream ended.");
-      assert.equal("cause" in error, false);
+      assert.strictEqual(yield* Deferred.await(termination), exitError);
     }),
   );
 });

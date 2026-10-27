@@ -43,17 +43,17 @@ vi.mock("react-native-enriched-markdown", async () => {
     // The native parser exposes eligible block images through this public media callback.
     EnrichedMarkdownText: ({
       markdown,
-      renderMedia,
+      renderers,
       ...rest
     }: {
       markdown: string;
-      renderMedia?: (asset: { url: string }) => ReactNode;
+      renderers?: { image: (asset: { url: string; altText: string; title: string }) => ReactNode };
     }) =>
       createElement(
         "EnrichedMarkdownText",
-        { markdown, renderMedia, ...rest },
+        { markdown, renderers, ...rest },
         ...[...markdown.matchAll(/!\[[^\]]*\]\((t3-mermaid:[^)]+)\)/g)].map((match) =>
-          renderMedia?.({ url: match[1]! }),
+          renderers?.image({ url: match[1]!, altText: "", title: "" }),
         ),
       ),
   };
@@ -69,7 +69,6 @@ const style: NativeMarkdownTextStyle = {
   codeBackgroundColor: "#111",
   codeBlockBackgroundColor: "#111",
   fileTextColor: "#eee",
-  skillTextColor: "#eee",
   quoteMarkerColor: "#aaa",
   dividerColor: "#333",
   fontSize: 14,
@@ -243,21 +242,7 @@ it("routes file presses to the owning host and retains per-occurrence source for
     native.props.onLinkPress({ url: urls[1] });
   });
   expect(onLinkPress).toHaveBeenCalledWith("/host/tree/report.md");
-  await act(async () =>
-    native.props.onDocumentAssets({
-      assets: [
-        {
-          id: "file-1",
-          kind: "link",
-          url: urls[0],
-          altText: "",
-          title: "",
-          placement: "inline",
-          eligible: true,
-        },
-      ],
-    }),
-  );
+  await act(async () => native.props.onLinksChange([{ url: urls[0] }]));
   const updated = renderer!.root.find(
     (node) => node.type === ("EnrichedMarkdownText" as ReactTestInstance["type"]),
   );

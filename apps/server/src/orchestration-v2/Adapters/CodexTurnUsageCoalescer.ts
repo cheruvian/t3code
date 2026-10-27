@@ -22,13 +22,12 @@ export const makeCodexTurnUsageCoalescer = Effect.fn("makeCodexTurnUsageCoalesce
   const closeDone = yield* Deferred.make<void>();
   let closed = false;
 
-  const emitLatest = (state: PendingUsage<V>) =>
-    Effect.gen(function* () {
-      if (Option.isSome(state.value)) {
-        yield* input.emit(state.value.value);
-        state.value = Option.none();
-      }
-    });
+  const emitLatest = Effect.fn("emitLatest")(function* (state: PendingUsage<V>) {
+    if (Option.isSome(state.value)) {
+      yield* input.emit(state.value.value);
+      state.value = Option.none();
+    }
+  });
   const close = Effect.uninterruptible(
     Effect.gen(function* () {
       if (closed) return yield* Deferred.await(closeDone);
@@ -87,26 +86,25 @@ export const makeCodexTurnUsageCoalescer = Effect.fn("makeCodexTurnUsageCoalesce
           );
         }),
       ),
-    flush: (key: string) =>
-      Effect.gen(function* () {
-        const state = keys.get(key);
-        if (state === undefined || closed) return;
-        let worker: Fiber.Fiber<void> | null = null;
-        yield* state.lock
-          .withPermit(
-            Effect.gen(function* () {
-              if (closed) return;
-              worker = state.worker?.fiber ?? null;
-              state.worker = null;
-              yield* emitLatest(state);
-            }),
-          )
-          .pipe(
-            Effect.ensuring(
-              Effect.suspend(() => (worker === null ? Effect.void : Fiber.interrupt(worker))),
-            ),
-          );
-      }),
+    flush: Effect.fn("flush")(function* (key: string) {
+      const state = keys.get(key);
+      if (state === undefined || closed) return;
+      let worker: Fiber.Fiber<void> | null = null;
+      yield* state.lock
+        .withPermit(
+          Effect.gen(function* () {
+            if (closed) return;
+            worker = state.worker?.fiber ?? null;
+            state.worker = null;
+            yield* emitLatest(state);
+          }),
+        )
+        .pipe(
+          Effect.ensuring(
+            Effect.suspend(() => (worker === null ? Effect.void : Fiber.interrupt(worker))),
+          ),
+        );
+    }),
     close,
   };
 });
