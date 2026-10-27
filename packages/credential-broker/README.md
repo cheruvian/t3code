@@ -43,6 +43,37 @@ T3 hosts them through its hidden worker command so Electron and single-executabl
 runtimes preserve IPC and cleanup. Direct package use embeds those programs. After changing either program, run
 node scripts/embed-programs.mjs. The check command detects stale embedded source.
 
+## Operator vault search
+
+Connected human clients can send the `search` action with a request ID and a
+query of at most 200 characters. A string (including an empty string to browse)
+searches saved item names, usernames and hostnames; omitting `query` restores
+hostname matches. Results are limited to 100 compatible items and contain only
+selection metadata. Queries and results are not returned to the requesting agent.
+Search is submitted explicitly rather than run on every keystroke.
+
+Bitwarden's basic CLI search does not index SSH custom fields, so manual search
+filters sanitized metadata from `list items` inside the provider. Deleted items
+and incompatible types are excluded. Overlapping searches publish only the latest
+results; denial or cancellation prevents a late search from reviving a request.
+
+A result with `hostMismatch` can be approved once. Only that human selection
+permits delivery without the hostname check; item ID, type and deletion checks
+still apply. The request's destination and command are unchanged.
+
+For a mismatched result, the human's always-allow decision saves the requested
+host to that item before creating the grant. Login items append a URI; SSH items
+append to the `t3-ssh-hosts` Text field. Existing hosts and other fields are
+preserved. The Bitwarden edit payload goes through stdin. The response must
+confirm the new host, and delivery rechecks it without a mismatch override.
+Failed saves leave the request pending with no grant or consumer; cancellation
+during a save prevents granting or delivering, even if Bitwarden saved the host.
+Searching alone never edits vault entries.
+
+Normal hostname selections still recheck the binding before delivery. All actions
+use the existing human-only RPC and permission checks; no search capability is
+exposed to agents or the helper API.
+
 ## Existing browser tabs
 
 Pass `browserTabId` from `preview_status` to `credential_broker_exec` when the
@@ -102,3 +133,50 @@ Tests use fake credentials. They exercise the T3 CLI transport, subprocess super
 raw/encoded output suppression, permissions, expiry, cancellation, restart
 recovery, private Bitwarden child environments, site filtering, scoped grants,
 remote visibility acknowledgment, five-minute notices, dismissal, and revocation.
+
+## SSH private key delivery
+
+`field: "sshKey"` delivers the selected Bitwarden SSH item's `sshKey.privateKey`
+as a UTF-8 private key file at `CB_CREDENTIAL_FILE`. SSH items (`type: 5`) are
+matched by a Text custom field (`type: 0`) named `t3-ssh-hosts`, containing
+comma- or whitespace-separated exact hostnames. Search and delivery both check
+the binding; sibling domains, deleted items, and login items do not match.
+Without operator search support, missing keys return `no_matching_ssh_key`.
+T3 keeps the request open for manual vault search instead. Create/import SSH items in Bitwarden;
+the broker's inline login creation is unavailable for SSH requests.
+
+An approved consumer can pass the temporary path straight to OpenSSH without
+reading the private key or adding it to an agent:
+
+```js
+import { spawnSync } from "node:child_process";
+
+const result = spawnSync(
+  "ssh",
+  [
+    "-i",
+    process.env.CB_CREDENTIAL_FILE,
+    "-o",
+    "IdentitiesOnly=yes",
+    "-o",
+    "IdentityAgent=none",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "StrictHostKeyChecking=yes",
+    "deploy@host.example.com",
+    "true",
+  ],
+  { stdio: "ignore" },
+);
+process.exitCode = result.status ?? 1;
+```
+
+Request `site: "host.example.com"` for this consumer. The host key must already
+be trusted, and the destination account must authorize the public key. The
+broker does not provision hosts, intercept shell commands, or supply a separate
+key passphrase. Use an unencrypted key inside the encrypted Bitwarden vault.
+Try existing SSH access first; authentication failures can lead to a key request,
+while network errors and host-key mismatches need their own diagnosis. A consumer
+may write an explicitly non-sensitive receipt; its stdout and stderr are discarded.
+The CLI accepts `--field sshKey` through the same T3 approval path.

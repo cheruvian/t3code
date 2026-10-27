@@ -9,18 +9,14 @@ import { createPortal } from "react-dom";
 import { useAtomValue } from "@effect/atom-react";
 import {
   AuthAccessReadScope,
-  resolveEnvironmentMachineKind,
   type CredentialApproval,
   type CredentialBrokerAction,
   type CredentialNotice,
   type EnvironmentId,
 } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
-import { KeyRoundIcon, ShieldCheckIcon } from "lucide-react";
+import { KeyRoundIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ProjectFavicon } from "./ProjectFavicon";
-import { EnvironmentIcon } from "./EnvironmentIcon";
-import { useProject } from "../state/entities";
 import { credentialBroker } from "../state/credentialBroker";
 import { useEnvironmentIds, useEnvironment } from "../state/environments";
 import { useEnvironmentScope } from "../state/session";
@@ -144,6 +140,8 @@ export function EnvironmentBroker({
   const setOpen = (open: boolean) => setPresentation({ ...nextPresentation, open });
   const active =
     state?.requests.filter((r) => ["running", "preparing", "saving"].includes(r.state)) ?? [];
+  const hasRequests = pending.length + active.length > 0;
+  const locked = state?.status === "locked" || state?.status === "unlocking";
   useEffect(() => {
     report(environmentId, open);
     return () => report(environmentId, false);
@@ -163,26 +161,25 @@ export function EnvironmentBroker({
         </Button>
       </div>
       <Dialog open={focused && open} onOpenChange={setOpen}>
-        <DialogPopup size={pending.length ? "wide" : "default"} showCloseButton>
+        <DialogPopup showCloseButton>
           <DialogHeader>
-            <DialogTitle>{pending.length ? "Credential request" : "Credential access"}</DialogTitle>
-            {pending.length === 0 && (
-              <p className="text-sm text-muted-foreground">{environmentLabel}</p>
-            )}
+            <DialogTitle>
+              {locked
+                ? "Unlock Bitwarden"
+                : hasRequests
+                  ? "Credential request"
+                  : "Credential access"}
+            </DialogTitle>
+            {!hasRequests && <p className="text-sm text-muted-foreground">{environmentLabel}</p>}
             <DialogDescription>
-              {pending.length
-                ? "Review who is asking and choose what to share. Hide this request to keep working; it returns when you open its thread."
-                : "Manage your vault and saved permissions."}
+              {locked
+                ? "Use your Bitwarden master password to unlock your saved credentials."
+                : hasRequests
+                  ? "Choose a credential and how long to allow access."
+                  : "Manage your vault and saved permissions."}
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
-            {pending.length > 0 && (
-              <div className="mb-3 flex justify-end">
-                <Button variant="outline" size="sm" onClick={() => setOpen(false)}>
-                  Hide for now
-                </Button>
-              </div>
-            )}
             <div className="space-y-4">
               {error && (
                 <p role="alert" className="text-sm text-destructive">
@@ -212,22 +209,23 @@ export function EnvironmentBroker({
                   unlock={(password, executable) => act({ type: "unlock", password, executable })}
                 />
               )}
-              {pending
-                .toSorted(
-                  (a, b) =>
-                    Number(b.origin?.threadId === viewedThread?.threadId) -
-                    Number(a.origin?.threadId === viewedThread?.threadId),
-                )
-                .map((request) => (
-                  <ApprovalCard
-                    key={request.requestId}
-                    request={request}
-                    environmentLabel={environmentLabel}
-                    disabled={!canAct}
-                    act={act}
-                  />
-                ))}
-              {state?.status === "ready" && pending.length === 0 && (
+              {!locked &&
+                [...pending, ...active]
+                  .toSorted(
+                    (a, b) =>
+                      Number(b.origin?.threadId === viewedThread?.threadId) -
+                      Number(a.origin?.threadId === viewedThread?.threadId),
+                  )
+                  .map((request) => (
+                    <ApprovalCard
+                      key={request.requestId}
+                      request={request}
+                      environmentLabel={environmentLabel}
+                      disabled={!canAct}
+                      act={act}
+                    />
+                  ))}
+              {state?.status === "ready" && !hasRequests && (
                 <p className="text-sm text-muted-foreground">
                   Your vault is ready. New requests ask for permission here.
                 </p>
@@ -256,25 +254,7 @@ export function EnvironmentBroker({
                           : `Request ${request.state}.`}
                   </p>
                 ))}
-              {active.map((request) => (
-                <div
-                  key={request.requestId}
-                  className="flex items-center justify-between gap-3 rounded-xl border p-3 text-sm"
-                >
-                  <span>
-                    {request.site} · {request.state}
-                  </span>
-                  <Button
-                    variant="destructive-outline"
-                    size="sm"
-                    disabled={!canAct}
-                    onClick={() => void act({ type: "stop", requestId: request.requestId })}
-                  >
-                    Stop
-                  </Button>
-                </div>
-              ))}
-              <details open={pending.length === 0} className="space-y-3 border-t pt-3">
+              <details open={!hasRequests && !locked} className="space-y-3 border-t pt-3">
                 <summary className="cursor-pointer text-sm text-muted-foreground">
                   Manage access
                   {state?.grants.length ? ` · ${state.grants.length} saved permissions` : ""}
@@ -284,7 +264,8 @@ export function EnvironmentBroker({
                   <div key={grant.grantId} className="space-y-2 rounded-xl border p-3 text-sm">
                     <div className="flex items-center justify-between gap-3">
                       <span>
-                        {grant.site} · {grant.field} · {grant.maxTtl}s maximum
+                        {grant.site} · {grant.field === "sshKey" ? "SSH private key" : grant.field}{" "}
+                        · {grant.maxTtl}s maximum
                       </span>
                       <Button
                         variant="destructive-outline"
@@ -381,14 +362,17 @@ function VaultUnlock({
       <p className="text-sm">
         Unlock Bitwarden privately. The server must already be signed in with the Bitwarden CLI.
       </p>
-      <Input
-        ref={input}
-        type="password"
-        autoComplete="off"
-        maxLength={4096}
-        aria-label="Bitwarden master password"
-        disabled={busy || disabled}
-      />
+      <label className="block space-y-1.5 text-sm">
+        <span>Bitwarden master password</span>
+        <Input
+          ref={input}
+          type="password"
+          autoComplete="off"
+          maxLength={4096}
+          aria-label="Bitwarden master password"
+          disabled={busy || disabled}
+        />
+      </label>
       <details className="text-sm text-muted-foreground">
         <summary className="cursor-pointer">Bitwarden CLI location</summary>
         <div className="mt-2">
@@ -418,271 +402,287 @@ export function ApprovalCard({
   act: (input: CredentialBrokerAction) => Promise<void>;
 }) {
   const [chosenId, setSelection] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const selection = request.candidates.some((candidate) => candidate.id === chosenId)
     ? chosenId
-    : request.candidates.length === 1
+    : request.searchQuery === undefined && request.candidates.length === 1
       ? request.candidates[0]!.id
       : null;
-  const project = useProject(
-    request.origin?.projectId
-      ? { environmentId: request.origin.environmentId, projectId: request.origin.projectId }
-      : null,
-  );
-  const environment = useEnvironment(request.origin?.environmentId ?? null);
-  const waitingForUnlock = request.state !== "pending";
-  const selectedAccount = request.candidates.find((candidate) => candidate.id === selection);
-  const fields =
-    request.field === "login"
-      ? "Username + password"
-      : request.field === "password"
-        ? "Password"
-        : "Username";
+  const selected = request.candidates.find((candidate) => candidate.id === selection);
+  const isSshKey = request.field === "sshKey";
+  const processing = ["saving", "preparing", "running"].includes(request.state);
+  const canAlways = !!request.origin && (!selected?.hostMismatch || request.canSaveHost === true);
+  const unavailable = disabled || submitting || request.state !== "pending";
+  const submit = async (choice: "deny" | "once" | "always") => {
+    if (disabled || submitting) return;
+    setSubmitting(true);
+    try {
+      await act({
+        type: "decide",
+        requestId: request.requestId,
+        decision: choice,
+        ...(choice !== "deny" && selection ? { candidateId: selection } : {}),
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
   return (
-    <section className="space-y-3 rounded-xl border p-3">
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-        <div>
-          <p className="text-xs text-muted-foreground">{fields} requested for</p>
-          <h2 className="break-all text-lg font-semibold">{request.site}</h2>
+    <section className="space-y-5">
+      <div className="space-y-2">
+        <div className="flex items-baseline justify-between gap-3">
+          <h2 className="break-all text-xl font-semibold">{request.site}</h2>
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {request.ttlSeconds}s per use
+          </span>
         </div>
-        <p className="text-xs text-muted-foreground">{request.ttlSeconds}s access after approval</p>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="space-y-2 rounded-lg bg-muted/40 p-3">
-          <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-            <ShieldCheckIcon className="size-3.5" />
-            {request.origin ? "Caller verified by T3" : "Unverified caller"}
-          </div>
-          <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
-            <dt className="text-muted-foreground">Project</dt>
-            <dd className="flex min-w-0 items-center gap-1.5 font-medium">
-              {project && <ProjectFavicon project={project} className="size-3.5 shrink-0" />}
-              <span className="break-words">{request.origin?.projectName || "Not available"}</span>
-            </dd>
-            <dt className="text-muted-foreground">Thread</dt>
-            <dd className="break-words font-medium">
-              {request.origin?.threadTitle || "No verified T3 thread"}
-            </dd>
-            <dt className="text-muted-foreground">Agent</dt>
-            <dd className="break-words">
-              {request.origin
-                ? `${request.origin.agent} · ${request.origin.providerInstanceId}`
-                : "Not verified"}
-            </dd>
-            <dt className="text-muted-foreground">Environment</dt>
-            <dd className="flex min-w-0 items-center gap-1.5 font-medium">
-              <EnvironmentIcon
-                environmentId={request.origin?.environmentId ?? null}
-                aria-hidden
-                kind={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
-                className="size-3.5 shrink-0 text-muted-foreground"
-              />
-              <span className="break-words">{environmentLabel}</span>
-            </dd>
-            <dt className="text-muted-foreground">Program</dt>
-            <dd className="break-all font-mono text-xs">
-              {request.argv[0]?.split(/[\\/]/).at(-1)}
-            </dd>
-          </dl>
-        </div>
-        <div className="min-w-0 space-y-3">
-          <div className="space-y-1">
-            <p className="text-xs text-muted-foreground">Reason supplied by agent</p>
-            <p className="break-words text-sm">{request.reason}</p>
-          </div>
-          {waitingForUnlock ? (
-            <div
-              role="status"
-              aria-live="polite"
-              aria-busy={request.state === "searching"}
-              className="space-y-2 rounded-lg border p-3"
-            >
-              <p className="text-sm font-medium">
-                {request.state === "searching"
-                  ? "Loading saved accounts…"
-                  : "Waiting for vault unlock"}
-              </p>
-              <p className="text-sm text-muted-foreground">
-                {request.state === "searching"
-                  ? request.searchPhase === "syncing"
-                    ? "Syncing Bitwarden before searching for matching logins…"
-                    : "Searching Bitwarden for matching logins…"
-                  : "Unlock the vault to load your saved accounts."}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                No account has been approved. You can deny this request while you wait.
-              </p>
-            </div>
-          ) : request.candidates.length > 0 ? (
-            <div className="space-y-2">
-              <p className="text-xs font-medium text-muted-foreground">
-                {request.candidates.length} matching{" "}
-                {request.candidates.length === 1 ? "account" : "accounts"} · Choose a login to
-                approve
-              </p>
-              <RadioGroup
-                value={selection ?? ""}
-                onValueChange={(value) => setSelection(typeof value === "string" ? value : null)}
-                aria-label="Saved account to share"
-              >
-                {request.candidates.map((candidate) => (
-                  <label
-                    key={candidate.id}
-                    className="flex cursor-pointer items-start gap-3 rounded-lg border p-3"
-                  >
-                    <Radio
-                      value={candidate.id}
-                      disabled={disabled}
-                      aria-label={`${candidate.name} · ${candidate.username ?? "Username unavailable"}`}
-                    />
-                    <span className="min-w-0 space-y-1">
-                      <span className="block break-words text-sm font-medium">
-                        {candidate.name}
-                      </span>
-                      <span className="block break-all text-sm">
-                        {candidate.username ?? "Username unavailable"}
-                      </span>
-                      <span className="block break-all text-xs text-muted-foreground">
-                        {candidate.hosts.join(", ")}
-                      </span>
-                    </span>
-                  </label>
-                ))}
-              </RadioGroup>
-              {selectedAccount && (
-                <details className="text-sm">
-                  <summary className="cursor-pointer">Review selected account and access</summary>
-                  <dl className="mt-2 space-y-2 break-words">
-                    <div>
-                      <dt className="text-xs text-muted-foreground">Saved login</dt>
-                      <dd>{selectedAccount.name}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs text-muted-foreground">Username</dt>
-                      <dd className="break-all">
-                        {selectedAccount.username ?? "Username unavailable"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs text-muted-foreground">Matching sites</dt>
-                      <dd className="break-all">{selectedAccount.hosts.join(", ")}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs text-muted-foreground">Access requested</dt>
-                      <dd>
-                        {fields} · {request.ttlSeconds}s after approval
-                      </dd>
-                    </div>
-                  </dl>
-                </details>
-              )}
-            </div>
-          ) : (
-            <p role="status" className="text-sm text-muted-foreground">
-              {request.error
-                ? "No accounts available for approval."
-                : "No matching accounts found."}
-            </p>
-          )}
-
-          {request.error && (
-            <p role="alert" className="text-sm text-destructive">
-              {request.error}
-            </p>
-          )}
-          {request.canSave && request.state === "pending" && (
-            <SaveLogin request={request} disabled={disabled} act={act} />
-          )}
-
-          <details className="space-y-2 text-xs">
-            <summary className="cursor-pointer text-muted-foreground">
-              Command, workspace & permission scope
-            </summary>
-            <pre className="overflow-auto whitespace-pre-wrap break-all rounded-lg bg-muted/40 p-3">
-              {JSON.stringify(
-                {
-                  executable: request.argv[0],
-                  invocationName: request.argv0,
-                  arguments: request.argv.slice(1),
-                  directory: request.cwd,
-                  workspace: request.origin?.workspace,
-                  environment: request.origin?.environmentId,
-                  project: request.origin?.projectId,
-                  thread: request.origin?.threadId,
-                  provider: request.origin?.providerInstanceId,
-                  session: request.origin?.providerSessionId,
-                  toolCall: request.origin?.toolCallId,
-                  run: request.origin?.runId,
-                  requestedLabel: request.label,
-                  reason: request.reason,
-                  callerClaim: request.clientClaim,
-                },
-                null,
-                2,
-              )}
-            </pre>
-            <p className="text-muted-foreground">
-              Always allow saves permission for this thread, provider, workspace, login, fields,
-              exact command, executable and script fingerprints, and maximum lifetime. Review or
-              revoke it under Manage access.
-            </p>
-            <p className="text-muted-foreground">
-              Credentials go directly to this program. Revocation stops supervised programs and
-              deletes active credential files; it cannot erase copied secrets or end website
-              sessions.
-            </p>
-          </details>
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
-        <p className="text-xs text-muted-foreground">
-          {request.approvalDeadline === null
-            ? "No approval timeout"
-            : `Approval expires ${new Date(request.approvalDeadline).toLocaleTimeString()}`}
+        <p className="text-sm text-muted-foreground">
+          {request.origin
+            ? [request.origin.projectName, request.origin.threadTitle, environmentLabel]
+                .filter(Boolean)
+                .join(" · ")
+            : `Unverified caller · ${environmentLabel}`}
         </p>
-        <div className="flex flex-wrap justify-end gap-2">
+        <p className="text-sm">{request.reason}</p>
+      </div>
+      {processing ? (
+        <div className="space-y-4 rounded-lg bg-muted/40 p-4">
+          <div role="status" aria-live="polite" className="space-y-1">
+            <p className="text-sm font-medium">
+              {request.state === "running"
+                ? "Program is running"
+                : request.state === "saving"
+                  ? "Saving credential to Bitwarden…"
+                  : "Preparing approved access…"}
+            </p>
+            <p className="text-sm text-muted-foreground">
+              You can keep working. Stop ends this operation and removes temporary credential
+              access.
+            </p>
+          </div>
           <Button
-            variant="ghost"
+            variant="destructive-outline"
             disabled={disabled}
-            onClick={() =>
-              void act({ type: "decide", requestId: request.requestId, decision: "deny" })
-            }
+            onClick={() => void act({ type: "stop", requestId: request.requestId })}
           >
-            Deny
+            Stop operation
           </Button>
-          {!waitingForUnlock && (
+        </div>
+      ) : request.state === "awaiting_unlock" ? (
+        <p className="text-sm text-muted-foreground">
+          Unlock Bitwarden to choose a credential for this request.
+        </p>
+      ) : (
+        <>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-medium">
+                {adding ? "New login" : isSshKey ? "SSH key" : "Saved credential"}
+              </h3>
+              {request.canSave && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={disabled || submitting || request.state !== "pending"}
+                  onClick={() => setAdding(!adding)}
+                >
+                  {adding ? "Choose saved credential" : "Add credential"}
+                </Button>
+              )}
+            </div>
+            {adding ? (
+              <SaveLogin request={request} disabled={disabled || submitting} act={act} />
+            ) : (
+              <>
+                {request.canSearch && (
+                  <VaultSearch
+                    key={request.searchQuery}
+                    request={request}
+                    disabled={unavailable || !!request.grantId}
+                    search={(query) => {
+                      setSelection(null);
+                      void act({
+                        type: "search",
+                        requestId: request.requestId,
+                        ...(query !== undefined ? { query } : {}),
+                      });
+                    }}
+                  />
+                )}
+                {request.state === "searching" ? (
+                  <p
+                    role="status"
+                    aria-live="polite"
+                    className="py-4 text-sm text-muted-foreground"
+                  >
+                    {request.searchPhase === "syncing"
+                      ? "Syncing Bitwarden…"
+                      : "Finding credentials…"}
+                  </p>
+                ) : request.candidates.length > 0 ? (
+                  <div className="max-h-56 overflow-y-auto rounded-lg border">
+                    <RadioGroup
+                      value={selection ?? ""}
+                      onValueChange={(value) =>
+                        setSelection(typeof value === "string" ? value : null)
+                      }
+                      aria-label={isSshKey ? "SSH key to share" : "Credential to share"}
+                    >
+                      {request.candidates.map((candidate) => (
+                        <label
+                          key={candidate.id}
+                          className="flex cursor-pointer items-center gap-3 px-3 py-3 has-[[data-checked]]:bg-muted/50"
+                        >
+                          <Radio
+                            value={candidate.id}
+                            disabled={disabled || submitting}
+                            aria-label={[
+                              candidate.name,
+                              candidate.username,
+                              candidate.hosts.join(", ") || "No saved host",
+                              candidate.hostMismatch ? "Host does not match" : "",
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          />
+                          <span className="min-w-0 space-y-0.5">
+                            <span className="block break-words text-sm font-medium">
+                              {candidate.name}
+                            </span>
+                            <span className="block break-all text-xs text-muted-foreground">
+                              {[candidate.username, candidate.hosts.join(", ") || "No saved host"]
+                                .filter(Boolean)
+                                .join(" · ")}
+                            </span>
+                          </span>
+                        </label>
+                      ))}
+                    </RadioGroup>
+                  </div>
+                ) : (
+                  !request.error && (
+                    <p role="status" className="py-3 text-sm text-muted-foreground">
+                      No credentials found. Search all Bitwarden or add a login.
+                    </p>
+                  )
+                )}
+              </>
+            )}
+            {request.error && (
+              <p role="alert" className="text-sm text-destructive">
+                {request.error}
+              </p>
+            )}
+          </div>
+          {!adding && (
             <>
-              <Button
-                variant="outline"
-                disabled={disabled || !selection || !request.origin}
-                onClick={() =>
-                  void act({
-                    type: "decide",
-                    requestId: request.requestId,
-                    decision: "always",
-                    candidateId: selection!,
-                  })
-                }
-              >
-                Always allow
-              </Button>
-              <Button
-                disabled={disabled || !selection}
-                onClick={() =>
-                  void act({
-                    type: "decide",
-                    requestId: request.requestId,
-                    decision: "once",
-                    candidateId: selection!,
-                  })
-                }
-              >
-                Allow once
-              </Button>
+              <p className="text-xs text-muted-foreground">
+                {selected?.hostMismatch
+                  ? `Always allow also saves ${request.site} to this credential in Bitwarden. Existing hosts are kept.`
+                  : "Always allow remembers access for this thread, credential, and command. Revoke anytime in Manage access."}
+              </p>
+              <div className="flex flex-wrap items-center justify-end gap-2 border-t pt-4">
+                <Button
+                  variant="ghost"
+                  disabled={disabled || submitting}
+                  onClick={() => void submit("deny")}
+                >
+                  Deny
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={unavailable || !selection || !canAlways}
+                  onClick={() => void submit("always")}
+                >
+                  Always allow
+                </Button>
+                <Button disabled={unavailable || !selection} onClick={() => void submit("once")}>
+                  {submitting ? "Allowing…" : "Allow once"}
+                </Button>
+              </div>
             </>
           )}
+        </>
+      )}
+      <details className="text-xs text-muted-foreground">
+        <summary className="cursor-pointer">
+          Request details · {request.argv[0]?.split(/[\\/]/).at(-1)}
+        </summary>
+        <div className="mt-3 space-y-3">
+          <p>
+            {request.origin
+              ? `Requested by ${request.origin.agent} · ${request.origin.providerInstanceId}`
+              : "Caller identity is not verified."}
+          </p>
+          <pre className="overflow-auto whitespace-pre-wrap break-all rounded-lg bg-muted/40 p-3">
+            {JSON.stringify(
+              {
+                executable: request.argv[0],
+                arguments: request.argv.slice(1),
+                directory: request.cwd,
+                workspace: request.origin?.workspace,
+                fields: request.field,
+                lifetimeSeconds: request.ttlSeconds,
+              },
+              null,
+              2,
+            )}
+          </pre>
+          <p>
+            Credentials go directly to this program. Stopping removes temporary access; it cannot
+            undo actions already completed or erase copied credentials.
+          </p>
         </div>
-      </div>
+      </details>
     </section>
+  );
+}
+
+function VaultSearch({
+  request,
+  disabled,
+  search,
+}: {
+  request: CredentialApproval;
+  disabled: boolean;
+  search: (query?: string) => void;
+}) {
+  const [query, setQuery] = useState(request.searchQuery ?? "");
+  return (
+    <div className="space-y-2">
+      <form
+        className="flex flex-wrap items-end gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!disabled) search(query);
+        }}
+      >
+        <label className="min-w-0 flex-1 space-y-1 text-sm">
+          <span>Search Bitwarden</span>
+          <Input
+            type="search"
+            aria-label="Search Bitwarden by name, username, or host"
+            value={query}
+            maxLength={200}
+            disabled={disabled}
+            placeholder="Name, username, or host"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
+        <Button type="submit" variant="outline" disabled={disabled}>
+          Search
+        </Button>
+      </form>
+      <p className="text-xs text-muted-foreground">
+        Search all saved credentials, even when the host differs. Leave blank to browse.
+      </p>
+      {request.searchQuery !== undefined && (
+        <Button variant="ghost" disabled={disabled} onClick={() => search()}>
+          Use hostname matches
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -723,7 +723,7 @@ function AutomaticNotice({
       className="space-y-2 rounded-xl border bg-popover p-4 text-popover-foreground shadow-lg"
     >
       <p className="text-sm font-medium">
-        {notice.revoked ? "Permission revoked" : "Saved login used automatically"}
+        {notice.revoked ? "Permission revoked" : "Saved credential used automatically"}
       </p>
       <p className="text-sm text-muted-foreground">
         {environmentLabel} · {notice.site} · {notice.command}
@@ -766,8 +766,7 @@ function SaveLogin({
   const password = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   return (
-    <details open={request.candidates.length === 0} className="space-y-2 text-sm">
-      <summary className="cursor-pointer">Enter and save a new login</summary>
+    <div className="space-y-3 text-sm">
       <p className="text-xs text-muted-foreground">
         Create a new Bitwarden login for {request.site} and share it once with this program. Enter
         the site password here, not your vault master password. Values stay out of chat.
@@ -790,31 +789,37 @@ function SaveLogin({
           );
         }}
       >
-        <Input
-          ref={username}
-          aria-label="New login username"
-          placeholder="Username or email"
-          autoComplete="off"
-          maxLength={4096}
-          required={request.field !== "password"}
-          disabled={disabled || busy}
-        />
-        <Input
-          ref={password}
-          aria-label="New login password"
-          placeholder="Site password"
-          type="password"
-          autoComplete="new-password"
-          maxLength={4096}
-          required={request.field !== "username"}
-          disabled={disabled || busy}
-        />
+        <label className="space-y-1">
+          <span>Username or email</span>
+          <Input
+            ref={username}
+            aria-label="New login username"
+            placeholder="Username or email"
+            autoComplete="off"
+            maxLength={4096}
+            required={request.field !== "password"}
+            disabled={disabled || busy}
+          />
+        </label>
+        <label className="space-y-1">
+          <span>Site password</span>
+          <Input
+            ref={password}
+            aria-label="New login password"
+            placeholder="Site password"
+            type="password"
+            autoComplete="new-password"
+            maxLength={4096}
+            required={request.field !== "username"}
+            disabled={disabled || busy}
+          />
+        </label>
         <div className="sm:col-span-2">
           <Button type="submit" disabled={disabled || busy}>
             {busy ? "Saving…" : "Save to Bitwarden & allow once"}
           </Button>
         </div>
       </form>
-    </details>
+    </div>
   );
 }

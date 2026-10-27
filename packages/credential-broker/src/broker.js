@@ -122,7 +122,11 @@ export class Broker {
       notices: this.notices(),
     };
   }
-  request(input, origin, { allowSave = false, argv0, consumerEnvironment } = {}) {
+  request(
+    input,
+    origin,
+    { allowSave = false, allowSearch = false, argv0, consumerEnvironment } = {},
+  ) {
     if (this.#closing) throw new BrokerError("Broker is shutting down.", 503);
     const data = parseRequest(input);
     if ([...this.#requests.values()].filter((r) => !terminal.has(r.state)).length >= 100)
@@ -130,7 +134,10 @@ export class Broker {
     const request = {
       ...data,
       ...(argv0 ? { argv0 } : {}),
-      allow_save: allowSave && typeof this.provider.create === "function",
+      allow_search: allowSearch && typeof this.provider.searchVault === "function",
+      allow_save_host: allowSearch && typeof this.provider.addHost === "function",
+      allow_save:
+        data.field !== "sshKey" && allowSave && typeof this.provider.create === "function",
       request_id: randomUUID(),
       state: data.site ? "searching" : "pending",
       created_at: this.now(),
@@ -156,39 +163,83 @@ export class Broker {
     return this.public(request);
   }
   async search(request) {
+    const version = (request.search_version = (request.search_version ?? 0) + 1);
+    const query = request.search_query;
     try {
-      const candidates = await this.provider.search(request.site, (phase) => {
-        if (request.state !== "searching" || !["syncing", "matching"].includes(phase)) return;
+      const search =
+        query === undefined
+          ? (progress) => this.provider.search(request.site, progress, request.field)
+          : (progress) => this.provider.searchVault(request.site, query, request.field, progress);
+      const candidates = await search((phase) => {
+        if (
+          request.state !== "searching" ||
+          request.search_version !== version ||
+          !["syncing", "matching"].includes(phase)
+        )
+          return;
         request.search_phase = phase;
         this.changed();
       });
       await this.sweep();
-      if (request.state !== "searching" || this.#closing) return;
-      if (!candidates.length && !request.allow_save) {
+      if (request.state !== "searching" || request.search_version !== version || this.#closing)
+        return;
+      if (!candidates.length && !request.allow_save && !request.allow_search) {
         request.state = "failed";
-        request.failure_code = "no_matching_login";
-        request.error = "No matching login found for this site.";
+        request.failure_code =
+          request.field === "sshKey" ? "no_matching_ssh_key" : "no_matching_login";
+        request.error =
+          request.field === "sshKey"
+            ? "No matching SSH key found. Add this hostname to the key’s t3-ssh-hosts custom field in Bitwarden."
+            : "No matching login found for this site.";
       } else {
         request.candidates = candidates;
+        request.error = undefined;
         if (!candidates.length)
-          request.error = "No matching login found. Enter a login to save and use it.";
+          request.error =
+            query !== undefined
+              ? "No saved credentials found. Try another name, username, or host."
+              : request.allow_search
+                ? "No matching credentials found. Search all Bitwarden to choose another saved credential."
+                : "No matching login found. Enter a login to save and use it.";
         request.state = "pending";
-        this.offerApproval(request);
+        if (!request.manual_search_started) this.offerApproval(request);
       }
     } catch {
-      if (request.state === "searching") {
-        if (request.allow_save) {
+      if (request.state === "searching" && request.search_version === version) {
+        if (request.allow_save || request.allow_search) {
           request.candidates = [];
-          request.error = "Vault lookup failed. You can still enter a login to save and use it.";
+          request.error = request.allow_search
+            ? "Vault lookup failed. Try searching all Bitwarden again."
+            : "Vault lookup failed. You can still enter a login to save and use it.";
           request.state = "pending";
-          this.offerApproval(request);
+          if (!request.manual_search_started) this.offerApproval(request);
         } else {
           request.state = "failed";
           request.failure_code = "vault_search_failed";
-          request.error = "Vault login search failed; provider output is withheld.";
+          request.error = "Vault credential search failed; provider output is withheld.";
         }
       }
     }
+  }
+  async searchVault(id, query) {
+    await this.sweep();
+    const request = this.find(id);
+    if (
+      !request.allow_search ||
+      !["pending", "searching"].includes(request.state) ||
+      request.grant_id ||
+      this.#closing
+    )
+      throw new BrokerError("Request is no longer available for vault search.", 409);
+    if (query !== undefined && (typeof query !== "string" || query.length > 200))
+      throw new BrokerError("Search must be at most 200 characters.");
+    request.manual_search_started = true;
+    request.search_query = query?.trim();
+    request.candidates = [];
+    request.error = undefined;
+    request.search_phase = undefined;
+    request.state = "searching";
+    await this.search(request);
   }
   offerApproval(request) {
     void this.tryAutomatic(request).catch(() => {
@@ -199,7 +250,8 @@ export class Broker {
     });
   }
   async tryAutomatic(request) {
-    if (request.kind !== "exec" || !this.grants.list().length) return false;
+    if (request.kind !== "exec" || request.manual_search_started || !this.grants.list().length)
+      return false;
     let scope;
     try {
       scope = await commandScope(request, this.provider.mode);
@@ -207,7 +259,7 @@ export class Broker {
       return false;
     }
     await this.sweep();
-    if (request.state !== "pending" || this.#closing) return true;
+    if (request.state !== "pending" || request.manual_search_started || this.#closing) return true;
     const grant = this.grants.match(scope, request);
     if (!grant || !this.notifier) return false;
     request.grant_id = grant.grant_id;
@@ -288,7 +340,12 @@ export class Broker {
     if (operator && request.candidates) result.candidates = request.candidates;
     if (operator) result.settled = !request.cleanup_pending;
     if (operator && request.origin) result.origin = request.origin;
-    if (operator) result.allow_save = request.allow_save === true;
+    if (operator) {
+      result.allow_save = request.allow_save === true;
+      result.allow_search = request.allow_search === true;
+      result.allow_save_host = request.allow_save_host === true;
+      if (request.search_query !== undefined) result.search_query = request.search_query;
+    }
     if (state === "active" && request.kind === "file") result.path = request.path;
     if (request.kind === "exec") {
       result.argv = request.argv;
@@ -390,16 +447,42 @@ export class Broker {
       request.state = "denied";
       return this.public(request);
     }
+    let allowHostMismatch = false;
     if (request.site) {
       const selected =
         itemId ?? (request.candidates.length === 1 ? request.candidates[0].item_id : undefined);
-      if (!request.candidates.some((candidate) => candidate.item_id === selected))
-        throw new BrokerError("Choose one of the matching vault logins.");
+      const candidate = request.candidates.find((candidate) => candidate.item_id === selected);
+      if (!candidate) throw new BrokerError("Choose one of the listed vault credentials.");
+      allowHostMismatch = candidate.hostMismatch === true;
+      if (allowHostMismatch && automaticGrant)
+        throw new BrokerError("Automatic access requires a matching saved host.");
+      if (allowHostMismatch && always && !request.allow_save_host)
+        throw new BrokerError("This provider cannot save the requested host.");
       request.item_id = selected;
     } else if (itemId && itemId !== request.item_id) {
       throw new BrokerError("Selected item does not match the request.");
     }
     request.state = "preparing";
+    if (allowHostMismatch && always) {
+      try {
+        const saved = await this.provider.addHost(request.item_id, request.field, request.site);
+        await this.sweep();
+        if (request.state !== "preparing" || this.#closing) return this.public(request);
+        request.candidates = request.candidates.map((candidate) =>
+          candidate.item_id === request.item_id
+            ? { ...candidate, hosts: saved.hosts, hostMismatch: false }
+            : candidate,
+        );
+        allowHostMismatch = false;
+      } catch {
+        if (request.state === "preparing") {
+          request.error =
+            "Could not save the host in Bitwarden. No ongoing access was granted. Try again or allow once.";
+          request.state = "pending";
+        }
+        throw new BrokerError("Could not save the host in Bitwarden.", 502);
+      }
+    }
     let file;
     try {
       if (always) {
@@ -410,7 +493,9 @@ export class Broker {
         request.grant_id = grant.grant_id;
       }
       if (automaticGrant && !this.grants.get(automaticGrant.grant_id)) throw new Error();
-      let value = await this.provider.get(request.item_id, request.field, request.site);
+      let value = await this.provider.get(request.item_id, request.field, request.site, {
+        allowHostMismatch,
+      });
       const grant = request.grant_id && this.grants.get(request.grant_id);
       if (
         request.grant_id &&

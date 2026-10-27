@@ -11,6 +11,18 @@ thread, agent, workspace, program, arguments, fields, and access lifetime. Purpo
 and labels come from the caller. Choose the matching login, then deny access,
 allow it once, or always allow its exact scope.
 
+If the expected credential is missing, use **Search Bitwarden**. Search
+by saved name, username, or host, or leave the search blank to browse up to 100
+results. Select the credential and approve it. **Use hostname matches** returns
+to the original results. Search results stay private to your connected T3 client.
+
+You can select a credential even when its saved host differs from the requested
+host or is missing. **Allow once** uses it without changing Bitwarden.
+**Always allow** adds the requested hostname to the selected
+credential in Bitwarden, preserves its existing hosts, and saves permission for
+this thread and command. Future requests can then find it through hostname
+matching. If saving fails, no ongoing permission is granted.
+
 For a thread agent to use a saved password, ask it to prepare a script for the
 operation and run it with `credential_broker_exec`. Choose the saved login in the
 private approval dialog. The script receives a temporary file path through
@@ -61,3 +73,26 @@ revoke open descriptors, undo completed operations, or end website sessions.
 The broker is verified on macOS. Linux uses the POSIX boundary but needs platform
 verification. Windows fails closed until ACL, named-pipe, and process-tree
 security adapters are implemented and verified.
+
+## SSH keys
+
+Save or import your key as an **SSH key** item in Bitwarden. For hostname
+matching, add a **Text** custom field named `t3-ssh-hosts` with the exact destination hostname. For a key used on
+multiple hosts, separate hostnames with commas or whitespace. Subdomains are
+matched individually. Install the public key on the destination account before
+connecting; saving a private key does not grant access to that account.
+
+Ask your agent to try existing SSH access first and request a saved SSH key if
+authentication fails. Choose the matching key and approve it in T3, including
+from a remote web or mobile client. Bitwarden Desktop and its SSH agent are not
+required; the Bitwarden CLI runs on your T3 server. To use a key for another
+host, edit its `t3-ssh-hosts` field in Bitwarden, or select it through
+**Search Bitwarden** for one-time access.
+
+Use a key without a separate passphrase inside the encrypted Bitwarden vault.
+
+SSH requests share the same approval, lifetime, cancellation, and revocation
+controls as saved logins. Keys are temporary and are not installed into your
+SSH configuration. The SSH username and port must be specified separately.
+Host-key verification still applies; a changed host key or unreachable host is
+not fixed by requesting a different credential.

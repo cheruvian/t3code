@@ -119,6 +119,7 @@ test("CLI preserves safe admission diagnostics and terminal failure codes withou
   }
   for (const failureCode of [
     "no_matching_login",
+    "no_matching_ssh_key",
     "vault_search_failed",
     "consumer_start_failed",
     "fake-secret",

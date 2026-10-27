@@ -91,9 +91,13 @@ export class T3CredentialBroker {
           name: c.name,
           ...(c.username ? { username: c.username } : {}),
           hosts: c.hosts,
+          ...(c.hostMismatch ? { hostMismatch: true } : {}),
         })),
         ...(r.grant_id ? { grantId: r.grant_id } : {}),
         canSave: r.allow_save === true,
+        canSearch: r.allow_search === true,
+        canSaveHost: r.allow_save_host === true,
+        ...(r.search_query !== undefined ? { searchQuery: r.search_query } : {}),
         ...(r.error ? { error: r.error } : {}),
       })),
       notices: snapshot.notices.map((n) => ({
@@ -269,6 +273,7 @@ export class T3CredentialBroker {
         input.candidateId,
         input.decision === "always",
       );
+    else if (input.type === "search") await broker.searchVault(input.requestId, input.query);
     else if (input.type === "saveLogin")
       await broker.saveLogin(input.requestId, {
         username: input.username,
@@ -362,6 +367,7 @@ export class T3CredentialBroker {
     const request = broker.request(parsed, origin, {
       consumerEnvironment,
       allowSave: true,
+      allowSearch: true,
       argv0: parsedArgv0,
     });
     return new Promise((resolve, reject) => {
