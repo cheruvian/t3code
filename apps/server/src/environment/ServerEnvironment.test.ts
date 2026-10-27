@@ -235,6 +235,8 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(metaprojectInstructions).toContain(`${baseDir}/userdata/keybindings.json`);
       expect(metaprojectInstructions).toContain("Use sources in this order");
       expect(metaprojectInstructions).toContain("t3 project add");
+      expect(metaprojectInstructions).toContain("`project.update`");
+      expect(metaprojectInstructions).not.toContain("`project.meta.update`");
       expect(metaprojectInstructions).toContain("Actions and keybindings");
       expect(metaprojectInstructions).toContain("server.updateSettings");
       expect(metaprojectInstructions).toContain("api_call");
