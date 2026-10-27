@@ -192,6 +192,34 @@ describe("CodexAdapterV2 assistant message streaming", () => {
         assert.equal((yield* Ref.get(updates)).length, 2);
       }),
   );
+  it.effect("flushes another turn while one text delivery is blocked", () =>
+    Effect.gen(function* () {
+      const blocked = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const updates = yield* Ref.make<string[]>([]);
+      const coalescer = yield* makeProviderTextDeltaCoalescer({
+        flushIntervalMs: 10,
+        emit: (update) =>
+          update.turnId === "blocked"
+            ? Deferred.succeed(blocked, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.asVoid,
+              )
+            : Ref.update(updates, (current) => [...current, update.text]),
+      });
+      yield* Effect.gen(function* () {
+        yield* coalescer.append({ turnId: "blocked", itemId: "a", delta: "waiting" });
+        yield* TestClock.adjust("10 millis");
+        yield* Deferred.await(blocked);
+        yield* coalescer
+          .append({ turnId: "other", itemId: "b", delta: "visible" })
+          .pipe(Effect.forkChild);
+        yield* TestClock.adjust("10 millis");
+        assert.deepEqual(yield* Ref.get(updates), ["visible"]);
+      }).pipe(Effect.ensuring(Deferred.succeed(release, undefined)));
+    }),
+  );
+
   it.effect("makes accumulated assistant text visible after the bounded flush interval", () =>
     Effect.gen(function* () {
       const updates = yield* Ref.make<
