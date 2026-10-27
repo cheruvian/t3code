@@ -239,6 +239,20 @@ export function QueuedRunsControl({
       <span className="sr-only" aria-live="polite">
         {items.length} queued
       </span>
+      {isHeld ? (
+        <div className="flex items-center justify-end gap-2 text-xs text-muted-foreground">
+          <span>Queue paused</span>
+          <Button
+            size="xs"
+            variant="ghost"
+            aria-label="Unpause queue"
+            disabled={!canOperate || resuming}
+            onClick={() => void unpause()}
+          >
+            {resuming ? "Unpausing…" : "Unpause"}
+          </Button>
+        </div>
+      ) : null}
       <ol className="flex flex-col items-end gap-3" id={queueListId}>
         {visibleItems.map((item, position) => {
           const previewText = assistantCitationsToPlainText(

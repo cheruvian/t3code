@@ -7,6 +7,7 @@ import { page } from "vite-plus/test/browser";
 const state = vi.hoisted(() => ({
   projection: null as unknown,
   workflow: null as unknown,
+  resume: vi.fn(async () => undefined),
 }));
 
 vi.mock(import("@t3tools/client-runtime/state/thread-workflows"), async (importOriginal) => ({
@@ -21,7 +22,7 @@ vi.mock(import("../../state/entities"), async (importOriginal) => ({
 
 vi.mock(import("../../state/use-atom-command"), async (importOriginal) => ({
   ...(await importOriginal()),
-  useAtomCommand: (() => async () => undefined) as never,
+  useAtomCommand: (() => state.resume) as never,
 }));
 
 vi.mock(import("../../assets/assetUrls"), async (importOriginal) => ({
@@ -30,10 +31,16 @@ vi.mock(import("../../assets/assetUrls"), async (importOriginal) => ({
     resources.map((resource) => `https://assets.test/${resource.attachmentId}`)) as never,
 }));
 
+vi.mock(import("../../state/session"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  useEnvironmentScope: () => true,
+}));
+
 import { render as renderUi } from "../../../test/render";
 import { QueuedRunsControl } from "./QueuedRunsControl";
 
 function setup() {
+  state.resume.mockClear();
   state.projection = null;
   state.workflow = null;
 }
@@ -96,4 +103,30 @@ it("previews assistant quotes as readable text and preserves the citation when e
   expect(onEditQueuedRun).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ text: quoteAndText }),
   );
+});
+
+it("unpauses a held queue while another run is recovering", async () => {
+  setup();
+  state.projection = { projection: { messages: [] } };
+  state.workflow = {
+    activeRun: { id: "recovery-run" },
+    isHeld: true,
+    canSendNow: false,
+    canPromoteToSteer: false,
+    queuedRuns: [
+      {
+        run: { id: "queued-run", userMessageId: "queued-message" },
+        text: "Wait for recovery",
+        attachments: [],
+      },
+    ],
+  };
+  await using _screen = await renderQueue();
+  const unpause = page.getByRole("button", { name: "Unpause queue", exact: true });
+  await expect.element(unpause).toBeVisible();
+  await unpause.click();
+  expect(state.resume).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "environment:test",
+    input: { threadId: "thread:test" },
+  });
 });
