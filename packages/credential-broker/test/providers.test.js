@@ -256,6 +256,7 @@ test("SSH search selects only explicitly bound SSH items and rechecks bindings a
 
 test("manual vault search finds saved names, usernames and hosts without revealing or searching secrets", async () => {
   const calls = [];
+  let now = 0;
   let record = {
     id: DEMO_ITEM,
     type: 1,
@@ -268,6 +269,7 @@ test("manual vault search finds saved names, usernames and hosts without reveali
     notes: "private-note",
   };
   const provider = new BitwardenProvider({
+    now: () => now,
     passwordPrompt: async () => "fake-master",
     runner: async (_, args) => {
       calls.push(args);
@@ -322,6 +324,7 @@ test("manual vault search finds saved names, usernames and hosts without reveali
     provider.get(DEMO_ITEM, "password", "heihei", { allowHostMismatch: true }),
     /invalid login/,
   );
+  now = 30_000;
   assert.deepEqual(await provider.searchVault("heihei", "home", "sshKey"), [
     { item_id: DEMO_ITEM, name: "Home server", hosts: [], hostMismatch: true },
   ]);

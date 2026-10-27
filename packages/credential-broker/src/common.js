@@ -46,7 +46,7 @@ const requestBaseSchema = z
       })
       .optional(),
     label: z.string().trim().min(1).max(120),
-    field: z.enum(["password", "username", "login", "sshKey"]).default("password"),
+    field: z.enum(["password", "username", "login", "sshKey", "ssh"]).default("password"),
     reason: z.string().trim().min(1).max(500),
     client: z.string().trim().min(1).max(120).default("unspecified client"),
     ttl_seconds: z.number().int().min(5).max(300).default(60),

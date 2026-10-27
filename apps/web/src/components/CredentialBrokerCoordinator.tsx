@@ -419,7 +419,9 @@ export function ApprovalCard({
   const [submitting, setSubmitting] = useState(false);
   const selection = request.candidates.some((candidate) => candidate.id === chosenId)
     ? chosenId
-    : request.searchQuery === undefined && request.candidates.length === 1
+    : request.searchQuery === undefined &&
+        request.candidates.length === 1 &&
+        !request.candidates[0]!.hostMismatch
       ? request.candidates[0]!.id
       : null;
   const selected = request.candidates.find((candidate) => candidate.id === selection);
@@ -499,7 +501,13 @@ export function ApprovalCard({
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-sm font-medium">
-                {adding ? "New login" : isSshKey ? "SSH key" : "Saved credential"}
+                {adding
+                  ? "New login"
+                  : request.field === "ssh"
+                    ? "SSH key or login"
+                    : isSshKey
+                      ? "SSH key"
+                      : "Saved credential"}
               </h3>
               {request.canSave && (
                 <Button
@@ -560,9 +568,20 @@ export function ApprovalCard({
                             disabled={disabled || submitting}
                             aria-label={[
                               candidate.name,
+                              candidate.kind === "sshKey"
+                                ? "SSH key"
+                                : candidate.kind === "login"
+                                  ? "Login"
+                                  : "",
                               candidate.username,
                               candidate.hosts.join(", ") || "No saved host",
-                              candidate.hostMismatch ? "Host does not match" : "",
+                              candidate.matchReason === "shortHost"
+                                ? "Short hostname suggestion"
+                                : candidate.matchReason === "wildcard"
+                                  ? "Wildcard host suggestion"
+                                  : candidate.hostMismatch
+                                    ? "Host does not match"
+                                    : "",
                             ]
                               .filter(Boolean)
                               .join(" · ")}
@@ -570,12 +589,27 @@ export function ApprovalCard({
                           <span className="min-w-0 space-y-0.5">
                             <span className="block break-words text-sm font-medium">
                               {candidate.name}
+                              {candidate.kind && (
+                                <span className="ml-2 text-xs text-muted-foreground">
+                                  {candidate.kind === "sshKey" ? "SSH key" : "Login"}
+                                </span>
+                              )}
                             </span>
                             <span className="block break-all text-xs text-muted-foreground">
                               {[candidate.username, candidate.hosts.join(", ") || "No saved host"]
                                 .filter(Boolean)
                                 .join(" · ")}
                             </span>
+                            {candidate.hostMismatch && (
+                              <span className="block text-xs text-muted-foreground">
+                                {candidate.matchReason === "shortHost"
+                                  ? "Short hostname suggestion"
+                                  : candidate.matchReason === "wildcard"
+                                    ? "Wildcard host suggestion"
+                                    : "Host does not match"}{" "}
+                                · confirm before allowing
+                              </span>
+                            )}
                           </span>
                         </label>
                       ))}
@@ -645,6 +679,7 @@ export function ApprovalCard({
                 workspace: request.origin?.workspace,
                 fields: request.field,
                 lifetimeSeconds: request.ttlSeconds,
+                search: request.searchDiagnostics,
               },
               null,
               2,
@@ -683,11 +718,11 @@ function VaultSearch({
           <span>Search Bitwarden</span>
           <Input
             type="search"
-            aria-label="Search Bitwarden by name, username, or host"
+            aria-label="Search Bitwarden by name, username, or URL"
             value={query}
             maxLength={200}
             disabled={disabled}
-            placeholder="Name, username, or host"
+            placeholder="Name, username, or URL"
             onChange={(event) => setQuery(event.target.value)}
           />
         </label>
@@ -696,11 +731,11 @@ function VaultSearch({
         </Button>
       </form>
       <p className="text-xs text-muted-foreground">
-        Search all saved credentials, even when the host differs. Leave blank to browse.
+        Search names, usernames, and domains/URLs. Leave blank to browse.
       </p>
       {request.searchQuery !== undefined && (
         <Button variant="ghost" disabled={disabled} onClick={() => search()}>
-          Use hostname matches
+          Use suggested credentials
         </Button>
       )}
     </div>

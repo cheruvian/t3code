@@ -1,16 +1,19 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { getDomain } from "tldts";
+import { isIP } from "node:net";
 import { BrokerError, siteHost } from "./common.js";
 
 function matchingHosts(record, site) {
   const domain = site === undefined ? null : getDomain(site, { allowPrivateDomains: true });
   return [
     ...new Set(
-      (record.login?.uris ?? []).flatMap(({ uri }) => {
+      (record.login?.uris ?? []).flatMap(({ uri, match }) => {
         try {
           const url = new URL(uri.includes("://") ? uri : `https://${uri}`);
-          return ["http:", "https:"].includes(url.protocol) &&
+          return match !== 5 &&
+            ["http:", "https:"].includes(url.protocol) &&
+            !url.hostname.includes("*") &&
             !url.username &&
             !url.password &&
             (site === undefined ||
@@ -45,6 +48,105 @@ function matchingSshHosts(record, site) {
         });
       }),
     ),
+  ];
+}
+
+function searchText(value) {
+  return value
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+function queryTerms(query) {
+  return query
+    .trim()
+    .split(/\s+/)
+    .flatMap((part) => {
+      try {
+        if (part.includes("://") || part.includes("/"))
+          part = new URL(part.includes("://") ? part : `https://${part}`).hostname;
+      } catch {}
+      return searchText(part).split(/\s+/).filter(Boolean);
+    });
+}
+function hostMatches(host, site, ssh) {
+  if (host.includes("*")) return false;
+  if (host === site) return true;
+  const domain = getDomain(site, { allowPrivateDomains: true });
+  return !ssh && domain !== null && getDomain(host, { allowPrivateDomains: true }) === domain;
+}
+function matchingSshLoginHosts(record, site) {
+  return (record.login?.uris ?? []).flatMap(({ uri, match }) => {
+    try {
+      const url = new URL(uri);
+      return match !== 5 &&
+        url.protocol === "ssh:" &&
+        !url.hostname.includes("*") &&
+        !url.password &&
+        (site === undefined || hostMatches(url.hostname, site, false))
+        ? [url.hostname]
+        : [];
+    } catch {
+      return [];
+    }
+  });
+}
+function wildcardHost(value) {
+  try {
+    const url = new URL(value.includes("://") ? value : `https://${value}`);
+    if (
+      !["http:", "https:", "ssh:"].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      !url.hostname.startsWith("*.")
+    )
+      return [];
+    return [`*.${siteHost(url.hostname.slice(2))}`];
+  } catch {
+    return [];
+  }
+}
+function wildcardHosts(record) {
+  const values =
+    record.type === 5
+      ? (record.fields ?? [])
+          .filter(
+            (field) =>
+              field.name === "t3-ssh-hosts" && field.type === 0 && typeof field.value === "string",
+          )
+          .flatMap((field) => field.value.split(/[\s,]+/))
+      : (record.login?.uris ?? []).filter((uri) => uri.match !== 5).map((uri) => uri.uri);
+  return [...new Set(values.flatMap(wildcardHost))];
+}
+function shortHostMatch(host, site) {
+  if (host.includes("*") || isIP(host) || isIP(site)) return false;
+  return host.includes(".") !== site.includes(".") && host.split(".")[0] === site.split(".")[0];
+}
+function wildcardMatches(pattern, site) {
+  return site !== pattern.slice(2) && site.endsWith(`.${pattern.slice(2)}`);
+}
+function metadata(record) {
+  if (
+    ![1, 5].includes(record.type) ||
+    record.deletedDate ||
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(record.id)
+  )
+    return [];
+  const ssh = record.type === 5;
+  return [
+    {
+      item_id: record.id,
+      kind: ssh ? "sshKey" : "login",
+      name: String(record.name ?? (ssh ? "SSH key" : "Login")).slice(0, 120),
+      hosts: ssh ? matchingSshHosts(record) : matchingHosts(record),
+      sshHosts: matchingSshLoginHosts(record),
+      wildcardHosts: wildcardHosts(record),
+      ...(!ssh && typeof record.login?.username === "string" && record.login.username
+        ? { username: record.login.username.slice(0, 320) }
+        : {}),
+    },
   ];
 }
 
@@ -120,8 +222,10 @@ export class DemoProvider {
 export class BitwardenProvider {
   mode = "bitwarden";
   #session;
-  #syncing;
   #syncedAt = -Infinity;
+  #index;
+  #loading;
+  #generation = 0;
   constructor({
     executable = "bw",
     runner = run,
@@ -157,78 +261,117 @@ export class BitwardenProvider {
       master = undefined;
     }
   }
-  async search(site, progress = () => {}, field = "password", query) {
+  invalidateIndex() {
+    this.#generation++;
+    this.#index = undefined;
+    this.#loading = undefined;
+  }
+  async index(progress) {
     if (!this.#session) throw new BrokerError("Vault is locked.", 503);
-    let records;
-    try {
-      // Concurrent requests share one sync; a short freshness window avoids another
-      // network round trip when the human requests a second login immediately.
-      if (this.now() - this.#syncedAt >= 30_000) {
-        progress("syncing");
-        this.#syncing ??= this.runner(this.executable, ["sync"], {
+    if (this.#index && this.now() - this.#syncedAt < 30_000)
+      return { items: this.#index, cacheHit: true };
+    const generation = this.#generation;
+    const session = this.#session;
+    progress("syncing");
+    this.#loading ??= (async () => {
+      await this.runner(this.executable, ["sync"], { ...this.env, BW_SESSION: session });
+      const records = JSON.parse(
+        await this.runner(this.executable, ["list", "items", "--raw"], {
           ...this.env,
-          BW_SESSION: this.#session,
-        })
-          .then(() => {
-            this.#syncedAt = this.now();
-          })
-          .finally(() => {
-            this.#syncing = undefined;
-          });
-        await this.#syncing;
-      }
-      progress("matching");
-      // Bitwarden’s basic CLI search does not index custom fields. Filter SSH
-      // bindings here rather than silently missing keys with unrelated names.
-      records = JSON.parse(
-        await this.runner(
-          this.executable,
-          field === "sshKey" || query !== undefined
-            ? ["list", "items", "--raw"]
-            : ["list", "items", "--url", `https://${site}`, "--raw"],
-          {
-            ...this.env,
-            BW_SESSION: this.#session,
-          },
-        ),
+          BW_SESSION: session,
+        }),
       );
-      if (!Array.isArray(records)) throw new Error();
+      if (!Array.isArray(records) || generation !== this.#generation || session !== this.#session)
+        throw new Error();
+      const items = records.flatMap(metadata);
+      this.#index = items;
+      this.#syncedAt = this.now();
+      return items;
+    })().finally(() => {
+      if (generation === this.#generation) this.#loading = undefined;
+    });
+    return { items: await this.#loading, cacheHit: false };
+  }
+  async search(site, progress = () => {}, field = "password", query) {
+    const started = this.now();
+    const generation = this.#generation;
+    try {
+      const { items, cacheHit } = await this.index(progress);
+      if (generation !== this.#generation || !this.#session) throw new Error();
+      progress("matching");
+      const compatible = items.filter(
+        (item) => field === "ssh" || item.kind === (field === "sshKey" ? "sshKey" : "login"),
+      );
+      const terms = query === undefined ? null : queryTerms(query);
+      const alias = (getDomain(site, { allowPrivateDomains: true }) ?? site).split(".")[0];
+      let hostMatchesCount = 0;
+      let suggestedCount = 0;
+      const ranked = compatible
+        .flatMap((item) => {
+          const allHosts = [...new Set([...item.hosts, ...item.sshHosts, ...item.wildcardHosts])];
+          const bindings = field === "ssh" ? allHosts : item.hosts;
+          const hosts = bindings.filter((host) => hostMatches(host, site, item.kind === "sshKey"));
+          if (hosts.length) hostMatchesCount++;
+          const name = searchText(item.name);
+          const text = searchText([item.name, item.username ?? "", ...allHosts].join(" "));
+          const nameMatch = name.split(" ").includes(alias);
+          const matchReason = allHosts.some((host) => shortHostMatch(host, site))
+            ? "shortHost"
+            : item.wildcardHosts.some((pattern) => wildcardMatches(pattern, site))
+              ? "wildcard"
+              : undefined;
+          if (!hosts.length && (nameMatch || matchReason)) suggestedCount++;
+          if (
+            terms === null
+              ? !hosts.length && !nameMatch && !matchReason
+              : !terms.every((term) => text.includes(term))
+          )
+            return [];
+          const score =
+            (hosts.includes(site) ? 1000 : hosts.length ? 800 : 0) +
+            (terms?.length && searchText(item.name) === terms.join(" ") ? 400 : 0) +
+            (matchReason === "shortHost" ? 600 : matchReason === "wildcard" ? 500 : 0) +
+            (nameMatch ? 100 : 0) +
+            (terms?.filter((term) => name.includes(term)).length ?? 0);
+          return [
+            {
+              score,
+              candidate: {
+                item_id: item.item_id,
+                name: item.name,
+                hosts: query === undefined && hosts.length ? hosts : allHosts,
+                ...(item.username ? { username: item.username } : {}),
+                ...(field === "ssh" ? { kind: item.kind } : {}),
+                ...(!hosts.length
+                  ? { hostMismatch: true, ...(matchReason ? { matchReason } : {}) }
+                  : {}),
+              },
+            },
+          ];
+        })
+        .sort(
+          (a, b) =>
+            b.score - a.score ||
+            a.candidate.name.localeCompare(b.candidate.name) ||
+            a.candidate.item_id.localeCompare(b.candidate.item_id),
+        );
+      const results = ranked.slice(0, 100).map((entry) => entry.candidate);
+      Object.defineProperty(results, "diagnostics", {
+        value: {
+          indexedItems: items.length,
+          compatibleItems: compatible.length,
+          hostMatches: hostMatchesCount,
+          suggestedMatches: suggestedCount,
+          returnedItems: results.length,
+          truncated: ranked.length > 100,
+          cacheHit,
+          durationMs: Math.max(0, this.now() - started),
+        },
+      });
+      return results;
     } catch {
       throw new BrokerError("Vault credential search failed.", 502);
     }
-    const terms = query?.toLowerCase().split(/\s+/).filter(Boolean);
-    // Retain only human approval metadata, never passwords, notes, or full URLs.
-    return records
-      .flatMap((record) => {
-        const ssh = field === "sshKey";
-        const matches = ssh ? matchingSshHosts(record, site) : matchingHosts(record, site);
-        const hosts =
-          query === undefined ? matches : ssh ? matchingSshHosts(record) : matchingHosts(record);
-        return record.type === (ssh ? 5 : 1) &&
-          !record.deletedDate &&
-          /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(record.id) &&
-          (query !== undefined || hosts.length)
-          ? [
-              {
-                item_id: record.id,
-                name: String(record.name ?? (ssh ? "SSH key" : "Login")).slice(0, 120),
-                hosts,
-                ...(query !== undefined && !matches.length ? { hostMismatch: true } : {}),
-                ...(!ssh && typeof record.login?.username === "string" && record.login.username
-                  ? { username: record.login.username.slice(0, 320) }
-                  : {}),
-              },
-            ]
-          : [];
-      })
-      .filter((candidate) => {
-        if (terms === undefined) return true;
-        const text = [candidate.name, candidate.username ?? "", ...candidate.hosts]
-          .join(" ")
-          .toLowerCase();
-        return terms.every((term) => text.includes(term));
-      })
-      .slice(0, 100);
   }
   async searchVault(site, query, field, progress) {
     return this.search(site, progress, field, query);
@@ -242,6 +385,7 @@ export class BitwardenProvider {
       reprompt: 0,
       login: { username, password, uris: [{ uri: `https://${site}`, match: 0 }] },
     };
+    this.invalidateIndex();
     try {
       // stdin keeps even the encoded login out of process arguments and logs.
       const raw = await this.runner(
@@ -258,6 +402,7 @@ export class BitwardenProvider {
         !matchingHosts(record, site).length
       )
         throw new Error();
+      this.invalidateIndex();
       return {
         item_id: record.id,
         name: item.name,
@@ -273,12 +418,14 @@ export class BitwardenProvider {
   }
   async addHost(item, field, site) {
     if (!this.#session) throw new BrokerError("Vault is locked.", 503);
+    this.invalidateIndex();
     try {
       site = siteHost(site);
       const env = { ...this.env, BW_SESSION: this.#session };
       const record = JSON.parse(
         await this.runner(this.executable, ["get", "item", item, "--raw"], env),
       );
+      if (field === "ssh") field = record.type === 5 ? "sshKey" : "login";
       const valid = (value) =>
         value.id === item && !value.deletedDate && value.type === (field === "sshKey" ? 5 : 1);
       if (!valid(record)) throw new Error();
@@ -307,6 +454,7 @@ export class BitwardenProvider {
           ),
         );
         if (!valid(saved) || !hosts(saved).includes(site)) throw new Error();
+        this.invalidateIndex();
         return { hosts: hosts(saved) };
       }
       return { hosts: hosts(record) };
@@ -323,14 +471,24 @@ export class BitwardenProvider {
     let record;
     try {
       record = JSON.parse(raw);
-      if (record.id !== item || record.deletedDate || record.type !== (field === "sshKey" ? 5 : 1))
-        throw new Error();
       if (
-        site &&
-        !allowHostMismatch &&
-        !(field === "sshKey" ? matchingSshHosts(record, site) : matchingHosts(record, site)).length
+        record.id !== item ||
+        record.deletedDate ||
+        (field === "ssh"
+          ? ![1, 5].includes(record.type)
+          : record.type !== (field === "sshKey" ? 5 : 1))
       )
         throw new Error();
+      if (site && !allowHostMismatch) {
+        const hosts =
+          record.type === 5
+            ? matchingSshHosts(record, site)
+            : [
+                ...matchingHosts(record, site),
+                ...(field === "ssh" ? matchingSshLoginHosts(record, site) : []),
+              ];
+        if (!hosts.length) throw new Error();
+      }
     } catch {
       throw new BrokerError(
         field === "sshKey"
@@ -339,20 +497,28 @@ export class BitwardenProvider {
         502,
       );
     }
-    if (field === "sshKey") {
+    if (field === "sshKey" || (field === "ssh" && record.type === 5)) {
       const key = record.sshKey?.privateKey;
       if (typeof key !== "string" || !key.trim())
         throw new BrokerError("Requested SSH private key is empty.", 422);
-      return key.endsWith("\n") ? key : `${key}\n`;
+      const privateKey = key.endsWith("\n") ? key : `${key}\n`;
+      return field === "ssh" ? JSON.stringify({ type: "sshKey", privateKey }) : privateKey;
     }
-    return loginValue(record, field);
+    return field === "ssh"
+      ? JSON.stringify({ type: "login", ...JSON.parse(loginValue(record, "login")) })
+      : loginValue(record, field);
   }
   async close() {
-    if (!this.#session) return;
+    this.#generation++;
+    this.#index = undefined;
+    this.#loading = undefined;
+    const session = this.#session;
+    this.#session = undefined;
+    if (!session) return;
     try {
       await this.runner(this.executable, ["lock"], {
         ...this.env,
-        BW_SESSION: this.#session,
+        BW_SESSION: session,
       });
     } finally {
       this.#session = undefined;

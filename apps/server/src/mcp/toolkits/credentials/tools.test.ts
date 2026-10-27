@@ -31,6 +31,7 @@ describe("credential tool boundary", () => {
       argv: ["node", "/tmp/ssh-consumer.mjs"],
     };
     expect(decode(input).field).toBe("sshKey");
+    expect(decode({ ...input, field: "ssh" }).field).toBe("ssh");
   });
   it("supports browsing, searching and resetting only through operator actions", () => {
     const request = { type: "search", requestId: "test-request" };

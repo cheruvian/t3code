@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { Broker } from "../src/broker.js";
+import { commandScope } from "../src/grants.js";
 import { DemoProvider, DEMO_ITEM, DEMO_PASSWORD } from "../src/providers.js";
 
 async function until(fn) {
@@ -197,4 +198,21 @@ test("revocation during provider fetch cancels delivery", async (t) => {
   resolve(JSON.stringify({ username: "fake", password: DEMO_PASSWORD }));
   await new Promise((r) => setTimeout(r, 50));
   assert.deepEqual(await readdir(broker.leaseDir), []);
+});
+
+test("a saved grant cannot match name-only host-mismatch suggestions", async (t) => {
+  const { broker, input } = await setup(t);
+  const scope = await commandScope(input, broker.provider.mode);
+  const grant = await broker.grants.add(scope, DEMO_ITEM, input.ttl_seconds);
+  assert.equal(
+    broker.grants.match(scope, {
+      ...input,
+      candidates: [{ item_id: DEMO_ITEM, hostMismatch: true }],
+    }),
+    undefined,
+  );
+  assert.equal(
+    broker.grants.match(scope, { ...input, candidates: [{ item_id: DEMO_ITEM }] }).grant_id,
+    grant.grant_id,
+  );
 });

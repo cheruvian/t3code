@@ -55,7 +55,7 @@ for (const { site, uri, matches } of [
     try {
       const candidates = await provider.search(site);
       assert.equal(candidates.length, matches ? 1 : 0);
-      assert.deepEqual(calls[2], ["list", "items", "--url", `https://${site}`, "--raw"]);
+      assert.deepEqual(calls[2], ["list", "items", "--raw"]);
       if (matches) {
         assert.deepEqual(JSON.parse(await provider.get(DEMO_ITEM, "login", site)), {
           username: "fake-user",
@@ -69,7 +69,7 @@ for (const { site, uri, matches } of [
     }
   });
 }
-test("local hostname search matches the exact host and excludes lookalikes", async () => {
+test("local hostname search binds only the exact host and marks FQDN suggestions for confirmation", async () => {
   assert.equal(parseRequest({ ...input, site: "heihei" }).site, "heihei");
   for (const site of [
     "heihei:22",
@@ -93,9 +93,18 @@ test("local hostname search matches the exact host and excludes lookalikes", asy
       args[0] === "unlock" ? "fake-session" : args[0] === "list" ? JSON.stringify(records) : "",
   });
   await provider.initialize();
-  assert.deepEqual(await provider.search("heihei"), [
-    { item_id: DEMO_ITEM, name: "Test host", username: "fake-user", hosts: ["heihei"] },
-  ]);
+  const candidates = await provider.search("heihei");
+  assert.ok(
+    candidates
+      .filter((candidate) => candidate.item_id !== DEMO_ITEM)
+      .every(
+        (candidate) => candidate.hostMismatch === true && candidate.matchReason === "shortHost",
+      ),
+  );
+  assert.deepEqual(
+    candidates.filter((candidate) => !candidate.hostMismatch),
+    [{ item_id: DEMO_ITEM, name: "Test host", username: "fake-user", hosts: ["heihei"] }],
+  );
   await provider.close();
 });
 async function setup(t, provider) {
@@ -210,19 +219,22 @@ test("provider search keeps human username metadata, strips secrets and rechecks
   });
   await provider.initialize();
   const matches = await provider.search("example.com");
-  assert.deepEqual(matches, [
-    {
-      item_id: DEMO_ITEM,
-      name: "Example login",
-      username: "private-user",
-      hosts: ["accounts.example.com"],
-    },
-  ]);
+  assert.deepEqual(
+    matches.filter((candidate) => !candidate.hostMismatch),
+    [
+      {
+        item_id: DEMO_ITEM,
+        name: "Example login",
+        username: "private-user",
+        hosts: ["accounts.example.com"],
+      },
+    ],
+  );
   assert.ok(!JSON.stringify(matches).includes("private-pass"));
   assert.ok(!JSON.stringify(matches).includes("private-note"));
   assert.ok(!JSON.stringify(matches).includes("private=token"));
   assert.deepEqual(calls[1], ["sync"]);
-  assert.deepEqual(calls[2], ["list", "items", "--url", "https://example.com", "--raw"]);
+  assert.deepEqual(calls[2], ["list", "items", "--raw"]);
   assert.equal(
     await provider.get(DEMO_ITEM, "login", "example.com"),
     JSON.stringify({ username: "private-user", password: "private-pass" }),

@@ -23,7 +23,7 @@ export const CredentialExecInput = Schema.Struct({
       "Existing tab from preview_status for this script to operate. The consumer receives T3_BROWSER_URL; no new page is created. Omit for non-browser scripts.",
   }),
   site: Schema.String,
-  field: Schema.Literals(["login", "username", "password", "sshKey"]),
+  field: Schema.Literals(["login", "username", "password", "sshKey", "ssh"]),
   label: Schema.String,
   reason: Schema.String,
   ttlSeconds: Schema.Int.check(Schema.isBetween({ minimum: 5, maximum: 300 })),
@@ -71,7 +71,18 @@ export const CredentialExecution = Schema.Struct({
   failureCode: Schema.optional(CredentialExecutionFailureCode),
 });
 export type CredentialExecution = typeof CredentialExecution.Type;
+export const CredentialSearchDiagnostics = Schema.Struct({
+  indexedItems: Schema.Number,
+  compatibleItems: Schema.Number,
+  hostMatches: Schema.Number,
+  suggestedMatches: Schema.Number,
+  returnedItems: Schema.Number,
+  truncated: Schema.Boolean,
+  cacheHit: Schema.Boolean,
+  durationMs: Schema.Number,
+});
 export const CredentialApproval = Schema.Struct({
+  searchDiagnostics: Schema.optional(CredentialSearchDiagnostics),
   searchPhase: Schema.optional(Schema.Literals(["syncing", "matching"])),
   canSave: Schema.optional(Schema.Boolean),
   canSearch: Schema.optional(Schema.Boolean),
@@ -99,6 +110,8 @@ export const CredentialApproval = Schema.Struct({
       username: Schema.optional(Schema.String),
       hosts: Schema.Array(Schema.String),
       hostMismatch: Schema.optional(Schema.Boolean),
+      matchReason: Schema.optional(Schema.Literals(["shortHost", "wildcard"])),
+      kind: Schema.optional(Schema.Literals(["login", "sshKey"])),
     }),
   ),
   grantId: Schema.optional(Schema.String),

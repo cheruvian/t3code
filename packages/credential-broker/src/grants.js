@@ -91,7 +91,9 @@ export class GrantStore {
   }
   match(scope, request) {
     const key = scopeKey(scope);
-    const ids = request.site ? request.candidates.map((c) => c.item_id) : [request.item_id];
+    const ids = request.site
+      ? request.candidates.filter((c) => !c.hostMismatch).map((c) => c.item_id)
+      : [request.item_id];
     const matches = this.list().filter(
       (g) => g.key === key && ids.includes(g.item_id) && request.ttl_seconds <= g.max_ttl,
     );

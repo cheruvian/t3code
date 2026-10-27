@@ -137,7 +137,9 @@ export class Broker {
       allow_search: allowSearch && typeof this.provider.searchVault === "function",
       allow_save_host: allowSearch && typeof this.provider.addHost === "function",
       allow_save:
-        data.field !== "sshKey" && allowSave && typeof this.provider.create === "function",
+        !["sshKey", "ssh"].includes(data.field) &&
+        allowSave &&
+        typeof this.provider.create === "function",
       request_id: randomUUID(),
       state: data.site ? "searching" : "pending",
       created_at: this.now(),
@@ -192,6 +194,7 @@ export class Broker {
             ? "No matching SSH key found. Add this hostname to the key’s t3-ssh-hosts custom field in Bitwarden."
             : "No matching login found for this site.";
       } else {
+        request.search_diagnostics = candidates.diagnostics;
         request.candidates = candidates;
         request.error = undefined;
         if (!candidates.length)
@@ -238,6 +241,7 @@ export class Broker {
     request.candidates = [];
     request.error = undefined;
     request.search_phase = undefined;
+    request.search_diagnostics = undefined;
     request.state = "searching";
     await this.search(request);
   }
@@ -336,6 +340,8 @@ export class Broker {
     if (request.grant_id) result.grant_id = request.grant_id;
     if (request.auto_approved) result.auto_approved = true;
     if (request.site) result.site = request.site;
+    if (operator && request.search_diagnostics)
+      result.search_diagnostics = request.search_diagnostics;
     if (operator && request.search_phase) result.search_phase = request.search_phase;
     if (operator && request.candidates) result.candidates = request.candidates;
     if (operator) result.settled = !request.cleanup_pending;

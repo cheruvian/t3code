@@ -48,12 +48,30 @@ node scripts/embed-programs.mjs. The check command detects stale embedded source
 Connected human clients can send the `search` action with a request ID and a
 query of at most 200 characters. A string (including an empty string to browse)
 searches saved item names, usernames and hostnames; omitting `query` restores
-hostname matches. Results are limited to 100 compatible items and contain only
+ranked host and name suggestions. Words can match across fields. Punctuation and
+accents are normalized; pasted URLs contribute only their hostname. Exact host
+matches rank first, then base-domain login matches, then name suggestions.
+Name-only suggestions are marked `hostMismatch` and never match automatic grants.
+Short-host/FQDN suggestions require the same first label with exactly one side
+being a short hostname. Different FQDN suffixes and numeric IP prefixes are not
+aliases. A leading `*.` in a saved login URL or `t3-ssh-hosts` binding suggests
+one or more subdomain labels, never the apex or a lookalike suffix. These carry
+`matchReason: "shortHost" | "wildcard"` and `hostMismatch: true`, rank below
+normal host matches, and require explicit selection. Wildcard patterns never
+count as host authorization; always allow saves the requested exact host before
+recording permission. Results are limited to 100 compatible items and contain only
 selection metadata. Queries and results are not returned to the requesting agent.
-Search is submitted explicitly rather than run on every keystroke.
+Search is submitted explicitly rather than run on every keystroke. Operator-only
+`searchDiagnostics` reports indexed and compatible counts, host/name suggestion
+counts, returned count, truncation, cache hits, and elapsed time. It includes no
+query, item identity, hostname, or secret. No search history is persisted.
 
 Bitwarden's basic CLI search does not index SSH custom fields, so manual search
-filters sanitized metadata from `list items` inside the provider. Deleted items
+filters sanitized metadata from `list items` inside the provider. This metadata
+index is loaded on first use, shared across concurrent requests, refreshed after
+30 seconds, invalidated by vault edits, and cleared on lock. It retains names,
+usernames, types, and hostnames, never passwords, keys, notes, or URL paths/query
+strings. Approved delivery still fetches and validates the current item. Deleted items
 and incompatible types are excluded. Overlapping searches publish only the latest
 results; denial or cancellation prevents a late search from reviving a request.
 
@@ -180,3 +198,30 @@ Try existing SSH access first; authentication failures can lead to a key request
 while network errors and host-key mismatches need their own diagnosis. A consumer
 may write an explicitly non-sensitive receipt; its stdout and stderr are discarded.
 The CLI accepts `--field sshKey` through the same T3 approval path.
+
+## Combined SSH selection
+
+Use `field: "ssh"` (CLI `--field ssh`) for an SSH consumer that supports both
+keys and passwords. The operator picker includes login and SSH key items, labeled
+with their `kind`. HTTP(S) URLs and SSH URLs are considered for login matching;
+SSH keys use exact `t3-ssh-hosts` bindings. Search can also find either by name.
+
+The selected credential arrives in the usual mode-0600 `CB_CREDENTIAL_FILE` as
+one of these JSON payloads:
+
+```ts
+{ type: "login", username: string, password: string }
+{ type: "sshKey", privateKey: string }
+```
+
+Only the consumer reads this JSON. For `sshKey`, create a mode-0600 temporary
+identity file, pass its path to `ssh -i` with `IdentitiesOnly=yes` and
+`IdentityAgent=none`, and remove it in `finally`. For `login`, use the username
+and a private `SSH_ASKPASS` helper; never pass passwords in arguments, logs, or
+receipts. Keep host-key checking enabled in both cases. Existing `field: "sshKey"`
+still delivers the raw key file directly.
+
+Combined requests share the same approval, exact command scope, cancellation,
+and revocation lifecycle. Inline login creation is unavailable for combined
+requests. Saving a mismatched host updates the selected item's URI or SSH binding
+before recording an always-allow grant.

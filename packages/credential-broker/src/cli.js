@@ -7,7 +7,7 @@ import { BrokerError } from "./common.js";
 const help = `Credential Broker — T3-approved temporary credential files
 
   credential-broker exec --site HOST --reason REASON
-      [--field password|username|login|sshKey] [--label LABEL] [--ttl 60] [--cwd DIR]
+      [--field password|username|login|sshKey|ssh] [--label LABEL] [--ttl 60] [--cwd DIR]
       [--browser-tab TAB_ID]
       -- PROGRAM ARGS...
 

@@ -1486,3 +1486,101 @@ test("stopping during a host save prevents creating a grant or starting the cons
   assert.deepEqual(broker.state().grants, []);
   await assert.rejects(stat(marker), { code: "ENOENT" });
 });
+
+for (const selectedKind of ["login", "sshKey"]) {
+  test(`combined SSH approval privately delivers selected ${selectedKind} and operator-only search diagnostics`, async (t) => {
+    const keyId = "33333333-3333-4333-8333-333333333333";
+    const records = [
+      {
+        id: DEMO_ITEM,
+        type: 1,
+        name: "heihei - admin",
+        login: { username: "admin", password: "test-password", uris: [{ uri: "ssh://heihei" }] },
+      },
+      {
+        id: keyId,
+        type: 5,
+        name: "agent-key",
+        fields: [{ name: "t3-ssh-hosts", type: 0, value: "heihei" }],
+        sshKey: { privateKey: "test-private-key" },
+      },
+    ];
+    const provider = new BitwardenProvider({
+      passwordPrompt: async () => "fake-master",
+      runner: async (_, args) => {
+        if (args[0] === "unlock") return "fake-session";
+        if (args[0] === "list") return JSON.stringify(records);
+        if (args[0] === "get")
+          return JSON.stringify(records.find((record) => record.id === args[2]));
+        return "";
+      },
+    });
+    const { broker, caller, input, script, marker, runtime } = await setup(t, { provider });
+    await writeFile(
+      script,
+      `import fs from 'node:fs';
+const file=process.env.CB_CREDENTIAL_FILE;
+const value=JSON.parse(fs.readFileSync(file,'utf8'));
+const received=value.type===${JSON.stringify(selectedKind)} && (value.type==='login' ? value.username==='admin'&&value.password==='test-password' : value.privateKey==='test-private-key\\n');
+fs.writeFileSync(process.argv[2],JSON.stringify({received,path:file,privateFile:(fs.statSync(file).mode&0o777)===0o600}));
+process.exitCode=received?0:1;`,
+    );
+    const { execution, request } = await pending(broker, caller, {
+      ...input,
+      site: "heihei",
+      field: "ssh",
+    });
+    assert.equal(request.canSave, false);
+    assert.deepEqual(new Set(request.candidates.map((c) => c.kind)), new Set(["login", "sshKey"]));
+    assert.equal(request.searchDiagnostics.indexedItems, 2);
+    await broker.action("human", {
+      type: "decide",
+      requestId: request.requestId,
+      decision: "once",
+      candidateId: selectedKind === "login" ? DEMO_ITEM : keyId,
+    });
+    const result = await execution;
+    assert.equal(result.state, "completed");
+    assert.equal(result.exitCode, 0);
+    const receipt = JSON.parse(await readFile(marker, "utf8"));
+    assert.equal(receipt.received, true);
+    assert.equal(receipt.privateFile, true);
+    await assert.rejects(stat(receipt.path), { code: "ENOENT" });
+    assert.deepEqual(await readdir(join(runtime, "leases")), []);
+    assert.equal(result.candidates, undefined);
+    assert.equal(result.searchDiagnostics, undefined);
+    assert.equal(
+      JSON.stringify({ result, state: broker.state() }).includes("test-password"),
+      false,
+    );
+    assert.equal(
+      JSON.stringify({ result, state: broker.state() }).includes("test-private-key"),
+      false,
+    );
+  });
+}
+
+test("name-only suggestions stay marked for explicit human confirmation", async (t) => {
+  const provider = new BitwardenProvider({
+    passwordPrompt: async () => "fake-master",
+    runner: async (_, args) => {
+      if (args[0] === "unlock") return "fake-session";
+      if (args[0] === "list" || args[0] === "get") {
+        const record = {
+          id: DEMO_ITEM,
+          type: 1,
+          name: "example - admin",
+          login: { username: "admin", password: "test-secret", uris: [] },
+        };
+        return JSON.stringify(args[0] === "list" ? [record] : record);
+      }
+      return "";
+    },
+  });
+  const { broker, caller, input } = await setup(t, { provider });
+  const { execution, request } = await pending(broker, caller, { ...input, field: "ssh" });
+  assert.equal(request.candidates.length, 1);
+  assert.equal(request.candidates[0].hostMismatch, true);
+  await broker.action("human", { type: "decide", requestId: request.requestId, decision: "deny" });
+  assert.equal((await execution).state, "denied");
+});

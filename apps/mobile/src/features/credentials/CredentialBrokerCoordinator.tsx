@@ -421,7 +421,9 @@ function Approval({
   const [submitting, setSubmitting] = useState(false);
   const selection = request.candidates.some((c) => c.id === chosenId)
     ? chosenId
-    : request.searchQuery === undefined && request.candidates.length === 1
+    : request.searchQuery === undefined &&
+        request.candidates.length === 1 &&
+        !request.candidates[0]!.hostMismatch
       ? request.candidates[0]!.id
       : undefined;
   const selected = request.candidates.find((c) => c.id === selection);
@@ -498,7 +500,13 @@ function Approval({
           <View className="gap-3">
             <View className="flex-row items-center justify-between gap-2">
               <Text className="font-t3-medium text-foreground">
-                {adding ? "New login" : request.field === "sshKey" ? "SSH key" : "Saved credential"}
+                {adding
+                  ? "New login"
+                  : request.field === "ssh"
+                    ? "SSH key or login"
+                    : request.field === "sshKey"
+                      ? "SSH key"
+                      : "Saved credential"}
               </Text>
               {request.canSave && (
                 <Button
@@ -550,9 +558,16 @@ function Approval({
                           }}
                           accessibilityLabel={[
                             c.name,
+                            c.kind === "sshKey" ? "SSH key" : c.kind === "login" ? "Login" : "",
                             c.username,
                             c.hosts.join(", ") || "No saved host",
-                            c.hostMismatch ? "Host does not match" : "",
+                            c.matchReason === "shortHost"
+                              ? "Short hostname suggestion"
+                              : c.matchReason === "wildcard"
+                                ? "Wildcard host suggestion"
+                                : c.hostMismatch
+                                  ? "Host does not match"
+                                  : "",
                           ]
                             .filter(Boolean)
                             .join(" · ")}
@@ -563,12 +578,23 @@ function Approval({
                           <Text className="font-t3-medium text-foreground">
                             {selection === c.id ? "✓ " : ""}
                             {c.name}
+                            {c.kind ? ` · ${c.kind === "sshKey" ? "SSH key" : "Login"}` : ""}
                           </Text>
                           <Text className="text-xs text-foreground-muted">
                             {[c.username, c.hosts.join(", ") || "No saved host"]
                               .filter(Boolean)
                               .join(" · ")}
                           </Text>
+                          {c.hostMismatch && (
+                            <Text className="text-xs text-foreground-muted">
+                              {c.matchReason === "shortHost"
+                                ? "Short hostname suggestion"
+                                : c.matchReason === "wildcard"
+                                  ? "Wildcard host suggestion"
+                                  : "Host does not match"}{" "}
+                              · confirm before allowing
+                            </Text>
+                          )}
                         </Pressable>
                       ))}
                     </View>
@@ -635,6 +661,7 @@ function Approval({
               directory: request.cwd,
               fields: request.field,
               lifetimeSeconds: request.ttlSeconds,
+              search: request.searchDiagnostics,
             },
             null,
             2,
@@ -659,14 +686,14 @@ function VaultSearch({
     <View className="gap-2">
       <Text className="text-sm text-foreground">Search Bitwarden</Text>
       <TextInput
-        accessibilityLabel="Search Bitwarden by name, username, or host"
+        accessibilityLabel="Search Bitwarden by name, username, or URL"
         value={query}
         onChangeText={setQuery}
         editable={!disabled}
         maxLength={200}
         autoCapitalize="none"
         autoCorrect={false}
-        placeholder="Name, username, or host"
+        placeholder="Name, username, or URL"
         className="rounded-xl border border-border px-3 py-2 text-foreground"
         returnKeyType="search"
         onSubmitEditing={() => {
@@ -675,11 +702,11 @@ function VaultSearch({
       />
       <Button label="Search" disabled={disabled} onPress={() => search(query)} />
       <Text className="text-xs text-foreground-muted">
-        Search all saved credentials, even when the host differs. Leave blank to browse.
+        Search names, usernames, and domains/URLs. Leave blank to browse.
       </Text>
       {request.searchQuery !== undefined && (
         <Button
-          label="Use hostname matches"
+          label="Use suggested credentials"
           tone="text"
           disabled={disabled}
           onPress={() => search()}
