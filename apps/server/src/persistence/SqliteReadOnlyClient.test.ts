@@ -206,3 +206,16 @@ it.effect("never reads ahead of the write connection inside a read transaction",
     assert.equal(yield* countReceipts(writeSql), 2);
   }).pipe(Effect.provide(layer));
 });
+
+it.effect("nests write-client transactions inside a read-client transaction", () => {
+  const { layer } = makeFilePersistenceLayer();
+  return Effect.gen(function* () {
+    const writeSql = yield* SqlClient.SqlClient;
+    const readSql = yield* ReadOnlySqlClient;
+    yield* insertReceipt(writeSql, "nested-read");
+    const count = yield* readSql.withTransaction(
+      writeSql.withTransaction(readSql.withTransaction(countReceipts(writeSql))),
+    );
+    assert.equal(count, 1);
+  }).pipe(Effect.provide(layer));
+});

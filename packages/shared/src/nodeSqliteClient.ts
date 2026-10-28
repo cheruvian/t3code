@@ -1216,8 +1216,12 @@ const make = Effect.fn("makeWithDatabase")(function* (
     ],
     transformRows,
   });
+  // Companion clients share the owner so nested savepoints use its private semaphore.
+  const transactionOwner = Context.Service<Client.SqlClient["withTransaction"]>(
+    `${client.transactionService.key}/Owner`,
+  );
   const withTransaction = client.withTransaction;
-  const localTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  const localTransaction: Client.SqlClient["withTransaction"] = (effect) =>
     Effect.uninterruptibleMask((restore) => {
       // SqlClient masks setup; acquisition must preserve the caller's interruptibility.
       const pending: {
@@ -1228,10 +1232,10 @@ const make = Effect.fn("makeWithDatabase")(function* (
         ownerAtWaitStart: undefined,
         restore,
       };
-      const body = Effect.withFiber<A, E, R>((fiber) => {
+      const body = Effect.withFiber((fiber) => {
         annotateAcquired(fiber, pending.acquired, pending.ownerAtWaitStart);
         pending.restore = undefined;
-        return effect;
+        return Effect.provideService(effect, transactionOwner, localTransaction);
       });
       return restore(
         withTransaction(body).pipe(Effect.provideService(TransactionAcquire, pending)),
@@ -1239,10 +1243,8 @@ const make = Effect.fn("makeWithDatabase")(function* (
     });
   return Object.assign(client, {
     withTransaction: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      Effect.flatMap(Effect.serviceOption(client.transactionService), (active) =>
-        transactionClient !== undefined && Option.isSome(active) && active.value[0] !== connection
-          ? transactionClient.withTransaction(effect)
-          : localTransaction(effect),
+      Effect.flatMap(Effect.serviceOption(transactionOwner), (owner) =>
+        Option.isSome(owner) ? owner.value(effect) : localTransaction(effect),
       ),
   });
 });
