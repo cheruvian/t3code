@@ -46,10 +46,12 @@ export class T3CredentialBroker {
     now = Date.now,
     watchdog = true,
     approvalTimeout = null,
+    requirePresenter = false,
     noticeTimeout = 10000,
     platform = process.platform,
     searchPath = process.env.PATH ?? "",
   }) {
+    this.requirePresenter = requirePresenter;
     this.searchPath = searchPath;
     this.runtime = runtime;
     this.workerEntrypoint = workerEntrypoint;
@@ -133,16 +135,26 @@ export class T3CredentialBroker {
   }
   subscribe(sessionId, viewId, listener) {
     const key = `${sessionId}:${viewId}`;
-    if (this.#views.has(key)) throw new BrokerError("Presenter already attached.");
-    this.#views.set(key, { sessionId, visible: false });
-    this.#listeners.add(listener);
+    let view = this.#views.get(key);
+    if (!view) {
+      view = { sessionId, visible: false, subscriptions: new Set() };
+      this.#views.set(key, view);
+    }
+    // Reconnecting RPC streams can overlap while the old transport finishes closing.
+    const subscription = (state) => listener(state);
+    view.subscriptions.add(subscription);
+    this.#listeners.add(subscription);
     listener(this.state());
     return () => {
-      this.#listeners.delete(listener);
-      this.#views.delete(key);
-      this.#lostView(key);
+      if (!view.subscriptions.delete(subscription)) return;
+      this.#listeners.delete(subscription);
+      if (view.subscriptions.size === 0) {
+        this.#views.delete(key);
+        this.#lostView(key);
+      }
     };
   }
+
   #lostView(key) {
     for (const [id, entry] of this.#notices) {
       if (entry.owner !== key) continue;
@@ -338,6 +350,13 @@ export class T3CredentialBroker {
     if (signal?.aborted)
       throw new BrokerError("Credential caller was cancelled.", 409, "caller_cancelled");
     if (this.#closing) throw new BrokerError("Broker unavailable.", 503, "broker_unavailable");
+    if (this.requirePresenter && ![...this.#views.values()].some((view) => view.visible)) {
+      throw new BrokerError(
+        "No connected client can approve credentials. Connect a client with access:read and access:write permissions and open T3, then retry.",
+        403,
+        "approval_client_unavailable",
+      );
+    }
     if (this.#status !== "ready") {
       const requestId = randomUUID();
       const result = await new Promise((resolve) => {

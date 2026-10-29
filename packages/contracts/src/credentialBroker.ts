@@ -193,6 +193,7 @@ export const CredentialBrokerFailureCode = Schema.Literals([
   "consumer_unavailable",
   "caller_cancelled",
   "broker_unavailable",
+  "approval_client_unavailable",
 ]);
 export class CredentialBrokerError extends Schema.TaggedError<CredentialBrokerError>()(
   "CredentialBrokerError",
@@ -212,6 +213,8 @@ export class CredentialBrokerError extends Schema.TaggedError<CredentialBrokerEr
         return "Credential Broker invalid_request: use a valid hostname, a command name or absolute executable path, an absolute working directory, and an integer lifetime of 5–300 seconds.";
       case "consumer_unavailable":
         return "Credential Broker consumer_unavailable: check that the command is installed on this environment’s PATH (or the supplied absolute path is executable) and the working directory exists. No vault search or approval was started.";
+      case "approval_client_unavailable":
+        return "Credential Broker approval_client_unavailable: no connected, visible client can approve credentials. Connect to this environment with access:read and access:write permissions, open T3, then retry.";
       case "caller_cancelled":
         return "Credential Broker caller_cancelled: the originating tool call or turn ended; no further access is authorized.";
       default:

@@ -6,7 +6,11 @@ import type {
   CredentialExecution,
 } from "@t3tools/contracts";
 export class T3CredentialBroker {
-  constructor(options: { runtime: string; workerEntrypoint?: ReadonlyArray<string> });
+  constructor(options: {
+    runtime: string;
+    workerEntrypoint?: ReadonlyArray<string>;
+    requirePresenter?: boolean;
+  });
   state(): CredentialBrokerState;
   subscribe(
     sessionId: string,

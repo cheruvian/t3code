@@ -157,6 +157,7 @@ const make = Effect.gen(function* () {
         new T3CredentialBroker({
           runtime: path.join(config.stateDir, "credential-broker"),
           workerEntrypoint,
+          requirePresenter: true,
         }),
     ),
     (broker) => Effect.promise(() => broker.close()).pipe(Effect.ignore),

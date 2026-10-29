@@ -1584,3 +1584,64 @@ test("name-only suggestions stay marked for explicit human confirmation", async 
   await broker.action("human", { type: "decide", requestId: request.requestId, decision: "deny" });
   assert.equal((await execution).state, "denied");
 });
+
+test("required approval presenter rejects absent and read-only clients before vault access", async (t) => {
+  const { broker, caller, input } = await setup(t, { requirePresenter: true });
+  await broker.lock();
+  const detach = broker.subscribe("read-only", "observer", () => {});
+  t.after(detach);
+  const rejected = new AbortController();
+  const requested = milestone(broker, (s) => s.requests.length > 0);
+  const attempt = broker.execute(caller, input, rejected.signal);
+  const outcome = await Promise.race([
+    attempt.then(
+      () => "completed",
+      (error) => error.code,
+    ),
+    requested.then(() => "prompted"),
+  ]);
+  rejected.abort();
+  await attempt.catch(() => {});
+  assert.equal(outcome, "approval_client_unavailable");
+  assert.deepEqual(broker.state().requests, []);
+  const stopPresenting = await visible(broker);
+  t.after(stopPresenting);
+  const waiting = milestone(broker, (s) => s.requests.some((r) => r.state === "awaiting_unlock"));
+  const controller = new AbortController();
+  const execution = broker.execute(caller, input, controller.signal);
+  await waiting;
+  controller.abort();
+  assert.equal((await execution).state, "released");
+});
+
+test("required approval presenter rejects an unlocked vault without a client", async (t) => {
+  const { broker, caller, input } = await setup(t, { requirePresenter: true });
+  await assert.rejects(broker.execute(caller, input), { code: "approval_client_unavailable" });
+  assert.deepEqual(broker.state().requests, []);
+});
+
+test("overlapping reconnect subscriptions retain the presenter until the last stream closes", async (t) => {
+  const { broker } = await setup(t);
+  const original = [];
+  const replacement = [];
+  const detachOriginal = broker.subscribe("human", "reconnecting", (state) =>
+    original.push(state.status),
+  );
+  const detachReplacement = broker.subscribe("human", "reconnecting", (state) =>
+    replacement.push(state.status),
+  );
+  t.after(detachOriginal);
+  t.after(detachReplacement);
+  await broker.action("human", { type: "presenter", viewId: "reconnecting", visible: true });
+  detachOriginal();
+  detachOriginal();
+  await broker.lock();
+  assert.deepEqual(original, ["ready"]);
+  assert.equal(replacement.at(-1), "locked");
+  await broker.action("human", { type: "presenter", viewId: "reconnecting", visible: true });
+  detachReplacement();
+  await assert.rejects(
+    broker.action("human", { type: "presenter", viewId: "reconnecting", visible: true }),
+    /Presenter not attached/,
+  );
+});
