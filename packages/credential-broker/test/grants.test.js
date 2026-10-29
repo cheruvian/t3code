@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { Broker } from "../src/broker.js";
-import { commandScope } from "../src/grants.js";
+import { GrantStore, commandScope } from "../src/grants.js";
 import { DemoProvider, DEMO_ITEM, DEMO_PASSWORD } from "../src/providers.js";
 
 async function until(fn) {
@@ -215,4 +215,25 @@ test("a saved grant cannot match name-only host-mismatch suggestions", async (t)
     broker.grants.match(scope, { ...input, candidates: [{ item_id: DEMO_ITEM }] }).grant_id,
     grant.grant_id,
   );
+});
+
+test("timed grants expire and remain expired after reload", async () => {
+  const runtime = await mkdtemp("/tmp/t3-timed-grants-");
+  const originalNow = Date.now;
+  let now = 1800000000000;
+  Date.now = () => now;
+  try {
+    const store = new GrantStore(runtime);
+    const grant = await store.add({ site: "example.com" }, DEMO_ITEM, 30, 3600);
+    assert.equal(grant.expires_at, now + 3600000);
+    now += 3600000;
+    assert.equal(store.get(grant.grant_id), undefined);
+    assert.deepEqual(store.list(), []);
+    const reloaded = new GrantStore(runtime);
+    await reloaded.initialize();
+    assert.deepEqual(reloaded.list(), []);
+  } finally {
+    Date.now = originalNow;
+    await rm(runtime, { recursive: true, force: true });
+  }
 });

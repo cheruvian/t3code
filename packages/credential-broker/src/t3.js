@@ -275,6 +275,8 @@ export class T3CredentialBroker {
         input.decision !== "deny",
         input.candidateId,
         input.decision === "always",
+        undefined,
+        { durationSeconds: input.durationSeconds, saveHost: input.saveHost },
       );
     else if (input.type === "search") await broker.searchVault(input.requestId, input.query);
     else if (input.type === "saveLogin")

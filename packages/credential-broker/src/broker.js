@@ -444,7 +444,7 @@ export class Broker {
       throw new BrokerError("Could not save and use the login.", 502);
     }
   }
-  async decide(id, approve, itemId, always = false, automaticGrant) {
+  async decide(id, approve, itemId, always = false, automaticGrant, options = {}) {
     await this.sweep();
     const request = this.find(id);
     if (request.state !== "pending" && !(request.state === "searching" && !approve))
@@ -462,14 +462,14 @@ export class Broker {
       allowHostMismatch = candidate.hostMismatch === true;
       if (allowHostMismatch && automaticGrant)
         throw new BrokerError("Automatic access requires a matching saved host.");
-      if (allowHostMismatch && always && !request.allow_save_host)
+      if (allowHostMismatch && (always || options.saveHost) && !request.allow_save_host)
         throw new BrokerError("This provider cannot save the requested host.");
       request.item_id = selected;
     } else if (itemId && itemId !== request.item_id) {
       throw new BrokerError("Selected item does not match the request.");
     }
     request.state = "preparing";
-    if (allowHostMismatch && always) {
+    if (allowHostMismatch && (always || options.saveHost)) {
       try {
         const saved = await this.provider.addHost(request.item_id, request.field, request.site);
         await this.sweep();
@@ -495,7 +495,12 @@ export class Broker {
         if (!this.notifier) throw new Error();
         const scope = await commandScope(request, this.provider.mode);
         if (request.state !== "preparing" || this.#closing) return this.public(request);
-        const grant = await this.grants.add(scope, request.item_id, request.ttl_seconds);
+        const grant = await this.grants.add(
+          scope,
+          request.item_id,
+          request.ttl_seconds,
+          options.durationSeconds,
+        );
         request.grant_id = grant.grant_id;
       }
       if (automaticGrant && !this.grants.get(automaticGrant.grant_id)) throw new Error();

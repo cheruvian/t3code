@@ -84,10 +84,12 @@ export class GrantStore {
     }
   }
   list() {
-    return [...this.#grants.values()];
+    return [...this.#grants.values()].filter(
+      (grant) => !grant.expires_at || grant.expires_at > Date.now(),
+    );
   }
   get(id) {
-    return this.#grants.get(id);
+    return this.list().find((grant) => grant.grant_id === id);
   }
   match(scope, request) {
     const key = scopeKey(scope);
@@ -99,7 +101,9 @@ export class GrantStore {
     );
     return matches.length === 1 ? matches[0] : undefined;
   }
-  async add(scope, item_id, max_ttl) {
+  async add(scope, item_id, max_ttl, durationSeconds) {
+    if (durationSeconds !== undefined && durationSeconds !== 3600)
+      throw new BrokerError("Unsupported approval duration.");
     const grant = {
       grant_id: randomUUID(),
       key: scopeKey(scope),
@@ -107,9 +111,14 @@ export class GrantStore {
       item_id,
       max_ttl,
       created_at: Date.now(),
+      ...(durationSeconds ? { expires_at: Date.now() + durationSeconds * 1000 } : {}),
     };
     const existing = this.list().find((g) => g.key === grant.key && g.item_id === item_id);
-    if (existing) return existing;
+    if (existing) {
+      if (existing.expires_at !== undefined || durationSeconds !== undefined) {
+        await this.revoke(existing.grant_id);
+      } else return existing;
+    }
     if (this.#grants.size >= 1000) throw new BrokerError("Too many always-allow grants.");
     this.#grants.set(grant.grant_id, grant);
     try {

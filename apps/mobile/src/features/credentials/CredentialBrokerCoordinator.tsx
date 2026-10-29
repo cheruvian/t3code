@@ -418,6 +418,8 @@ function Approval({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [chosenId, setSelection] = useState<string | undefined>();
   const [adding, setAdding] = useState(false);
+  const [durationSeconds, setDurationSeconds] = useState<3600 | undefined>();
+  const [saveHost, setSaveHost] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const selection = request.candidates.some((c) => c.id === chosenId)
     ? chosenId
@@ -438,6 +440,8 @@ function Approval({
         type: "decide",
         requestId: request.requestId,
         decision: choice,
+        ...(choice === "always" && durationSeconds ? { durationSeconds } : {}),
+        ...(choice !== "deny" && saveHost ? { saveHost: true } : {}),
         ...(choice !== "deny" && selection ? { candidateId: selection } : {}),
       });
     } finally {
@@ -619,7 +623,7 @@ function Approval({
               <Text className="text-xs text-foreground-muted">
                 {selected?.hostMismatch
                   ? `Always allow also saves ${request.site} to this credential in Bitwarden. Existing hosts are kept.`
-                  : "Always allow remembers access for this thread, credential, and command. Revoke anytime in Manage access."}
+                  : "Allow for this thread remembers access for this credential and command. Revoke anytime in Manage access."}
               </Text>
               <View className="flex-row flex-wrap justify-end gap-2">
                 <Button
@@ -629,7 +633,17 @@ function Approval({
                   onPress={() => void submit("deny")}
                 />
                 <Button
-                  label="Always allow"
+                  label={durationSeconds ? "Duration: 1 hour" : "Duration: this thread"}
+                  onPress={() => setDurationSeconds(durationSeconds ? undefined : 3600)}
+                />
+                {selected?.hostMismatch && request.canSaveHost && (
+                  <Button
+                    label={saveHost ? "✓ Save domain to credential" : "Save domain to credential"}
+                    onPress={() => setSaveHost(!saveHost)}
+                  />
+                )}
+                <Button
+                  label={durationSeconds ? "Allow for 1 hour" : "Allow for this thread"}
                   tone="secondary"
                   disabled={unavailable || !selection || !canAlways}
                   onPress={() => void submit("always")}

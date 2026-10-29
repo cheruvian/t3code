@@ -416,6 +416,8 @@ export function ApprovalCard({
     : "Unverified caller";
   const [chosenId, setSelection] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [durationSeconds, setDurationSeconds] = useState<3600 | undefined>();
+  const [saveHost, setSaveHost] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const selection = request.candidates.some((candidate) => candidate.id === chosenId)
     ? chosenId
@@ -437,6 +439,8 @@ export function ApprovalCard({
         type: "decide",
         requestId: request.requestId,
         decision: choice,
+        ...(choice === "always" && durationSeconds ? { durationSeconds } : {}),
+        ...(choice !== "deny" && saveHost ? { saveHost: true } : {}),
         ...(choice !== "deny" && selection ? { candidateId: selection } : {}),
       });
     } finally {
@@ -632,10 +636,28 @@ export function ApprovalCard({
           </div>
           {!adding && (
             <>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  disabled={unavailable}
+                  onClick={() => setDurationSeconds(durationSeconds ? undefined : 3600)}
+                >
+                  {durationSeconds ? "Duration: 1 hour" : "Duration: this thread"}
+                </Button>
+                {selected?.hostMismatch && request.canSaveHost && (
+                  <Button
+                    variant="outline"
+                    disabled={unavailable}
+                    onClick={() => setSaveHost(!saveHost)}
+                  >
+                    {saveHost ? "✓ Save domain to credential" : "Save domain to credential"}
+                  </Button>
+                )}
+              </div>
               <p className="text-xs text-muted-foreground">
                 {selected?.hostMismatch
                   ? `Always allow also saves ${request.site} to this credential in Bitwarden. Existing hosts are kept.`
-                  : "Always allow remembers access for this thread, credential, and command. Revoke anytime in Manage access."}
+                  : "Allow for this thread remembers access for this credential and command. Revoke anytime in Manage access."}
               </p>
               <div className="flex flex-wrap items-center justify-end gap-2 border-t pt-4">
                 <Button
@@ -650,7 +672,7 @@ export function ApprovalCard({
                   disabled={unavailable || !selection || !canAlways}
                   onClick={() => void submit("always")}
                 >
-                  Always allow
+                  {durationSeconds ? "Allow for 1 hour" : "Allow for this thread"}
                 </Button>
                 <Button disabled={unavailable || !selection} onClick={() => void submit("once")}>
                   {submitting ? "Allowing…" : "Allow once"}
