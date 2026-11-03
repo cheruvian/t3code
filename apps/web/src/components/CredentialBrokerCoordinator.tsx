@@ -206,12 +206,26 @@ export function EnvironmentBroker({
                   access is unavailable.
                 </p>
               )}
-              {(state?.status === "locked" || state?.status === "unlocking") && (
+              {state && state.status !== "unsupported" && (
                 <VaultUnlock
-                  busy={state.status === "unlocking"}
+                  busy={state.status === "unlocking" || state.addingAccount === true}
                   disabled={!canAct}
-                  unlock={(password, executable) => act({ type: "unlock", password, executable })}
+                  unlock={(password, executable, account, profileDirectory) =>
+                    act({ type: "unlock", password, executable, account, profileDirectory })
+                  }
                 />
+              )}
+              {(state?.accounts ?? []).length > 0 && (
+                <p className="text-sm">Unlocked accounts: {state?.accounts?.join(", ")}</p>
+              )}
+              {state?.status === "ready" && (
+                <Button
+                  variant="outline"
+                  disabled={!canAct || state.refreshing === true}
+                  onClick={() => void act({ type: "refresh" })}
+                >
+                  {state.refreshing ? "Refreshing accounts…" : "Refresh accounts"}
+                </Button>
               )}
               {!locked &&
                 [...pending, ...active]
@@ -349,23 +363,53 @@ function VaultUnlock({
 }: {
   busy: boolean;
   disabled: boolean;
-  unlock: (password: string, executable: string) => Promise<void>;
+  unlock: (
+    password: string,
+    executable: string,
+    account?: string,
+    profileDirectory?: string,
+  ) => Promise<void>;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const executable = useRef<HTMLInputElement>(null);
+  const account = useRef<HTMLInputElement>(null);
+  const profile = useRef<HTMLInputElement>(null);
   return (
     <form
       onSubmit={(event) => {
         event.preventDefault();
         const password = input.current?.value ?? "";
         if (input.current) input.current.value = "";
-        void unlock(password, executable.current?.value || "bw");
+        void unlock(
+          password,
+          executable.current?.value || "bw",
+          account.current?.value || "Default",
+          profile.current?.value || undefined,
+        );
       }}
       className="space-y-3"
     >
       <p className="text-sm">
-        Unlock Bitwarden privately. The server must already be signed in with the Bitwarden CLI.
+        Unlock an account privately. For each additional account, sign in using a separate Bitwarden
+        CLI profile on the server, then enter its directory below.
       </p>
+      <label className="block space-y-1.5 text-sm">
+        <span>Account email or name</span>
+        <Input
+          ref={account}
+          aria-label="Bitwarden account"
+          disabled={busy || disabled}
+          maxLength={320}
+        />
+      </label>
+      <label className="block space-y-1.5 text-sm">
+        <span>CLI profile directory on server (optional for default account)</span>
+        <Input
+          ref={profile}
+          aria-label="Bitwarden CLI profile directory"
+          disabled={busy || disabled}
+        />
+      </label>
       <label className="block space-y-1.5 text-sm">
         <span>Bitwarden master password</span>
         <Input
@@ -840,6 +884,7 @@ function SaveLogin({
   disabled: boolean;
   act: (input: CredentialBrokerAction) => Promise<void>;
 }) {
+  const account = useRef<HTMLInputElement>(null);
   const username = useRef<HTMLInputElement>(null);
   const password = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
@@ -856,6 +901,7 @@ function SaveLogin({
           event.preventDefault();
           if (disabled || busy) return;
           const login = {
+            account: account.current?.value || undefined,
             username: username.current?.value ?? "",
             password: password.current?.value ?? "",
           };
@@ -867,6 +913,15 @@ function SaveLogin({
           );
         }}
       >
+        <label className="space-y-1">
+          <span>Destination account (required with multiple accounts)</span>
+          <Input
+            ref={account}
+            aria-label="Destination Bitwarden account"
+            maxLength={320}
+            disabled={disabled || busy}
+          />
+        </label>
         <label className="space-y-1">
           <span>Username or email</span>
           <Input

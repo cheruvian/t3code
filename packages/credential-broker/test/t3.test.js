@@ -1645,3 +1645,33 @@ test("overlapping reconnect subscriptions retain the presenter until the last st
     /Presenter not attached/,
   );
 });
+
+test("manual refresh shares in-flight work, publishes completion and sanitizes failures", async (t) => {
+  const provider = new DemoProvider();
+  let finishRefresh;
+  let refreshCalls = 0;
+  provider.refresh = () => {
+    refreshCalls++;
+    return new Promise((resolve) => {
+      finishRefresh = resolve;
+    });
+  };
+  const { broker } = await setup(t, { provider });
+  const refresh = broker.action("human", { type: "refresh" });
+  assert.equal(broker.state().refreshing, true);
+  await broker.action("human", { type: "refresh" });
+  assert.equal(refreshCalls, 1);
+  finishRefresh();
+  await refresh;
+  assert.equal(broker.state().refreshing, false);
+  provider.refresh = async () => {
+    throw new Error("private-provider-output");
+  };
+  await assert.rejects(broker.action("human", { type: "refresh" }), {
+    message: "Vault refresh failed.",
+  });
+  assert.equal(broker.state().status, "ready");
+  assert.equal(broker.state().refreshing, false);
+  await broker.lock();
+  await assert.rejects(broker.action("human", { type: "refresh" }), /Unlock/);
+});

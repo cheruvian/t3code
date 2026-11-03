@@ -34,7 +34,7 @@ async function vault(t, records) {
   });
   await provider.initialize();
   t.after(() => provider.close());
-  return { provider, calls, advance: () => (now += 30_000) };
+  return { provider, calls, advance: () => (now += 300_000) };
 }
 test("SSH picker ranks bound keys and SSH URL logins ahead of unbound name suggestions", async (t) => {
   const records = [
@@ -110,7 +110,7 @@ test("combined delivery tags the selected type and rechecks current binding and 
   records[1] = { ...records[1], type: 2 };
   await assert.rejects(provider.get(keyId, "ssh", "heihei", { allowHostMismatch: true }));
 });
-test("metadata cache shares full listings across fields, refreshes after TTL and clears on lock", async (t) => {
+test("metadata cache shares listings across fields, refreshes in background and clears on lock", async (t) => {
   const { provider, calls, advance } = await vault(t, [login(DEMO_ITEM, "heihei - admin"), key]);
   const first = await provider.search("heihei", () => {}, "ssh");
   const second = await provider.searchVault("heihei", "admin", "login");
@@ -119,6 +119,7 @@ test("metadata cache shares full listings across fields, refreshes after TTL and
   assert.equal(calls.filter((c) => c[0] === "list").length, 1);
   advance();
   await provider.search("heihei", () => {}, "ssh");
+  await provider.refresh();
   assert.equal(calls.filter((c) => c[0] === "list").length, 2);
   await provider.close();
   await assert.rejects(provider.search("heihei", () => {}, "ssh"));
@@ -304,4 +305,67 @@ test("unsupported wildcard forms and Never-match URIs cannot authorize or sugges
     assert.deepEqual(await provider.search(site, () => {}, "ssh"), []);
     await assert.rejects(provider.get(DEMO_ITEM, "ssh", site));
   }
+});
+
+test("expired metadata stays searchable while a shared background refresh is pending", async (t) => {
+  let now = 0;
+  let lists = 0;
+  let resolveList;
+  const provider = new BitwardenProvider({
+    now: () => now,
+    passwordPrompt: async () => "fake-master",
+    runner: async (_, args) => {
+      if (args[0] === "unlock") return "fake-session";
+      if (args[0] === "list") {
+        lists++;
+        if (lists === 1) return JSON.stringify([login(DEMO_ITEM, "Old login", ["https://heihei"])]);
+        return new Promise((resolve) => {
+          resolveList = resolve;
+        });
+      }
+      return "";
+    },
+  });
+  t.after(() => provider.close());
+  await provider.initialize();
+  await provider.search("heihei");
+  now = 300_000;
+  const cached = await provider.search("heihei");
+  assert.equal(cached[0].name, "Old login");
+  assert.equal(cached.diagnostics.cacheHit, true);
+  const refresh = provider.refresh();
+  resolveList(JSON.stringify([login(DEMO_ITEM, "Updated login", ["https://heihei"])]));
+  await refresh;
+  assert.equal((await provider.search("heihei"))[0].name, "Updated login");
+  assert.equal(lists, 2);
+});
+
+test("a failed background refresh preserves cached metadata and retries are throttled", async (t) => {
+  let now = 0;
+  let syncs = 0;
+  let rejectSync;
+  const provider = new BitwardenProvider({
+    now: () => now,
+    passwordPrompt: async () => "fake-master",
+    runner: async (_, args) => {
+      if (args[0] === "unlock") return "fake-session";
+      if (args[0] === "sync" && ++syncs > 1)
+        return new Promise((_, reject) => {
+          rejectSync = reject;
+        });
+      if (args[0] === "list")
+        return JSON.stringify([login(DEMO_ITEM, "Cached login", ["https://heihei"])]);
+      return "";
+    },
+  });
+  t.after(() => provider.close());
+  await provider.initialize();
+  await provider.search("heihei");
+  now = 300_000;
+  assert.equal((await provider.search("heihei"))[0].name, "Cached login");
+  const refresh = provider.refresh();
+  rejectSync(new Error("offline"));
+  await assert.rejects(refresh, /offline/);
+  assert.equal((await provider.search("heihei"))[0].name, "Cached login");
+  assert.equal(syncs, 2);
 });

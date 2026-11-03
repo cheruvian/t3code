@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Broker } from "./broker.js";
+import { AccountProvider } from "./accounts.js";
 import { BitwardenProvider } from "./providers.js";
 import { BrokerError, parseRequest } from "./common.js";
 import { access, stat, realpath } from "node:fs/promises";
@@ -31,6 +32,11 @@ const terminal = new Set(["denied", "expired", "released", "failed", "completed"
 /** Host adapter. Operator methods are never exposed on the agent socket. */
 export class T3CredentialBroker {
   #broker;
+  #accounts;
+  #profileDirectories = new Set();
+  #addingAccount = false;
+  #refreshing = false;
+  #unlockTask;
   #status;
   #listeners = new Set();
   #views = new Map();
@@ -67,6 +73,9 @@ export class T3CredentialBroker {
     return {
       status: this.#status,
       mode: this.#broker?.provider.mode ?? "bitwarden",
+      accounts: this.#accounts?.accounts ?? [],
+      addingAccount: this.#addingAccount,
+      refreshing: this.#refreshing,
       ...(this.#error ? { error: this.#error } : {}),
       requests: [
         ...[...this.#waitingForUnlock.values()].map((entry) => entry.request),
@@ -163,28 +172,97 @@ export class T3CredentialBroker {
     }
     this.#publish();
   }
-  async unlock(password, executable = "bw") {
-    if (this.#status === "unsupported" || this.#status === "unlocking" || this.#closing)
+  unlock(...args) {
+    if (this.#unlockTask) return Promise.reject(new BrokerError("Unlock is in progress."));
+    const task = this.#unlock(...args);
+    this.#unlockTask = task;
+    return task.finally(() => {
+      this.#unlockTask = undefined;
+    });
+  }
+  async #unlock(password, executable = "bw", account = "Default", profileDirectory) {
+    if (
+      this.#status === "unsupported" ||
+      this.#status === "unlocking" ||
+      this.#addingAccount ||
+      this.#closing
+    )
       throw new BrokerError("Broker unavailable.");
-    if (this.#status === "ready") return;
+    if (this.#status === "ready" && (!profileDirectory || this.provider)) {
+      if (!this.provider && account !== "Default")
+        throw new BrokerError("An additional account requires a separate CLI profile directory.");
+      return;
+    }
+    if (
+      typeof account !== "string" ||
+      !account.trim() ||
+      account.length > 320 ||
+      (profileDirectory !== undefined &&
+        (typeof profileDirectory !== "string" || !isAbsolute(profileDirectory)))
+    )
+      throw new BrokerError("Provide an account name and an absolute CLI profile directory.");
+    account = account.trim();
+    const directory = await realpath(
+      profileDirectory ??
+        process.env.BITWARDENCLI_APPDATA_DIR ??
+        join(
+          process.env.HOME ?? "",
+          process.platform === "darwin"
+            ? "Library/Application Support/Bitwarden CLI"
+            : ".config/Bitwarden CLI",
+        ),
+    ).catch(() => profileDirectory ?? "default");
+    if (this.#profileDirectories.has(directory))
+      throw new BrokerError("This CLI profile is already unlocked.");
+    const wasReady = this.#status === "ready";
     if (!this.provider && (typeof password !== "string" || !password || password.length > 4096))
       throw new BrokerError("Invalid unlock.");
-    this.#status = "unlocking";
+    this.#addingAccount = true;
+    if (!wasReady) this.#status = "unlocking";
     this.#error = undefined;
     this.#publish();
     const provider =
       this.provider ??
       new BitwardenProvider({
         executable,
+        env: {
+          ...process.env,
+          ...(profileDirectory ? { BITWARDENCLI_APPDATA_DIR: profileDirectory } : {}),
+        },
         passwordPrompt: async () => {
           const value = password;
           password = undefined;
           return value;
         },
       });
+    const accounts = this.#accounts ?? new AccountProvider();
+    try {
+      if (!this.provider) await accounts.add(account, provider, directory);
+      if (this.#closing) {
+        await accounts.close();
+        throw new BrokerError("Broker unavailable.");
+      }
+      if (wasReady) {
+        this.#profileDirectories.add(directory);
+        return;
+      }
+    } catch {
+      this.#addingAccount = false;
+      if (!wasReady) this.#status = "locked";
+      this.#error =
+        "Account unlock failed. Check that this CLI profile is signed in and the account is not already unlocked.";
+      this.#publish();
+      throw new BrokerError("Account unlock failed.");
+    } finally {
+      password = undefined;
+      if (wasReady) {
+        this.#addingAccount = false;
+        this.#publish();
+      }
+    }
     const broker = new Broker({
       runtime: this.runtime,
-      provider,
+      provider: this.provider ?? accounts,
       now: this.now,
       watchdog: this.watchdog,
       runnerProgram,
@@ -212,17 +290,20 @@ export class T3CredentialBroker {
         this.#status = "locked";
         return;
       }
+      this.#profileDirectories.add(directory);
       this.#broker = broker;
+      if (!this.provider) this.#accounts = accounts;
       this.#status = "ready";
       for (const entry of this.#waitingForUnlock.values()) entry.finish();
     } catch {
-      await provider.close().catch(() => {});
+      await (this.provider ?? accounts).close().catch(() => {});
       this.#status = "locked";
       this.#error =
         "Vault unlock failed. Authenticate the Bitwarden CLI on the server, then unlock privately in T3.";
       throw new BrokerError("Vault unlock failed.");
     } finally {
       password = undefined;
+      this.#addingAccount = false;
       this.#publish();
     }
   }
@@ -254,8 +335,24 @@ export class T3CredentialBroker {
     });
   }
   async action(sessionId, input) {
-    if (input.type === "unlock") return this.unlock(input.password, input.executable);
+    if (input.type === "unlock")
+      return this.unlock(input.password, input.executable, input.account, input.profileDirectory);
     if (input.type === "lock") return this.lock();
+    if (input.type === "refresh") {
+      if (this.#status !== "ready") throw new BrokerError("Unlock an account before refreshing.");
+      if (this.#refreshing) return;
+      this.#refreshing = true;
+      this.#publish();
+      try {
+        await this.#broker.provider.refresh?.();
+      } catch {
+        throw new BrokerError("Vault refresh failed.");
+      } finally {
+        this.#refreshing = false;
+        this.#publish();
+      }
+      return;
+    }
     if (input.type === "presenter") {
       const key = `${sessionId}:${input.viewId}`;
       const view = this.#views.get(key);
@@ -293,6 +390,7 @@ export class T3CredentialBroker {
     else if (input.type === "search") await broker.searchVault(input.requestId, input.query);
     else if (input.type === "saveLogin")
       await broker.saveLogin(input.requestId, {
+        ...(input.account ? { account: input.account } : {}),
         username: input.username,
         password: input.password,
       });
@@ -445,12 +543,15 @@ export class T3CredentialBroker {
   }
   async lock() {
     const broker = this.#broker;
-    if (this.#status === "unlocking") throw new BrokerError("Unlock is in progress.");
+    if (this.#status === "unlocking" || this.#addingAccount)
+      throw new BrokerError("Unlock is in progress.");
     for (const entry of this.#waitingForUnlock.values()) entry.finish("released");
     if (broker) {
       await broker.close();
       this.#publish(); // Resolve every still-waiting tool call before forgetting requests.
       this.#broker = undefined;
+      this.#accounts = undefined;
+      this.#profileDirectories.clear();
     }
     if (this.#status !== "unsupported") this.#status = "locked";
     this.#publish();
@@ -458,7 +559,10 @@ export class T3CredentialBroker {
   async close() {
     this.#closing = true;
     for (const entry of this.#waitingForUnlock.values()) entry.finish("released");
-    if (this.#status === "unlocking") return;
+    if (this.#unlockTask) {
+      void this.#unlockTask.finally(() => this.lock()).catch(() => {});
+      return;
+    }
     await this.lock();
   }
 }

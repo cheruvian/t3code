@@ -260,7 +260,7 @@ test("request requires exactly one site or UUID and rejects non-origin sites", (
   assert.throws(() => parseRequest({ ...input, site: undefined }), /Invalid request/);
 });
 
-test("concurrent searches share sync, reuse fresh vault data, and refresh after 30 seconds", async () => {
+test("concurrent searches share sync, reuse fresh vault data, and refresh after five minutes", async () => {
   let now = 0;
   let syncs = 0;
   let releaseSync;
@@ -295,10 +295,10 @@ test("concurrent searches share sync, reuse fresh vault data, and refresh after 
   releaseSync();
   await Promise.all([first, second]);
   assert.deepEqual(phases, ["syncing", "matching"]);
-  now = 29_999;
+  now = 299_999;
   await provider.search("example.com");
   assert.equal(syncs, 1);
-  now = 30_000;
+  now = 300_000;
   await provider.search("example.com");
   assert.equal(syncs, 2);
   await provider.close();

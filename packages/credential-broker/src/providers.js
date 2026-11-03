@@ -223,6 +223,7 @@ export class BitwardenProvider {
   mode = "bitwarden";
   #session;
   #syncedAt = -Infinity;
+  #refreshAttemptedAt = -Infinity;
   #index;
   #loading;
   #generation = 0;
@@ -266,13 +267,24 @@ export class BitwardenProvider {
     this.#index = undefined;
     this.#loading = undefined;
   }
+  warm() {
+    void this.refresh().catch(() => {});
+  }
   async index(progress) {
     if (!this.#session) throw new BrokerError("Vault is locked.", 503);
-    if (this.#index && this.now() - this.#syncedAt < 30_000)
+    if (this.#index) {
+      if (this.now() - this.#syncedAt >= 300_000 && this.now() - this.#refreshAttemptedAt >= 30_000)
+        this.warm();
       return { items: this.#index, cacheHit: true };
+    }
+    progress("syncing");
+    return { items: await this.refresh(), cacheHit: false };
+  }
+  async refresh() {
+    if (!this.#session) throw new BrokerError("Vault is locked.", 503);
+    this.#refreshAttemptedAt = this.now();
     const generation = this.#generation;
     const session = this.#session;
-    progress("syncing");
     this.#loading ??= (async () => {
       await this.runner(this.executable, ["sync"], { ...this.env, BW_SESSION: session });
       const records = JSON.parse(
@@ -290,7 +302,7 @@ export class BitwardenProvider {
     })().finally(() => {
       if (generation === this.#generation) this.#loading = undefined;
     });
-    return { items: await this.#loading, cacheHit: false };
+    return this.#loading;
   }
   async search(site, progress = () => {}, field = "password", query) {
     const started = this.now();

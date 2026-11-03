@@ -324,7 +324,8 @@ test("manual vault search finds saved names, usernames and hosts without reveali
     provider.get(DEMO_ITEM, "password", "heihei", { allowHostMismatch: true }),
     /invalid login/,
   );
-  now = 30_000;
+  now = 300_000;
+  await provider.refresh();
   assert.deepEqual(await provider.searchVault("heihei", "home", "sshKey"), [
     { item_id: DEMO_ITEM, name: "Home server", hosts: [], hostMismatch: true },
   ]);

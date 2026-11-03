@@ -130,6 +130,9 @@ export type CredentialNotice = typeof CredentialNotice.Type;
 export const CredentialBrokerState = Schema.Struct({
   status: Schema.Literals(["locked", "unlocking", "ready", "unsupported"]),
   mode: Schema.String,
+  accounts: Schema.optional(Schema.Array(Schema.String)),
+  addingAccount: Schema.optional(Schema.Boolean),
+  refreshing: Schema.optional(Schema.Boolean),
   error: Schema.optional(Schema.String),
   requests: Schema.Array(CredentialApproval),
   notices: Schema.Array(CredentialNotice),
@@ -155,6 +158,7 @@ export const CredentialBrokerAction = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("saveLogin"),
+    account: Schema.optional(Schema.String.check(Schema.isMaxLength(320))),
     requestId: Schema.String,
     username: Schema.String.check(Schema.isMaxLength(4096)),
     password: Schema.String.check(Schema.isMaxLength(4096)),
@@ -180,8 +184,11 @@ export const CredentialBrokerAction = Schema.Union([
     type: Schema.Literal("unlock"),
     password: Schema.String,
     executable: Schema.optional(Schema.String),
+    account: Schema.optional(Schema.String.check(Schema.isMaxLength(320))),
+    profileDirectory: Schema.optional(Schema.String.check(Schema.isMaxLength(4096))),
   }),
   Schema.Struct({ type: Schema.Literal("lock") }),
+  Schema.Struct({ type: Schema.Literal("refresh") }),
 ]);
 export type CredentialBrokerAction = typeof CredentialBrokerAction.Type;
 export const CredentialBrokerFailureCode = Schema.Literals([

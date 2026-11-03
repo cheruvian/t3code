@@ -106,6 +106,8 @@ function EnvironmentBroker({
   const nativeVisible = useRef(false);
   const noticeViews = useRef(new Map<string, ViewInstance>());
   const { height } = useWindowDimensions();
+  const [account, setAccount] = useState("");
+  const [profileDirectory, setProfileDirectory] = useState("");
   const [password, setPassword] = useState("");
   const [executable, setExecutable] = useState("bw");
   const [advancedUnlock, setAdvancedUnlock] = useState(false);
@@ -223,11 +225,32 @@ function EnvironmentBroker({
           {state?.status === "unsupported" && (
             <Text className="text-foreground">Windows security adapters are not supported.</Text>
           )}
-          {(state?.status === "locked" || state?.status === "unlocking") && (
+          {state && state.status !== "unsupported" && (
             <View className="gap-3">
               <Text className="text-foreground">
-                Unlock Bitwarden privately. Its CLI must be signed in on the server.
+                Unlock each account using a separate signed-in Bitwarden CLI profile on the server.
               </Text>
+              <Text className="text-sm text-foreground">
+                Unlocked accounts: {state.accounts?.join(", ") || "None"}
+              </Text>
+              <TextInput
+                value={account}
+                onChangeText={setAccount}
+                autoCapitalize="none"
+                autoCorrect={false}
+                accessibilityLabel="Bitwarden account email or name"
+                placeholder="Account email or name"
+                className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+              />
+              <TextInput
+                value={profileDirectory}
+                onChangeText={setProfileDirectory}
+                autoCapitalize="none"
+                autoCorrect={false}
+                accessibilityLabel="Bitwarden CLI profile directory"
+                placeholder="CLI profile directory (blank for default)"
+                className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+              />
               <Text className="text-sm text-foreground">Bitwarden master password</Text>
               <TextInput
                 secureTextEntry
@@ -255,14 +278,27 @@ function EnvironmentBroker({
               )}
               <Button
                 label="Unlock vault"
-                disabled={!canAct || state.status === "unlocking"}
+                disabled={!canAct || state.status === "unlocking" || state.addingAccount === true}
                 onPress={() => {
                   const value = password;
                   setPassword("");
-                  void act({ type: "unlock", password: value, executable });
+                  void act({
+                    type: "unlock",
+                    password: value,
+                    executable,
+                    account: account || "Default",
+                    profileDirectory: profileDirectory || undefined,
+                  });
                 }}
               />
             </View>
+          )}
+          {state?.status === "ready" && (
+            <Button
+              label={state.refreshing ? "Refreshing accounts…" : "Refresh accounts"}
+              disabled={!canAct || state.refreshing === true}
+              onPress={() => void act({ type: "refresh" })}
+            />
           )}
           {state?.notices.map((notice) => (
             <View
@@ -740,6 +776,7 @@ function SaveLogin({
   act: (input: CredentialBrokerAction) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
+  const account = useRef("");
   const username = useRef("");
   const password = useRef("");
   const usernameInput = useRef<TextInputInstance>(null);
@@ -756,6 +793,18 @@ function SaveLogin({
         Create a new Bitwarden login for {request.site} and share it once with this program. Enter
         the site password, not your vault master password. Values stay out of chat.
       </Text>
+      <Text className="text-sm text-foreground">
+        Destination account (required with multiple accounts)
+      </Text>
+      <TextInput
+        accessibilityLabel="Destination Bitwarden account"
+        onChangeText={(value) => {
+          account.current = value;
+        }}
+        autoCapitalize="none"
+        autoCorrect={false}
+        className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+      />
       <Text className="text-sm text-foreground">Username or email</Text>
       <TextInput
         ref={usernameInput}
@@ -798,7 +847,11 @@ function SaveLogin({
             (request.field !== "username" && !password.current)
           )
             return;
-          const login = { username: username.current, password: password.current };
+          const login = {
+            account: account.current || undefined,
+            username: username.current,
+            password: password.current,
+          };
           clear();
           setBusy(true);
           void act({ type: "saveLogin", requestId: request.requestId, ...login }).finally(() =>

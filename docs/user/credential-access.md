@@ -6,6 +6,12 @@ machine running your T3 server. Open **Credential access** in T3 and unlock the
 vault privately. If needed, expand **Bitwarden CLI location** to choose its
 executable.
 
+T3 keeps unlocked sessions and searchable names, usernames, and hosts in memory.
+Searches use that cache immediately and refresh it in the background when it is
+at least five minutes old. Use **Refresh accounts** to pull in recent changes
+immediately. Passwords and private keys are fetched from the vault only after
+approval. Locking clears the cache.
+
 An agent requests a site hostname and a prepared program. T3 shows the verified
 thread, agent, workspace, program, arguments, fields, and access lifetime. Purpose
 and labels come from the caller. Choose the matching login, then deny access,
@@ -110,3 +116,23 @@ SSH configuration. The SSH username and port must be specified separately for
 key items; login items supply their saved username.
 Host-key verification still applies; a changed host key or unreachable host is
 not fixed by requesting a different credential.
+
+## Multiple Bitwarden accounts
+
+Each account needs its own signed-in CLI profile on the machine running your T3
+server. For example, sign in to a second account from a human terminal with:
+
+```sh
+BITWARDENCLI_APPDATA_DIR="$HOME/.config/bitwarden-work" bw login
+```
+
+In **Credential access**, enter a unique account email or name, the absolute path
+of that profile directory on the server, and its master password. Repeat for each
+account. Leave the directory blank to use the server's default CLI profile.
+Account names are labels; the CLI profile determines which email is signed in.
+
+Unlocked accounts are searched together, and each credential choice includes its
+account name. When saving a new login with multiple accounts unlocked, enter its
+destination account name. **Lock vault & stop access** locks every account and
+stops credential use. Unlock each account again after locking or restarting T3;
+use the same profile directories to retain the CLI sign-ins.
