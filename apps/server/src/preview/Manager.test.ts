@@ -3,8 +3,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { type PreviewEvent, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
+import * as Stream from "effect/Stream";
 import { expect } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
@@ -37,6 +39,25 @@ const layer = PreviewManager.layer.pipe(
 );
 
 it.layer(layer)("PreviewManager", (it) => {
+  it.effect("replays an existing tab when the desktop subscribes after it opened", () =>
+    Effect.gen(function* () {
+      const threadId = freshThreadId();
+      const manager = yield* PreviewManager.PreviewManager;
+      const snapshot = yield* manager.open({ threadId, runtime: "server" });
+      const consumer = yield* manager.events.pipe(
+        Stream.takeUntil((event) => event.type === "closed" && event.tabId === snapshot.tabId),
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.runCollect,
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* manager.close({ threadId, tabId: snapshot.tabId });
+      const events = yield* Fiber.join(consumer);
+      expect(events.filter((event) => event.type === "opened")).toEqual([
+        expect.objectContaining({ type: "opened", tabId: snapshot.tabId, snapshot }),
+      ]);
+    }),
+  );
+
   it.effect("opens a session and emits opened with normalized URL", () =>
     Effect.gen(function* () {
       const threadId = freshThreadId();

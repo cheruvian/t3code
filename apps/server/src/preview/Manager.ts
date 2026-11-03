@@ -125,7 +125,29 @@ export const make = Effect.gen(function* PreviewManagerMake() {
   const serverEpoch = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
   const stateRef = yield* SynchronizedRef.make<ManagerState>(initialState);
   const eventsPubSub = yield* PubSub.unbounded<PreviewEvent>();
-  const events: Stream.Stream<PreviewEvent> = Stream.fromPubSub(eventsPubSub);
+  const events: Stream.Stream<PreviewEvent> = Stream.unwrap(
+    Effect.gen(function* () {
+      // Subscribe before reading state so opens during reconnect cannot fall between the two.
+      const subscription = yield* PubSub.subscribe(eventsPubSub);
+      const state = yield* SynchronizedRef.get(stateRef);
+      const snapshots: PreviewEvent[] = Array.from(state.sessions.values(), ({ snapshot }) => ({
+        type: "opened",
+        threadId: snapshot.threadId,
+        tabId: snapshot.tabId,
+        snapshot,
+        createdAt: snapshot.updatedAt,
+        serverEpoch,
+        revision: state.revision,
+      }));
+      return Stream.fromIterable(snapshots).pipe(
+        Stream.concat(
+          Stream.fromSubscription(subscription).pipe(
+            Stream.filter((event) => event.revision > state.revision),
+          ),
+        ),
+      );
+    }),
+  );
 
   /** Publish inside the lock to preserve state-transition order. */
   const mutateExistingSession = <R, E>(
