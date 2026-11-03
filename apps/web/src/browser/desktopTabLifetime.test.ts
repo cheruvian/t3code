@@ -45,6 +45,17 @@ describe("desktopTabLifetime", () => {
     vi.restoreAllMocks();
   });
 
+  it("retries failed creation when attachment requests readiness again", async () => {
+    vi.useFakeTimers();
+    createTab.mockRejectedValueOnce(new Error("creation failed")).mockResolvedValue(undefined);
+    const lease = acquireDesktopTab("tab_creation_recovery");
+    await expect(lease.ready).rejects.toThrow("creation failed");
+    await expect(lease.ready).resolves.toBeUndefined();
+    expect(createTab).toHaveBeenCalledTimes(2);
+    lease.release();
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
   it("keeps identical server tab ids from two environments in separate desktop slots", async () => {
     vi.useFakeTimers();
     createTab.mockResolvedValue(undefined);

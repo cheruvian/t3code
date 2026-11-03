@@ -159,7 +159,11 @@ export function HostedBrowserWebview(props: {
           if (Number.isInteger(webContentsId) && webContentsId > 0) {
             await bridge.registerWebview(runtimeTabId, webContentsId);
           }
-        } catch {}
+        } catch {
+          if (disposed) return;
+          console.warn("Desktop browser tab attachment failed", { runtimeTabId });
+          recoverGuest();
+        }
       })();
     };
     const recoverGuest = () => {

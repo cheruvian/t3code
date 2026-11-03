@@ -45,26 +45,36 @@ export function acquireDesktopTab(
   tabId: string,
   serverTab?: { readonly threadId: string; readonly tabId: string },
 ): AcquiredDesktopTab {
-  const current =
-    leases.get(tabId) ??
-    ({
+  let current = leases.get(tabId);
+  if (!current) {
+    let ready: Promise<void> | undefined;
+    current = {
       references: 0,
       closeTimer: null,
-      // Include defaults at creation to avoid painting a frame at 100%/system.
-      ready: enqueueDesktopTabOperation(tabId, async () =>
-        previewBridge?.createTab(tabId, {
-          ...browserDefaultTabState(await resolveBrowserDefaults()),
-          ...(serverTab === undefined ? {} : { serverTab }),
-        }),
-      ),
-    } satisfies DesktopTabLease);
+      get ready() {
+        ready ??= enqueueDesktopTabOperation(tabId, async () => {
+          await previewBridge?.createTab(tabId, {
+            ...browserDefaultTabState(await resolveBrowserDefaults()),
+            ...(serverTab === undefined ? {} : { serverTab }),
+          });
+        }).catch((error: unknown) => {
+          ready = undefined;
+          throw error;
+        });
+        return ready;
+      },
+    };
+  }
   if (current.closeTimer !== null) window.clearTimeout(current.closeTimer);
   current.references += 1;
   current.closeTimer = null;
   leases.set(tabId, current);
+  void current.ready.catch(() => undefined);
 
   return {
-    ready: current.ready,
+    get ready() {
+      return current.ready;
+    },
     release: () => {
       const lease = leases.get(tabId);
       if (!lease) return;
