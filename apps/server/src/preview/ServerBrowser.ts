@@ -795,10 +795,20 @@ const make = Effect.gen(function* () {
   const desktopRenders = (snapshot: PreviewSessionSnapshot) =>
     desktopChannel.available
       ? runPromise(
-          desktopChannel.awaitAttached(
-            { threadId: snapshot.threadId, tabId: snapshot.tabId },
-            DESKTOP_ATTACH_TIMEOUT,
-          ),
+          desktopChannel
+            .awaitAttached(
+              { threadId: snapshot.threadId, tabId: snapshot.tabId },
+              DESKTOP_ATTACH_TIMEOUT,
+            )
+            .pipe(
+              Effect.tap((attached) =>
+                Effect.logInfo("desktop browser attachment result", {
+                  threadId: snapshot.threadId,
+                  tabId: snapshot.tabId,
+                  attached,
+                }),
+              ),
+            ),
         ).then((attached) => {
           if (!attached)
             throw new ServerBrowserPage.ServerBrowserOperationError(

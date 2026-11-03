@@ -1,3 +1,4 @@
+import { recordBrowserAttachment } from "./browserAttachmentTelemetry";
 import { previewBridge } from "~/components/preview/previewBridge";
 
 import { browserDefaultTabState, resolveBrowserDefaults } from "./browserDefaults";
@@ -53,11 +54,17 @@ export function acquireDesktopTab(
       closeTimer: null,
       get ready() {
         ready ??= enqueueDesktopTabOperation(tabId, async () => {
+          recordBrowserAttachment("create-start", { runtimeTabId: tabId });
           await previewBridge?.createTab(tabId, {
             ...browserDefaultTabState(await resolveBrowserDefaults()),
             ...(serverTab === undefined ? {} : { serverTab }),
           });
+          recordBrowserAttachment("create-success", { runtimeTabId: tabId });
         }).catch((error: unknown) => {
+          recordBrowserAttachment("create-failure", {
+            runtimeTabId: tabId,
+            errorType: error instanceof Error ? error.name : typeof error,
+          });
           ready = undefined;
           throw error;
         });

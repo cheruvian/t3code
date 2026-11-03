@@ -1,3 +1,4 @@
+import { recordBrowserAttachment } from "./browserAttachmentTelemetry";
 import { parseScopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   AuthPreviewOperateScope,
@@ -204,6 +205,8 @@ const desktopPreviewSyncAtom = Atom.family((environmentId: EnvironmentId) => {
   const sessions = previewEnvironment.list({ environmentId, input: {} });
   const events = previewEnvironment.events({ environmentId, input: {} });
   return Atom.make((get) => {
+    recordBrowserAttachment("discovery-start", { environmentId });
+    get.addFinalizer(() => recordBrowserAttachment("discovery-stop", { environmentId }));
     get.subscribe(sessions, (result) => {
       if (AsyncResult.isSuccess(result))
         reconcilePreviewEnvironmentSessions(environmentId, result.value);
@@ -211,10 +214,28 @@ const desktopPreviewSyncAtom = Atom.family((environmentId: EnvironmentId) => {
     get.subscribe(events, (result) => {
       if (!AsyncResult.isSuccess(result)) return;
       const event = result.value;
+      if (event.type === "opened") {
+        recordBrowserAttachment("event-received", {
+          environmentId,
+          threadId: event.threadId,
+          tabId: event.tabId,
+          serverEpoch: event.serverEpoch,
+          revision: event.revision,
+        });
+      }
       const ref = scopeThreadRef(environmentId, ThreadId.make(event.threadId));
       const epoch = readThreadPreviewState(ref).serverEpoch;
       if (epoch !== null && epoch !== event.serverEpoch) get.refresh(sessions);
       else applyPreviewServerEvent(ref, event);
+      if (event.type === "opened") {
+        recordBrowserAttachment("event-applied", {
+          environmentId,
+          threadId: event.threadId,
+          tabId: event.tabId,
+          epochMatched: epoch === null || epoch === event.serverEpoch,
+          sessionKnown: readThreadPreviewState(ref).sessions[event.tabId] !== undefined,
+        });
+      }
     });
     get.mount(events);
     get.mount(sessions);

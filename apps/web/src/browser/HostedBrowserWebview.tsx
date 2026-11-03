@@ -1,3 +1,4 @@
+import { recordBrowserAttachment } from "./browserAttachmentTelemetry";
 import type {
   DesktopPreviewColorScheme,
   PreviewViewportSetting,
@@ -153,13 +154,20 @@ export function HostedBrowserWebview(props: {
       void (async () => {
         try {
           // Tab creation and webview attachment use separate effects; wait to avoid PreviewTabNotFoundError.
+          recordBrowserAttachment("register-start", { runtimeTabId });
           await lease.ready;
           if (disposed || webviewRef.current !== webview) return;
           const webContentsId = webview.getWebContentsId();
           if (Number.isInteger(webContentsId) && webContentsId > 0) {
             await bridge.registerWebview(runtimeTabId, webContentsId);
+            recordBrowserAttachment("register-success", { runtimeTabId, webContentsId });
           }
-        } catch {
+        } catch (error) {
+          recordBrowserAttachment("register-failure", {
+            runtimeTabId,
+            errorType: error instanceof Error ? error.name : typeof error,
+            disposed,
+          });
           if (disposed) return;
           console.warn("Desktop browser tab attachment failed", { runtimeTabId });
           recoverGuest();
