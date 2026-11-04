@@ -114,6 +114,39 @@ async function renderHost() {
 }
 
 describe("ElectronBrowserHost", () => {
+  it("keeps an unready guest mounted until attachment and still recovers a crashed guest", async () => {
+    using _state = setup();
+    reconcilePreviewServerSessions(threadRef, {
+      sessions: [snapshot("tab_ready", "2026-01-01T00:00:01.000Z")],
+      serverEpoch: "server-a",
+      revision: 1,
+    });
+    await using screen = await renderHost();
+    using _timers = fakeTimers();
+    const guest = screen.container.querySelector("webview")!;
+    const getWebContentsId = vi.fn<() => number>(() => {
+      throw new Error("Guest is not ready");
+    });
+    Object.assign(guest, { getWebContentsId });
+    await act(async () => {
+      guest.dispatchEvent(new Event("did-attach"));
+    });
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(screen.container.querySelector("webview")).toBe(guest);
+    expect(mocks.registerWebview).not.toHaveBeenCalled();
+
+    getWebContentsId.mockImplementation(() => 42);
+    await act(async () => {
+      guest.dispatchEvent(new Event("dom-ready"));
+    });
+    expect(mocks.registerWebview).toHaveBeenCalledWith(expect.any(String), 42);
+    await act(async () => {
+      guest.dispatchEvent(new Event("render-process-gone"));
+    });
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(screen.container.querySelector("webview")).not.toBe(guest);
+  });
+
   it("never moves a tab's webview when the server reorders tabs by last update", async () => {
     using _state = setup();
     reconcilePreviewServerSessions(threadRef, {

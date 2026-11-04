@@ -160,7 +160,14 @@ export function HostedBrowserWebview(props: {
           await lease.ready;
           if (disposed || webviewRef.current !== webview) return;
           phase = "read-guest-id";
-          const webContentsId = webview.getWebContentsId();
+          let webContentsId: number;
+          try {
+            webContentsId = webview.getWebContentsId();
+          } catch {
+            // Electron can create the guest after mount; attachment events retry registration.
+            recordBrowserAttachment("register-pending", { runtimeTabId, phase });
+            return;
+          }
           guestId = webContentsId;
           if (Number.isInteger(webContentsId) && webContentsId > 0) {
             phase = "register-ipc";
