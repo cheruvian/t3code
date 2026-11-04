@@ -152,13 +152,18 @@ export function HostedBrowserWebview(props: {
       const lease = tabLeaseRef.current;
       if (!lease) return;
       void (async () => {
+        let phase = "wait-for-tab";
+        let guestId = 0;
         try {
           // Tab creation and webview attachment use separate effects; wait to avoid PreviewTabNotFoundError.
           recordBrowserAttachment("register-start", { runtimeTabId });
           await lease.ready;
           if (disposed || webviewRef.current !== webview) return;
+          phase = "read-guest-id";
           const webContentsId = webview.getWebContentsId();
+          guestId = webContentsId;
           if (Number.isInteger(webContentsId) && webContentsId > 0) {
+            phase = "register-ipc";
             await bridge.registerWebview(runtimeTabId, webContentsId);
             recordBrowserAttachment("register-success", { runtimeTabId, webContentsId });
           }
@@ -167,6 +172,10 @@ export function HostedBrowserWebview(props: {
             runtimeTabId,
             errorType: error instanceof Error ? error.name : typeof error,
             disposed,
+            phase,
+            webContentsId: guestId,
+            currentGuest: webviewRef.current === webview,
+            connected: webview.isConnected,
           });
           if (disposed) return;
           console.warn("Desktop browser tab attachment failed", { runtimeTabId });
