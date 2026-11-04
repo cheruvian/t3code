@@ -460,6 +460,7 @@ export function ApprovalCard({
     : "Unverified caller";
   const [chosenId, setSelection] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [approvalScope, setApprovalScope] = useState<"thread" | "project" | "t3">("thread");
   const [durationSeconds, setDurationSeconds] = useState<3600 | undefined>();
   const [saveHost, setSaveHost] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -483,6 +484,7 @@ export function ApprovalCard({
         type: "decide",
         requestId: request.requestId,
         decision: choice,
+        ...(choice === "always" ? { approvalScope } : {}),
         ...(choice === "always" && durationSeconds ? { durationSeconds } : {}),
         ...(choice !== "deny" && saveHost ? { saveHost: true } : {}),
         ...(choice !== "deny" && selection ? { candidateId: selection } : {}),
@@ -686,7 +688,22 @@ export function ApprovalCard({
                   disabled={unavailable}
                   onClick={() => setDurationSeconds(durationSeconds ? undefined : 3600)}
                 >
-                  {durationSeconds ? "Duration: 1 hour" : "Duration: this thread"}
+                  {durationSeconds ? "Duration: 1 hour" : "Duration: unlimited"}
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={unavailable || !request.origin}
+                  onClick={() =>
+                    setApprovalScope(
+                      approvalScope === "thread"
+                        ? "project"
+                        : approvalScope === "project"
+                          ? "t3"
+                          : "thread",
+                    )
+                  }
+                >
+                  Scope: {approvalScope === "t3" ? "T3" : approvalScope}
                 </Button>
                 {selected?.hostMismatch && request.canSaveHost && (
                   <Button
@@ -701,7 +718,7 @@ export function ApprovalCard({
               <p className="text-xs text-muted-foreground">
                 {selected?.hostMismatch
                   ? `Always allow also saves ${request.site} to this credential in Bitwarden. Existing hosts are kept.`
-                  : "Allow for this thread remembers access for this credential and command. Revoke anytime in Manage access."}
+                  : "Remembered access applies to this credential and command. Revoke anytime in Manage access."}
               </p>
               <div className="flex flex-wrap items-center justify-end gap-2 border-t pt-4">
                 <Button
@@ -716,7 +733,9 @@ export function ApprovalCard({
                   disabled={unavailable || !selection || !canAlways}
                   onClick={() => void submit("always")}
                 >
-                  {durationSeconds ? "Allow for 1 hour" : "Allow for this thread"}
+                  {durationSeconds
+                    ? "Allow for 1 hour"
+                    : `Allow for ${approvalScope === "t3" ? "T3" : `this ${approvalScope}`}`}
                 </Button>
                 <Button disabled={unavailable || !selection} onClick={() => void submit("once")}>
                   {submitting ? "Allowing…" : "Allow once"}
