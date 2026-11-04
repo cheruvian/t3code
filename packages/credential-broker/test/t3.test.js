@@ -1675,3 +1675,57 @@ test("manual refresh shares in-flight work, publishes completion and sanitizes f
   await broker.lock();
   await assert.rejects(broker.action("human", { type: "refresh" }), /Unlock/);
 });
+
+test("successful unlock remembers the profile across broker restarts and forgetting preserves CLI files", async () => {
+  const root = await realpath(await mkdtemp("/tmp/t3-profile-registry-"));
+  const profile = join(root, "custom-profile");
+  const runtime = join(root, "broker");
+  await mkdir(profile);
+  await writeFile(join(profile, "data.json"), "vault remains owned by CLI");
+  const first = new T3CredentialBroker({ runtime, provider: new DemoProvider(), watchdog: false });
+  const second = new T3CredentialBroker({ runtime, provider: new DemoProvider(), watchdog: false });
+  try {
+    await first.unlock("", "bw", "Secondary", profile);
+    assert.ok(first.state().profiles.some((entry) => entry.directory === profile && entry.saved));
+    await first.close();
+    await milestone(second, (state) => state.profiles.some((entry) => entry.directory === profile));
+    await second.action("operator", { type: "discoverProfiles" });
+    assert.ok(
+      second
+        .state()
+        .profiles.some((entry) => entry.directory === profile && entry.name === "Secondary"),
+    );
+    assert.equal(second.state().status, "locked");
+    await second.action("operator", { type: "forgetProfile", directory: profile });
+    assert.ok(!second.state().profiles.some((entry) => entry.directory === profile));
+    assert.equal(await readFile(join(profile, "data.json"), "utf8"), "vault remains owned by CLI");
+  } finally {
+    await first.close();
+    await second.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the default CLI profile can unlock after a custom profile", async () => {
+  const root = await realpath(await mkdtemp("/tmp/t3-default-after-custom-"));
+  const executable = join(root, "bw");
+  const profile = join(root, "lse");
+  await mkdir(profile);
+  await writeFile(
+    executable,
+    `#!${process.execPath}
+if (process.argv[2] === "unlock") process.stdout.write("fixture-session");
+else if (process.argv[2] === "list") process.stdout.write("[]");
+`,
+  );
+  await chmod(executable, 0o700);
+  const broker = new T3CredentialBroker({ runtime: join(root, "broker"), watchdog: false });
+  try {
+    await broker.unlock("fixture-password", executable, "LSE", profile);
+    await broker.unlock("fixture-password", executable, "Default");
+    assert.deepEqual(broker.state().accounts, ["LSE", "Default"]);
+  } finally {
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

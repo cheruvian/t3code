@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Broker } from "./broker.js";
+import { ProfileRegistry } from "./profiles.js";
 import { AccountProvider } from "./accounts.js";
 import { BitwardenProvider } from "./providers.js";
 import { BrokerError, parseRequest } from "./common.js";
@@ -34,6 +35,9 @@ export class T3CredentialBroker {
   #broker;
   #accounts;
   #profileDirectories = new Set();
+  #profiles = [];
+  #profileRegistry;
+  #profilesLoaded = false;
   #addingAccount = false;
   #refreshing = false;
   #unlockTask;
@@ -47,6 +51,7 @@ export class T3CredentialBroker {
   #closing = false;
   constructor({
     runtime,
+    profileRegistryFile = join(runtime, "profiles.json"),
     workerEntrypoint,
     provider,
     now = Date.now,
@@ -60,6 +65,7 @@ export class T3CredentialBroker {
     this.requirePresenter = requirePresenter;
     this.searchPath = searchPath;
     this.runtime = runtime;
+    this.#profileRegistry = new ProfileRegistry({ file: profileRegistryFile });
     this.workerEntrypoint = workerEntrypoint;
     this.provider = provider;
     this.now = now;
@@ -74,6 +80,7 @@ export class T3CredentialBroker {
       status: this.#status,
       mode: this.#broker?.provider.mode ?? "bitwarden",
       accounts: this.#accounts?.accounts ?? [],
+      profiles: this.#profiles,
       addingAccount: this.#addingAccount,
       refreshing: this.#refreshing,
       ...(this.#error ? { error: this.#error } : {}),
@@ -143,6 +150,20 @@ export class T3CredentialBroker {
     }
   }
   subscribe(sessionId, viewId, listener) {
+    if (!this.#profilesLoaded) {
+      this.#profilesLoaded = true;
+      void this.#profileRegistry
+        .list()
+        .then((profiles) => {
+          if (this.#closing) return;
+          this.#profiles = profiles;
+          this.#publish();
+        })
+        .catch(() => {
+          this.#error = "Could not load saved CLI profiles.";
+          this.#publish();
+        });
+    }
     const key = `${sessionId}:${viewId}`;
     let view = this.#views.get(key);
     if (!view) {
@@ -181,6 +202,7 @@ export class T3CredentialBroker {
     });
   }
   async #unlock(password, executable = "bw", account = "Default", profileDirectory) {
+    if (profileDirectory) profileDirectory = this.#profileRegistry.expand(profileDirectory);
     if (
       this.#status === "unsupported" ||
       this.#status === "unlocking" ||
@@ -188,11 +210,7 @@ export class T3CredentialBroker {
       this.#closing
     )
       throw new BrokerError("Broker unavailable.");
-    if (this.#status === "ready" && (!profileDirectory || this.provider)) {
-      if (!this.provider && account !== "Default")
-        throw new BrokerError("An additional account requires a separate CLI profile directory.");
-      return;
-    }
+    if (this.#status === "ready" && this.provider) return;
     if (
       typeof account !== "string" ||
       !account.trim() ||
@@ -252,6 +270,7 @@ export class T3CredentialBroker {
         throw new BrokerError("Broker unavailable.");
       }
       if (wasReady) {
+        await this.#rememberProfile(account, directory);
         this.#profileDirectories.add(directory);
         return;
       }
@@ -302,6 +321,7 @@ export class T3CredentialBroker {
       this.#profileDirectories.add(directory);
       this.#broker = broker;
       if (!this.provider) this.#accounts = accounts;
+      await this.#rememberProfile(account, directory);
       this.#status = "ready";
       for (const entry of this.#waitingForUnlock.values()) entry.finish();
     } catch {
@@ -343,7 +363,22 @@ export class T3CredentialBroker {
       this.#publish();
     });
   }
+  async #rememberProfile(account, directory) {
+    try {
+      await this.#profileRegistry.remember(account, directory);
+      this.#profiles = await this.#profileRegistry.list();
+    } catch {
+      this.#error = "Vault unlocked, but its CLI profile location could not be saved.";
+    }
+  }
   async action(sessionId, input) {
+    if (input.type === "discoverProfiles" || input.type === "forgetProfile") {
+      if (this.#addingAccount) throw new BrokerError("Unlock is in progress.");
+      if (input.type === "forgetProfile") await this.#profileRegistry.forget(input.directory);
+      this.#profiles = await this.#profileRegistry.list();
+      this.#publish();
+      return;
+    }
     if (input.type === "unlock")
       return this.unlock(input.password, input.executable, input.account, input.profileDirectory);
     if (input.type === "lock") return this.lock();

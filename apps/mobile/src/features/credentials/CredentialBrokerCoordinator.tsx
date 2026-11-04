@@ -243,12 +243,43 @@ function EnvironmentBroker({
             (state.status !== "ready" || addingAccount) && (
               <View className="gap-3">
                 <Text className="text-foreground">
-                  Unlock each account using a separate signed-in Bitwarden CLI profile on the
-                  server.
+                  Choose a CLI profile or enter its directory. Successful unlocks save its name and
+                  location. Your CLI login stays in the profile; unlock the vault after a restart.
                 </Text>
                 <Text className="text-sm text-foreground">
                   Unlocked accounts: {state.accounts?.join(", ") || "None"}
                 </Text>
+                <Button
+                  label="Discover CLI profiles"
+                  disabled={!canAct || state.status === "unlocking" || state.addingAccount === true}
+                  onPress={() => void act({ type: "discoverProfiles" })}
+                />
+                {(state.profiles ?? []).map((entry) => (
+                  <View key={entry.directory} className="gap-1">
+                    <Button
+                      label={entry.name}
+                      disabled={
+                        !canAct || state.status === "unlocking" || state.addingAccount === true
+                      }
+                      onPress={() => {
+                        setAccount(entry.name);
+                        setProfileDirectory(entry.directory);
+                      }}
+                    />
+                    <Text className="text-sm text-foreground-muted">{entry.directory}</Text>
+                    {entry.saved && (
+                      <Button
+                        label="Forget"
+                        disabled={
+                          !canAct || state.status === "unlocking" || state.addingAccount === true
+                        }
+                        onPress={() =>
+                          void act({ type: "forgetProfile", directory: entry.directory })
+                        }
+                      />
+                    )}
+                  </View>
+                ))}
                 <TextInput
                   value={account}
                   onChangeText={setAccount}

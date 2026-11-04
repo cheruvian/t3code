@@ -8,6 +8,7 @@ import type {
 export class T3CredentialBroker {
   constructor(options: {
     runtime: string;
+    profileRegistryFile?: string;
     workerEntrypoint?: ReadonlyArray<string>;
     requirePresenter?: boolean;
   });

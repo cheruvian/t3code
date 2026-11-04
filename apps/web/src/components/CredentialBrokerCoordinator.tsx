@@ -12,6 +12,7 @@ import {
   resolveEnvironmentMachineKind,
   type CredentialApproval,
   type CredentialBrokerAction,
+  type CredentialBrokerState,
   type CredentialNotice,
   type EnvironmentId,
 } from "@t3tools/contracts";
@@ -223,6 +224,9 @@ export function EnvironmentBroker({
                 state.status !== "unsupported" &&
                 (state.status !== "ready" || addingAccount) && (
                   <VaultUnlock
+                    profiles={state.profiles ?? []}
+                    discover={() => act({ type: "discoverProfiles" })}
+                    forget={(directory) => act({ type: "forgetProfile", directory })}
                     busy={state.status === "unlocking" || state.addingAccount === true}
                     disabled={!canAct}
                     unlock={(password, executable, account, profileDirectory) =>
@@ -372,10 +376,16 @@ export function EnvironmentBroker({
   );
 }
 function VaultUnlock({
+  profiles,
+  discover,
+  forget,
   busy,
   disabled,
   unlock,
 }: {
+  profiles: NonNullable<CredentialBrokerState["profiles"]>;
+  discover: () => Promise<void>;
+  forget: (directory: string) => Promise<void>;
   busy: boolean;
   disabled: boolean;
   unlock: (
@@ -405,9 +415,49 @@ function VaultUnlock({
       className="space-y-3"
     >
       <p className="text-sm">
-        Unlock an account privately. For each additional account, sign in using a separate Bitwarden
-        CLI profile on the server, then enter its directory below.
+        Choose a CLI profile or enter its directory. Profiles keep their CLI login across restarts;
+        unlock each vault privately. Successful unlocks save the name and location.
       </p>
+      <Button
+        type="button"
+        variant="outline"
+        disabled={busy || disabled}
+        onClick={() => void discover()}
+      >
+        Discover CLI profiles
+      </Button>
+      {profiles.length > 0 && (
+        <ul className="space-y-2">
+          {profiles.map((entry) => (
+            <li key={entry.directory} className="flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={busy || disabled}
+                  onClick={() => {
+                    if (profile.current) profile.current.value = entry.directory;
+                    if (account.current) account.current.value = entry.name;
+                  }}
+                >
+                  {entry.name}
+                </Button>
+                <p className="break-all text-xs text-muted-foreground">{entry.directory}</p>
+              </div>
+              {entry.saved && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={busy || disabled}
+                  onClick={() => void forget(entry.directory)}
+                >
+                  Forget
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
       <label className="block space-y-1.5 text-sm">
         <span>Account email or name</span>
         <Input

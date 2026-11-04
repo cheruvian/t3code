@@ -131,6 +131,15 @@ export const CredentialBrokerState = Schema.Struct({
   status: Schema.Literals(["locked", "unlocking", "ready", "unsupported"]),
   mode: Schema.String,
   accounts: Schema.optional(Schema.Array(Schema.String)),
+  profiles: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        directory: Schema.String,
+        saved: Schema.Boolean,
+      }),
+    ),
+  ),
   addingAccount: Schema.optional(Schema.Boolean),
   refreshing: Schema.optional(Schema.Boolean),
   error: Schema.optional(Schema.String),
@@ -151,6 +160,8 @@ export const CredentialBrokerState = Schema.Struct({
 });
 export type CredentialBrokerState = typeof CredentialBrokerState.Type;
 export const CredentialBrokerAction = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("discoverProfiles") }),
+  Schema.Struct({ type: Schema.Literal("forgetProfile"), directory: Schema.String }),
   Schema.Struct({
     type: Schema.Literal("search"),
     requestId: Schema.String,
