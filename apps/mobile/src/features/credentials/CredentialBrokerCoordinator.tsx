@@ -470,6 +470,7 @@ function Approval({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [chosenId, setSelection] = useState<string | undefined>();
   const [adding, setAdding] = useState(false);
+  const [approvalScope, setApprovalScope] = useState<"thread" | "project" | "t3">("thread");
   const [durationSeconds, setDurationSeconds] = useState<3600 | undefined>();
   const [saveHost, setSaveHost] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -492,6 +493,7 @@ function Approval({
         type: "decide",
         requestId: request.requestId,
         decision: choice,
+        ...(choice === "always" ? { approvalScope } : {}),
         ...(choice === "always" && durationSeconds ? { durationSeconds } : {}),
         ...(choice !== "deny" && saveHost ? { saveHost: true } : {}),
         ...(choice !== "deny" && selection ? { candidateId: selection } : {}),
@@ -675,7 +677,7 @@ function Approval({
               <Text className="text-xs text-foreground-muted">
                 {selected?.hostMismatch
                   ? `Always allow also saves ${request.site} to this credential in Bitwarden. Existing hosts are kept.`
-                  : "Allow for this thread remembers access for this credential and command. Revoke anytime in Manage access."}
+                  : "Remembered access applies to this credential and command. Revoke anytime in Manage access."}
               </Text>
               <View className="flex-row flex-wrap justify-end gap-2">
                 <Button
@@ -685,7 +687,19 @@ function Approval({
                   onPress={() => void submit("deny")}
                 />
                 <Button
-                  label={durationSeconds ? "Duration: 1 hour" : "Duration: this thread"}
+                  label={`Scope: ${approvalScope}`}
+                  onPress={() =>
+                    setApprovalScope(
+                      approvalScope === "thread"
+                        ? "project"
+                        : approvalScope === "project"
+                          ? "t3"
+                          : "thread",
+                    )
+                  }
+                />
+                <Button
+                  label={durationSeconds ? "Duration: 1 hour" : "Duration: unlimited"}
                   onPress={() => setDurationSeconds(durationSeconds ? undefined : 3600)}
                 />
                 {selected?.hostMismatch && request.canSaveHost && (
@@ -695,7 +709,11 @@ function Approval({
                   />
                 )}
                 <Button
-                  label={durationSeconds ? "Allow for 1 hour" : "Allow for this thread"}
+                  label={
+                    durationSeconds
+                      ? "Allow for 1 hour"
+                      : `Allow for ${approvalScope === "t3" ? "T3" : `this ${approvalScope}`}`
+                  }
                   tone="secondary"
                   disabled={unavailable || !selection || !canAlways}
                   onPress={() => void submit("always")}

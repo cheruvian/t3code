@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { Broker } from "../src/broker.js";
-import { GrantStore, commandScope } from "../src/grants.js";
+import { GrantStore, commandScope, approvalScope } from "../src/grants.js";
 import { DemoProvider, DEMO_ITEM, DEMO_PASSWORD } from "../src/providers.js";
 
 async function until(fn) {
@@ -236,4 +236,27 @@ test("timed grants expire and remain expired after reload", async () => {
     Date.now = originalNow;
     await rm(runtime, { recursive: true, force: true });
   }
+});
+
+test("approval scopes retain environment and command boundaries", () => {
+  const scope = {
+    origin: { environmentId: "env", threadId: "a", workspace: "/project" },
+    argv: ["consumer"],
+    cwd: "/project",
+  };
+  const other = { ...scope, origin: { ...scope.origin, threadId: "b" } };
+  assert.notDeepEqual(approvalScope(scope), approvalScope(other));
+  assert.deepEqual(approvalScope(scope, "project"), approvalScope(other, "project"));
+  assert.notDeepEqual(
+    approvalScope(scope, "project"),
+    approvalScope({ ...other, origin: { ...other.origin, workspace: "/other" } }, "project"),
+  );
+  assert.deepEqual(
+    approvalScope(scope, "t3"),
+    approvalScope({ ...other, origin: { ...other.origin, workspace: "/other" } }, "t3"),
+  );
+  assert.notDeepEqual(
+    approvalScope(scope, "t3"),
+    approvalScope({ ...other, origin: { ...other.origin, environmentId: "remote" } }, "t3"),
+  );
 });

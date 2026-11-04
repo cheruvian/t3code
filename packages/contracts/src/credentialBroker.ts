@@ -167,6 +167,7 @@ export const CredentialBrokerAction = Schema.Union([
     type: Schema.Literal("decide"),
     requestId: Schema.String,
     decision: Schema.Literals(["deny", "once", "always"]),
+    approvalScope: Schema.optional(Schema.Literals(["thread", "project", "t3"])),
     durationSeconds: Schema.optional(Schema.Literal(3600)),
     saveHost: Schema.optional(Schema.Boolean),
     candidateId: Schema.optional(Schema.String),

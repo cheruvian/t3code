@@ -44,6 +44,21 @@ export async function commandScope(request, provider) {
     files,
   };
 }
+export function approvalScope(scope, level = "thread") {
+  if (level === "thread") return scope;
+  if (!scope.origin || !["project", "t3"].includes(level))
+    throw new BrokerError("Unsupported approval scope.");
+  if (level === "project" && !scope.origin.workspace)
+    throw new BrokerError("Project approval requires a workspace.");
+  return {
+    ...scope,
+    approvalScope: level,
+    origin: {
+      environmentId: scope.origin.environmentId,
+      ...(level === "project" ? { workspace: scope.origin.workspace } : {}),
+    },
+  };
+}
 export const scopeKey = (scope) => createHash("sha256").update(JSON.stringify(scope)).digest("hex");
 
 export class GrantStore {
@@ -97,7 +112,11 @@ export class GrantStore {
       ? request.candidates.filter((c) => !c.hostMismatch).map((c) => c.item_id)
       : [request.item_id];
     const matches = this.list().filter(
-      (g) => g.key === key && ids.includes(g.item_id) && request.ttl_seconds <= g.max_ttl,
+      (g) =>
+        g.key ===
+          (g.scope.approvalScope ? scopeKey(approvalScope(scope, g.scope.approvalScope)) : key) &&
+        ids.includes(g.item_id) &&
+        request.ttl_seconds <= g.max_ttl,
     );
     return matches.length === 1 ? matches[0] : undefined;
   }

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { fork, spawn } from "node:child_process";
 import { BrokerError, GUIDANCE, parseRequest } from "./common.js";
-import { GrantStore, commandScope, scopeKey } from "./grants.js";
+import { GrantStore, commandScope, scopeKey, approvalScope } from "./grants.js";
 
 const leaseName = /^lease-[a-f0-9-]{36}\.secret$/;
 const terminal = new Set(["denied", "expired", "released", "failed", "completed", "revoked"]);
@@ -493,7 +493,10 @@ export class Broker {
     try {
       if (always) {
         if (!this.notifier) throw new Error();
-        const scope = await commandScope(request, this.provider.mode);
+        const scope = approvalScope(
+          await commandScope(request, this.provider.mode),
+          options.approvalScope,
+        );
         if (request.state !== "preparing" || this.#closing) return this.public(request);
         const grant = await this.grants.add(
           scope,
@@ -510,7 +513,13 @@ export class Broker {
       const grant = request.grant_id && this.grants.get(request.grant_id);
       if (
         request.grant_id &&
-        (!grant || scopeKey(await commandScope(request, this.provider.mode)) !== grant.key)
+        (!grant ||
+          scopeKey(
+            approvalScope(
+              await commandScope(request, this.provider.mode),
+              grant.scope.approvalScope,
+            ),
+          ) !== grant.key)
       )
         throw new Error();
       // Release/shutdown can cancel an in-flight provider call.

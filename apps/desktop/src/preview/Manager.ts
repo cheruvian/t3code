@@ -1928,6 +1928,17 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     return yield* withTabLifecycleLock(
       tabId,
       registerWebviewUnlocked(tabId, webContentsId, expectedGeneration),
+    ).pipe(
+      Effect.tapError((error) =>
+        Effect.logWarning("Desktop browser webview registration failed", {
+          tabId,
+          webContentsId,
+          errorTag: error._tag,
+          operation: "operation" in error ? error.operation : "validate-registration",
+          expectedGeneration: expectedGeneration ?? -1,
+          currentGeneration: tabLifecycleGenerations.get(tabId) ?? -1,
+        }),
+      ),
     );
   });
 
