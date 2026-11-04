@@ -1,3 +1,4 @@
+import { SessionControl } from "../../../preview/SessionControl.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -12,7 +13,6 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as Fiber from "effect/Fiber";
@@ -152,3 +152,21 @@ it.effect(
       }),
     ),
 );
+
+it("credential access recognizes the owning browser agent and rejects another thread", () => {
+  const control = new SessionControl(
+    `${invocation.environmentId}\u0000${invocation.thread.providerSessionId}\u0000${threadId}`,
+  );
+  const identity = { ...invocation.thread, environmentId: invocation.environmentId };
+  expect(control.agentCanActNow(CredentialBroker.credentialBrowserAgentSessionId(identity))).toBe(
+    true,
+  );
+  expect(
+    control.agentCanActNow(
+      CredentialBroker.credentialBrowserAgentSessionId({
+        ...identity,
+        threadId: ThreadId.make("another-thread"),
+      }),
+    ),
+  ).toBe(false);
+});

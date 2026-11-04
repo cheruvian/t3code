@@ -140,6 +140,10 @@ export const bindToolCall = Effect.fn("bindToolCall")(function* (
   ).pipe(Effect.mapError(toolBrokerFailure), Effect.raceFirst(stopped));
 });
 
+export const credentialBrowserAgentSessionId = (
+  caller: Pick<CredentialCaller, "environmentId" | "providerSessionId" | "threadId">,
+) => `${caller.environmentId}\u0000${caller.providerSessionId}\u0000${caller.threadId}`;
+
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const path = yield* Path.Path;
@@ -182,7 +186,7 @@ const make = Effect.gen(function* () {
                 threadId: caller.threadId,
                 tabId: input.browserTabId,
                 site: input.site,
-                agentSessionId: `${caller.environmentId}\u0000${caller.providerSessionId}`,
+                agentSessionId: credentialBrowserAgentSessionId(caller),
               });
         return yield* Effect.tryPromise({
           try: (signal) =>
