@@ -56,7 +56,7 @@ test("failed account unlock leaves existing accounts available", async () => {
 });
 
 test("host unlocks two CLI profiles and locking clears both accounts", async () => {
-  const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
+  const { mkdtemp, mkdir, writeFile, rm, stat } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const { T3CredentialBroker } = await import("../src/t3.js");
@@ -85,6 +85,8 @@ test("host unlocks two CLI profiles and locking clears both accounts", async () 
       account: "work",
       profileDirectory: join(root, "work"),
     });
+    assert.equal((await stat(join(root, "personal"))).isDirectory(), true);
+    assert.equal((await stat(join(root, "work"))).mode & 0o777, 0o700);
     assert.equal(broker.state().status, "ready");
     assert.deepEqual(broker.state().accounts, ["personal", "work"]);
     await assert.rejects(

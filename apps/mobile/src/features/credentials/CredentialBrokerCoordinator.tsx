@@ -112,8 +112,11 @@ function EnvironmentBroker({
   const [executable, setExecutable] = useState("bw");
   const [advancedUnlock, setAdvancedUnlock] = useState(false);
   const [error, setError] = useState<string>();
+  const [addingAccount, setAddingAccount] = useState(false);
   const act = async (input: CredentialBrokerAction) => {
     const outcome = await run({ environmentId, input });
+    if (outcome._tag !== "Failure" && (input.type === "unlock" || input.type === "lock"))
+      setAddingAccount(false);
     setError(
       outcome._tag === "Failure"
         ? "Could not complete the action. Check connection, permissions, and vault status."
@@ -225,74 +228,87 @@ function EnvironmentBroker({
           {state?.status === "unsupported" && (
             <Text className="text-foreground">Windows security adapters are not supported.</Text>
           )}
-          {state && state.status !== "unsupported" && (
-            <View className="gap-3">
-              <Text className="text-foreground">
-                Unlock each account using a separate signed-in Bitwarden CLI profile on the server.
-              </Text>
-              <Text className="text-sm text-foreground">
-                Unlocked accounts: {state.accounts?.join(", ") || "None"}
-              </Text>
-              <TextInput
-                value={account}
-                onChangeText={setAccount}
-                autoCapitalize="none"
-                autoCorrect={false}
-                accessibilityLabel="Bitwarden account email or name"
-                placeholder="Account email or name"
-                className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
-              />
-              <TextInput
-                value={profileDirectory}
-                onChangeText={setProfileDirectory}
-                autoCapitalize="none"
-                autoCorrect={false}
-                accessibilityLabel="Bitwarden CLI profile directory"
-                placeholder="CLI profile directory (blank for default)"
-                className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
-              />
-              <Text className="text-sm text-foreground">Bitwarden master password</Text>
-              <TextInput
-                secureTextEntry
-                autoComplete="off"
-                value={password}
-                onChangeText={setPassword}
-                accessibilityLabel="Bitwarden master password"
-                maxLength={4096}
-                className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
-              />
-              <Button
-                label={advancedUnlock ? "Hide advanced setup" : "Advanced setup"}
-                tone="text"
-                onPress={() => setAdvancedUnlock(!advancedUnlock)}
-              />
-              {advancedUnlock && (
+          {state?.status === "ready" && (
+            <Button
+              label={addingAccount ? "Cancel adding account" : "Add account"}
+              disabled={!canAct || state.addingAccount === true}
+              onPress={() => {
+                setAddingAccount(!addingAccount);
+                setPassword("");
+              }}
+            />
+          )}
+          {state &&
+            state.status !== "unsupported" &&
+            (state.status !== "ready" || addingAccount) && (
+              <View className="gap-3">
+                <Text className="text-foreground">
+                  Unlock each account using a separate signed-in Bitwarden CLI profile on the
+                  server.
+                </Text>
+                <Text className="text-sm text-foreground">
+                  Unlocked accounts: {state.accounts?.join(", ") || "None"}
+                </Text>
                 <TextInput
-                  value={executable}
-                  onChangeText={setExecutable}
+                  value={account}
+                  onChangeText={setAccount}
                   autoCapitalize="none"
                   autoCorrect={false}
-                  accessibilityLabel="Bitwarden CLI executable"
+                  accessibilityLabel="Bitwarden account email or name"
+                  placeholder="Account email or name"
                   className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
                 />
-              )}
-              <Button
-                label="Unlock vault"
-                disabled={!canAct || state.status === "unlocking" || state.addingAccount === true}
-                onPress={() => {
-                  const value = password;
-                  setPassword("");
-                  void act({
-                    type: "unlock",
-                    password: value,
-                    executable,
-                    account: account || "Default",
-                    profileDirectory: profileDirectory || undefined,
-                  });
-                }}
-              />
-            </View>
-          )}
+                <TextInput
+                  value={profileDirectory}
+                  onChangeText={setProfileDirectory}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  accessibilityLabel="Bitwarden CLI profile directory"
+                  placeholder="CLI profile directory (blank for default)"
+                  className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+                />
+                <Text className="text-sm text-foreground">Bitwarden master password</Text>
+                <TextInput
+                  secureTextEntry
+                  autoComplete="off"
+                  value={password}
+                  onChangeText={setPassword}
+                  accessibilityLabel="Bitwarden master password"
+                  maxLength={4096}
+                  className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+                />
+                <Button
+                  label={advancedUnlock ? "Hide advanced setup" : "Advanced setup"}
+                  tone="text"
+                  onPress={() => setAdvancedUnlock(!advancedUnlock)}
+                />
+                {advancedUnlock && (
+                  <TextInput
+                    value={executable}
+                    onChangeText={setExecutable}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    accessibilityLabel="Bitwarden CLI executable"
+                    className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+                  />
+                )}
+                <Button
+                  label="Unlock vault"
+                  disabled={!canAct || state.status === "unlocking" || state.addingAccount === true}
+                  onPress={() => {
+                    const value = password;
+                    setPassword("");
+                    void act({
+                      type: "unlock",
+                      password: value,
+                      executable,
+                      account: account || "Default",
+                      profileDirectory: profileDirectory || undefined,
+                    });
+                  }}
+                />
+              </View>
+            )}
           {state?.status === "ready" && (
             <Button
               label={state.refreshing ? "Refreshing accounts…" : "Refresh accounts"}

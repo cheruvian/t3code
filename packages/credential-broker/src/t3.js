@@ -3,7 +3,7 @@ import { Broker } from "./broker.js";
 import { AccountProvider } from "./accounts.js";
 import { BitwardenProvider } from "./providers.js";
 import { BrokerError, parseRequest } from "./common.js";
-import { access, stat, realpath } from "node:fs/promises";
+import { access, stat, realpath, mkdir } from "node:fs/promises";
 import { constants } from "node:fs";
 import { basename, delimiter, isAbsolute, join } from "node:path";
 import runnerProgram from "./runner-program.js";
@@ -201,6 +201,15 @@ export class T3CredentialBroker {
         (typeof profileDirectory !== "string" || !isAbsolute(profileDirectory)))
     )
       throw new BrokerError("Provide an account name and an absolute CLI profile directory.");
+    if (!this.provider && (typeof password !== "string" || !password || password.length > 4096))
+      throw new BrokerError("Invalid unlock.");
+    if (profileDirectory) {
+      try {
+        await mkdir(profileDirectory, { recursive: true, mode: 0o700 });
+      } catch {
+        throw new BrokerError("Could not create the CLI profile directory.");
+      }
+    }
     account = account.trim();
     const directory = await realpath(
       profileDirectory ??

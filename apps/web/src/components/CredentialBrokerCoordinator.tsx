@@ -112,13 +112,17 @@ export function EnvironmentBroker({
     open: false,
   });
   const [error, setError] = useState<string>();
+  const [addingAccount, setAddingAccount] = useState(false);
   const state = AsyncResult.isSuccess(result) ? result.value : undefined;
   const canAct = permission;
   const act = async (input: CredentialBrokerAction) => {
     const response = await run({ environmentId, input });
     if (response._tag === "Failure")
       setError("Could not complete the action. Check connection, permissions, and vault status.");
-    else setError(undefined);
+    else {
+      setError(undefined);
+      if (input.type === "unlock" || input.type === "lock") setAddingAccount(false);
+    }
   };
   useEffect(() => {
     if (!state?.status || !canAct) return;
@@ -206,15 +210,26 @@ export function EnvironmentBroker({
                   access is unavailable.
                 </p>
               )}
-              {state && state.status !== "unsupported" && (
-                <VaultUnlock
-                  busy={state.status === "unlocking" || state.addingAccount === true}
-                  disabled={!canAct}
-                  unlock={(password, executable, account, profileDirectory) =>
-                    act({ type: "unlock", password, executable, account, profileDirectory })
-                  }
-                />
+              {state?.status === "ready" && (
+                <Button
+                  variant="outline"
+                  disabled={!canAct || state.addingAccount === true}
+                  onClick={() => setAddingAccount(!addingAccount)}
+                >
+                  {addingAccount ? "Cancel adding account" : "Add account"}
+                </Button>
               )}
+              {state &&
+                state.status !== "unsupported" &&
+                (state.status !== "ready" || addingAccount) && (
+                  <VaultUnlock
+                    busy={state.status === "unlocking" || state.addingAccount === true}
+                    disabled={!canAct}
+                    unlock={(password, executable, account, profileDirectory) =>
+                      act({ type: "unlock", password, executable, account, profileDirectory })
+                    }
+                  />
+                )}
               {(state?.accounts ?? []).length > 0 && (
                 <p className="text-sm">Unlocked accounts: {state?.accounts?.join(", ")}</p>
               )}
