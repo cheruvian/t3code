@@ -154,7 +154,10 @@ describe("approved script access to the existing browser page", () => {
         method: "POST",
         body: JSON.stringify({ operation: "click", selector: "button" }),
       });
-      expect(await failed.json()).toEqual({ error: "browser_action_failed" });
+      expect(await failed.json()).toEqual({
+        error: "browser_action_failed",
+        failureCode: "control_rejected",
+      });
       const count = run.mock.calls.length;
       expect(
         (
@@ -165,14 +168,15 @@ describe("approved script access to the existing browser page", () => {
           })
         ).status,
       ).toBe(404);
-      expect(
-        (
-          await fetch(bridge.endpoint, {
-            method: "POST",
-            body: JSON.stringify({ operation: "unknown" }),
-          })
-        ).status,
-      ).toBe(400);
+      const malformed = await fetch(bridge.endpoint, {
+        method: "POST",
+        body: JSON.stringify({ operation: "unknown" }),
+      });
+      expect(malformed.status).toBe(400);
+      expect(await malformed.json()).toEqual({
+        error: "browser_action_failed",
+        failureCode: "invalid_command",
+      });
       expect(run.mock.calls).toHaveLength(count);
     } finally {
       await bridge.close();

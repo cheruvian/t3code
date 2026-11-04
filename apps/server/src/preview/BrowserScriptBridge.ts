@@ -43,6 +43,7 @@ export async function createBrowserScriptBridge(input: {
       response.writeHead(404).end();
       return;
     }
+    let failureCode = "invalid_command";
     try {
       let body = "";
       for await (const chunk of request) {
@@ -51,7 +52,11 @@ export async function createBrowserScriptBridge(input: {
       }
       const command = decode(JSON.parse(body));
       body = "";
-      const result = await input.run(() => dispatch(command));
+      failureCode = "control_rejected";
+      const result = await input.run(() => {
+        failureCode = !active || input.page.isClosed() ? "page_closed" : "action_failed";
+        return dispatch(command);
+      });
       response
         .writeHead(200, { "content-type": "application/json" })
         .end(JSON.stringify({ result }));
@@ -59,7 +64,7 @@ export async function createBrowserScriptBridge(input: {
       // Playwright errors can quote a filled value, selector, or page contents.
       response
         .writeHead(400, { "content-type": "application/json" })
-        .end(JSON.stringify({ error: "browser_action_failed" }));
+        .end(JSON.stringify({ error: "browser_action_failed", failureCode }));
     }
   });
   await new Promise<void>((resolve, reject) => {
