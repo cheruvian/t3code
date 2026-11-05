@@ -7,6 +7,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   ServerConfig,
+  type PreviewEvent,
   type ServerConfig as ServerConfigType,
   ServerConfigStreamEvent,
   type ServerConfigStreamEvent as ServerConfigStreamEventType,
@@ -38,6 +39,7 @@ import {
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as RpcSession from "./session.ts";
+import { request, subscribe } from "./client.ts";
 import { makeEnvironmentServerConfigState } from "../state/server.ts";
 import { applyServerConfigProjection } from "../state/serverConfigProjection.ts";
 
@@ -917,6 +919,103 @@ describe("RpcSessionFactory", () => {
           );
         }),
       ),
+  );
+
+  it.effect(
+    "replays background preview tabs after a malformed chunk without replacing the socket",
+    () =>
+      Effect.gen(function* () {
+        const { factory, sockets } = yield* makeFactory();
+        const session = yield* factory.connect(PREPARED);
+        const socket = yield* awaitSocket(sockets);
+        socket.open();
+        yield* completeInitialConfig(socket);
+        yield* session.ready;
+        const closed = yield* session.closed.pipe(Effect.exit, Effect.forkChild);
+        const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+          target: PREPARED.target,
+          state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
+          session: yield* SubscriptionRef.make(Option.some(session)),
+          prepared: yield* SubscriptionRef.make(Option.some(PREPARED)),
+          connect: Effect.void,
+          disconnect: Effect.void,
+          retryNow: Effect.die("The socket must remain connected"),
+        });
+        const decodedFailure = yield* Deferred.make<void>();
+        const received = yield* Queue.unbounded<PreviewEvent>();
+        const subscription = yield* subscribe(
+          WS_METHODS.subscribePreviewEvents,
+          {},
+          {
+            onDefect: () => Deferred.succeed(decodedFailure, undefined).pipe(Effect.asVoid),
+          },
+        ).pipe(
+          Stream.runForEach((event) => Queue.offer(received, event)),
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.forkChild,
+        );
+        const initial = yield* awaitRequest(socket, 1);
+        expect(initial.tag).toBe(WS_METHODS.subscribePreviewEvents);
+        socket.serverMessage(
+          encodeJson({
+            _tag: "Chunk",
+            requestId: initial.id,
+            values: [{ type: "opened", tabId: null }],
+          }),
+        );
+        yield* Deferred.await(decodedFailure);
+        const listFiber = yield* request(WS_METHODS.previewList, {}).pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.forkChild,
+        );
+        const list = yield* awaitRequest(socket, 2);
+        expect(list.tag).toBe(WS_METHODS.previewList);
+        const event: PreviewEvent = {
+          type: "opened",
+          threadId: "background-thread",
+          tabId: "background-tab",
+          serverEpoch: "epoch-1",
+          revision: 2,
+          createdAt: "2026-11-05T00:00:00.000Z",
+          snapshot: {
+            threadId: "background-thread",
+            tabId: "background-tab",
+            navStatus: { _tag: "Idle" },
+            canGoBack: false,
+            canGoForward: false,
+            updatedAt: "2026-11-05T00:00:00.000Z",
+          },
+        };
+        socket.serverMessage(
+          encodeJson({
+            _tag: "Exit",
+            requestId: list.id,
+            exit: {
+              _tag: "Success",
+              value: {
+                sessions: [event.snapshot],
+                serverEpoch: event.serverEpoch,
+                revision: event.revision,
+              },
+            },
+          }),
+        );
+        expect((yield* Fiber.join(listFiber)).sessions).toEqual([event.snapshot]);
+        yield* TestClock.adjust("250 millis");
+        const requests = socket.sent.map((message) => decodeJson(message)).filter(isRpcRequest);
+        expect(requests.map((value) => value.tag)).toEqual([
+          WS_METHODS.subscribeServerConfig,
+          WS_METHODS.subscribePreviewEvents,
+          WS_METHODS.previewList,
+          WS_METHODS.subscribePreviewEvents,
+        ]);
+        const replay = yield* awaitRequest(socket, 3);
+        socket.serverMessage(encodeJson({ _tag: "Chunk", requestId: replay.id, values: [event] }));
+        expect(yield* Queue.take(received)).toEqual(event);
+        expect(closed.pollUnsafe()).toBeUndefined();
+        expect(sockets).toHaveLength(1);
+        yield* Fiber.interrupt(subscription);
+      }),
   );
 
   it.effect("rejects a server config for a different environment", () =>
