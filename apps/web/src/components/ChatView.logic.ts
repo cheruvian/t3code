@@ -440,7 +440,7 @@ export function resetHeldThreadTimeline(): void {
   lastReadyThreadKey = null;
 }
 
-export function threadKeysShareEnvironment(left: string | null, right: string | null): boolean {
+function threadKeysShareEnvironment(left: string | null, right: string | null): boolean {
   if (left === null || right === null) {
     return false;
   }

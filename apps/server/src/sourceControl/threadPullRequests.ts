@@ -6,10 +6,8 @@ export { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 
 export const {
   normalizeThreadPullRequestKey,
-  legacyThreadPullRequestKey,
   threadPullRequestKeysEqual,
   threadPullRequestKeyOf,
   resolveThreadPullRequestChains,
   threadPullRequestsOf,
-  applyThreadPullRequestLinkUpdate,
 } = makeThreadPullRequests(sourceControlDefinitions);

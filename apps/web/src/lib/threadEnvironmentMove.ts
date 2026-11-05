@@ -28,7 +28,7 @@ export function readThreadMoveAvailability(ref: ScopedThreadRef) {
   };
 }
 
-export function readThreadMoveDestinations(ref: ScopedThreadRef) {
+function readThreadMoveDestinations(ref: ScopedThreadRef) {
   return readThreadMoveAvailability(ref).moveDestinations;
 }
 

@@ -20,7 +20,7 @@ type RuntimeSqliteLayerConfig = {
   readonly transactionClient?: SqlClient.SqlClient;
 };
 // Size the -wal file is cut back to on the first commit after a WAL reset.
-export const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
+const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
 
 const layerSetup = Layer.effectDiscard(
   Effect.gen(function* () {

@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Exercises shell cleanup commands against temporary filesystem fixtures.
 import { assert, it } from "@effect/vitest";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -31,9 +32,9 @@ function exerciseCleanScript(scriptName: "clean" | "clean:outputs") {
     }
 
     const outputScript = repositoryPackage.scripts["clean:outputs"];
-    assert.isString(outputScript);
+    assert.isDefined(outputScript);
     const selectedScript = repositoryPackage.scripts[scriptName];
-    assert.isString(selectedScript);
+    assert.isDefined(selectedScript);
     const executableScript = selectedScript.replace("pnpm clean:outputs", outputScript);
     const result = NodeChildProcess.spawnSync("sh", ["-c", executableScript], {
       cwd: sandbox,

@@ -78,7 +78,7 @@ export interface TerminalStatusIndicator {
 }
 
 export type ThreadPr = VcsStatusResult["pr"];
-export function resolveVisibleVcsStatusTarget(input: {
+function resolveVisibleVcsStatusTarget(input: {
   isVisible: boolean;
   shouldSubscribe: boolean;
   environmentId: EnvironmentId;
@@ -480,7 +480,7 @@ export function ChangeRequestStatusIcon({
   return <presentation.Icon className={className} />;
 }
 
-export function PrStatusTooltipContent({ status }: { status: PrStatusIndicator }) {
+function PrStatusTooltipContent({ status }: { status: PrStatusIndicator }) {
   return (
     <span className="flex max-w-[min(34rem,calc(100vw-2rem))] items-stretch overflow-hidden whitespace-nowrap">
       <span className="shrink-0 pr-2 font-medium">{status.tooltipLead}</span>
@@ -842,7 +842,7 @@ export function ThreadWorktreeIndicator({
   );
 }
 
-export function ThreadStatusLabel({
+function ThreadStatusLabel({
   status,
   compact = false,
 }: {

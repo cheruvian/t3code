@@ -67,7 +67,7 @@ export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 // Not exported: mobile was the last consumer of the value itself; the
 // wire field keeps its decoding default below.
-export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
+const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 
 export const SidebarProjectGroupingMode = Schema.Literals([
   "repository",
@@ -76,8 +76,8 @@ export const SidebarProjectGroupingMode = Schema.Literals([
 ]);
 export type SidebarProjectGroupingMode = typeof SidebarProjectGroupingMode.Type;
 const DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE: SidebarProjectGroupingMode = "repository";
-export const MIN_SIDEBAR_THREAD_PREVIEW_COUNT = 1;
-export const MAX_SIDEBAR_THREAD_PREVIEW_COUNT = 15;
+const MIN_SIDEBAR_THREAD_PREVIEW_COUNT = 1;
+const MAX_SIDEBAR_THREAD_PREVIEW_COUNT = 15;
 export const SidebarThreadPreviewCount = Schema.Int.check(
   Schema.isBetween({
     minimum: MIN_SIDEBAR_THREAD_PREVIEW_COUNT,
@@ -124,11 +124,7 @@ export const PanelAnimationDurationMs = Schema.Int.check(
 );
 export type PanelAnimationDurationMs = typeof PanelAnimationDurationMs.Type;
 const DEFAULT_PANEL_ANIMATION_DURATION_MS: PanelAnimationDurationMs = 0;
-/**
- * Font size preferences, in CSS pixels. The ranges are deliberately narrow:
- * the interface size scales every rem-based dimension in the app, so the
- * bounds keep layouts intact rather than offering unusable extremes.
- */
+/** Font size preferences, in CSS pixels. The ranges are deliberately narrow: the interface size scales every rem-based dimension in the app, so the bounds keep layouts intact rather than offering unusable extremes. */
 export const MIN_INTERFACE_FONT_SIZE = 12;
 export const MAX_INTERFACE_FONT_SIZE = 20;
 export const InterfaceFontSize = Schema.Int.check(
@@ -261,13 +257,7 @@ export const DefaultThemePreference = Schema.String.check(Schema.isMaxLength(64)
 // Excluded from RPC patches so t3 theme set can validate syntax and resolvability.
 export type DefaultThemePreference = typeof DefaultThemePreference.Type;
 
-/**
- * Defaults for the in-app preview browser, applied whenever a tab is opened
- * without an explicit viewport/zoom/appearance — by the user opening a browser
- * tab, or by an agent calling `preview_open` with no size. Recording quality is
- * client-local for the same reason: the Chromium guest being captured belongs
- * to the desktop app.
- */
+/** Defaults for the in-app preview browser, applied whenever a tab is opened without an explicit viewport/zoom/appearance — by the user opening a browser tab, or by an agent calling `preview_open` with no size. Recording quality is client-local for the same reason: the Chromium guest being captured belongs to the desktop app. */
 export const DEFAULT_BROWSER_VIEWPORT: PreviewViewportSetting = FILL_PREVIEW_VIEWPORT;
 export const DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW = true;
 export {
@@ -379,12 +369,7 @@ export const ClientSettingsSchema = Schema.Struct({
   browserLinkTarget: BrowserLinkTarget.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_BROWSER_LINK_TARGET)),
   ),
-  /**
-   * Whether an agent using a preview pops the floating mini player into
-   * view. Only applies when the agent didn't ask either way — an explicit
-   * `open`/`show` on `preview_open` still wins, since that is the agent
-   * deliberately showing or hiding its work.
-   */
+  /** Whether an agent using a preview pops the floating mini player into view. Only applies when the agent didn't ask either way — an explicit `open`/`show` on `preview_open` still wins, since that is the agent deliberately showing or hiding its work. */
 
   browserSearchEngine: BrowserSearchEngine.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_BROWSER_SEARCH_ENGINE)),
@@ -398,11 +383,7 @@ export const ClientSettingsSchema = Schema.Struct({
   browserAutoShowFloatingPreview: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW)),
   ),
-  /**
-   * User-created browser profiles. The built-in Default and Incognito profiles
-   * are synthesized by `resolveBrowserProfiles`, not stored here, so they
-   * cannot be renamed away or deleted.
-   */
+  /** User-created browser profiles. The built-in Default and Incognito profiles are synthesized by `resolveBrowserProfiles`, not stored here, so they cannot be renamed away or deleted. */
   browserProfiles: Schema.Array(BrowserProfile).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
@@ -465,11 +446,7 @@ export const ClientSettingsSchema = Schema.Struct({
     TrimmedNonEmptyString,
     PullRequestMergeMethod,
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-  /**
-   * Whether clicking a pull request link opens T3 Code's pull request view.
-   * When false, pull request links open like any other link, so they reach
-   * GitHub or the repository's other host.
-   */
+  /** Whether clicking a pull request link opens T3 Code's pull request view. When false, pull request links open like any other link, so they reach GitHub or the repository's other host. */
   pullRequestLinksOpenInApp: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Legacy plan mode. The composer's Build/Plan toggle was removed from the
   // default UI; this beta flag restores it (plus the /plan and /default slash
@@ -798,11 +775,7 @@ export const ClaudeSettings = makeProviderSettingsSchema(
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;
 
-/**
- * Antigravity ACP auth methods. Personal and Enterprise open a Google sign-in
- * in the browser. The API key and Agent Platform methods take credentials from
- * the instance config and never open a browser.
- */
+/** Antigravity ACP auth methods. Personal and Enterprise open a Google sign-in in the browser. The API key and Agent Platform methods take credentials from the instance config and never open a browser. */
 export const ANTIGRAVITY_AUTH_METHODS = [
   { value: "oauth-personal", label: "Google account" },
   { value: "oauth-business", label: "Gemini Enterprise" },
@@ -880,12 +853,7 @@ export const AntigravitySettings = makeProviderSettingsSchema(
 );
 export type AntigravitySettings = typeof AntigravitySettings.Type;
 
-/**
- * A read-only quota source outside this environment's provider CLIs. The
- * only kind today is a CLIProxyAPI hub, whose management API reports the
- * windows of every pooled account. The key travels in settings for now, like
- * provider environment secrets; it is redacted before reaching a client.
- */
+/** A read-only quota source outside this environment's provider CLIs. The only kind today is a CLIProxyAPI hub, whose management API reports the windows of every pooled account. The key travels in settings for now, like provider environment secrets; it is redacted before reaching a client. */
 export const UsageLimitSourceConfig = Schema.Struct({
   kind: Schema.Literal("cliproxy"),
   label: Schema.optional(TrimmedNonEmptyString),
@@ -900,13 +868,7 @@ export const GitHubHost = TrimmedNonEmptyString.pipe(
   Schema.decodeTo(Schema.String, SchemaTransformation.toLowerCase()),
 );
 
-/**
- * One source control host's saved settings. Each host package declares the fields it reads in
- * its client definition's settings schema and decodes this blob with it; the environment stores
- * it whole, so a host this build does not ship keeps its settings. A field annotated as a secret
- * holds a string, or a string per server host, whose value lives in the server's secret store:
- * settings and clients only see a redaction marker for a saved one.
- */
+/** One source control host's saved settings. Each host package declares the fields it reads in its client definition's settings schema and decodes this blob with it; the environment stores it whole, so a host this build does not ship keeps its settings. A field annotated as a secret holds a string, or a string per server host, whose value lives in the server's secret store: settings and clients only see a redaction marker for a saved one. */
 export const SourceControlHostSettings = Schema.Record(Schema.String, Schema.Unknown);
 export type SourceControlHostSettings = typeof SourceControlHostSettings.Type;
 
@@ -1050,21 +1012,11 @@ const PerformanceSettingsPatch = Schema.Struct({
   eventLoopReportIntervalMs: Schema.optionalKey(EventLoopReportIntervalMs),
 });
 
-/**
- * How assistant text reaches clients while a turn runs.
- * - `turn`: hold the whole message until the turn finishes or pauses.
- * - `paragraph`: deliver each finished paragraph or closed code block.
- * - `token`: forward every provider text update.
- */
+/** How assistant text reaches clients while a turn runs. - `turn`: hold the whole message until the turn finishes or pauses. - `paragraph`: deliver each finished paragraph or closed code block. - `token`: forward every provider text update. */
 export const ResponseStreamingMode = Schema.Literals(["turn", "paragraph"]);
 export type ResponseStreamingMode = typeof ResponseStreamingMode.Type;
 
-/**
- * Server settings a project may override. Every other server setting is
- * environment-wide: providers, keybindings, observability, device hosts,
- * background activity, theme. UI, search and the write planner derive
- * eligibility from this list, so adding a key here is the whole opt-in.
- */
+/** Server settings a project may override. Every other server setting is environment-wide: providers, keybindings, observability, device hosts, background activity, theme. UI, search and the write planner derive eligibility from this list, so adding a key here is the whole opt-in. */
 const StorageRetentionDays = Schema.NullOr(
   Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 3650 })),
 );
@@ -1295,17 +1247,7 @@ export const ServerSettings = Schema.Struct({
   continueThreadsAfterServerUpdate: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
-  /**
-   * Whether agents may drive the in-app preview browser. Turning this off
-   * withholds the MCP credential, so the `t3-code` server (and with it every
-   * `preview_*` tool) is never attached to a provider session, and the prompt
-   * text describing those tools is dropped along with them. The user's own
-   * browser panel is unaffected — this gates agent access only.
-   *
-   * Server-authoritative rather than client-local: tool injection and prompt
-   * construction both happen on the server, and the answer must not differ
-   * between a desktop window and a phone attached to the same server.
-   */
+  /** Whether agents may drive the in-app preview browser. Turning this off withholds the MCP credential, so the `t3-code` server (and with it every `preview_*` tool) is never attached to a provider session, and the prompt text describing those tools is dropped along with them. The user's own browser panel is unaffected — this gates agent access only.  Server-authoritative rather than client-local: tool injection and prompt construction both happen on the server, and the answer must not differ between a desktop window and a phone attached to the same server. */
   enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   projectAgentBrowserAccessOverrides: Schema.Record(ProjectId, Schema.Boolean).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
@@ -1326,25 +1268,13 @@ export const ServerSettings = Schema.Struct({
   defaultRuntimeMode: RuntimeMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE)),
   ),
-  /**
-   * Per-project overrides of the keys in `PROJECT_SCOPED_SERVER_SETTING_KEYS`,
-   * plus `providerInstances`. The source of truth for project
-   * settings; `projectAgentBrowserAccessOverrides`, `projectAutoPullOverrides`
-   * and `projectScriptOverrides` are derived views kept for one release so
-   * older clients keep reading them.
-   */
+  /** Per-project overrides of the keys in `PROJECT_SCOPED_SERVER_SETTING_KEYS`, plus `providerInstances`. The source of truth for project settings; `projectAgentBrowserAccessOverrides`, `projectAutoPullOverrides` and `projectScriptOverrides` are derived views kept for one release so older clients keep reading them. */
   projectSettingsOverrides: Schema.Record(ProjectId, ProjectSettingsOverrides).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   /** Fold once so restarts cannot undo later UI resets. */
   projectSettingsFolded: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  /**
-   * Whether agents may drive simulators and emulators. Gates the `device_*`
-   * MCP tools and the preconfigured `agent-device` CLI the same way
-   * `enableAgentBrowserAccess` gates the browser: server-authoritative, applied
-   * when the provider session is prepared. The user's own Device panel is
-   * unaffected.
-   */
+  /** Whether agents may drive simulators and emulators. Gates the `device_*` MCP tools and the preconfigured `agent-device` CLI the same way `enableAgentBrowserAccess` gates the browser: server-authoritative, applied when the provider session is prepared. The user's own Device panel is unaffected. */
   enableAgentDeviceAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /** Enabling the Device panel must not grant providers device control. */
   enableDeviceSupport: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -1394,13 +1324,7 @@ export const ServerSettings = Schema.Struct({
   defaultThemeSetAt: Schema.String.check(Schema.isMaxLength(64)).pipe(
     Schema.withDecodingDefault(Effect.succeed("")),
   ),
-  /**
-   * The icon clients draw for this environment. Null means "use what the
-   * server detected" (`environment.platform.machine`), falling back to a
-   * generic server. Lives on the server, not the client, so every device
-   * sees the same machine. A kind picked on a newer server decodes as null
-   * here rather than failing the whole settings snapshot for an older client.
-   */
+  /** The icon clients draw for this environment. Null means "use what the server detected" (`environment.platform.machine`), falling back to a generic server. Lives on the server, not the client, so every device sees the same machine. A kind picked on a newer server decodes as null here rather than failing the whole settings snapshot for an older client. */
   environmentIcon: ForwardCompatibleNullable(EnvironmentMachineKind).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -1408,13 +1332,7 @@ export const ServerSettings = Schema.Struct({
   environmentIconProjectId: ForwardCompatibleNullable(ProjectId).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  /**
-   * Null means inherit: the repository's t3.json, then "local". The old
-   * default "local" was never persisted (defaults are stripped on write), so
-   * it now decodes as inherit, which resolves the same way because the old
-   * chain also let t3.json outrank the environment. Null stays off the wire
-   * so older clients, which require a literal here, keep decoding.
-   */
+  /** Null means inherit: the repository's t3.json, then "local". The old default "local" was never persisted (defaults are stripped on write), so it now decodes as inherit, which resolves the same way because the old chain also let t3.json outrank the environment. Null stays off the wire so older clients, which require a literal here, keep decoding. */
   defaultThreadEnvMode: OmittedWhenNull(ThreadEnvMode),
   newWorktreesStartFromOrigin: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
@@ -1456,11 +1374,7 @@ export const ServerSettings = Schema.Struct({
    * write guides, for people and agents alike.
    */
   reviewGuidesEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  /**
-   * The model that reads a pull request to write its review guide. It investigates a checkout
-   * over many turns, so it can want a stronger model than one-shot writing. `null` uses the
-   * source control writer model.
-   */
+  /** The model that reads a pull request to write its review guide. It investigates a checkout over many turns, so it can want a stronger model than one-shot writing. `null` uses the source control writer model. */
   reviewGuideModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -1469,11 +1383,7 @@ export const ServerSettings = Schema.Struct({
    * guide's emphasis only; the output format and coverage rules stay fixed.
    */
   reviewGuideInstructions: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
-  /**
-   * The merge method pull requests start with; `null` reuses the method
-   * last chosen on this device. Server-side so a project can override it
-   * like any other project setting.
-   */
+  /** The merge method pull requests start with; `null` reuses the method last chosen on this device. Server-side so a project can override it like any other project setting. */
   pullRequestMergeMethod: Schema.NullOr(PullRequestMergeMethod).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -1511,12 +1421,7 @@ export type ServerSettings = typeof ServerSettings.Type;
 
 export const DEFAULT_SERVER_SETTINGS: ServerSettings = Schema.decodeSync(ServerSettings)({});
 
-/**
- * Read the legacy `enabled` flag embedded in a provider instance config
- * blob. The envelope-level `ProviderInstanceConfig.enabled` is the single
- * flag going forward; this reader exists for old settings files that still
- * carry the flag in-config.
- */
+/** Read the legacy `enabled` flag embedded in a provider instance config blob. The envelope-level `ProviderInstanceConfig.enabled` is the single flag going forward; this reader exists for old settings files that still carry the flag in-config. */
 export const providerInstanceConfigEnabledFlag = (config: unknown): boolean | undefined => {
   if (config === null || typeof config !== "object" || Array.isArray(config)) {
     return undefined;
@@ -1537,11 +1442,7 @@ const DEFAULT_ENABLED_DEFAULT_INSTANCES: ReadonlySet<ProviderInstanceId> = new S
   ["codex", "claudeAgent"].map((instanceId) => ProviderInstanceId.make(instanceId)),
 );
 
-/**
- * Whether the built-in default instance at `instanceId` is enabled while
- * settings have no `providerInstances` entry for it. Only Codex and Claude
- * start on; any other id without an entry has no running instance.
- */
+/** Whether the built-in default instance at `instanceId` is enabled while settings have no `providerInstances` entry for it. Only Codex and Claude start on; any other id without an entry has no running instance. */
 export const isUnconfiguredDefaultInstanceEnabled = (instanceId: ProviderInstanceId): boolean =>
   DEFAULT_ENABLED_DEFAULT_INSTANCES.has(instanceId);
 
@@ -1552,12 +1453,7 @@ export const isUnconfiguredDefaultInstanceEnabled = (instanceId: ProviderInstanc
 const defaultEnabledForDriver = (driver: ProviderDriverKind): boolean =>
   !DEFAULT_DISABLED_PROVIDER_DRIVERS.has(driver);
 
-/**
- * Resolve whether a configured provider instance is enabled. An explicit
- * false on either the envelope or the in-config flag wins (most
- * restrictive), so a user's disable is never silently undone by the other
- * flag. Otherwise: envelope, then config, then the driver's default.
- */
+/** Resolve whether a configured provider instance is enabled. An explicit false on either the envelope or the in-config flag wins (most restrictive), so a user's disable is never silently undone by the other flag. Otherwise: envelope, then config, then the driver's default. */
 export const resolveProviderInstanceEnabled = (
   instance: Pick<ProviderInstanceConfig, "driver" | "enabled" | "config">,
 ): boolean => {
@@ -1568,12 +1464,7 @@ export const resolveProviderInstanceEnabled = (
   return instance.enabled ?? configEnabled ?? defaultEnabledForDriver(instance.driver);
 };
 
-/**
- * Effective enablement for a provider instance within a project: the
- * project's `providerInstances[id].enabled` override when set, otherwise the
- * machine-wide `resolveProviderInstanceEnabled` value. `projectId` of `null`
- * (no project in scope) always resolves to the machine-wide value.
- */
+/** Effective enablement for a provider instance within a project: the project's `providerInstances[id].enabled` override when set, otherwise the machine-wide `resolveProviderInstanceEnabled` value. `projectId` of `null` (no project in scope) always resolves to the machine-wide value. */
 export const resolveProjectProviderInstanceEnabled = (
   settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides">,
   projectId: ProjectId | null,
@@ -1615,11 +1506,7 @@ export const withIdleCompaction = <S extends IdleCompactionSettings>(
 export const readsIdleCompactionModes = (settings: IdleCompactionSettings) =>
   settings.idleCompaction !== undefined || typeof settings.compactIdleThreads === "string";
 
-/**
- * The patch that sets `mode` in the form the server's settings show it reads:
- * the mode for a server that has `idleCompaction` or kept the mode in the legacy
- * field, the boolean switch for a server from before modes.
- */
+/** The patch that sets `mode` in the form the server's settings show it reads: the mode for a server that has `idleCompaction` or kept the mode in the legacy field, the boolean switch for a server from before modes. */
 export const idleCompactionPatch = (settings: IdleCompactionSettings, mode: IdleCompactionMode) =>
   settings.idleCompaction !== undefined
     ? { idleCompaction: mode }

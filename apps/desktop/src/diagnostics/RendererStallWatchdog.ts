@@ -15,7 +15,7 @@ import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as ElectronPowerMonitor from "../electron/ElectronPowerMonitor.ts";
 import { RENDERER_HEARTBEAT_CHANNEL } from "../ipc/channels.ts";
 
-export const HEARTBEAT_INTERVAL_MS = 1_000;
+const HEARTBEAT_INTERVAL_MS = 1_000;
 export const CHECK_INTERVAL_MS = 1_000;
 export const STALL_THRESHOLD_MS = 6_000;
 export const CAPTURE_DURATION_MS = 5_000;
@@ -71,7 +71,7 @@ export interface RendererStallWatchdogDependencies {
   ) => Effect.Effect<void, never, Scope.Scope>;
 }
 
-export function evaluateStall(input: {
+function evaluateStall(input: {
   readonly active: boolean;
   readonly lastHeartbeatAt: number;
   readonly now: number;
@@ -80,7 +80,7 @@ export function evaluateStall(input: {
   return input.active && input.now - input.lastHeartbeatAt >= input.stallThresholdMs;
 }
 
-export function evaluateCaptureAllowed(input: {
+function evaluateCaptureAllowed(input: {
   readonly now: number;
   readonly lastCaptureAt: number | undefined;
   readonly minIntervalMs: number;

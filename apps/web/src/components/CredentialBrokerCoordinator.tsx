@@ -21,7 +21,7 @@ import { ProjectFavicon } from "./ProjectFavicon";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { useProject } from "../state/entities";
 import { KeyRoundIcon } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { credentialBroker } from "../state/credentialBroker";
 import { useEnvironmentIds, useEnvironment } from "../state/environments";
 import { useEnvironmentScope } from "../state/session";
@@ -43,7 +43,7 @@ export function CredentialBrokerCoordinator() {
   const [activeId, setActiveId] = useState<EnvironmentId>();
   const [noticeRoot, setNoticeRoot] = useState<HTMLDivElement | null>(null);
   const pendingIds = useRef(new Set<EnvironmentId>());
-  const report = useCallback((id: EnvironmentId, pending: boolean) => {
+  const report = (id: EnvironmentId, pending: boolean) => {
     if (pending) pendingIds.current.add(id);
     else pendingIds.current.delete(id);
     setActiveId((current) =>
@@ -51,7 +51,7 @@ export function CredentialBrokerCoordinator() {
         ? current
         : (pendingIds.current.values().next().value ?? current),
     );
-  }, []);
+  };
   return (
     <>
       <div className="fixed right-4 bottom-4 z-40 flex flex-col items-end gap-2">
@@ -85,7 +85,7 @@ function AuthorizedBroker(props: BrokerProps) {
     <EnvironmentBroker {...props} />
   ) : null;
 }
-export function EnvironmentBroker({
+function EnvironmentBroker({
   environmentId,
   active: focused,
   select,
@@ -125,6 +125,7 @@ export function EnvironmentBroker({
       if (input.type === "unlock" || input.type === "lock") setAddingAccount(false);
     }
   };
+  // oxlint-disable-next-line t3code/react-effect-budget -- Publish presenter visibility to the credential broker.
   useEffect(() => {
     if (!state?.status || !canAct) return;
     const visible = () => {
@@ -151,6 +152,7 @@ export function EnvironmentBroker({
     state?.requests.filter((r) => ["running", "preparing", "saving"].includes(r.state)) ?? [];
   const hasRequests = pending.length + active.length > 0;
   const locked = state?.status === "locked" || state?.status === "unlocking";
+  // oxlint-disable-next-line t3code/react-effect-budget -- Report dialog ownership across environment presenters.
   useEffect(() => {
     report(environmentId, open);
     return () => report(environmentId, false);
@@ -503,7 +505,7 @@ function VaultUnlock({
     </form>
   );
 }
-export function ApprovalCard({
+function ApprovalCard({
   request,
   environmentLabel,
   disabled,
@@ -907,6 +909,7 @@ function AutomaticNotice({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const acknowledged = useRef(false);
+  // oxlint-disable-next-line t3code/react-effect-budget -- Acknowledge notices only after they become visible.
   useEffect(() => {
     if (!ref.current || disabled || acknowledged.current) return;
     const observer = new IntersectionObserver(

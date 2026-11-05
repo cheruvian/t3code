@@ -1,31 +1,27 @@
+import { openCodeToolProjectionKind } from "./toolItems.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { OpencodeClient, ToolPart } from "@opencode-ai/sdk/v2";
+import type { OpencodeClient } from "@opencode-ai/sdk/v2";
 import {
-  CheckpointId,
   NodeId,
   ProjectId,
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
-  ProviderTurnId,
   RunAttemptId,
   RunId,
   MessageId,
   ThreadId,
   type OrchestrationV2ProviderThread,
-  type OrchestrationV2ProviderTurn,
 } from "@t3tools/contracts";
 import { OpenCodeSettings } from "../settings.ts";
 import * as Effect from "effect/Effect";
-import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -41,11 +37,7 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import {
   advanceOpenCodePromptAdmission,
   cancelOpenCodePromptAdmission,
-  openCodeBoundaryAfterProviderTurn,
-  openCodeChildPermissionRules,
-  openCodePermissionRules,
   openCodePermissionRequestKind,
-  openCodeToolProjectionKind,
   makeOpenCodeProtocolLogger,
   makeOpenCodeAdapterV2,
   OPENCODE_PROVIDER,
@@ -104,7 +96,7 @@ function asyncEventStream() {
   };
 }
 
-const OPENCODE_TEST_SETTINGS = Schema.decodeUnknownSync(OpenCodeSettings)({});
+const OPENCODE_TEST_SETTINGS = Schema.decodeSync(OpenCodeSettings)({});
 
 function runtimePolicy(
   runtimeMode: ProviderAdapter.ProviderAdapterV2RuntimePolicy["runtimeMode"],
@@ -116,32 +108,6 @@ function runtimePolicy(
     cwd: null,
     ...override,
   });
-}
-
-function permissionAction(rules: ReturnType<typeof openCodePermissionRules>, permission: string) {
-  return rules.findLast((rule) => rule.permission === "*" || rule.permission === permission)
-    ?.action;
-}
-
-function providerTurn(input: {
-  readonly id: string;
-  readonly ordinal: number;
-  readonly nativeId: string | null;
-}): OrchestrationV2ProviderTurn {
-  return {
-    id: ProviderTurnId.make(input.id),
-    providerThreadId: ProviderThreadId.make("provider-thread:opencode-test"),
-    nodeId: NodeId.make(`node:${input.id}`),
-    runAttemptId: null,
-    nativeTurnRef:
-      input.nativeId === null
-        ? null
-        : { driver: OPENCODE_PROVIDER, nativeId: input.nativeId, strength: "weak" },
-    ordinal: input.ordinal,
-    status: "completed",
-    startedAt: null,
-    completedAt: null,
-  };
 }
 
 const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(function* (

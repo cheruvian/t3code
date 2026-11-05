@@ -1,5 +1,5 @@
 import { CheckIcon, CircleDotIcon, CircleIcon, ListTodoIcon } from "lucide-react";
-import { memo, type ComponentProps } from "react";
+import { memo } from "react";
 
 import { formatDuration } from "../../session-logic";
 import { cn } from "~/lib/utils";
@@ -99,7 +99,7 @@ function TaskSummary({
   );
 }
 
-export const ComposerTasksBadge = memo(function ComposerTasksBadge({
+const ComposerTasksBadge = memo(function ComposerTasksBadge({
   expanded,
   onToggle,
   placement = "tab",
@@ -216,20 +216,5 @@ export const ComposerTasksContent = memo(function ComposerTasksContent({
         </ComposerBanner.Scroll>
       ) : null}
     </div>
-  );
-});
-
-export const ComposerTasksDrawer = memo(function ComposerTasksDrawer({
-  onCollapse,
-  ...props
-}: Omit<ComponentProps<typeof ComposerTasksContent>, "expanded" | "onToggle"> & {
-  readonly onCollapse: () => void;
-}) {
-  return (
-    <ComposerBanner.Attachment>
-      <ComposerBanner.Root>
-        <ComposerTasksContent {...props} expanded onToggle={onCollapse} />
-      </ComposerBanner.Root>
-    </ComposerBanner.Attachment>
   );
 });

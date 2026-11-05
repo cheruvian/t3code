@@ -1,4 +1,3 @@
-import { cn } from "~/lib/utils";
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
@@ -137,31 +136,6 @@ export function resolveSidebarOrderingThreads<T extends SidebarThreadSummary>(
   const signature = threads.map(sidebarThreadSortSignature).join("\u0001");
   return previous?.signature === signature ? previous : { signature, threads };
 }
-
-export function sidebarThreadRowRenderKey(
-  threadKey: string,
-  section: SidebarThreadSection,
-  rowVariant: SidebarThreadRowVariant,
-): string {
-  return `${threadKey}:${section}:${rowVariant}`;
-}
-
-export function resolveSidebarSortableRowBag<T>(
-  rowVariant: SidebarThreadRowVariant,
-  sortable: T | undefined,
-): T | undefined {
-  switch (rowVariant) {
-    case "card":
-    case "slim":
-      return sortable;
-  }
-}
-
-// The list already reaches its destination through sortable transforms while
-// the pointer is down. dnd-kit's default also animates the committed DOM order
-// after release, replaying the same movement across every affected row.
-export const animatePinnedLayoutChanges: AnimateLayoutChanges = (args) =>
-  args.isSorting ? defaultAnimateLayoutChanges(args) : false;
 export function useSidebarRowSubscriptionLease(isActive: boolean): {
   readonly leaseLiveStatus: boolean;
   readonly rowRef: (row: HTMLElement | null) => (() => void) | undefined;
@@ -746,11 +720,7 @@ export function buildBulkTitleRegenerationContextMenuItem(input: {
   };
 }
 
-/**
- * Bulk unpin follows the same "count only what the action will touch" rule
- * as title regeneration: on a mixed selection the label counts the pinned
- * rows alone, and the item disappears when nothing selected is pinned.
- */
+/** Bulk unpin follows the same "count only what the action will touch" rule as title regeneration: on a mixed selection the label counts the pinned rows alone, and the item disappears when nothing selected is pinned. */
 export function buildBulkUnpinContextMenuItem(input: {
   pinnedCount: number;
 }): ContextMenuItem<"unpin"> | null {
@@ -817,13 +787,7 @@ export function useThreadJumpHintsVisible(shouldShow: boolean): boolean {
   return useDeadlinePassed(showAt);
 }
 
-/**
- * Effective visited watermark for a thread. Servers with visited tracking
- * project `lastVisitedAt` on the shell and are authoritative — that value is
- * shared across every device connected to the environment. Pre-tracking
- * servers omit the field, and the browser's locally persisted watermark keeps
- * working as before.
- */
+/** Effective visited watermark for a thread. Servers with visited tracking project `lastVisitedAt` on the shell and are authoritative — that value is shared across every device connected to the environment. Pre-tracking servers omit the field, and the browser's locally persisted watermark keeps working as before. */
 export function resolveThreadLastVisitedAt(
   serverLastVisitedAt: string | null | undefined,
   localLastVisitedAt: string | undefined,
@@ -998,51 +962,7 @@ export function isContextMenuPointerDown(input: {
   return input.isMac && input.button === 0 && input.ctrlKey;
 }
 
-export function resolveThreadRowClassName(input: {
-  isActive: boolean;
-  isSelected: boolean;
-}): string {
-  const baseClassName =
-    "h-8 w-full translate-x-0 cursor-pointer justify-start rounded-md px-2 text-left text-sm select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
-
-  if (input.isSelected && input.isActive) {
-    return cn(
-      baseClassName,
-      "bg-sidebar-row-active text-sidebar-foreground font-medium hover:bg-sidebar-row-active hover:text-sidebar-foreground",
-    );
-  }
-
-  if (input.isSelected) {
-    return cn(
-      baseClassName,
-      "bg-sidebar-row-selected text-sidebar-foreground hover:bg-sidebar-row-active hover:text-sidebar-foreground",
-    );
-  }
-
-  if (input.isActive) {
-    return cn(
-      baseClassName,
-      "bg-sidebar-row-active text-sidebar-foreground font-medium hover:bg-sidebar-row-active hover:text-sidebar-foreground",
-    );
-  }
-
-  return cn(
-    baseClassName,
-    "text-sidebar-muted-foreground/80 hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
-  );
-}
-
-// ── Sidebar v2 status model ─────────────────────────────────────────
-// Six visual states, three colors: color is reserved for "act now"
-// (approval), "in motion" (working), and "broken" (failed). Ready is the
-// unlabeled resting state — the agent stopped and is waiting on the user,
-// whether it finished, asked a question, or proposed a plan. Waiting
-// (runtime status "idle") is the agent stopped with background work that will
-// wake it (subagents, monitors): not the user's turn yet, so it renders grey
-// like working, not as a false Done. Commands it left running, such as a dev
-// server, do not hold the thread; it reads as ready.
-// Unread completion is tracked separately: it describes whether a ready
-// thread needs attention, not what the thread is currently doing.
+// ── Sidebar v2 status model ───────────────────────────────────────── Six visual states, three colors: color is reserved for "act now" (approval), "in motion" (working), and "broken" (failed). Ready is the unlabeled resting state — the agent stopped and is waiting on the user, whether it finished, asked a question, or proposed a plan. Waiting (runtime status "idle") is the agent stopped with background work that will wake it (subagents, monitors): not the user's turn yet, so it renders grey like working, not as a false Done. Commands it left running, such as a dev server, do not hold the thread; it reads as ready. Unread completion is tracked separately: it describes whether a ready thread needs attention, not what the thread is currently doing.
 export type SidebarThreadStatus =
   | "approval"
   | "input"
@@ -1086,7 +1006,7 @@ type SidebarThreadStatusInput = Pick<
 > &
   Partial<Pick<ThreadStatusInput, "latestRun" | "lastVisitedAt" | "pendingBackgroundTasks">>;
 
-export function hasUnreadMonitorCompletion(thread: Partial<ThreadStatusInput>): boolean {
+function hasUnreadMonitorCompletion(thread: Partial<ThreadStatusInput>): boolean {
   const tasks = thread.pendingBackgroundTasks ?? [];
   return (
     thread.latestRun?.status === "completed" &&
@@ -1228,11 +1148,7 @@ export { sortPinnedThreadsByOrderKey as sortPinnedThreadsForSidebar } from "@t3t
 
 const EMPTY_CONTENT_MATCH_KEYS: ReadonlySet<string> = new Set<string>();
 
-/**
- * Sidebar search results: title, branch, and pull request matches ranked as
- * the command palette ranks them, then threads listed only because their
- * messages match, in `contentMatchKeys` order.
- */
+/** Sidebar search results: title, branch, and pull request matches ranked as the command palette ranks them, then threads listed only because their messages match, in `contentMatchKeys` order. */
 export function getSidebarForkParentThreadId(
   thread: Pick<SidebarThreadSummary, "forkedFrom" | "lineage">,
 ) {
@@ -1276,11 +1192,7 @@ export function searchSidebarThreads<
   return { titleMatches, contentMatches };
 }
 
-/**
- * Whether a PR's search terms contain every whitespace-separated token of the
- * query. Search results use this to pick the PR number to show, so it has to
- * accept the multi-token queries the command palette matches on.
- */
+/** Whether a PR's search terms contain every whitespace-separated token of the query. Search results use this to pick the PR number to show, so it has to accept the multi-token queries the command palette matches on. */
 export function pullRequestMatchesSearchQuery(
   pullRequest: Parameters<typeof threadPullRequestSearchTerms>[0],
   query: string,
@@ -1601,11 +1513,7 @@ export function sortSidebarV2ProjectGroups<
   );
 }
 
-/**
- * Sorts the cross-environment project collection used by landing surfaces.
- * Project ids are only unique within an environment, and archived threads
- * must not make a project appear recently active.
- */
+/** Sorts the cross-environment project collection used by landing surfaces. Project ids are only unique within an environment, and archived threads must not make a project appear recently active. */
 export function sortScopedProjectsForSidebar<
   TProject extends ScopedSidebarProject,
   TThread extends ScopedSidebarThread,

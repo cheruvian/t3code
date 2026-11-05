@@ -23,7 +23,7 @@ export const offlineMessages = createOfflineMessageQueue(createOfflineMessageSto
 export const useOfflineMessages = () =>
   useSyncExternalStore(offlineMessages.subscribe, offlineMessages.getSnapshot);
 
-export function offlineEnvironmentConnected(environmentId: EnvironmentId): boolean {
+function offlineEnvironmentConnected(environmentId: EnvironmentId): boolean {
   const presentation = appAtomRegistry.get(
     environmentPresentations.presentationAtom(environmentId),
   );

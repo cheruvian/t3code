@@ -1,16 +1,13 @@
 import {
   CheckpointId,
-  CheckpointRef,
   CheckpointScopeId,
   CommandId,
   EnvironmentId,
   MessageId,
-  NodeId,
   ORCHESTRATION_V2_WS_METHODS,
   PlanId,
   ProjectId,
   ProviderInstanceId,
-  ProviderDriverKind,
   RunId,
   RuntimeRequestId,
   ThreadId,
@@ -38,7 +35,6 @@ import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import { v2Now, v2Projection, v2ThreadId } from "../state/orchestrationV2TestFixtures.ts";
 import {
-  archiveThread,
   cancelQueuedRun,
   createProject,
   requestProjectResource,
@@ -135,6 +131,7 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
     subscribeServerConfig: (input) => client.subscribeServerConfig(input),
     ready: Effect.void,
     probe: Effect.void,
+    inboundFrames: Effect.succeed(0),
     closed: Effect.never,
   };
   return EnvironmentSupervisor.EnvironmentSupervisor.of({

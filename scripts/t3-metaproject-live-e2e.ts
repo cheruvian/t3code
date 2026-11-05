@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - Standalone Node CLI fixture using synchronous subprocesses.
 /**
  * Opt-in live acceptance test for the T3 Chat Helper pseudo-project contract.
  *

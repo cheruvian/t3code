@@ -4,7 +4,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import type { ThreadId } from "@t3tools/contracts";
-import { RotatingFileSink, makeAsyncRotatingFileSink } from "@t3tools/shared/logging";
+import { makeAsyncRotatingFileSink } from "@t3tools/shared/logging";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { causeErrorTag, errorTag } from "@t3tools/shared/observability";
 import * as Clock from "effect/Clock";
@@ -522,37 +522,6 @@ export function boundProviderEventForLogging(event: unknown): unknown {
     // A failing accessor must not escape into provider processing.
   }
   return summarizeProviderEvent(event);
-}
-
-export function writeBatchedMessages(
-  sink: Pick<RotatingFileSink, "write">,
-  records: ReadonlyArray<PendingRecord>,
-  maxBytes: number,
-  onWritten: (records: ReadonlyArray<PendingRecord>) => void,
-): void {
-  let pendingRecords: Array<PendingRecord> = [];
-  let pendingBytes = 0;
-
-  const flush = () => {
-    if (pendingRecords.length === 0) return;
-    const writtenRecords = pendingRecords;
-    sink.write(writtenRecords.map((record) => record.line).join(""));
-    onWritten(writtenRecords);
-    pendingRecords = [];
-    pendingBytes = 0;
-  };
-
-  for (const record of records) {
-    if (pendingBytes > 0 && pendingBytes + record.bytes > maxBytes) {
-      flush();
-    }
-    pendingRecords.push(record);
-    pendingBytes += record.bytes;
-    if (pendingBytes >= maxBytes) {
-      flush();
-    }
-  }
-  flush();
 }
 
 function isProviderLogFile(filePath: string, fileName: string, filePrefix: string): boolean {

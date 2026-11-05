@@ -33,23 +33,16 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
 import {
   EnvironmentRpcSubscriptionObserver,
-  EnvironmentRpcUnavailableError,
   type EnvironmentRpcSubscriptionObservation,
 } from "../rpc/client.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
 
 import {
-  commitVcsRefsRefresh,
   createVcsEnvironmentAtoms,
   makeCachedVcsRefsChanges,
   selectVcsStatusAtomForDemand,
 } from "./vcs.ts";
-import {
-  invalidateCachedVcsRefs,
-  invalidateVcsRefs,
-  vcsRefsCacheStateAtom,
-} from "./vcsRefInvalidation.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -108,6 +101,7 @@ function session(client: WsRpcProtocolClient): RpcSession {
     subscribeServerConfig: (input) => client.subscribeServerConfig(input),
     ready: Effect.void,
     probe: Effect.void,
+    inboundFrames: Effect.succeed(0),
     closed: Effect.never,
   };
 }
@@ -510,7 +504,7 @@ describe("VCS status subscription ownership", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeVcsStatusSubscriptionHarness;
-        const attempts = yield* Ref.make<ReadonlyArray<"first" | "second">>([]);
+        const attempts = yield* SubscriptionRef.make<ReadonlyArray<"first" | "second">>([]);
         const firstAttempted = yield* Queue.unbounded<void>();
         const failure = new GitManagerError({
           operation: "VcsStatusBroadcaster.streamStatus",
@@ -520,7 +514,7 @@ describe("VCS status subscription ownership", () => {
         const firstClient = {
           [WS_METHODS.subscribeVcsStatus]: () =>
             Stream.fromEffect(
-              Ref.update(attempts, (current) => [...current, "first" as const]).pipe(
+              SubscriptionRef.update(attempts, (current) => [...current, "first" as const]).pipe(
                 Effect.andThen(Queue.offer(firstAttempted, undefined)),
               ),
             ).pipe(Stream.drain, Stream.concat(Stream.fail(failure))),
@@ -540,7 +534,9 @@ describe("VCS status subscription ownership", () => {
         const secondClient = {
           [WS_METHODS.subscribeVcsStatus]: () =>
             Stream.make(snapshot).pipe(
-              Stream.tap(() => Ref.update(attempts, (current) => [...current, "second" as const])),
+              Stream.tap(() =>
+                SubscriptionRef.update(attempts, (current) => [...current, "second" as const]),
+              ),
               Stream.concat(Stream.never),
             ),
         } as unknown as WsRpcProtocolClient;
@@ -554,24 +550,18 @@ describe("VCS status subscription ownership", () => {
         const release = harness.registry.mount(atom);
         yield* Queue.take(firstAttempted);
         yield* TestClock.adjust("10 minutes");
-        expect(yield* Ref.get(attempts)).toEqual(["first"]);
+        expect(yield* SubscriptionRef.get(attempts)).toEqual(["first"]);
 
         yield* SubscriptionRef.set(supervisor.session, Option.some(session(secondClient)));
-        for (
-          let attempt = 0;
-          attempt < 100 && (yield* Ref.get(attempts)).length < 2;
-          attempt += 1
-        ) {
-          yield* Effect.yieldNow;
-        }
-        expect(yield* Ref.get(attempts)).toEqual(["first", "second"]);
-        for (
-          let attempt = 0;
-          attempt < 100 && !AsyncResult.isSuccess(harness.registry.get(atom));
-          attempt += 1
-        ) {
-          yield* Effect.yieldNow;
-        }
+        yield* SubscriptionRef.changes(attempts).pipe(
+          Stream.filter((values) => values.length >= 2),
+          Stream.runHead,
+        );
+        expect(yield* SubscriptionRef.get(attempts)).toEqual(["first", "second"]);
+        yield* AtomRegistry.toStream(harness.registry, atom).pipe(
+          Stream.filter(AsyncResult.isSuccess),
+          Stream.runHead,
+        );
 
         const recovered = harness.registry.get(atom);
         expect(AsyncResult.isSuccess(recovered)).toBe(true);
@@ -697,12 +687,12 @@ describe("cached VCS refs", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const expectedError = new Error("Could not list Git refs.");
-          const calls = yield* Ref.make(0);
+          const calls = yield* SubscriptionRef.make(0);
           const attempts = yield* Queue.unbounded<number>();
           const connectionState = yield* SubscriptionRef.make(CONNECTED_CONNECTION_STATE);
           const client = {
             [WS_METHODS.vcsListRefs]: () =>
-              Ref.updateAndGet(calls, (count) => count + 1).pipe(
+              SubscriptionRef.updateAndGet(calls, (count) => count + 1).pipe(
                 Effect.tap((count) => Queue.offer(attempts, count)),
                 Effect.flatMap((count) =>
                   count === 1 ? Effect.fail(expectedError) : Effect.succeed(LIVE_REFS),
@@ -756,15 +746,12 @@ describe("cached VCS refs", () => {
           registry.mount(refsAtom);
 
           expect(yield* Queue.take(attempts)).toBe(1);
-          expect(yield* Ref.get(calls)).toBe(1);
+          expect(yield* SubscriptionRef.get(calls)).toBe(1);
 
-          for (
-            let attempt = 0;
-            attempt < 100 && !AsyncResult.isFailure(registry.get(refsAtom));
-            attempt += 1
-          ) {
-            yield* Effect.yieldNow;
-          }
+          yield* AtomRegistry.toStream(registry, refsAtom).pipe(
+            Stream.filter(AsyncResult.isFailure),
+            Stream.runHead,
+          );
           const failed = registry.get(refsAtom);
           expect(AsyncResult.isFailure(failed)).toBe(true);
           if (AsyncResult.isFailure(failed)) {
@@ -774,26 +761,23 @@ describe("cached VCS refs", () => {
 
           yield* TestClock.adjust("1 minute");
           yield* Effect.yieldNow;
-          expect(yield* Ref.get(calls)).toBe(1);
+          expect(yield* SubscriptionRef.get(calls)).toBe(1);
 
           yield* SubscriptionRef.set(connectionState, AVAILABLE_CONNECTION_STATE);
           yield* Effect.yieldNow;
-          expect(yield* Ref.get(calls)).toBe(1);
+          expect(yield* SubscriptionRef.get(calls)).toBe(1);
 
           yield* SubscriptionRef.set(connectionState, {
             ...CONNECTED_CONNECTION_STATE,
             generation: 2,
           });
           expect(yield* Queue.take(attempts)).toBe(2);
-          expect(yield* Ref.get(calls)).toBe(2);
+          expect(yield* SubscriptionRef.get(calls)).toBe(2);
 
-          for (
-            let attempt = 0;
-            attempt < 100 && !AsyncResult.isSuccess(registry.get(refsAtom));
-            attempt += 1
-          ) {
-            yield* Effect.yieldNow;
-          }
+          yield* AtomRegistry.toStream(registry, refsAtom).pipe(
+            Stream.filter(AsyncResult.isSuccess),
+            Stream.runHead,
+          );
           const recovered = registry.get(refsAtom);
           expect(AsyncResult.isSuccess(recovered)).toBe(true);
           if (AsyncResult.isSuccess(recovered)) {
@@ -806,17 +790,17 @@ describe("cached VCS refs", () => {
   it.effect("cancels an in-flight refresh when the connection generation changes", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const calls = yield* Ref.make(0);
-        const interruptions = yield* Ref.make(0);
+        const calls = yield* SubscriptionRef.make(0);
+        const interruptions = yield* SubscriptionRef.make(0);
         const connectionState = yield* SubscriptionRef.make(CONNECTED_CONNECTION_STATE);
         const client = {
           [WS_METHODS.vcsListRefs]: () =>
-            Ref.updateAndGet(calls, (count) => count + 1).pipe(
+            SubscriptionRef.updateAndGet(calls, (count) => count + 1).pipe(
               Effect.flatMap((count) =>
                 count === 1
                   ? Effect.never.pipe(
                       Effect.onInterrupt(() =>
-                        Ref.update(interruptions, (interruptions) => interruptions + 1),
+                        SubscriptionRef.update(interruptions, (interruptions) => interruptions + 1),
                       ),
                     )
                   : Effect.succeed(LIVE_REFS),
@@ -841,21 +825,23 @@ describe("cached VCS refs", () => {
         ).pipe(Stream.runHead);
         const fiber = yield* Effect.forkChild(result);
 
-        for (let attempt = 0; attempt < 100 && (yield* Ref.get(calls)) < 1; attempt += 1) {
-          yield* Effect.yieldNow;
-        }
+        yield* SubscriptionRef.changes(calls).pipe(
+          Stream.filter((count) => count >= 1),
+          Stream.runHead,
+        );
         yield* SubscriptionRef.set(connectionState, AVAILABLE_CONNECTION_STATE);
-        for (let attempt = 0; attempt < 100 && (yield* Ref.get(interruptions)) < 1; attempt += 1) {
-          yield* Effect.yieldNow;
-        }
-        expect(yield* Ref.get(interruptions)).toBe(1);
+        yield* SubscriptionRef.changes(interruptions).pipe(
+          Stream.filter((count) => count >= 1),
+          Stream.runHead,
+        );
+        expect(yield* SubscriptionRef.get(interruptions)).toBe(1);
 
         yield* SubscriptionRef.set(connectionState, {
           ...CONNECTED_CONNECTION_STATE,
           generation: 2,
         });
         expect(Option.getOrThrow(yield* Fiber.join(fiber))).toEqual(LIVE_REFS);
-        expect(yield* Ref.get(calls)).toBe(2);
+        expect(yield* SubscriptionRef.get(calls)).toBe(2);
       }),
     ),
   );
@@ -863,10 +849,10 @@ describe("cached VCS refs", () => {
   it.effect("does not poll refs while the connection remains stable", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const calls = yield* Ref.make(0);
+        const calls = yield* SubscriptionRef.make(0);
         const client = {
           [WS_METHODS.vcsListRefs]: () =>
-            Ref.update(calls, (count) => count + 1).pipe(Effect.as(CACHED_REFS)),
+            SubscriptionRef.update(calls, (count) => count + 1).pipe(Effect.as(CACHED_REFS)),
         } as unknown as WsRpcProtocolClient;
         const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
           target: TARGET,
@@ -885,14 +871,15 @@ describe("cached VCS refs", () => {
         ).pipe(Stream.runDrain);
         const fiber = yield* Effect.forkChild(stream);
 
-        for (let attempt = 0; attempt < 100 && (yield* Ref.get(calls)) < 1; attempt += 1) {
-          yield* Effect.yieldNow;
-        }
-        expect(yield* Ref.get(calls)).toBe(1);
+        yield* SubscriptionRef.changes(calls).pipe(
+          Stream.filter((count) => count >= 1),
+          Stream.runHead,
+        );
+        expect(yield* SubscriptionRef.get(calls)).toBe(1);
 
         yield* TestClock.adjust("1 minute");
         yield* Effect.yieldNow;
-        expect(yield* Ref.get(calls)).toBe(1);
+        expect(yield* SubscriptionRef.get(calls)).toBe(1);
         yield* Fiber.interrupt(fiber);
       }).pipe(Effect.provide(TestClock.layer())),
     ),

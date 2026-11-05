@@ -80,7 +80,7 @@ export async function loadMcpBridge(
     outputSchema: { type: "object", properties: { count: { type: "number" } } },
   }));
   const source = NodeModule.stripTypeScriptTypes(
-    PI_T3_MCP_EXTENSION_SOURCE.replace(/^import .*;$/gm, "").replace(
+    PI_T3_MCP_EXTENSION_SOURCE.replace(/^import\b[\s\S]*?;$/gm, "").replace(
       "export default async function",
       "async function",
     ),

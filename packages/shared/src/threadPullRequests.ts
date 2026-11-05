@@ -1,14 +1,12 @@
 import {
   type OrchestrationV2AppThread,
-  type RepositoryIdentity,
-  type SourceControlProviderKind,
   type ThreadLinkedPullRequest,
   type ThreadPullRequestKey,
   type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 
 import { parseChangeRequestUrl } from "./changeRequestUrl.ts";
-import { canonicalRepositoryKey, sourceControlRepositorySelector } from "./sourceControl.ts";
+import { canonicalRepositoryKey } from "./sourceControl.ts";
 
 type ThreadPullRequestKeySource = ThreadPullRequestKey & {
   readonly authority?: string;
@@ -68,7 +66,7 @@ export function threadPullRequestKeysEqual(
   return threadPullRequestKeyOf(left) === threadPullRequestKeyOf(right);
 }
 
-export function threadPullRequestKeyOf(key: ThreadPullRequestKeySource): string {
+function threadPullRequestKeyOf(key: ThreadPullRequestKeySource): string {
   const normalized = normalizeThreadPullRequestKey(key);
   return `${normalized.host}/${normalized.repository}#${normalized.number}`;
 }
@@ -169,25 +167,4 @@ export function applyThreadPullRequestLinkUpdate(
       threadPullRequestKeysEqual(link, updated) ? updated : link,
     ),
   };
-}
-
-export function pullRequestHostOf(
-  identity:
-    | {
-        readonly canonicalKey?: string | undefined;
-        readonly locator?: { readonly remoteUrl: string } | undefined;
-      }
-    | null
-    | undefined,
-  kind: SourceControlProviderKind,
-): string {
-  if (kind === "forgejo") {
-    try {
-      const remote = new URL(identity?.locator?.remoteUrl ?? "");
-      if (remote.protocol === "http:" || remote.protocol === "https:")
-        return remote.host.toLowerCase();
-    } catch {}
-  }
-  const host = identity?.canonicalKey?.split("/")[0]?.trim();
-  return host === undefined || host.length === 0 ? kind : host.toLowerCase();
 }

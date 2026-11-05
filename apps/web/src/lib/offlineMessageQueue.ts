@@ -11,7 +11,6 @@ import {
   ChatAttachment,
   UploadChatAttachment,
 } from "@t3tools/contracts";
-import type { StartThreadTurnInput } from "@t3tools/client-runtime/operations";
 import * as Schema from "effect/Schema";
 
 const CreateThread = Schema.Struct({
@@ -294,6 +293,3 @@ export function createOfflineMessageQueue(storage: OfflineMessageStorage) {
     },
   };
 }
-
-/** Compile-time check: stored turns remain valid inputs for the ordinary send path. */
-export const offlineTurnInput = (message: OfflineMessage): StartThreadTurnInput => message.input;

@@ -121,7 +121,6 @@
     "mermaid": "^12.1.0",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "react-markdown": "10.1.0",
     "react-native": "0.88.0",
     "react-native-blob-util": "0.25.1",
     "react-native-enriched-markdown": "file:deps/react-native-enriched-markdown-1.2.0-t3.16-558767d9.tgz",

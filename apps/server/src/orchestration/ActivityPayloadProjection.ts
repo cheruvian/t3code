@@ -181,12 +181,7 @@ function summarizeToolTextOutput(value: string): string | null {
   return meaningfulLineCount > 1 ? `${meaningfulLineCount.toLocaleString()} lines` : null;
 }
 
-/**
- * Fields of an MCP tool-call item both clients render in the expanded
- * work-log row. Everything else — notably `result`, which carries the full
- * tool output and dominates wire size on MCP-heavy threads — is summarized
- * or dropped. Full payloads remain in persistence.
- */
+/** Fields of an MCP tool-call item both clients render in the expanded work-log row. Everything else — notably `result`, which carries the full tool output and dominates wire size on MCP-heavy threads — is summarized or dropped. Full payloads remain in persistence. */
 const MCP_ITEM_KEPT_FIELDS = [
   "type",
   "id",
@@ -199,11 +194,7 @@ const MCP_ITEM_KEPT_FIELDS = [
   "durationMs",
 ] as const;
 
-/**
- * Pulls renderable text out of an MCP tool result: either a Codex-style
- * `{content: [{type: "text", text}, ...]}` record or a raw Claude
- * `tool_result` block whose `content` is a string or block array.
- */
+/** Pulls renderable text out of an MCP tool result: either a Codex-style `{content: [{type: "text", text}, ...]}` record or a raw Claude `tool_result` block whose `content` is a string or block array. */
 function extractMcpResultText(result: unknown): string | null {
   const record = asRecord(result);
   if (!record) {
@@ -300,12 +291,7 @@ function projectPreviewToolMetadata(data: Record<string, unknown>, status: unkno
   }
 }
 
-/**
- * MCP tool calls carry full tool results (`data.item.result` on Codex,
- * `data.result` on Claude/OpenCode) that used to bypass slimming entirely to
- * keep the expanded-row UI working. Keep the fields the UI actually renders
- * and summarize the result like regular tool output.
- */
+/** MCP tool calls carry full tool results (`data.item.result` on Codex, `data.result` on Claude/OpenCode) that used to bypass slimming entirely to keep the expanded-row UI working. Keep the fields the UI actually renders and summarize the result like regular tool output. */
 function projectMcpToolCallData(data: Record<string, unknown>): Record<string, unknown> {
   const projectedData: Record<string, unknown> = {};
 
@@ -412,46 +398,13 @@ function projectAcpContent(value: unknown): Record<string, unknown> | undefined 
   return summary ? { content: summary } : undefined;
 }
 
-/**
- * Version stamp for {@link projectPayload}'s rules, stored alongside every
- * pre-slimmed payload in `projection_thread_activities.payload_slim_version`.
- * Reads only trust a stored slim payload when its stamp equals this constant,
- * so **bump it in the same commit as any change to the slimming rules** —
- * anything the rules newly keep, drop, or reshape. Rows stamped with an older
- * version fall back to re-slimming `payload_json`, which is always correct,
- * just slower until they are rewritten.
- */
+/** Version stamp for {@link projectPayload}'s rules, stored alongside every pre-slimmed payload in `projection_thread_activities.payload_slim_version`. Reads only trust a stored slim payload when its stamp equals this constant, so **bump it in the same commit as any change to the slimming rules** — anything the rules newly keep, drop, or reshape. Rows stamped with an older version fall back to re-slimming `payload_json`, which is always correct, just slower until they are rewritten. */
 export const ACTIVITY_PAYLOAD_SLIM_VERSION = 2;
 
-/**
- * Payload objects that already went through {@link projectPayload} — either
- * because a reader served them from `payload_slim_json` or because this module
- * produced them. Keyed on the payload object itself, which schema decoding
- * passes through by reference, so the slimming pass can be skipped instead of
- * repeated on the read path. Re-running would be harmless (the projection is
- * idempotent); skipping it is the point of storing the slim payload.
- */
+/** Payload objects that already went through {@link projectPayload} — either because a reader served them from `payload_slim_json` or because this module produced them. Keyed on the payload object itself, which schema decoding passes through by reference, so the slimming pass can be skipped instead of repeated on the read path. Re-running would be harmless (the projection is idempotent); skipping it is the point of storing the slim payload. */
 const projectedPayloads = new WeakSet<object>();
 
-/**
- * Marks a payload read from `payload_slim_json` as already slimmed so
- * {@link projectActivityPayload} leaves it alone. Returns its argument so
- * callers can mark inline.
- */
-export function markProjectedPayload<A>(payload: A): A {
-  if (payload !== null && typeof payload === "object") {
-    projectedPayloads.add(payload);
-  }
-  return payload;
-}
-
-/**
- * Removes activity payload fields that no current client reads. The single
- * source of truth for slimming: the read path applies it to payloads loaded
- * from `payload_json`, and the projector applies it at write time to fill
- * `payload_slim_json`. Returns its argument unchanged when there is nothing to
- * slim, so callers can detect a no-op by reference.
- */
+/** Removes activity payload fields that no current client reads. The single source of truth for slimming: the read path applies it to payloads loaded from `payload_json`, and the projector applies it at write time to fill `payload_slim_json`. Returns its argument unchanged when there is nothing to slim, so callers can detect a no-op by reference. */
 export function projectPayload(rawPayload: unknown): unknown {
   const payload = asRecord(rawPayload);
   const data = asRecord(payload?.data);

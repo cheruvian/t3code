@@ -38,7 +38,7 @@ const dependencies = [
   Path.Path,
 ];
 
-export const ApiCallTool = Tool.make("api_call", {
+const ApiCallTool = Tool.make("api_call", {
   description:
     "Call a typed T3 Code environment API by name. `operation` is an agent-exposed entry from the T3 Chat Helper project's api-inventory.json (for example `orchestration.dispatchCommand` or `server.updateSettings`); `input` must match that operation's typed contract. `orchestration.subscribeShell` and `orchestration.subscribeThread` return the current snapshot instead of a live stream. Only agent sessions running in the T3 Chat Helper project may call this tool.",
   parameters: Schema.Struct({

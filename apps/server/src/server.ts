@@ -205,7 +205,7 @@ import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale"
 import * as ServerActivation from "./serverActivation.ts";
 
 // Escaped MCP handoff provenance can exceed find-my-way's 100-character segment default.
-export const HTTP_ROUTER_CONFIG = {
+const HTTP_ROUTER_CONFIG = {
   maxParamLength: 512,
 } as const;
 
@@ -549,7 +549,7 @@ const layerOrchestrationApplication = CheckpointDiffQuery.layer.pipe(
   Layer.provideMerge(layerOrchestrationV2Runtime),
 );
 
-// Automatic thread settlement (#8600): a server-owned sweep evaluates
+// Automatic thread settlement: a server-owned sweep evaluates
 // inactivity and merged pull requests, then settles through the orchestrator
 // so every client sees the same shelf.
 const layerThreadSettlementWorker = Layer.effectDiscard(
@@ -695,11 +695,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   // Search, prepare, status inspection, and turn launch share one registry
   // cache so every client and provider instance sees the same prepared agents.
   Layer.provideMerge(AcpRegistrySupport.layerFromHost.pipe(Layer.provide(ProviderHostLive.layer))),
-  // Provider event loggers are shared by every driver instance and the
-  // orchestration runtime, so they are provided once here.
-  // `ModelManifest.layer` is the model manifest, refreshed from the repo's
-  // `model-manifest.json` on `main`. Drivers read their entry through the
-  // `ModelCatalog` port it provides.
+  // Provider event loggers are shared by every driver instance and the orchestration runtime, so they are provided once here. `ModelManifest.layer` is the model manifest, refreshed from the repo's `model-manifest.json` on `main`. Drivers read their entry through the `ModelCatalog` port it provides.
   Layer.provideMerge(
     Layer.mergeAll(
       layerProviderEventLoggers,
@@ -709,11 +705,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
       McpProviderSessions.layer,
     ),
   ),
-  // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
-  // `ProviderRegistry.layer` pulled `OpenCodeRuntimeLive` in for itself, but
-  // the rewritten registry reads snapshots off the instance registry and
-  // no longer transitively provides it. Exposing it at the runtime level
-  // keeps a single Live for all opencode consumers.
+  // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old `ProviderRegistry.layer` pulled `OpenCodeRuntimeLive` in for itself, but the rewritten registry reads snapshots off the instance registry and no longer transitively provides it. Exposing it at the runtime level keeps a single Live for all opencode consumers.
   Layer.provideMerge(
     OpenCodeRuntime.layer.pipe(
       Layer.provide(
@@ -793,11 +785,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
   ),
-  // The MCP session registry is provided globally (shared with V2 provider
-  // sessions) rather than inline here. The orchestrator toolkit resolves
-  // delegation targets through the same live adapter facade the V2
-  // orchestrator uses, so MCP capability reporting can never drift from
-  // what dispatch can actually serve.
+  // The MCP session registry is provided globally (shared with V2 provider sessions) rather than inline here. The orchestrator toolkit resolves delegation targets through the same live adapter facade the V2 orchestrator uses, so MCP capability reporting can never drift from what dispatch can actually serve.
   McpHttpServer.layer.pipe(
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
     Layer.provide(McpOAuth.layerMcpClientAuthenticator),
@@ -985,12 +973,7 @@ const layerMakeServer = Layer.unwrap(
               Stream.runForEach(recoverManagedTunnel),
               Effect.forkScoped,
             );
-            // No settling delay before the first attempt: routes are already
-            // serving by the time activation opens this gate (the startup
-            // sequence awaits routesReady), and the retry schedule below
-            // covers anything this sleep used to hedge against. Every
-            // millisecond here is dead time on the path to remote
-            // reachability after a restart.
+            // No settling delay before the first attempt: routes are already serving by the time activation opens this gate (the startup sequence awaits routesReady), and the retry schedule below covers anything this sleep used to hedge against. Every millisecond here is dead time on the path to remote reachability after a restart.
             const wantsCliLink = hasCloudPublicConfig
               ? yield* CloudCliState.readCliDesiredCloudLink.pipe(
                   Effect.catch((cause) =>

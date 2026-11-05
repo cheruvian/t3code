@@ -100,6 +100,7 @@
       "entry": [
         "index.ts!",
         "fingerprint.config.js",
+        "index.web.ts!",
         "plugins/*.cjs",
         "scripts/generate-device-stream.mts",
         "src/features/devices/device-stream.browser.ts!",
@@ -113,7 +114,12 @@
         "@t3tools/mobile-terminal-native",
       ],
     },
+    "packages/credential-broker": {
+      // The embedded program loader resolves Zod through createRequire.
+      "ignoreDependencies": ["zod"],
+    },
     "apps/mobile/modules/t3-source-text": {
+      "ignoreDependencies": ["@types/react"],
       // React Native codegen discovers component specifications by filename.
       "entry": ["src/*NativeComponent.ts!"],
     },

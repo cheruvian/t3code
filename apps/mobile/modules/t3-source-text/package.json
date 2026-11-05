@@ -21,7 +21,7 @@
   },
   "peerDependenciesMeta": {
     "@types/react": {
-      "optional": true
+      "optional": false
     }
   },
   "codegenConfig": {

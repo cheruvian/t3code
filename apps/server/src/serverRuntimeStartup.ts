@@ -74,6 +74,8 @@ export class ServerRuntimeStartupError extends Schema.TaggedError<ServerRuntimeS
   }
 }
 
+const isRecoveryError = Schema.is(ProviderRuntimeRecovery.ProviderRuntimeRecoveryError);
+
 export const makeServerRuntimeStartupError = (input: {
   readonly mode: ServerConfig.RuntimeMode;
   readonly host: string | null;
@@ -83,7 +85,7 @@ export const makeServerRuntimeStartupError = (input: {
   const cause = Cause.squash(input.cause);
   return new ServerRuntimeStartupError({
     ...input,
-    ...(Schema.is(ProviderRuntimeRecovery.ProviderRuntimeRecoveryError)(cause)
+    ...(isRecoveryError(cause)
       ? {
           phase: "orchestration-v2.recovery",
           operation: cause.operation,
@@ -284,18 +286,18 @@ const resolveWelcomeBase = Effect.gen(function* () {
   } as const;
 });
 
-export const ensureT3CodeMetaprojectRegistered = Effect.fn("ensureT3CodeMetaprojectRegistered")(
-  function* (workspaceRoot: string) {
-    const crypto = yield* Crypto.Crypto;
-    const projects = yield* ProjectService.ProjectService;
-    yield* projects.bootstrap({
-      commandId: CommandId.make(yield* crypto.randomUUIDv4()),
-      projectId: ProjectId.make(yield* crypto.randomUUIDv4()),
-      title: T3_CHAT_HELPER_TITLE,
-      workspaceRoot,
-    });
-  },
-);
+const ensureT3CodeMetaprojectRegistered = Effect.fn("ensureT3CodeMetaprojectRegistered")(function* (
+  workspaceRoot: string,
+) {
+  const crypto = yield* Crypto.Crypto;
+  const projects = yield* ProjectService.ProjectService;
+  yield* projects.bootstrap({
+    commandId: CommandId.make(yield* crypto.randomUUIDv4()),
+    projectId: ProjectId.make(yield* crypto.randomUUIDv4()),
+    title: T3_CHAT_HELPER_TITLE,
+    workspaceRoot,
+  });
+});
 
 const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;

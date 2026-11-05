@@ -220,15 +220,7 @@ interface ActiveTurn {
   };
   steps: number;
   lastStep: Tokens | undefined;
-  /**
-   * The history item this turn's execution follows, for a turn with no prompt
-   * id of T3's: the session's newest item before a `/name` command (null when
-   * the history was empty), since `session.command` takes no id and answers
-   * without one; the report a continuation turn's execution answers; or, on a
-   * subagent's session, the first item queued for its turn. A reconnect
-   * backfills that turn from everything after this. Other turns backfill from
-   * their own prompt's id (`nativeTurnRef`).
-   */
+  /** The history item this turn's execution follows, for a turn with no prompt id of T3's: the session's newest item before a `/name` command (null when the history was empty), since `session.command` takes no id and answers without one; the report a continuation turn's execution answers; or, on a subagent's session, the first item queued for its turn. A reconnect backfills that turn from everything after this. Other turns backfill from their own prompt's id (`nativeTurnRef`). */
   before: string | null | undefined;
   /** The compaction running in this turn, `/compact` or OpenCode's own when the context fills. */
   compaction: { readonly nativeId: string; readonly startedAt: DateTime.Utc } | undefined;
@@ -241,27 +233,15 @@ interface ActiveTurn {
       }
     | undefined;
   interrupted: boolean;
-  /**
-   * Set until the turn's prompt, command or compaction is sent. A Stop before
-   * then has nothing on the server to stop, so it ends the turn here and the
-   * request is never sent.
-   */
+  /** Set until the turn's prompt, command or compaction is sent. A Stop before then has nothing on the server to stop, so it ends the turn here and the request is never sent. */
   unsent: boolean;
-  /**
-   * Steers sent into this turn that OpenCode has not delivered yet, by inbox
-   * id. Each one wakes the session, so an execution that ends before reading
-   * one is followed by another that does, and the turn spans both.
-   */
+  /** Steers sent into this turn that OpenCode has not delivered yet, by inbox id. Each one wakes the session, so an execution that ends before reading one is followed by another that does, and the turn spans both. */
   readonly steers: Set<string>;
   /** This turn's steers OpenCode delivered or cancelled: a retried one is not sent again. */
   readonly settledInbox: Set<string>;
   /** How the last execution ended, while the turn waits for the one that delivers its steers. */
   heldEnd: TurnTerminal | undefined;
-  /**
-   * Set on a turn started after a timed-out Stop's run left the server: that
-   * run's tail can still be on the stream, and everything before this turn's
-   * own `session.execution.started` belongs to it.
-   */
+  /** Set on a turn started after a timed-out Stop's run left the server: that run's tail can still be on the stream, and everything before this turn's own `session.execution.started` belongs to it. */
   awaitingStart: boolean;
   /** Scope child tool IDs because model-generated IDs can repeat parent IDs. */
   readonly scope: string;
@@ -292,11 +272,7 @@ interface SubagentCall {
   completedAt: DateTime.Utc | null;
 }
 
-/**
- * An execution OpenCode ran on a thread's session without T3 asking: the
- * parent's answer once a background subagent ended. Its events are held until
- * the continuation turn T3 opens for it takes them.
- */
+/** An execution OpenCode ran on a thread's session without T3 asking: the parent's answer once a background subagent ended. Its events are held until the continuation turn T3 opens for it takes them. */
 interface Wake {
   /** The message its continuation run starts from, which names the wake in that turn's input. */
   readonly messageId: MessageId | undefined;
@@ -364,11 +340,7 @@ interface ThreadState {
         turns: number;
         /** The prompt its next execution answers, shown as that turn's user message. */
         prompt: string | undefined;
-        /**
-         * The first item queued for the session since its last turn began (its
-         * prompt, or a report it answers): where the next turn's history
-         * begins, which a reconnect reads back.
-         */
+        /** The first item queued for the session since its last turn began (its prompt, or a report it answers): where the next turn's history begins, which a reconnect reads back. */
         queued: string | undefined;
       }
     | undefined;
@@ -504,11 +476,7 @@ const sessionGrantLabel = (action: string, save: ReadonlyArray<string>) =>
 
 const text = (value: string | undefined, fallback: string) => value?.trim() || fallback;
 
-/**
- * A form's fields as T3 questions, or why T3 cannot ask them: a link to open,
- * a field shown only for another answer, a hidden field, or a number or yes/no
- * value. OpenCode's question tool only asks text and multi-select fields.
- */
+/** A form's fields as T3 questions, or why T3 cannot ask them: a link to open, a field shown only for another answer, a hidden field, or a number or yes/no value. OpenCode's question tool only asks text and multi-select fields. */
 const formQuestions = (
   form: NativeForm,
 ):
@@ -683,16 +651,7 @@ const promptOf = (turn: OrchestrationV2ProviderTurn) => {
   return nativeId?.startsWith("msg_") === true ? nativeId : undefined;
 };
 
-/**
- * Where fork and rollback cut to keep the session's turns up to `kept` (all of
- * them before the first turn when undefined): before the message that starts
- * the next turn that reached OpenCode, which is in `prompts`. That is a turn's
- * prompt, or for a continuation the report it answers. A turn refused before
- * it prompted is not in the session and is passed over, and so is a
- * continuation that took no report. `null` means nothing follows, so there is
- * no cut; a later turn from before T3 chose prompt ids has no known message,
- * so no cut is safe.
- */
+/** Where fork and rollback cut to keep the session's turns up to `kept` (all of them before the first turn when undefined): before the message that starts the next turn that reached OpenCode, which is in `prompts`. That is a turn's prompt, or for a continuation the report it answers. A turn refused before it prompted is not in the session and is passed over, and so is a continuation that took no report. `null` means nothing follows, so there is no cut; a later turn from before T3 chose prompt ids has no known message, so no cut is safe. */
 const boundaryAfter = (
   turns: ReadonlyArray<OrchestrationV2ProviderTurn>,
   providerThreadId: OrchestrationV2ProviderThread["id"],
@@ -724,11 +683,7 @@ const boundaryAfter = (
 // Errors already in the adapter channel keep their tag; only lower-level ones are wrapped.
 const isProviderAdapterError = Schema.is(ProviderAdapter.ProviderAdapterV2Error);
 
-/**
- * The model OpenCode should run for a `provider/model` slug and its reasoning
- * variant, or undefined for any other slug: sending none would run OpenCode's
- * default while T3 records the requested model.
- */
+/** The model OpenCode should run for a `provider/model` slug and its reasoning variant, or undefined for any other slug: sending none would run OpenCode's default while T3 records the requested model. */
 const modelRef = (selection: ProviderAdapter.ProviderAdapterV2TurnInput["modelSelection"]) => {
   const parsed = OpenCodeRuntime.parseOpenCodeModelSlug(selection.model);
   if (parsed === null) return undefined;
@@ -970,11 +925,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       return calls;
     };
 
-    /**
-     * The turn a request from `sessionId` is shown under. A background
-     * subagent's goes to the turn that started it, whose run waits on the
-     * subagent; anything else goes to the thread's running turn.
-     */
+    /** The turn a request from `sessionId` is shown under. A background subagent's goes to the turn that started it, whose run waits on the subagent; anything else goes to the thread's running turn. */
     const requestTurn = (sessionId: string) => {
       const state = ownerOf(sessionId);
       if (state === undefined) return undefined;
@@ -987,12 +938,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       return state.active === undefined ? undefined : { state, turn: state.active };
     };
 
-    /**
-     * What a session still owes its thread once the thread's turn ended:
-     * background subagents, held executions, reports OpenCode queued for the
-     * follow-up it will start, and anything a subagent's session still runs,
-     * such as its own follow-up to such a report.
-     */
+    /** What a session still owes its thread once the thread's turn ended: background subagents, held executions, reports OpenCode queued for the follow-up it will start, and anything a subagent's session still runs, such as its own follow-up to such a report. */
     const owesWork = (state: ThreadState) =>
       state.wakes.length > 0 ||
       state.reports.size > 0 ||
@@ -1404,11 +1350,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       yield* syncRoster(rootOf(call.state));
     });
 
-    /**
-     * Lists a thread's background subagents on its provider thread, as typed
-     * `subagent` work: the thread shows it waits on them after its turn ends,
-     * and a Stop reaches them. Emitted only when the list changes.
-     */
+    /** Lists a thread's background subagents on its provider thread, as typed `subagent` work: the thread shows it waits on them after its turn ends, and a Stop reaches them. Emitted only when the list changes. */
     const syncRoster = Effect.fnUntraced(function* (state: ThreadState) {
       const roster = runningCalls(state)
         .filter((call) => call.background)
@@ -1466,11 +1408,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       };
     };
 
-    /**
-     * Gives a subagent call its session once both are known: OpenCode names
-     * the session on the call's progress, and announces it just before. The
-     * session becomes a child thread under the call's item.
-     */
+    /** Gives a subagent call its session once both are known: OpenCode names the session on the call's progress, and announces it just before. The session becomes a child thread under the call's item. */
     const attachChild = Effect.fnUntraced(function* (call: SubagentCall, childId: string) {
       if (call.child !== undefined) return;
       const info = announced.get(childId);
@@ -1576,11 +1514,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       }
     });
 
-    /**
-     * Ends a subagent call and every call under it that is still running. A
-     * background one outlives the call that made it, as it outlives a turn,
-     * unless that call failed.
-     */
+    /** Ends a subagent call and every call under it that is still running. A background one outlives the call that made it, as it outlives a turn, unless that call failed. */
     const settleCall: (
       call: SubagentCall,
       status: OrchestrationV2Subagent["status"],
@@ -1704,11 +1638,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       }
     });
 
-    /**
-     * Asks the orchestrator for the continuation turn a held wake needs. It
-     * names the subagents whose end woke the thread. A wake a Stop or an
-     * earlier turn already took needs no turn, so its offer is dropped.
-     */
+    /** Asks the orchestrator for the continuation turn a held wake needs. It names the subagents whose end woke the thread. A wake a Stop or an earlier turn already took needs no turn, so its offer is dropped. */
     const offerWake = Effect.fnUntraced(function* (state: ThreadState, wake: Wake) {
       const route = state.providerThread.appThreadId;
       if (route === null || wake.messageId === undefined) return;
@@ -1932,11 +1862,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       });
     });
 
-    /**
-     * Stops a run no turn of T3's waits on (one a Stop left running, or one
-     * found asking after a reconnect): a reject without a message and a
-     * cancelled form both end OpenCode's execution. Its end is not a turn's.
-     */
+    /** Stops a run no turn of T3's waits on (one a Stop left running, or one found asking after a reconnect): a reject without a message and a cancelled form both end OpenCode's execution. Its end is not a turn's. */
     const stopStaleRequest = (
       sessionId: string,
       native: { readonly type: "permission" | "form"; readonly id: string },
@@ -1983,11 +1909,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       }
     });
 
-    /**
-     * Shows a permission ask or question form on the thread whose session (or
-     * subagent session) asked, under that thread's running turn. A request no
-     * turn of T3's is waiting on is left for OpenCode's own clients.
-     */
+    /** Shows a permission ask or question form on the thread whose session (or subagent session) asked, under that thread's running turn. A request no turn of T3's is waiting on is left for OpenCode's own clients. */
     const showRequest = Effect.fnUntraced(function* (
       sessionId: string,
       native: PendingRequest["native"],
@@ -2166,11 +2088,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       });
     });
 
-    /**
-     * A permission ask or question form, from the stream or read back after a
-     * reconnect: shown under the turn it blocks, or stopped when it is the run
-     * a Stop left behind, which nothing answers.
-     */
+    /** A permission ask or question form, from the stream or read back after a reconnect: shown under the turn it blocks, or stopped when it is the run a Stop left behind, which nothing answers. */
     const onAsked = Effect.fnUntraced(function* (
       asked:
         | { readonly type: "permission"; readonly request: Permission.Request }
@@ -2401,17 +2319,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       }
     });
 
-    /**
-     * An execution OpenCode started on a thread's session with no turn of T3's
-     * running: the parent's answer to a background subagent's report. It is
-     * held for the continuation turn it asks for, or stopped when it only
-     * reports subagents a Stop ended.
-     */
-    /**
-     * Takes the reports an execution OpenCode started on its own delivers. When
-     * they all report subagents a Stop ended, that execution only answers the
-     * Stop, so it is stopped and `stopped` is true.
-     */
+    /** An execution OpenCode started on a thread's session with no turn of T3's running: the parent's answer to a background subagent's report. It is held for the continuation turn it asks for, or stopped when it only reports subagents a Stop ended. */
+    /** Takes the reports an execution OpenCode started on its own delivers. When they all report subagents a Stop ended, that execution only answers the Stop, so it is stopped and `stopped` is true. */
     const takeReports = Effect.fnUntraced(function* (state: ThreadState) {
       const delivered = [...state.reports.values()];
       state.reports.clear();
@@ -2759,17 +2668,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       yield* setSessionStatus("error", message);
       yield* Queue.end(events);
     });
-    /**
-     * Emits what a running turn missed while the stream was down, from the
-     * session's history since the turn began: text, reasoning and tools, each
-     * under the same native id its live events would have used, so nothing
-     * already shown is duplicated. A turn begins at its prompt, whose id T3
-     * chose (`nativeTurnRef`), or after `before` for a `/name` command or a
-     * continuation.
-     * Returns how that history says the turn's execution ended: the `idle` item
-     * OpenCode appends after each one, or undefined when there is none after
-     * the turn's start.
-     */
+    /** Emits what a running turn missed while the stream was down, from the session's history since the turn began: text, reasoning and tools, each under the same native id its live events would have used, so nothing already shown is duplicated. A turn begins at its prompt, whose id T3 chose (`nativeTurnRef`), or after `before` for a `/name` command or a continuation. Returns how that history says the turn's execution ended: the `idle` item OpenCode appends after each one, or undefined when there is none after the turn's start. */
     const backfill = Effect.fnUntraced(function* (sessionId: string, state: ThreadState) {
       const turn = state.active;
       if (turn === undefined) return undefined;
@@ -3088,11 +2987,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       return [...paths.values()];
     });
 
-    /**
-     * The rules a thread's session runs `policy` with. Full access allows
-     * every path already, so the agent's own path rules are read only for the
-     * modes that narrow it.
-     */
+    /** The rules a thread's session runs `policy` with. Full access allows every path already, so the agent's own path rules are read only for the modes that narrow it. */
     const rulesFor = Effect.fnUntraced(function* (
       thread: Pick<ThreadState, "directory" | "agent" | "grants">,
       policy: RulesPolicy,
@@ -3361,14 +3256,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       ),
     );
 
-    /**
-     * T3's MCP server for this thread, and the per-turn instructions. The MCP
-     * server is registered for the session's directory under the thread's own
-     * name and credential (the session rules allow only it), and removed when
-     * the thread unloads or the session closes. OpenCode 2 has no per-prompt
-     * system field, so the instructions are a session instructions entry,
-     * which applies from the next step; it is only rewritten when it changes.
-     */
+    /** T3's MCP server for this thread, and the per-turn instructions. The MCP server is registered for the session's directory under the thread's own name and credential (the session rules allow only it), and removed when the thread unloads or the session closes. OpenCode 2 has no per-prompt system field, so the instructions are a session instructions entry, which applies from the next step; it is only rewritten when it changes. */
     const prepareTurn = Effect.fnUntraced(function* (
       sessionId: string,
       state: ThreadState,
@@ -3499,12 +3387,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       for (const event of wake.events) yield* route(event, sessionOfEvent(event), true);
     });
 
-    /**
-     * Drops held executions no turn will take. The subagents one started are
-     * named only by its replay, so they stop routing to the thread at once and
-     * become strays for {@link stopStrays}. A subagent that registered its own
-     * call outside the held execution is the thread's, and is left alone.
-     */
+    /** Drops held executions no turn will take. The subagents one started are named only by its replay, so they stop routing to the thread at once and become strays for {@link stopStrays}. A subagent that registered its own call outside the held execution is the thread's, and is left alone. */
     const discardWakes = (caller: ThreadState, wakes: ReadonlyArray<Wake>) => {
       const retired = new Set<string>();
       const retire = (childId: string) => {
@@ -3558,14 +3441,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       yield* replay(wake);
     });
 
-    /**
-     * The continuation turn for an execution OpenCode started on its own: it
-     * takes the wake it was dispatched for, named by its message, and ends
-     * with it. Wakes held before that one had their continuation cancelled or
-     * dropped before it started, so nothing will replay them: they are
-     * dropped. One already taken (a user turn joined it) leaves nothing to
-     * run, so the turn ends at once.
-     */
+    /** The continuation turn for an execution OpenCode started on its own: it takes the wake it was dispatched for, named by its message, and ends with it. Wakes held before that one had their continuation cancelled or dropped before it started, so nothing will replay them: they are dropped. One already taken (a user turn joined it) leaves nothing to run, so the turn ends at once. */
     const runWake = Effect.fnUntraced(function* (
       state: ThreadState,
       turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
@@ -3595,14 +3471,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       );
     });
 
-    /**
-     * Stops a thread's background subagents and any execution OpenCode is
-     * running on its own. Their sessions end as interrupted; the reports
-     * OpenCode then queues wake the parent into an execution that is stopped
-     * as well, so no turn takes it. A subagent the Stop did not reach runs on,
-     * so its call stays tracked: the session is not released under it, and
-     * the next Stop tries it again.
-     */
+    /** Stops a thread's background subagents and any execution OpenCode is running on its own. Their sessions end as interrupted; the reports OpenCode then queues wake the parent into an execution that is stopped as well, so no turn takes it. A subagent the Stop did not reach runs on, so its call stays tracked: the session is not released under it, and the next Stop tries it again. */
     const stopBackground = Effect.fnUntraced(function* (state: ThreadState) {
       const calls = runningCalls(state).filter((call) => call.background);
       // Every session under the thread, which a stopped subagent may report to.
@@ -3680,13 +3549,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       yield* stopStrays(state);
     });
 
-    /**
-     * What a turn sends: `/compact` compacts, `/name args` naming a workspace
-     * command runs it, and anything else is a prompt with the `$skill`s it
-     * names attached. Commands and skills are read from the session's
-     * directory only when the text could use them. A turn stopped meanwhile
-     * sends nothing.
-     */
+    /** What a turn sends: `/compact` compacts, `/name args` naming a workspace command runs it, and anything else is a prompt with the `$skill`s it names attached. Commands and skills are read from the session's directory only when the text could use them. A turn stopped meanwhile sends nothing. */
     const submit = Effect.fnUntraced(function* (
       sessionId: string,
       turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
@@ -4230,21 +4093,21 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             ),
           ),
       ),
-      stopBackgroundProcesses: ({ providerThread }) =>
-        Effect.gen(function* () {
+      stopBackgroundProcesses: Effect.fn("OpenCode2Adapter.stopBackgroundProcesses")(
+        function* ({ providerThread }) {
           const nativeId = providerThread.nativeThreadRef?.nativeId;
           const state = nativeId == null ? undefined : threads.get(nativeId);
           if (state !== undefined) yield* stopBackground(state);
-        }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ProviderAdapter.ProviderAdapterProtocolError({
-                driver,
-                detail: "Could not stop OpenCode background work.",
-                cause,
-              }),
-          ),
+        },
+        Effect.mapError(
+          (cause) =>
+            new ProviderAdapter.ProviderAdapterProtocolError({
+              driver,
+              detail: "Could not stop OpenCode background work.",
+              cause,
+            }),
         ),
+      ),
       unloadThread: Effect.fn("OpenCode2Adapter.unloadThread")(function* ({ providerThread }) {
         const nativeId = providerThread.nativeThreadRef?.nativeId;
         const state = nativeId == null ? undefined : threads.get(nativeId);

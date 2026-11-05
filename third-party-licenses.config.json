@@ -230,6 +230,20 @@
   ],
   "packageOverrides": [
     {
+      "name": "@napi-rs/wasm-runtime",
+      "generatedNotice": {
+        "licenseId": "MIT",
+        "copyrights": ["Copyright (c) 2020-present LongYinan"]
+      }
+    },
+    {
+      "name": "@tybys/wasm-util",
+      "generatedNotice": {
+        "licenseId": "MIT",
+        "copyrights": ["Copyright (c) 2022-present Toyobayashi"]
+      }
+    },
+    {
       "name": "entities",
       "version": "8.1.0",
       "license": "BSD-2-Clause",

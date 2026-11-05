@@ -1,3 +1,4 @@
+import { loadMcpBridge } from "./mcpBridge.testkit.ts";
 import * as NodeModule from "node:module";
 import * as NodeVM from "node:vm";
 import { assert, describe, it } from "@effect/vitest";
@@ -8,38 +9,6 @@ type RequestHook = (
   event: { payload: unknown },
   ctx: { model: { provider: string } },
 ) => Record<string, unknown> | undefined;
-
-interface SkillCommand {
-  readonly name: string;
-  readonly source: string;
-  readonly sourceInfo: { readonly path: string };
-}
-
-type InputHook = (
-  event: { text: string; images?: ReadonlyArray<unknown> },
-  ctx: { ui: { notify: (message: string, level: string) => void } },
-) => Promise<{ action: string; text: string; images?: ReadonlyArray<unknown> } | undefined>;
-
-async function loadHooks(commands: ReadonlyArray<SkillCommand> = []) {
-  const handlers = new Map<string, unknown>();
-  const source = NodeModule.stripTypeScriptTypes(
-    PI_T3_MCP_EXTENSION_SOURCE.replace(/^import .*;$/gm, "").replace(
-      "export default async function",
-      "async function",
-    ),
-  );
-  await NodeVM.runInNewContext(`${source}\nt3McpExtension(pi)`, {
-    process: { env: {} },
-    NodeFSP,
-    NodePath,
-    stripFrontmatter: (content: string) => content,
-    pi: {
-      on: (name: string, handler: unknown) => handlers.set(name, handler),
-      getCommands: () => commands,
-    },
-  });
-  return handlers;
-}
 
 describe("Pi orchestration prompt section", () => {
   it.each([
@@ -322,7 +291,7 @@ describe("Pi tool discovery permissions", () => {
     let toolCall: ToolCallHook | undefined;
     let searchPath = "builtin:tool-search";
     const source = NodeModule.stripTypeScriptTypes(
-      PI_T3_MCP_EXTENSION_SOURCE.replace(/^import .*;$/gm, "").replace(
+      PI_T3_MCP_EXTENSION_SOURCE.replace(/^import\b[\s\S]*?;$/gm, "").replace(
         "export default async function",
         "async function",
       ),
@@ -368,7 +337,7 @@ async function loadRequestHook(): Promise<RequestHook> {
   const handlers = new Map<string, RequestHook>();
   // Execute the shipped extension with MCP disabled; this path needs no Typebox.
   const source = NodeModule.stripTypeScriptTypes(
-    PI_T3_MCP_EXTENSION_SOURCE.replace(/^import .*;$/gm, "").replace(
+    PI_T3_MCP_EXTENSION_SOURCE.replace(/^import\b[\s\S]*?;$/gm, "").replace(
       "export default async function",
       "async function",
     ),
@@ -416,7 +385,7 @@ describe("Pi upstream output-budget workaround", () => {
 it("appends runtime instructions without MCP and preserves the existing system prompt", async () => {
   const handlers = new Map<string, (event: { systemPrompt: string }) => { systemPrompt: string }>();
   const source = NodeModule.stripTypeScriptTypes(
-    PI_T3_MCP_EXTENSION_SOURCE.replace(/^import .*;$/gm, "").replace(
+    PI_T3_MCP_EXTENSION_SOURCE.replace(/^import\b[\s\S]*?;$/gm, "").replace(
       "export default async function",
       "async function",
     ),

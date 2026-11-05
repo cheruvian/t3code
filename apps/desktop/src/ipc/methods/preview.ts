@@ -199,7 +199,7 @@ const setAudioMuted = DesktopIpc.makeIpcMethod({
     yield* manager.setAudioMuted(tabId, audioMuted);
   }),
 });
-export const getAllAudioMuted = DesktopIpc.makeIpcMethod({
+const getAllAudioMuted = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_GET_ALL_AUDIO_MUTED_CHANNEL,
   payload: Schema.Void,
   result: Schema.Boolean,
@@ -209,7 +209,7 @@ export const getAllAudioMuted = DesktopIpc.makeIpcMethod({
   }),
 });
 
-export const setAllAudioMuted = DesktopIpc.makeIpcMethod({
+const setAllAudioMuted = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_SET_ALL_AUDIO_MUTED_CHANNEL,
   payload: Schema.Boolean,
   result: Schema.Void,
