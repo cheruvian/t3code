@@ -2697,7 +2697,11 @@ const make = Effect.gen(function* () {
     } satisfies ServerBrowserViewer;
   });
 
-  yield* manager.events.pipe(Stream.runForEach(mirrorManagerEvent), Effect.forkScoped);
+  yield* manager.events.pipe(
+    Stream.provideService(PreviewManager.PreviewEventConsumer, { consumerRole: "server-browser" }),
+    Stream.runForEach(mirrorManagerEvent),
+    Effect.forkScoped,
+  );
   // Whoever runs the server learns the fix before anyone opens a tab.
   if (
     !PreviewBrowserHost.sandboxDisabled(yield* HostProcess.Environment) &&

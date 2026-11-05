@@ -31,6 +31,15 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
+export class PreviewEventConsumer extends Context.Reference<{
+  readonly consumerRole: "unspecified" | "server-browser" | "websocket";
+  readonly rpcClientId?: number;
+  readonly rpcRequestId?: string;
+  readonly subscriptionId?: string;
+}>("t3/preview/PreviewEventConsumer", {
+  defaultValue: () => ({ consumerRole: "unspecified" }),
+}) {}
+
 export class PreviewManager extends Context.Service<
   PreviewManager,
   {
@@ -130,15 +139,16 @@ export const make = Effect.gen(function* PreviewManagerMake() {
       // Subscribe before reading state so opens during reconnect cannot fall between the two.
       const subscription = yield* PubSub.subscribe(eventsPubSub);
       const streamId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const consumer = yield* PreviewEventConsumer;
       yield* Effect.void.pipe(
         Effect.withSpan("browser.attachment.stream-start", {
-          attributes: { streamId, serverEpoch },
+          attributes: { streamId, serverEpoch, ...consumer },
         }),
       );
-      yield* Effect.addFinalizer(() =>
+      yield* Effect.addFinalizer((exit) =>
         Effect.void.pipe(
           Effect.withSpan("browser.attachment.stream-stop", {
-            attributes: { streamId, serverEpoch },
+            attributes: { streamId, serverEpoch, ...consumer, exit: exit._tag },
           }),
         ),
       );
@@ -163,6 +173,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
             ? Effect.void.pipe(
                 Effect.withSpan("browser.attachment.stream-emitted", {
                   attributes: {
+                    ...consumer,
                     streamId,
                     threadId: event.threadId,
                     tabId: event.tabId,

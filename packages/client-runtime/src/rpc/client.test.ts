@@ -13,7 +13,9 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as References from "effect/References";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
 import * as Schema from "effect/Schema";
@@ -85,6 +87,76 @@ const makeHarness = Effect.fn("TestEnvironmentRpc.makeHarness")(function* () {
 });
 
 describe("environment RPC", () => {
+  it.effect.each([true, false])(
+    "correlates preview opens with tracing enabled=%s",
+    (tracingEnabled) =>
+      Effect.gen(function* () {
+        const spans: Tracer.Span[] = [];
+        let headers: Record<string, string> | undefined;
+        const event = {
+          type: "opened",
+          threadId: "thread",
+          tabId: "tab",
+          serverEpoch: "epoch",
+          revision: 1,
+        };
+        const client = {
+          [WS_METHODS.subscribePreviewEvents]: (
+            _input: unknown,
+            options: { headers: Record<string, string> },
+          ) => {
+            headers = options.headers;
+            return Stream.fromIterable([event, { ...event, type: "status" }]);
+          },
+        } as unknown as WsRpcProtocolClient;
+        const { activeSession, supervisor } = yield* makeHarness();
+        yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+        yield* subscribe(WS_METHODS.subscribePreviewEvents, {}).pipe(
+          Stream.take(2),
+          Stream.runDrain,
+          Effect.provideService(References.TracerEnabled, tracingEnabled),
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.provideService(
+            Tracer.Tracer,
+            Tracer.make({
+              span(options) {
+                const span = new Tracer.NativeSpan(options);
+                spans.push(span);
+                return span;
+              },
+            }),
+          ),
+        );
+        const id = headers?.["x-t3-preview-subscription"];
+        if (!tracingEnabled) {
+          expect(spans).toHaveLength(0);
+          return;
+        }
+        expect(id).toMatch(/^[0-9a-f]{16}$/);
+        const markers = spans.filter((span) =>
+          [
+            "browser.attachment.subscription-start",
+            "browser.attachment.open-decoded",
+            "browser.attachment.subscription-stop",
+          ].includes(span.name),
+        );
+        expect(markers.map((span) => span.name)).toEqual([
+          "browser.attachment.subscription-start",
+          "browser.attachment.open-decoded",
+          "browser.attachment.subscription-stop",
+        ]);
+        for (const span of markers) expect(span.attributes.get("subscriptionId")).toBe(id);
+        expect(Object.fromEntries(markers[1]!.attributes)).toEqual({
+          environmentId: TARGET.environmentId,
+          subscriptionId: id,
+          threadId: "thread",
+          tabId: "tab",
+          serverEpoch: "epoch",
+          revision: 1,
+        });
+      }),
+  );
+
   it.effect("binds finite streaming commands to one active session", () =>
     Effect.gen(function* () {
       const firstEvents = yield* Queue.unbounded<RelayClientInstallProgressEvent>();

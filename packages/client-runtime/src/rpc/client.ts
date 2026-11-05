@@ -3,6 +3,7 @@ import {
   clientRpcRequiredScopes,
   authScopeRequiredResponse,
   type EnvironmentId,
+  type PreviewEvent,
   type ClientGuardedRpcTag,
   ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
@@ -288,6 +289,7 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                   : session.client[tag]
               ) as (
                 input: EnvironmentRpcInput<TTag>,
+                options?: { headers: Record<string, string> },
               ) => Stream.Stream<
                 EnvironmentRpcStreamValue<TTag>,
                 EnvironmentRpcStreamFailure<TTag>
@@ -316,7 +318,62 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         method: tag,
                         input,
                       });
-                      const stream = mapStream(session, method(input)).pipe(
+                      const isPreview = tag === WS_METHODS.subscribePreviewEvents;
+                      const subscriptionId = isPreview
+                        ? Option.getOrElse(
+                            Option.map(
+                              yield* Effect.option(Effect.currentSpan),
+                              (span) => span.spanId,
+                            ),
+                            () => "absent",
+                          )
+                        : "absent";
+                      const attributes = {
+                        environmentId: supervisor.target.environmentId,
+                        subscriptionId,
+                      };
+                      if (isPreview) {
+                        yield* Effect.void.pipe(
+                          Effect.withSpan("browser.attachment.subscription-start", { attributes }),
+                        );
+                      }
+                      const decoded = method(
+                        input,
+                        isPreview
+                          ? {
+                              headers: { "x-t3-preview-subscription": subscriptionId },
+                            }
+                          : undefined,
+                      ).pipe(
+                        isPreview
+                          ? Stream.tap((value) => {
+                              const event = value as PreviewEvent;
+                              return event.type === "opened"
+                                ? Effect.void.pipe(
+                                    Effect.withSpan("browser.attachment.open-decoded", {
+                                      attributes: {
+                                        ...attributes,
+                                        threadId: event.threadId,
+                                        tabId: event.tabId,
+                                        serverEpoch: event.serverEpoch,
+                                        revision: event.revision,
+                                      },
+                                    }),
+                                  )
+                                : Effect.void;
+                            })
+                          : (stream) => stream,
+                        isPreview
+                          ? Stream.onExit((exit) =>
+                              Effect.void.pipe(
+                                Effect.withSpan("browser.attachment.subscription-stop", {
+                                  attributes: { ...attributes, exit: exit._tag },
+                                }),
+                              ),
+                            )
+                          : (stream) => stream,
+                      );
+                      const stream = mapStream(session, decoded).pipe(
                         Stream.onFirst(() =>
                           Effect.sync(() => {
                             subscriptionFailureRetries = 0;
@@ -326,6 +383,9 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                       return stream.pipe(Stream.ensuring(completeObservation));
                     }),
                   ).pipe(
+                    tag === WS_METHODS.subscribePreviewEvents
+                      ? Stream.withSpan("browser.attachment.subscription")
+                      : (stream) => stream,
                     Stream.tapCause((cause) =>
                       options?.onDefect !== undefined &&
                       cause.reasons.some(

@@ -1,4 +1,5 @@
 import { WS_METHODS } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 import { Atom } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
@@ -29,6 +30,20 @@ export function createPreviewEnvironmentAtoms<R, E>(
       label: "environment-data:preview:events",
       tag: WS_METHODS.subscribePreviewEvents,
       preserveEveryValue: true,
+      onValue: (event, environmentId) =>
+        event.type === "opened"
+          ? Effect.void.pipe(
+              Effect.withSpan("browser.attachment.atom-offered", {
+                attributes: {
+                  environmentId,
+                  threadId: event.threadId,
+                  tabId: event.tabId,
+                  serverEpoch: event.serverEpoch,
+                  revision: event.revision,
+                },
+              }),
+            )
+          : Effect.void,
     }),
     discoveredServers: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:preview:discovered-servers",

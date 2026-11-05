@@ -3091,7 +3091,17 @@ export const layerWsRpc = (
         [WS_METHODS.previewClearProfile]: (input) => serverBrowser.clearProfile(input.profileId),
         [WS_METHODS.previewReportProfiles]: (input) => serverBrowser.reportProfiles(input),
         [WS_METHODS.previewReportStatus]: (input) => previewManager.reportStatus(input),
-        [WS_METHODS.subscribePreviewEvents]: (_input) => previewManager.events,
+        [WS_METHODS.subscribePreviewEvents]: (_input, { client, requestId, headers }) =>
+          previewManager.events.pipe(
+            Stream.provideService(PreviewManager.PreviewEventConsumer, {
+              consumerRole: "websocket",
+              rpcClientId: client.id,
+              rpcRequestId: String(requestId),
+              subscriptionId: /^[0-9a-f]{16}$/.test(headers["x-t3-preview-subscription"] ?? "")
+                ? (headers["x-t3-preview-subscription"] ?? "absent")
+                : "absent",
+            }),
+          ),
         [WS_METHODS.deviceConfigure]: (input) => deviceService.configure(input),
         [WS_METHODS.deviceTestHost]: (input) => deviceService.testHost(input),
         [WS_METHODS.deviceEasAccount]: (input) => deviceService.easAccount(input),
