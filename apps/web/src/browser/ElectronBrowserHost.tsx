@@ -1,8 +1,7 @@
-import { observeBrowserHostGate, recordBrowserAttachment } from "./browserAttachmentTelemetry";
-import { parseScopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { observeBrowserHostGate } from "./browserAttachmentTelemetry";
+import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   AuthPreviewOperateScope,
-  ThreadId,
   type DesktopPreviewBridge,
   type DesktopPreviewOpenLinkEvent,
   type EnvironmentId,
@@ -12,7 +11,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
 import { type ComponentProps, useEffect, useState } from "react";
 
-import { AsyncResult, Atom } from "effect/reactivity";
+import { desktopPreviewSyncAtom } from "./desktopPreviewSync";
 
 import { useServerConfigs } from "~/state/entities";
 
@@ -23,9 +22,6 @@ import { useClientSettingsHydrated } from "~/hooks/useSettings";
 import { useDesktopHostedPreviewSessions } from "~/components/preview/usePreviewSession";
 import {
   readActivePreviewSessions,
-  applyPreviewServerEvent,
-  readThreadPreviewState,
-  reconcilePreviewEnvironmentSessions,
   type ThreadPreviewState,
   useActivePreviewSessions,
 } from "~/previewStateStore";
@@ -209,69 +205,6 @@ function useTabProfileId(profileId: string | undefined): string | undefined {
   }
   return profileId ?? fallback;
 }
-
-// The hosting desktop must hear about agent tabs even when their thread is not viewed.
-const desktopPreviewSyncAtom = Atom.family((environmentId: EnvironmentId) => {
-  const sessions = previewEnvironment.list({ environmentId, input: {} });
-  const events = previewEnvironment.events({ environmentId, input: {} });
-  return Atom.make((get) => {
-    let discoveryState = "";
-    recordBrowserAttachment("discovery-start", { environmentId });
-    get.addFinalizer(() => recordBrowserAttachment("discovery-stop", { environmentId }));
-    get.subscribe(sessions, (result) => {
-      if (AsyncResult.isSuccess(result)) {
-        recordBrowserAttachment("list-received", {
-          environmentId,
-          scope: "environment",
-          serverEpoch: result.value.serverEpoch,
-          revision: result.value.revision,
-          sessionCount: result.value.sessions.length,
-          tabIds: JSON.stringify(result.value.sessions.map((session) => session.tabId)),
-          waiting: result.waiting,
-        });
-        reconcilePreviewEnvironmentSessions(environmentId, result.value);
-      }
-    });
-    get.subscribe(events, (result) => {
-      const state = `${result._tag}:${result.waiting}`;
-      if (state !== discoveryState) {
-        discoveryState = state;
-        recordBrowserAttachment("discovery-state", {
-          environmentId,
-          state: result._tag,
-          waiting: result.waiting,
-        });
-      }
-      if (!AsyncResult.isSuccess(result)) return;
-      const event = result.value;
-      if (event.type === "opened") {
-        recordBrowserAttachment("event-received", {
-          environmentId,
-          threadId: event.threadId,
-          tabId: event.tabId,
-          serverEpoch: event.serverEpoch,
-          revision: event.revision,
-        });
-      }
-      const ref = scopeThreadRef(environmentId, ThreadId.make(event.threadId));
-      const epoch = readThreadPreviewState(ref).serverEpoch;
-      if (epoch !== null && epoch !== event.serverEpoch) get.refresh(sessions);
-      else applyPreviewServerEvent(ref, event);
-      if (event.type === "opened") {
-        recordBrowserAttachment("event-applied", {
-          environmentId,
-          threadId: event.threadId,
-          tabId: event.tabId,
-          epochMatched: epoch === null || epoch === event.serverEpoch,
-          sessionKnown: readThreadPreviewState(ref).sessions[event.tabId] !== undefined,
-        });
-      }
-    });
-    get.mount(events);
-    get.mount(sessions);
-    get.refresh(sessions);
-  });
-});
 
 function DesktopPreviewSync({ environmentId }: { environmentId: EnvironmentId }) {
   useAtomValue(desktopPreviewSyncAtom(environmentId));
