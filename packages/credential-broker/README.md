@@ -92,6 +92,63 @@ Normal hostname selections still recheck the binding before delivery. All action
 use the existing human-only RPC and permission checks; no search capability is
 exposed to agents or the helper API.
 
+## Google identity mapping format
+
+A Google identity mapping is a Bitwarden **Login** item for the destination site.
+It records which Google account to select during sign-in. This is a T3 convention;
+Bitwarden's browser extension can edit the fields but does not interpret them as
+instructions to select an OAuth account.
+
+| Bitwarden field                      | Value                                                        |
+| ------------------------------------ | ------------------------------------------------------------ |
+| Item type                            | Login (`type: 1`)                                            |
+| Login URI                            | Destination site, for example `https://linear.app`           |
+| Username                             | Google email, for display in Bitwarden                       |
+| Password                             | Empty; keep Google credentials in their separate Google item |
+| Text custom field `t3.auth.provider` | Exactly `google`                                             |
+| Text custom field `t3.auth.identity` | Google email to select, for example `work@example.com`       |
+
+In Bitwarden CLI JSON, each text custom field has `type: 0`:
+
+```json
+{
+  "type": 1,
+  "name": "Linear (Google: work@example.com)",
+  "login": {
+    "username": "work@example.com",
+    "password": "",
+    "uris": [{ "uri": "https://linear.app", "match": 0 }]
+  },
+  "fields": [
+    { "name": "t3.auth.provider", "type": 0, "value": "google" },
+    { "name": "t3.auth.identity", "type": 0, "value": "work@example.com" }
+  ]
+}
+```
+
+Use exactly one of each custom field. The identity must be a string containing
+at least one non-whitespace character and at most 320 characters; the provider
+does not validate email syntax. Field names and the provider value are
+case-sensitive. `t3.auth.identity` is authoritative if it differs from Username.
+An item without `t3.auth.provider` uses ordinary credential handling; a present
+but unsupported, malformed, or duplicate provider or identity field makes the
+mapping unavailable for search and invalid for delivery. See
+[`googleIdentity` and `loginValue`](src/providers.js) for the validation boundary.
+
+Request the destination site's hostname with `field: "username"`. After approval,
+the consumer reads the email as UTF-8 from `CB_CREDENTIAL_FILE`; it receives no
+provider JSON or Google password. Mappings are excluded from password, combined
+login, and SSH searches and cannot satisfy those deliveries. Normal site-binding
+checks and explicit human host-mismatch approvals still apply. For browser use,
+start the invocation while the tab is on the destination hostname, before the
+consumer starts the Google redirect; the bridge validates the initial tab host.
+
+To create a mapping in T3, use **Add credential → Sign in with Google** on a
+username request. To change or remove it, edit or delete the item in Bitwarden
+and use **Refresh accounts** in T3. To return to ordinary credential handling,
+remove both custom fields. The mapping supplies an identity to the approved
+consumer; it does not itself implement Google's account chooser, consent, or MFA.
+
 ## Existing browser tabs
 
 Pass `browserTabId` from `preview_status` to `credential_broker_exec` when the
