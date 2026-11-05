@@ -30,6 +30,8 @@ const requestBaseSchema = z
   .object({
     kind: z.enum(["file", "exec"]).default("file"),
     item_id: z.string().uuid().optional(),
+    account: z.string().min(1).max(4096).optional(),
+    excludeAccounts: z.array(z.string().min(1).max(4096)).max(100).optional(),
     site: z
       .string()
       .max(253)
@@ -69,6 +71,8 @@ const requestBaseSchema = z
   .strict();
 
 function validateRequest(value, context, allowCommandName = false) {
+  if (!value.site && (value.account !== undefined || value.excludeAccounts !== undefined))
+    context.addIssue({ code: "custom", message: "Account filters require a site." });
   if (!!value.item_id === !!value.site)
     context.addIssue({ code: "custom", message: "Provide exactly one item UUID or site." });
   if (value.kind === "exec") {

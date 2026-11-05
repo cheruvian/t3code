@@ -164,6 +164,13 @@ export class Broker {
     else this.offerApproval(request);
     return this.public(request);
   }
+  matchesAccount(request, candidate) {
+    const matches = (account) => account === candidate.item_id || account === candidate.username;
+    return (
+      (request.account === undefined || matches(request.account)) &&
+      !(request.excludeAccounts ?? []).some(matches)
+    );
+  }
   async search(request) {
     const version = (request.search_version = (request.search_version ?? 0) + 1);
     const query = request.search_query;
@@ -172,7 +179,7 @@ export class Broker {
         query === undefined
           ? (progress) => this.provider.search(request.site, progress, request.field)
           : (progress) => this.provider.searchVault(request.site, query, request.field, progress);
-      const candidates = await search((phase) => {
+      const found = await search((phase) => {
         if (
           request.state !== "searching" ||
           request.search_version !== version ||
@@ -182,6 +189,7 @@ export class Broker {
         request.search_phase = phase;
         this.changed();
       });
+      const candidates = found.filter((candidate) => this.matchesAccount(request, candidate));
       await this.sweep();
       if (request.state !== "searching" || request.search_version !== version || this.#closing)
         return;
@@ -194,7 +202,7 @@ export class Broker {
             ? "No matching SSH key found. Add this hostname to the key’s t3-ssh-hosts custom field in Bitwarden."
             : "No matching login found for this site.";
       } else {
-        request.search_diagnostics = candidates.diagnostics;
+        request.search_diagnostics = found.diagnostics;
         request.candidates = candidates;
         request.error = undefined;
         if (!candidates.length)
@@ -426,6 +434,8 @@ export class Broker {
       (request.field !== "username" && !login.password)
     )
       throw new BrokerError("Enter the requested login fields.", 400);
+    if (!this.matchesAccount(request, { username: login.username }))
+      throw new BrokerError("Login does not match the requested account filters.", 400);
     request.state = "saving";
     request.error = undefined;
     try {

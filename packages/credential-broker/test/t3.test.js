@@ -1729,3 +1729,13 @@ else if (process.argv[2] === "list") process.stdout.write("[]");
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("exec forwards account exclusions without falling back to another credential", async (t) => {
+  const { broker, caller, input } = await setup(t);
+  const result = await broker.execute(caller, {
+    ...input,
+    excludeAccounts: [DEMO_ITEM],
+  });
+  assert.equal(result.state, "failed");
+  assert.equal(result.failureCode, "no_matching_login");
+});

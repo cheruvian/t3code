@@ -461,6 +461,8 @@ export class T3CredentialBroker {
       {
         kind: "exec",
         site: input.site,
+        account: input.account,
+        excludeAccounts: input.excludeAccounts,
         field: input.field,
         label: input.label,
         reason: input.reason,
