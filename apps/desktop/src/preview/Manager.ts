@@ -664,11 +664,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       window.webContents.setBackgroundThrottling(enabled),
     );
   });
-  const setFrameCaptureBackgroundThrottling = Effect.fnUntraced(function* (enabled: boolean) {
-    const mainWindow = yield* Ref.get(mainWindowRef);
-    if (Option.isNone(mainWindow)) return;
-    yield* setWindowBackgroundThrottling(mainWindow.value, enabled);
-  });
   const setFrameCaptureWebContentsBackgroundThrottling = Effect.fnUntraced(function* (
     wc: Electron.WebContents,
     enabled: boolean,
@@ -785,14 +780,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         yield* restoreFrameCaptureWebContentsBackgroundThrottling(
           current.unthrottledWebContentsIds,
         );
-        if (remainingSessions.size === 0) {
-          yield* setFrameCaptureBackgroundThrottling(true).pipe(
-            Effect.retry({ times: 2 }),
-            Effect.catch((error) =>
-              Effect.logWarning("Failed to restore preview frame capture throttling.", { error }),
-            ),
-          );
-        }
         return [current.scope, remainingSessions] as const;
       }),
     ).pipe(
@@ -1628,9 +1615,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       Effect.gen(function* () {
         // Cleanup or lock acquisition can outlive the replacement window.
         if (window.isDestroyed()) return [undefined, sessions] as const;
-        if (sessions.size > 0) {
-          yield* setWindowBackgroundThrottling(window, false);
-        }
+        // The host renderer must mount agent tabs even when its window is hidden.
+        yield* setWindowBackgroundThrottling(window, false);
         yield* Ref.set(mainWindowRef, Option.some(window));
         currentMainWindow = window;
         frameCaptureWindowOpen = true;
@@ -2707,16 +2693,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
               }),
             ] as const;
           }
-          if (sessions.size === 0) {
-            yield* setFrameCaptureBackgroundThrottling(false);
-          }
-          yield* setFrameCaptureWebContentsBackgroundThrottling(wc, false).pipe(
-            Effect.onError(() =>
-              sessions.size === 0
-                ? setFrameCaptureBackgroundThrottling(true).pipe(Effect.ignore)
-                : Effect.void,
-            ),
-          );
+          yield* setFrameCaptureWebContentsBackgroundThrottling(wc, false);
           const scope =
             consumer === "picture-in-picture" ? yield* Scope.fork(parentScope, "sequential") : null;
           if (scope !== null) {

@@ -1399,6 +1399,8 @@ describe("PreviewManager", () => {
           webContents: { setBackgroundThrottling },
         } as never);
 
+        expect(setBackgroundThrottling.mock.calls).toEqual([[false]]);
+
         yield* manager.startRecording("tab_capture_throttling_1");
         host.displayMediaHandler()?.({ frame: host.mainFrame }, () => {});
         yield* manager.startRecording("tab_capture_throttling_2");
@@ -1412,7 +1414,7 @@ describe("PreviewManager", () => {
         expect(secondWebContents.setBackgroundThrottling.mock.calls).toEqual([[false]]);
 
         yield* manager.stopRecording("tab_capture_throttling_2");
-        expect(setBackgroundThrottling.mock.calls).toEqual([[false], [true]]);
+        expect(setBackgroundThrottling.mock.calls).toEqual([[false]]);
         expect(secondWebContents.setBackgroundThrottling.mock.calls).toEqual([[false], [true]]);
       }),
     ),
@@ -1421,19 +1423,20 @@ describe("PreviewManager", () => {
   effectIt.effect("does not commit failed starts and retries throttle restoration", () =>
     withManager((manager) =>
       Effect.gen(function* () {
-        const setBackgroundThrottling = vi.fn<(enabled: boolean) => void>();
         const capturePage = vi.fn(async () => ({
           toJPEG: () => Buffer.from("recording-frame"),
           getSize: () => ({ width: 1280, height: 720 }),
         }));
-        fromId.mockReturnValue(makeTestPreviewWebContents(capturePage));
+        const guest = makeTestPreviewWebContents(capturePage);
+        const setBackgroundThrottling = guest.setBackgroundThrottling;
+        fromId.mockReturnValue(guest);
 
         yield* manager.createTab("tab_capture_throttling_failure");
         yield* manager.registerWebview("tab_capture_throttling_failure", 42);
         yield* manager.setMainWindow({
           isDestroyed: () => false,
           once: vi.fn(),
-          webContents: { setBackgroundThrottling },
+          webContents: { setBackgroundThrottling: vi.fn() },
         } as never);
 
         setBackgroundThrottling.mockImplementationOnce(() => {
@@ -1567,10 +1570,10 @@ describe("PreviewManager", () => {
 
         closeFirstWindow?.();
         yield* manager.startRecording("tab_replaced_window_close");
-        expect(firstWindowThrottling).not.toHaveBeenCalled();
+        expect(firstWindowThrottling.mock.calls).toEqual([[false]]);
         expect(replacementWindowThrottling.mock.calls).toEqual([[false]]);
         yield* manager.stopRecording("tab_replaced_window_close");
-        expect(replacementWindowThrottling.mock.calls).toEqual([[false], [true]]);
+        expect(replacementWindowThrottling.mock.calls).toEqual([[false]]);
       }),
     ),
   );
@@ -1629,7 +1632,7 @@ describe("PreviewManager", () => {
           once: vi.fn(),
           webContents: { setBackgroundThrottling: replacementWindowThrottling },
         } as never);
-        expect(replacementWindowThrottling).not.toHaveBeenCalled();
+        expect(replacementWindowThrottling.mock.calls).toEqual([[false]]);
       }),
     ),
   );
