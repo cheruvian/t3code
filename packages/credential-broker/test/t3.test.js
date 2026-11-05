@@ -1773,3 +1773,13 @@ test("Google identity save cannot satisfy a password or combined login request",
   await broker.action("human", { type: "decide", requestId: request.requestId, decision: "deny" });
   assert.equal((await execution).state, "denied");
 });
+
+test("exec forwards account exclusions without falling back to another credential", async (t) => {
+  const { broker, caller, input } = await setup(t);
+  const result = await broker.execute(caller, {
+    ...input,
+    excludeAccounts: [DEMO_ITEM],
+  });
+  assert.equal(result.state, "failed");
+  assert.equal(result.failureCode, "no_matching_login");
+});

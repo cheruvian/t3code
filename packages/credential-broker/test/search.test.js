@@ -118,12 +118,17 @@ async function setup(t, provider) {
   return broker;
 }
 async function ready(broker, id) {
-  let result;
-  do {
-    await new Promise((resolve) => setImmediate(resolve));
-    result = await broker.status(id);
-  } while (result.state === "searching");
-  return result;
+  const current = await broker.status(id);
+  if (current.state !== "searching") return current;
+  return new Promise((resolve) => {
+    broker.onChange = () => {
+      const request = broker.snapshot().requests.find((r) => r.request_id === id);
+      if (request && request.state !== "searching") resolve(broker.status(id));
+    };
+    void broker.status(id).then((request) => {
+      if (request.state !== "searching") resolve(request);
+    });
+  });
 }
 
 test("site request searches at first access, only human sees choices, approval delivers both fields", async (t) => {
@@ -183,7 +188,6 @@ test("empty, failed, and cancelled searches never deliver files or resurrect req
   const cancelled = broker.request(input);
   await broker.release(cancelled.request_id);
   finish([{ item_id: DEMO_ITEM, name: "Login", hosts: ["example.com"] }]);
-  await new Promise((resolve) => setImmediate(resolve));
   assert.equal((await broker.status(cancelled.request_id)).state, "released");
   assert.deepEqual(await readdir(broker.leaseDir), []);
 });
@@ -319,4 +323,70 @@ test("a failed sync is retried by a new search instead of caching failure", asyn
   assert.deepEqual(await provider.search("example.com"), []);
   assert.equal(syncs, 2);
   await provider.close();
+});
+
+test("account selectors remain enforced in site and vault search", async (t) => {
+  const provider = new DemoProvider();
+  const candidates = [
+    { item_id: DEMO_ITEM, name: "Personal", username: "personal@example.com" },
+    { item_id: secondId, name: "Work", username: "work@example.com" },
+  ];
+  provider.search = async () => candidates;
+  provider.searchVault = async () => candidates;
+  const broker = await setup(t, provider);
+  const check = async (filters, expected) => {
+    let notify;
+    const changed = new Promise((resolve) => {
+      notify = resolve;
+    });
+    broker.onChange = () => {
+      const request = broker.snapshot().requests[0];
+      if (request?.state === "pending" || request?.state === "failed") notify();
+    };
+    const request = broker.request({ ...input, ...filters }, undefined, { allowSearch: true });
+    await changed;
+    assert.deepEqual(
+      broker.snapshot().requests[0].candidates.map((c) => c.item_id),
+      expected,
+    );
+    await broker.searchVault(request.request_id, "anything");
+    assert.deepEqual(
+      broker.snapshot().requests[0].candidates.map((c) => c.item_id),
+      expected,
+    );
+  };
+  await check({ account: "work@example.com" }, [secondId]);
+  await check({ account: secondId }, [secondId]);
+  await check({ excludeAccounts: ["personal@example.com"] }, [secondId]);
+  await check({ account: "missing@example.com" }, []);
+  await check({ account: "work@example.com", excludeAccounts: [secondId] }, []);
+});
+
+test("excluded accounts cannot reach remembered approval matching", async (t) => {
+  const provider = new DemoProvider();
+  provider.search = async () => [
+    { item_id: DEMO_ITEM, name: "Personal", username: "personal@example.com" },
+    { item_id: secondId, name: "Work", username: "work@example.com" },
+  ];
+  const broker = await setup(t, provider);
+  broker.grants.list = () => [{}];
+  let matched;
+  const matching = new Promise((resolve) => {
+    matched = resolve;
+  });
+  broker.grants.match = (_scope, request) => {
+    matched(request.candidates);
+  };
+  broker.request({
+    ...input,
+    kind: "exec",
+    argv: [process.execPath],
+    cwd: broker.runtime,
+    file_env: "CB_CREDENTIAL_FILE",
+    excludeAccounts: ["personal@example.com"],
+  });
+  assert.deepEqual(
+    (await matching).map((c) => c.item_id),
+    [secondId],
+  );
 });

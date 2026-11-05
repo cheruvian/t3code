@@ -23,6 +23,20 @@ export const CredentialExecInput = Schema.Struct({
       "Existing tab from preview_status for this script to operate. The consumer receives T3_BROWSER_URL; no new page is created. Omit for non-browser scripts.",
   }),
   site: Schema.String,
+  account: Schema.optional(
+    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
+  ).annotate({
+    description:
+      "Exact username/email or broker candidate ID to use. Filters before remembered approval; never falls back to another account.",
+  }),
+  excludeAccounts: Schema.optional(
+    Schema.Array(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096))).check(
+      Schema.isMaxLength(100),
+    ),
+  ).annotate({
+    description:
+      "Exact usernames/emails or broker candidate IDs to exclude from selection and automatic reuse. Exclusions take precedence over account.",
+  }),
   field: Schema.Literals(["login", "username", "password", "sshKey", "ssh"]),
   label: Schema.String,
   reason: Schema.String,
