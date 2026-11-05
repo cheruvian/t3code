@@ -7,9 +7,12 @@ import { randomUUID } from "../lib/utils";
 export const serviceInstanceId = randomUUID();
 
 let delegate: Tracer.Tracer | null = null;
+const readyListeners = new Set<() => void>();
 
 export function setDelegate(next: Tracer.Tracer | null): void {
+  const becameReady = delegate === null && next !== null;
   delegate = next;
+  if (becameReady) for (const listener of readyListeners) listener();
 }
 
 export function hasDelegate(): boolean {
@@ -25,3 +28,10 @@ export const layer = Layer.succeed(
     },
   }),
 );
+
+export function onReady(listener: () => void): () => void {
+  readyListeners.add(listener);
+  return () => {
+    readyListeners.delete(listener);
+  };
+}

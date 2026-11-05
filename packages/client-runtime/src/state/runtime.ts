@@ -117,6 +117,7 @@ export type QueryAnswerHandler<Input, A> = (
 
 interface EnvironmentSubscriptionAtomOptions<Input, A, E, R> {
   readonly preserveEveryValue?: boolean;
+  readonly onValue?: (value: A, environmentId: string) => Effect.Effect<void>;
   readonly sensitiveInput?: boolean;
   readonly label: string;
   readonly subscribe: (input: Input) => Stream.Stream<A, E, R>;
@@ -812,6 +813,7 @@ export function createEnvironmentSubscriptionAtomFamily<R, ER, Input, A, E>(
 ) {
   const family = Atom.family((key: string) => {
     const target = parseEnvironmentRpcKey<Input>(key);
+    const onValue = options.onValue;
     return runtime
       .atom(
         Stream.suspend(() =>
@@ -820,6 +822,9 @@ export function createEnvironmentSubscriptionAtomFamily<R, ER, Input, A, E>(
           options.completeWhen ? Stream.takeUntil(options.completeWhen) : (stream) => stream,
           // Stream atoms retain only the last value of each chunk, including chunks from registry switching.
           options.preserveEveryValue ? Stream.rechunk(1) : (stream) => stream,
+          onValue
+            ? Stream.tap((value) => onValue(value, target.environmentId))
+            : (stream) => stream,
         ),
       )
       .pipe(
@@ -912,6 +917,7 @@ export function createEnvironmentRpcSubscriptionAtomFamily<
   runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>,
   options: {
     readonly preserveEveryValue?: boolean;
+    readonly onValue?: (value: B, environmentId: string) => Effect.Effect<void>;
     readonly label: string;
     readonly tag: TTag;
     readonly idleTtlMs?: number;
@@ -931,6 +937,7 @@ export function createEnvironmentRpcSubscriptionAtomFamily<
 ) {
   return createEnvironmentSubscriptionAtomFamily(runtime, {
     label: options.label,
+    ...(options.onValue === undefined ? {} : { onValue: options.onValue }),
     ...(options.preserveEveryValue === undefined
       ? {}
       : { preserveEveryValue: options.preserveEveryValue }),

@@ -7,6 +7,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 import { expect } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
@@ -39,6 +40,62 @@ const layer = PreviewManager.layer.pipe(
 );
 
 it.layer(layer)("PreviewManager", (it) => {
+  it.effect(
+    "correlates stream lifecycle and opens with the consumer request without page data",
+    () =>
+      Effect.gen(function* () {
+        const manager = yield* PreviewManager.PreviewManager;
+        const threadId = freshThreadId();
+        const snapshot = yield* manager.open({ threadId, runtime: "server" });
+        const spans: Tracer.Span[] = [];
+        const consumer = {
+          consumerRole: "websocket" as const,
+          rpcClientId: 7,
+          rpcRequestId: "12",
+          subscriptionId: "0123456789abcdef",
+        };
+        yield* manager.events.pipe(
+          Stream.filter((event) => event.tabId === snapshot.tabId),
+          Stream.take(1),
+          Stream.provideService(PreviewManager.PreviewEventConsumer, consumer),
+          Stream.runDrain,
+          Effect.provideService(
+            Tracer.Tracer,
+            Tracer.make({
+              span(options) {
+                const span = new Tracer.NativeSpan(options);
+                spans.push(span);
+                return span;
+              },
+            }),
+          ),
+        );
+        const markers = spans.filter((span) => span.name.startsWith("browser.attachment.stream-"));
+        const start = markers.find((span) => span.name.endsWith("stream-start"))!;
+        const stop = markers.find((span) => span.name.endsWith("stream-stop"))!;
+        const opened = markers.find(
+          (span) =>
+            span.name.endsWith("stream-emitted") && span.attributes.get("tabId") === snapshot.tabId,
+        )!;
+        for (const span of [start, stop, opened]) {
+          expect(Object.fromEntries(span.attributes)).toMatchObject({
+            ...consumer,
+            streamId: start.attributes.get("streamId"),
+            serverEpoch: start.attributes.get("serverEpoch"),
+          });
+          expect([...span.attributes.keys()].sort()).toEqual(
+            [
+              ...Object.keys(consumer),
+              "streamId",
+              "serverEpoch",
+              ...(span === opened ? ["threadId", "tabId", "revision"] : []),
+              ...(span === stop ? ["exit"] : []),
+            ].sort(),
+          );
+        }
+      }),
+  );
+
   it.effect("replays an existing tab when the desktop subscribes after it opened", () =>
     Effect.gen(function* () {
       const threadId = freshThreadId();

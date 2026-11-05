@@ -1,4 +1,4 @@
-import { recordBrowserAttachment } from "./browserAttachmentTelemetry";
+import { observeBrowserHostGate, recordBrowserAttachment } from "./browserAttachmentTelemetry";
 import { parseScopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   AuthPreviewOperateScope,
@@ -148,7 +148,7 @@ export function ElectronBrowserHost() {
   // oxlint-disable-next-line t3code/react-effect-budget -- Record changes to the native host discovery gate.
   useEffect(() => {
     if (!isElectron) return;
-    recordBrowserAttachment("host-gate", {
+    return observeBrowserHostGate({
       environmentId: primaryEnvironmentId ?? "none",
       configKnown,
       hostsPrimary,
