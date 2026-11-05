@@ -445,3 +445,53 @@ test("host save rejects invalid items and unconfirmed writes without exposing pr
   }
   await provider.close();
 });
+
+test("Google identity mappings round-trip through Bitwarden without a Google password", async () => {
+  let record;
+  const provider = new BitwardenProvider({
+    passwordPrompt: async () => "fake-master",
+    runner: async (_, args, env, timeout, input) => {
+      if (args[0] === "unlock") return "fake-session";
+      if (args[0] === "create") {
+        record = { ...JSON.parse(Buffer.from(input, "base64").toString()), id: DEMO_ITEM };
+        return JSON.stringify(record);
+      }
+      if (args[0] === "get") return JSON.stringify(record);
+      if (args[0] === "list") return JSON.stringify([record]);
+      return "";
+    },
+  });
+  await provider.initialize();
+  try {
+    await provider.create("linear.app", {
+      username: "work@example.com",
+      password: "",
+      authProvider: "google",
+    });
+    assert.deepEqual(record.fields, [
+      { name: "t3.auth.provider", type: 0, value: "google" },
+      { name: "t3.auth.identity", type: 0, value: "work@example.com" },
+    ]);
+    assert.equal(record.login.password, "");
+    assert.match(record.name, /Google/);
+    record.login.username = "stale@example.com";
+    assert.equal(await provider.get(DEMO_ITEM, "username", "linear.app"), "work@example.com");
+    assert.equal(
+      (await provider.search("linear.app", undefined, "username"))[0].username,
+      "work@example.com",
+    );
+    assert.deepEqual(await provider.search("linear.app", undefined, "password"), []);
+    assert.deepEqual(await provider.search("linear.app", undefined, "ssh"), []);
+    await assert.rejects(provider.get(DEMO_ITEM, "login", "linear.app"), /identity.*username/i);
+    await assert.rejects(provider.get(DEMO_ITEM, "username", "other.app"), /invalid login/);
+    record.fields.push({ name: "t3.auth.identity", type: 0, value: "other@example.com" });
+    await assert.rejects(
+      provider.get(DEMO_ITEM, "username", "linear.app"),
+      /Invalid Google identity/,
+    );
+    provider.invalidateIndex();
+    assert.deepEqual(await provider.search("linear.app", undefined, "username"), []);
+  } finally {
+    await provider.close();
+  }
+});

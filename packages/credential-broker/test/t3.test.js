@@ -1729,3 +1729,47 @@ else if (process.argv[2] === "list") process.stdout.write("[]");
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("Google identity save delivers only the email to an approved username consumer", async (t) => {
+  const provider = new SavingProvider();
+  const { broker, caller, input, marker } = await setup(t, { provider });
+  const { execution, request } = await pending(broker, caller, { ...input, field: "username" });
+  await broker.action("human", {
+    type: "saveLogin",
+    requestId: request.requestId,
+    authProvider: "google",
+    username: "work@example.com",
+    password: "",
+  });
+  const result = await execution;
+  assert.equal(result.state, "completed");
+  assert.equal(result.exitCode, 0);
+  assert.equal(JSON.parse(await readFile(marker, "utf8")).received, true);
+  assert.deepEqual(provider.saved, {
+    site: "example.com",
+    authProvider: "google",
+    username: "work@example.com",
+    password: "",
+  });
+  assert.equal(JSON.stringify(result).includes("work@example.com"), false);
+  assert.equal(broker.state().grants.length, 0);
+});
+
+test("Google identity save cannot satisfy a password or combined login request", async (t) => {
+  const provider = new SavingProvider();
+  const { broker, caller, input } = await setup(t, { provider });
+  const { execution, request } = await pending(broker, caller, input);
+  await assert.rejects(
+    broker.action("human", {
+      type: "saveLogin",
+      requestId: request.requestId,
+      authProvider: "google",
+      username: "work@example.com",
+      password: "",
+    }),
+    /requested login fields/,
+  );
+  assert.equal(provider.saved, undefined);
+  await broker.action("human", { type: "decide", requestId: request.requestId, decision: "deny" });
+  assert.equal((await execution).state, "denied");
+});

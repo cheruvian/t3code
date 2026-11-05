@@ -972,12 +972,27 @@ function SaveLogin({
   const username = useRef<HTMLInputElement>(null);
   const password = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  const [google, setGoogle] = useState(false);
   return (
     <div className="space-y-3 text-sm">
       <p className="text-xs text-muted-foreground">
         Create a new Bitwarden login for {request.site} and share it once with this program. Enter
         the site password here, not your vault master password. Values stay out of chat.
       </p>
+      {request.field === "username" && (
+        <Button
+          variant="outline"
+          disabled={disabled || busy}
+          aria-pressed={google}
+          onClick={() => {
+            setGoogle(!google);
+            if (password.current) password.current.value = "";
+          }}
+        >
+          {google ? "Use a regular login" : "Sign in with Google"}
+        </Button>
+      )}
+      {google && <p>Save the Google email you use for this site. No Google password is needed.</p>}
       <form
         autoComplete="off"
         className="grid gap-2 sm:grid-cols-2"
@@ -987,7 +1002,8 @@ function SaveLogin({
           const login = {
             account: account.current?.value || undefined,
             username: username.current?.value ?? "",
-            password: password.current?.value ?? "",
+            password: google ? "" : (password.current?.value ?? ""),
+            ...(google ? { authProvider: "google" as const } : {}),
           };
           if (username.current) username.current.value = "";
           if (password.current) password.current.value = "";
@@ -1013,24 +1029,26 @@ function SaveLogin({
             aria-label="New login username"
             placeholder="Username or email"
             autoComplete="off"
-            maxLength={4096}
+            maxLength={google ? 320 : 4096}
             required={request.field !== "password"}
             disabled={disabled || busy}
           />
         </label>
-        <label className="space-y-1">
-          <span>Site password</span>
-          <Input
-            ref={password}
-            aria-label="New login password"
-            placeholder="Site password"
-            type="password"
-            autoComplete="new-password"
-            maxLength={4096}
-            required={request.field !== "username"}
-            disabled={disabled || busy}
-          />
-        </label>
+        {!google && (
+          <label className="space-y-1">
+            <span>Site password</span>
+            <Input
+              ref={password}
+              aria-label="New login password"
+              placeholder="Site password"
+              type="password"
+              autoComplete="new-password"
+              maxLength={4096}
+              required={request.field !== "username"}
+              disabled={disabled || busy}
+            />
+          </label>
+        )}
         <div className="sm:col-span-2">
           <Button type="submit" disabled={disabled || busy}>
             {busy ? "Saving…" : "Save to Bitwarden & allow once"}

@@ -418,6 +418,10 @@ export class Broker {
     if (request.state !== "pending" || !request.allow_save || this.#closing)
       throw new BrokerError("Request is no longer awaiting a saved login.", 409);
     if (
+      (login.authProvider !== undefined &&
+        (login.authProvider !== "google" ||
+          request.field !== "username" ||
+          login.password !== "")) ||
       typeof login.username !== "string" ||
       typeof login.password !== "string" ||
       login.username.length > 4096 ||

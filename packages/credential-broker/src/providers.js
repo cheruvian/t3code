@@ -127,6 +127,25 @@ function shortHostMatch(host, site) {
 function wildcardMatches(pattern, site) {
   return site !== pattern.slice(2) && site.endsWith(`.${pattern.slice(2)}`);
 }
+function googleIdentity(record) {
+  const fields = record.fields ?? [];
+  const providers = fields.filter((field) => field.name === "t3.auth.provider");
+  if (!providers.length) return undefined;
+  const identities = fields.filter((field) => field.name === "t3.auth.identity");
+  if (
+    providers.length !== 1 ||
+    providers[0].type !== 0 ||
+    providers[0].value !== "google" ||
+    identities.length !== 1 ||
+    identities[0].type !== 0 ||
+    typeof identities[0].value !== "string" ||
+    !identities[0].value.trim() ||
+    identities[0].value.length > 320
+  )
+    throw new BrokerError("Invalid Google identity mapping.", 422);
+  return identities[0].value;
+}
+
 function metadata(record) {
   if (
     ![1, 5].includes(record.type) ||
@@ -135,22 +154,36 @@ function metadata(record) {
   )
     return [];
   const ssh = record.type === 5;
+  let identity;
+  try {
+    identity = googleIdentity(record);
+  } catch {
+    return [];
+  }
   return [
     {
       item_id: record.id,
       kind: ssh ? "sshKey" : "login",
+      identityOnly: identity !== undefined,
       name: String(record.name ?? (ssh ? "SSH key" : "Login")).slice(0, 120),
       hosts: ssh ? matchingSshHosts(record) : matchingHosts(record),
       sshHosts: matchingSshLoginHosts(record),
       wildcardHosts: wildcardHosts(record),
-      ...(!ssh && typeof record.login?.username === "string" && record.login.username
-        ? { username: record.login.username.slice(0, 320) }
+      ...(!ssh &&
+      (identity || (typeof record.login?.username === "string" && record.login.username))
+        ? { username: (identity ?? record.login.username).slice(0, 320) }
         : {}),
     },
   ];
 }
 
 function loginValue(record, field) {
+  const identity = googleIdentity(record);
+  if (identity !== undefined) {
+    if (field !== "username")
+      throw new BrokerError("Google identity requires a username request.", 422);
+    return identity;
+  }
   const login = record.login;
   if (field === "login") {
     if (
@@ -312,7 +345,9 @@ export class BitwardenProvider {
       if (generation !== this.#generation || !this.#session) throw new Error();
       progress("matching");
       const compatible = items.filter(
-        (item) => field === "ssh" || item.kind === (field === "sshKey" ? "sshKey" : "login"),
+        (item) =>
+          (!item.identityOnly || field === "username") &&
+          (field === "ssh" || item.kind === (field === "sshKey" ? "sshKey" : "login")),
       );
       const terms = query === undefined ? null : queryTerms(query);
       const alias = (getDomain(site, { allowPrivateDomains: true }) ?? site).split(".")[0];
@@ -388,11 +423,32 @@ export class BitwardenProvider {
   async searchVault(site, query, field, progress) {
     return this.search(site, progress, field, query);
   }
-  async create(site, { username, password }) {
+  async create(site, { username, password, authProvider }) {
     if (!this.#session) throw new BrokerError("Vault is locked.", 503);
+    if (
+      authProvider !== undefined &&
+      (authProvider !== "google" ||
+        typeof username !== "string" ||
+        !username.trim() ||
+        username.length > 320 ||
+        password !== "")
+    )
+      throw new BrokerError("Enter a Google email without a site password.", 400);
     const item = {
+      ...(authProvider
+        ? {
+            fields: [
+              { name: "t3.auth.provider", type: 0, value: authProvider },
+              { name: "t3.auth.identity", type: 0, value: username },
+            ],
+          }
+        : {}),
       type: 1,
-      name: username ? `${site} (${username})` : site,
+      name: authProvider
+        ? `${site} (Google: ${username})`
+        : username
+          ? `${site} (${username})`
+          : site,
       favorite: false,
       reprompt: 0,
       login: { username, password, uris: [{ uri: `https://${site}`, match: 0 }] },
@@ -411,7 +467,8 @@ export class BitwardenProvider {
       if (
         !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(record.id) ||
         record.type !== 1 ||
-        !matchingHosts(record, site).length
+        !matchingHosts(record, site).length ||
+        (authProvider && googleIdentity(record) !== username)
       )
         throw new Error();
       this.invalidateIndex();

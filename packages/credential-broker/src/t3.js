@@ -439,6 +439,7 @@ export class T3CredentialBroker {
     else if (input.type === "saveLogin")
       await broker.saveLogin(input.requestId, {
         ...(input.account ? { account: input.account } : {}),
+        ...(input.authProvider ? { authProvider: input.authProvider } : {}),
         username: input.username,
         password: input.password,
       });

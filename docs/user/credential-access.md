@@ -62,6 +62,17 @@ grant ongoing access. If lookup finds no matching login or fails, the dialog
 stays open so you can enter one. Unlock the vault before saving, and keep the
 site password separate from your Bitwarden master password.
 
+For **Sign in with Google**, ask the agent to request the site's Google identity
+with `field: "username"`. Under **Add credential**, choose **Sign in with Google**
+and enter the Google email you use for that site. T3 saves the site URL and
+`t3.auth.provider = google` and `t3.auth.identity = your email` as Bitwarden text
+custom fields, with no password. You can edit or delete that mapping in
+Bitwarden, including its browser extension, then use **Refresh accounts** in T3.
+The approved program receives the email privately and can select that account
+in the integrated browser. Google password, consent, and MFA steps still apply.
+Bitwarden's extension stores the mapping but does not automatically select the
+Google account from these custom fields.
+
 Always allow is limited to that thread, provider, workspace, login, site, fields,
 command, executable and direct-script fingerprints, and maximum lifetime.
 Changed commands require another approval. Every automatic use shows a notice

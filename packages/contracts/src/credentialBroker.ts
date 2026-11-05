@@ -169,6 +169,7 @@ export const CredentialBrokerAction = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("saveLogin"),
+    authProvider: Schema.optional(Schema.Literal("google")),
     account: Schema.optional(Schema.String.check(Schema.isMaxLength(320))),
     requestId: Schema.String,
     username: Schema.String.check(Schema.isMaxLength(4096)),

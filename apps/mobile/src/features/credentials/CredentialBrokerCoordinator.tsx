@@ -841,6 +841,7 @@ function SaveLogin({
   act: (input: CredentialBrokerAction) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
+  const [google, setGoogle] = useState(false);
   const account = useRef("");
   const username = useRef("");
   const password = useRef("");
@@ -858,6 +859,21 @@ function SaveLogin({
         Create a new Bitwarden login for {request.site} and share it once with this program. Enter
         the site password, not your vault master password. Values stay out of chat.
       </Text>
+      {request.field === "username" && (
+        <Button
+          label={google ? "Use a regular login" : "Sign in with Google"}
+          disabled={disabled || busy}
+          onPress={() => {
+            clear();
+            setGoogle(!google);
+          }}
+        />
+      )}
+      {google && (
+        <Text className="text-sm text-foreground">
+          Save the Google email you use for this site. No Google password is needed.
+        </Text>
+      )}
       <Text className="text-sm text-foreground">
         Destination account (required with multiple accounts)
       </Text>
@@ -878,29 +894,33 @@ function SaveLogin({
         autoComplete="off"
         autoCapitalize="none"
         autoCorrect={false}
-        maxLength={4096}
+        maxLength={google ? 320 : 4096}
         editable={!disabled && !busy}
         onChangeText={(value) => {
           username.current = value;
         }}
         className="rounded-lg border border-border p-3 text-foreground"
       />
-      <Text className="text-sm text-foreground">Site password</Text>
-      <TextInput
-        ref={passwordInput}
-        accessibilityLabel="New login password"
-        placeholder="Site password"
-        secureTextEntry
-        autoComplete="off"
-        autoCapitalize="none"
-        autoCorrect={false}
-        maxLength={4096}
-        editable={!disabled && !busy}
-        onChangeText={(value) => {
-          password.current = value;
-        }}
-        className="rounded-lg border border-border p-3 text-foreground"
-      />
+      {!google && (
+        <>
+          <Text className="text-sm text-foreground">Site password</Text>
+          <TextInput
+            ref={passwordInput}
+            accessibilityLabel="New login password"
+            placeholder="Site password"
+            secureTextEntry
+            autoComplete="off"
+            autoCapitalize="none"
+            autoCorrect={false}
+            maxLength={4096}
+            editable={!disabled && !busy}
+            onChangeText={(value) => {
+              password.current = value;
+            }}
+            className="rounded-lg border border-border p-3 text-foreground"
+          />
+        </>
+      )}
       <Button
         label={busy ? "Saving…" : "Save to Bitwarden & allow once"}
         disabled={disabled || busy}
@@ -915,7 +935,8 @@ function SaveLogin({
           const login = {
             account: account.current || undefined,
             username: username.current,
-            password: password.current,
+            password: google ? "" : password.current,
+            ...(google ? { authProvider: "google" as const } : {}),
           };
           clear();
           setBusy(true);
