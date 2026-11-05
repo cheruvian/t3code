@@ -1031,3 +1031,88 @@ it.effect("keeps each thread's current tab when threads share a provider session
     }),
   ),
 );
+
+it.effect.each([true, false])(
+  "does not select a successfully closed tab (current: %s)",
+  (current) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const broker = yield* makeBroker;
+        const tabA = PreviewTabId.make("tab-a");
+        const tabB = PreviewTabId.make("tab-b");
+        const routed: RoutedRequest[] = [];
+        const requests = requestsFrom(
+          yield* broker.connect(
+            makeHost({ supportedOperations: ["snapshot", "close", "status"] }),
+            { preferred: true },
+          ),
+        );
+        yield* Stream.runForEach(requests, (request) => {
+          routed.push(request);
+          return broker.respond({
+            clientId: "client-1",
+            connectionId: request.connectionId,
+            requestId: request.requestId,
+            ok: true,
+            result:
+              request.operation === "close"
+                ? {}
+                : { available: true, tabId: request.tabId ?? tabA },
+          });
+        }).pipe(Effect.forkScoped({ startImmediately: true }));
+        yield* broker.invoke({ scope, operation: "snapshot", input: {}, tabId: tabA });
+        yield* broker.invoke({
+          scope,
+          operation: "close",
+          input: {},
+          tabId: current ? tabA : tabB,
+        });
+        yield* broker.invoke({ scope, operation: "status", input: {} });
+        expect(routed.at(-1)?.tabId).toBe(current ? undefined : tabA);
+      }),
+    ),
+);
+
+it.effect("a delayed close cannot clear a newer tab selection", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const closing = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const tabA = PreviewTabId.make("tab-a");
+      const tabB = PreviewTabId.make("tab-b");
+      const routed: RoutedRequest[] = [];
+      const requests = requestsFrom(
+        yield* broker.connect(makeHost({ supportedOperations: ["snapshot", "close", "status"] }), {
+          preferred: true,
+        }),
+      );
+      yield* Stream.runForEach(requests, (request) =>
+        Effect.gen(function* () {
+          routed.push(request);
+          if (request.operation === "close") {
+            yield* Deferred.succeed(closing, undefined);
+            yield* Deferred.await(release);
+          }
+          yield* broker.respond({
+            clientId: "client-1",
+            connectionId: request.connectionId,
+            requestId: request.requestId,
+            ok: true,
+            result: request.operation === "close" ? {} : { tabId: request.tabId ?? tabA },
+          });
+        }).pipe(Effect.forkScoped),
+      ).pipe(Effect.forkScoped({ startImmediately: true }));
+      yield* broker.invoke({ scope, operation: "snapshot", input: {}, tabId: tabA });
+      const close = yield* broker
+        .invoke({ scope, operation: "close", input: {}, tabId: tabA })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(closing);
+      yield* broker.invoke({ scope, operation: "snapshot", input: {}, tabId: tabB });
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(close);
+      yield* broker.invoke({ scope, operation: "status", input: {} });
+      expect(routed.at(-1)?.tabId).toBe(tabB);
+    }),
+  ),
+);

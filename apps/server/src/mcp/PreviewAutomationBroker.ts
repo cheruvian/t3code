@@ -662,7 +662,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
     if (input.updateCurrentTab === false) return result;
     const responseTabId = readResultTabId(result);
     const resultTabId = responseTabId === undefined ? input.tabId : responseTabId;
-    if (resultTabId === undefined) return result;
+    if (resultTabId === undefined && input.operation !== "close") return result;
     const assignmentKey = hostAssignmentKey(input.scope);
     yield* SynchronizedRef.update(state, (current) => {
       const assignment = current.assignments.get(assignmentKey);
@@ -674,8 +674,11 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       ) {
         return current;
       }
+      if (input.operation === "close" && assignment.tabId !== requestContext.tabId) {
+        return current;
+      }
       const assignments = new Map(current.assignments);
-      if (resultTabId === null) {
+      if (input.operation === "close" || resultTabId === null) {
         const { tabId: _tabId, ...withoutTabId } = assignment;
         assignments.set(assignmentKey, { ...withoutTabId, tabSequence: requestSequence });
       } else {
