@@ -15,6 +15,7 @@ import {
 } from "~/previewStateStore";
 import { isElectron } from "~/env";
 import { previewEnvironment } from "~/state/preview";
+import { recordBrowserAttachment } from "~/browser/browserAttachmentTelemetry";
 
 class PreviewSessionThreadKeyParseError extends Schema.TaggedError<PreviewSessionThreadKeyParseError>()(
   "PreviewSessionThreadKeyParseError",
@@ -47,6 +48,18 @@ const previewSessionSyncAtom = Atom.family((threadKey: string) => {
     const reconcileSessions = (result: Atom.Type<typeof sessionsAtom>) => {
       if (result.waiting || !AsyncResult.isSuccess(result)) return;
       reconcilePreviewServerSessions(threadRef, result.value);
+      if (isElectron) {
+        recordBrowserAttachment("list-reconciled", {
+          environmentId: threadRef.environmentId,
+          threadId: threadRef.threadId,
+          scope: "thread",
+          serverEpoch: result.value.serverEpoch,
+          revision: result.value.revision,
+          sessionCount: result.value.sessions.length,
+          tabIds: JSON.stringify(result.value.sessions.map((session) => session.tabId)),
+          listLoaded: readThreadPreviewState(threadRef).listLoaded,
+        });
+      }
       if (!readThreadPreviewState(threadRef).listLoaded) {
         // An event overtook the initial list; retry before using the partial index for surface cleanup.
         queueMicrotask(() => {

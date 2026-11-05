@@ -101,8 +101,8 @@ const SCREENCAST_MOTION_FRAMES = 4;
 const SCREENCAST_MOTION_WINDOW_MS = 300;
 const SCREENCAST_MOTION_QUALITY = 50;
 const HOST_RECONNECT_DELAY = "1 second";
-/** How long a new tab waits for the desktop app to mount it before running headless. */
-const DESKTOP_ATTACH_TIMEOUT = "10 seconds";
+/** How long a new tab waits for the desktop app to mount it before reporting unavailable. */
+const DESKTOP_ATTACH_TIMEOUT = "60 seconds";
 const VIEWER_OUTPUT_LIMIT = 64;
 const RECORDING_SCREENCAST = { format: "jpeg", quality: 90, everyNthFrame: 1 } as const;
 const decodeViewportSetting = Schema.decodeUnknownSync(PreviewViewportSettingSchema);
@@ -801,6 +801,7 @@ const make = Effect.gen(function* () {
               DESKTOP_ATTACH_TIMEOUT,
             )
             .pipe(
+              Effect.tap((attached) => Effect.annotateCurrentSpan("attached", attached)),
               Effect.tap((attached) =>
                 Effect.logInfo("desktop browser attachment result", {
                   threadId: snapshot.threadId,
@@ -808,6 +809,13 @@ const make = Effect.gen(function* () {
                   attached,
                 }),
               ),
+              Effect.withSpan("browser.attachment.wait", {
+                attributes: {
+                  threadId: snapshot.threadId,
+                  tabId: snapshot.tabId,
+                  timeoutSeconds: 60,
+                },
+              }),
             ),
         ).then((attached) => {
           if (!attached)

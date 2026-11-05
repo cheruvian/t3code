@@ -129,6 +129,19 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     Effect.gen(function* () {
       // Subscribe before reading state so opens during reconnect cannot fall between the two.
       const subscription = yield* PubSub.subscribe(eventsPubSub);
+      const streamId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      yield* Effect.void.pipe(
+        Effect.withSpan("browser.attachment.stream-start", {
+          attributes: { streamId, serverEpoch },
+        }),
+      );
+      yield* Effect.addFinalizer(() =>
+        Effect.void.pipe(
+          Effect.withSpan("browser.attachment.stream-stop", {
+            attributes: { streamId, serverEpoch },
+          }),
+        ),
+      );
       const state = yield* SynchronizedRef.get(stateRef);
       const snapshots: PreviewEvent[] = Array.from(state.sessions.values(), ({ snapshot }) => ({
         type: "opened",
@@ -144,6 +157,21 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           Stream.fromSubscription(subscription).pipe(
             Stream.filter((event) => event.revision > state.revision),
           ),
+        ),
+        Stream.tap((event) =>
+          event.type === "opened"
+            ? Effect.void.pipe(
+                Effect.withSpan("browser.attachment.stream-emitted", {
+                  attributes: {
+                    streamId,
+                    threadId: event.threadId,
+                    tabId: event.tabId,
+                    serverEpoch: event.serverEpoch,
+                    revision: event.revision,
+                  },
+                }),
+              )
+            : Effect.void,
         ),
       );
     }),
@@ -238,6 +266,11 @@ export const make = Effect.gen(function* PreviewManagerMake() {
             revision,
             snapshot,
           });
+          yield* Effect.void.pipe(
+            Effect.withSpan("browser.attachment.open-published", {
+              attributes: { threadId: input.threadId, tabId, serverEpoch, revision },
+            }),
+          );
           return [snapshot, { sessions, revision }] as const;
         }),
       );

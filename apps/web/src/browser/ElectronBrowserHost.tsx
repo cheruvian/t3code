@@ -10,7 +10,7 @@ import {
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
-import { type ComponentProps, useState } from "react";
+import { type ComponentProps, useEffect, useState } from "react";
 
 import { AsyncResult, Atom } from "effect/reactivity";
 
@@ -144,6 +144,16 @@ export function ElectronBrowserHost() {
     isElectron &&
     primaryEnvironmentId !== null &&
     serverConfigs.get(primaryEnvironmentId)?.environment.capabilities.nativeDesktopBrowser === true;
+  const configKnown = primaryEnvironmentId !== null && serverConfigs.has(primaryEnvironmentId);
+  // oxlint-disable-next-line t3code/react-effect-budget -- Record changes to the native host discovery gate.
+  useEffect(() => {
+    if (!isElectron) return;
+    recordBrowserAttachment("host-gate", {
+      environmentId: primaryEnvironmentId ?? "none",
+      configKnown,
+      hostsPrimary,
+    });
+  }, [primaryEnvironmentId, configKnown, hostsPrimary]);
   useDesktopHostedPreviewSessions(hostsPrimary ? primaryEnvironmentId : null);
   const sessions = hostedBrowserSessions(previewByThreadKey, primaryEnvironmentId);
 
@@ -205,13 +215,33 @@ const desktopPreviewSyncAtom = Atom.family((environmentId: EnvironmentId) => {
   const sessions = previewEnvironment.list({ environmentId, input: {} });
   const events = previewEnvironment.events({ environmentId, input: {} });
   return Atom.make((get) => {
+    let discoveryState = "";
     recordBrowserAttachment("discovery-start", { environmentId });
     get.addFinalizer(() => recordBrowserAttachment("discovery-stop", { environmentId }));
     get.subscribe(sessions, (result) => {
-      if (AsyncResult.isSuccess(result))
+      if (AsyncResult.isSuccess(result)) {
+        recordBrowserAttachment("list-received", {
+          environmentId,
+          scope: "environment",
+          serverEpoch: result.value.serverEpoch,
+          revision: result.value.revision,
+          sessionCount: result.value.sessions.length,
+          tabIds: JSON.stringify(result.value.sessions.map((session) => session.tabId)),
+          waiting: result.waiting,
+        });
         reconcilePreviewEnvironmentSessions(environmentId, result.value);
+      }
     });
     get.subscribe(events, (result) => {
+      const state = `${result._tag}:${result.waiting}`;
+      if (state !== discoveryState) {
+        discoveryState = state;
+        recordBrowserAttachment("discovery-state", {
+          environmentId,
+          state: result._tag,
+          waiting: result.waiting,
+        });
+      }
       if (!AsyncResult.isSuccess(result)) return;
       const event = result.value;
       if (event.type === "opened") {
