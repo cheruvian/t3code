@@ -25,7 +25,6 @@ import * as ManagedDeployment from "./cloud/ManagedDeployment.ts";
 import * as CredentialBroker from "./secrets/CredentialBroker.ts";
 import {
   THREAD_MOVE_RPC,
-  DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
   AcpRegistryOperationError,
   CommandId,
   authScopeResponse,
@@ -89,9 +88,6 @@ import {
   type ServerProvider,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
-  AssetWorkspaceContextNotFoundError,
-  AssetWorkspaceContextResolutionError,
-  SOURCE_CONTROL_MEDIA_ASSET,
   ChatAttachmentId,
   PersistChatAttachmentsError,
   RpcClientId,
@@ -108,12 +104,8 @@ import {
 import * as ThreadMoveTransfer from "./orchestration-v2/ThreadMoveTransferService.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 
-import * as Fiber from "effect/Fiber";
-import * as Schedule from "effect/Schedule";
-
 import { runtimePerformanceSettings } from "./performanceSettings.ts";
 
-import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import {
   HttpRouter,
   HttpServerRequest,
@@ -207,7 +199,6 @@ import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
-import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import {
   attachmentRelativePath,
   chatAttachmentStableKey,
@@ -274,7 +265,6 @@ import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
-import { isNetworkPath } from "@t3tools/shared/path";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { isTelemetryIdHash } from "@t3tools/shared/telemetryId";
 import {
@@ -329,14 +319,7 @@ const resolveEditorConfig = Effect.fn("ws.resolveEditorConfig")(function* <E, R>
   };
 });
 
-/**
- * Live config updates that follow a snapshot of `config`. A busy host can
- * outlast the snapshot's discovery timeouts, which send no editors, or no
- * reveal kind for the file manager. The scan keeps running, so once it lands
- * this resends the config: clients replace theirs on any snapshot. The resent
- * config is folded from the live updates already sent, so it cannot roll back
- * a change that landed while the scan ran.
- */
+/** Late discovery resends config folded from live updates so concurrent changes cannot roll back. */
 export const withLateEditorConfig = <E, R>(
   config: ClientServerConfig,
   liveUpdates: Stream.Stream<ServerConfigStreamEvent, E, R>,
@@ -793,11 +776,7 @@ const enrichProjectShells = Effect.fn("ws.orchestrationV2.enrichProjectShells")(
       Effect.forEach(
         projects,
         (project) =>
-          // Non-blocking: emit with cached identity (or null) and schedule
-          // background resolution. subscribeChanges is attached before
-          // loadSnapshot, so later identity completions push refreshed
-          // shells for multi-env grouping without blocking the initial
-          // snapshot or completion marker on slow git probes.
+          // Emit cached identity; subscribeChanges delivers background resolutions without blocking snapshots.
           projectEnrichment.getAvailable(project.workspaceRoot).pipe(
             Effect.map((enrichment) => ({
               project: {
@@ -1305,7 +1284,6 @@ export const layerWsRpc = (
       const currentSessionId = currentSession.sessionId;
       const webPush = yield* WebPush.WebPush;
       const sql = yield* SqlClient.SqlClient;
-      const readSql = yield* ReadOnlySqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
       const intakeContext = yield* Effect.context<
         | ThreadManagementService.ThreadManagementService
@@ -1326,7 +1304,7 @@ export const layerWsRpc = (
       const providerSessionsV2 = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const mcpAppRequests = yield* McpAppRequests.McpAppRequests;
       const analytics = yield* AnalyticsService.AnalyticsService;
-      // Client-origin attribution (#7774): every thread/turn the connecting
+      // Client-origin attribution: every thread/turn the connecting
       // client starts is credited to its surface + app version. Best-effort:
       // attribution must never fail the user's command.
       const originProps = clientAnalyticsProps;
