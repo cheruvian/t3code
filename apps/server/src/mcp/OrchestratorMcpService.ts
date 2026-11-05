@@ -1936,6 +1936,14 @@ const make = Effect.gen(function* () {
     requestSecret: Effect.fn("OrchestratorMcpService.requestSecret")(function* (scope, input) {
       const { scope: threadScope, parent } = yield* loadThreadCaller(scope, "request_secret");
       const threadId = threadScope.thread.threadId;
+      yield* Effect.annotateCurrentSpan({
+        "orchestration_v2.thread_id": threadId,
+        "secret_request.delivery": input.delivery ?? "ref",
+        "secret_request.timeout_ms": Math.min(
+          input.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS,
+          MAX_WAIT_TIMEOUT_MS,
+        ),
+      });
       const run = ThreadManagementService.latestActiveRun(parent);
       if (
         run === undefined ||

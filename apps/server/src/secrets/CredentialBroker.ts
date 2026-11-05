@@ -85,6 +85,11 @@ export const bindToolCall = Effect.fn("bindToolCall")(function* (
   );
   const caller = context.caller;
   if (!caller || !caller.activeRunId) return yield* unavailable();
+  yield* Effect.annotateCurrentSpan({
+    "orchestration_v2.thread_id": thread.threadId,
+    "credential.browser_requested": input.browserTabId !== undefined,
+    "credential.field": input.field,
+  });
   const projects = yield* ProjectService.ProjectService;
   const project = yield* projects.getShell(caller.projectId).pipe(Effect.mapError(unavailable));
   if (Option.isNone(project)) return yield* unavailable();
@@ -176,34 +181,56 @@ const make = Effect.gen(function* () {
       (unsubscribe) => Effect.sync(unsubscribe),
     );
   }
-  const execute = (caller: CredentialCaller, input: CredentialExecInput) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const bridge =
-          input.browserTabId === undefined
-            ? undefined
-            : yield* browser.scriptBridge({
-                threadId: caller.threadId,
-                tabId: input.browserTabId,
-                site: input.site,
-                agentSessionId: credentialBrowserAgentSessionId(caller),
-              });
-        return yield* Effect.tryPromise({
-          try: (signal) =>
-            broker.execute(
-              caller,
-              input,
-              signal,
-              bridge ? { T3_BROWSER_URL: bridge.endpoint } : undefined,
+  const execute = Effect.fn("CredentialBroker.execute")(
+    (caller: CredentialCaller, input: CredentialExecInput) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* Effect.annotateCurrentSpan({
+            "orchestration_v2.thread_id": caller.threadId,
+            "credential.browser_requested": input.browserTabId !== undefined,
+            "credential.field": input.field,
+            "credential.stage": "browser_bridge",
+          });
+          const bridge =
+            input.browserTabId === undefined
+              ? undefined
+              : yield* browser.scriptBridge({
+                  threadId: caller.threadId,
+                  tabId: input.browserTabId,
+                  site: input.site,
+                  agentSessionId: credentialBrowserAgentSessionId(caller),
+                });
+          yield* Effect.annotateCurrentSpan("credential.stage", "broker_execution");
+          return yield* Effect.tryPromise({
+            try: (signal) =>
+              broker.execute(
+                caller,
+                input,
+                signal,
+                bridge ? { T3_BROWSER_URL: bridge.endpoint } : undefined,
+              ),
+            catch: safeBrokerFailure,
+          }).pipe(
+            Effect.tapError((error) =>
+              Effect.annotateCurrentSpan(
+                "credential.failure_code",
+                error.code ?? "broker_unavailable",
+              ),
             ),
-          catch: safeBrokerFailure,
-        }).pipe(
-          Effect.ensuring(
-            Effect.promise(() => broker.cancelCall(caller.toolCallId)).pipe(Effect.ignore),
-          ),
-        );
-      }),
-    );
+            Effect.tap((result) =>
+              Effect.annotateCurrentSpan({
+                "credential.state": result.state,
+                "credential.exit_code": result.exitCode ?? -1,
+                "credential.failure_code": result.failureCode ?? "none",
+              }),
+            ),
+            Effect.ensuring(
+              Effect.promise(() => broker.cancelCall(caller.toolCallId)).pipe(Effect.ignore),
+            ),
+          );
+        }),
+      ),
+  );
   return CredentialBroker.of({
     execute,
     executeFromTool: Effect.fn("CredentialBroker.executeFromTool")((input) =>
@@ -215,10 +242,14 @@ const make = Effect.gen(function* () {
       ).pipe(Effect.andThen(bindToolCall(input, execute))),
     ),
     action: Effect.fn("CredentialBroker.action")((sessionId, input) =>
-      Effect.tryPromise({
-        try: () => broker.action(sessionId, input),
-        catch: () => new CredentialBrokerError({}),
-      }),
+      Effect.annotateCurrentSpan("credential.action", input.type).pipe(
+        Effect.andThen(
+          Effect.tryPromise({
+            try: () => broker.action(sessionId, input),
+            catch: () => new CredentialBrokerError({}),
+          }),
+        ),
+      ),
     ),
     subscribe: (sessionId, viewId) =>
       Stream.callback<CredentialBrokerState, CredentialBrokerError>(

@@ -104,9 +104,17 @@ it.effect(
         yield* Effect.gen(function* () {
           const threads = yield* ThreadManagement.ThreadManagementService;
           const locked = yield* CredentialBroker.bindToolCall(input, () =>
-            Effect.fail(
-              CredentialBroker.safeBrokerFailure({ code: "vault_locked", message: "fake-secret" }),
-            ),
+            Effect.gen(function* () {
+              const span = yield* Effect.currentSpan.pipe(Effect.orDie);
+              expect(span.attributes.get("orchestration_v2.thread_id")).toBe(threadId);
+              expect(span.attributes.get("credential.browser_requested")).toBe(false);
+              expect(span.attributes.get("credential.field")).toBe("login");
+              expect(JSON.stringify([...span.attributes])).not.toContain(input.label);
+              return yield* CredentialBroker.safeBrokerFailure({
+                code: "vault_locked",
+                message: "fake-secret",
+              });
+            }),
           ).pipe(
             Effect.provideService(ThreadManagement.ThreadManagementService, {
               ...threads,
