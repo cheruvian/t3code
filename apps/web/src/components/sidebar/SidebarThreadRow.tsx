@@ -47,6 +47,7 @@ import {
   ShieldQuestionIcon,
   SquarePenIcon,
   TerminalIcon,
+  Volume2Icon,
   Undo2Icon,
   UserRoundIcon,
   XIcon,
@@ -60,6 +61,9 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+
+import { useThreadPreviewState } from "../../previewStateStore";
+import { useAllBrowsersMuted } from "../../browser/browserAudio";
 
 import { useRightPanelStore } from "../../rightPanelStore";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
@@ -128,6 +132,25 @@ export type SidebarProviderEntry = Pick<
   | "acpRegistryIconUrl"
   | "models"
 >;
+function ThreadAudioIndicator({ threadRef }: { threadRef: ScopedThreadRef }) {
+  const preview = useThreadPreviewState(threadRef);
+  const allMuted = useAllBrowsersMuted();
+  const playing =
+    !allMuted &&
+    Object.values(preview.desktopByTabId).some((tab) => tab.audible && !tab.audioMuted);
+  if (!playing) return null;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={<span role="img" aria-label="Browser playing audio" className="shrink-0" />}
+      >
+        <Volume2Icon aria-hidden className="size-3 text-foreground" />
+      </TooltipTrigger>
+      <TooltipPopup>Browser playing audio</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 function compactSidebarTimeLabel(label: string): string {
   if (label === "just now") return "now";
   return label.endsWith(" ago") ? label.slice(0, -4) : label;
@@ -1203,6 +1226,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               </span>
             ) : null}
             {title}
+            <ThreadAudioIndicator threadRef={threadRef} />
             {parentLink}
             {pinIndicator}
             {terminalStatusIcon}
