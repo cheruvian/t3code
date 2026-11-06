@@ -3,6 +3,7 @@ import {
   clientRpcRequiredScopes,
   authScopeRequiredResponse,
   type EnvironmentId,
+  type PreviewEvent,
   type ClientGuardedRpcTag,
   ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
@@ -60,11 +61,11 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof ORCHESTRATION_V2_WS_METHODS.searchThreadStream
   | typeof WS_METHODS.subscribeAuthAccess
   | typeof WS_METHODS.subscribeServerConfig
+  | typeof WS_METHODS.serverDrainSubscribe
   | typeof WS_METHODS.subscribeServerLifecycle
   | typeof WS_METHODS.scheduledTasksSubscribe
   | typeof WS_METHODS.serverGetStorageCleanupReport
   | typeof WS_METHODS.serverGetDatabaseStorage
-  | typeof WS_METHODS.subscribeTerminalEvents
   | typeof WS_METHODS.subscribeTerminalMetadata
   | typeof WS_METHODS.subscribePreviewEvents
   | typeof WS_METHODS.subscribeDiscoveredLocalServers
@@ -240,6 +241,7 @@ export function runStreamGuarded<TTag extends EnvironmentStreamCommandRpcTag>(
 }
 
 interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
+  /** Reports defects; the subscription then waits for the next session or resubscribe. */
   readonly onDefect?: (
     cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
   ) => Effect.Effect<void, never, never>;
@@ -288,6 +290,7 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                   : session.client[tag]
               ) as (
                 input: EnvironmentRpcInput<TTag>,
+                options?: { headers: Record<string, string> },
               ) => Stream.Stream<
                 EnvironmentRpcStreamValue<TTag>,
                 EnvironmentRpcStreamFailure<TTag>
@@ -316,7 +319,62 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         method: tag,
                         input,
                       });
-                      const stream = mapStream(session, method(input)).pipe(
+                      const isPreview = tag === WS_METHODS.subscribePreviewEvents;
+                      const subscriptionId = isPreview
+                        ? Option.getOrElse(
+                            Option.map(
+                              yield* Effect.option(Effect.currentSpan),
+                              (span) => span.spanId,
+                            ),
+                            () => "absent",
+                          )
+                        : "absent";
+                      const attributes = {
+                        environmentId: supervisor.target.environmentId,
+                        subscriptionId,
+                      };
+                      if (isPreview) {
+                        yield* Effect.void.pipe(
+                          Effect.withSpan("browser.attachment.subscription-start", { attributes }),
+                        );
+                      }
+                      const decoded = method(
+                        input,
+                        isPreview
+                          ? {
+                              headers: { "x-t3-preview-subscription": subscriptionId },
+                            }
+                          : undefined,
+                      ).pipe(
+                        isPreview
+                          ? Stream.tap((value) => {
+                              const event = value as PreviewEvent;
+                              return event.type === "opened"
+                                ? Effect.void.pipe(
+                                    Effect.withSpan("browser.attachment.open-decoded", {
+                                      attributes: {
+                                        ...attributes,
+                                        threadId: event.threadId,
+                                        tabId: event.tabId,
+                                        serverEpoch: event.serverEpoch,
+                                        revision: event.revision,
+                                      },
+                                    }),
+                                  )
+                                : Effect.void;
+                            })
+                          : (stream) => stream,
+                        isPreview
+                          ? Stream.onExit((exit) =>
+                              Effect.void.pipe(
+                                Effect.withSpan("browser.attachment.subscription-stop", {
+                                  attributes: { ...attributes, exit: exit._tag },
+                                }),
+                              ),
+                            )
+                          : (stream) => stream,
+                      );
+                      const stream = mapStream(session, decoded).pipe(
                         Stream.onFirst(() =>
                           Effect.sync(() => {
                             subscriptionFailureRetries = 0;
@@ -326,6 +384,9 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                       return stream.pipe(Stream.ensuring(completeObservation));
                     }),
                   ).pipe(
+                    tag === WS_METHODS.subscribePreviewEvents
+                      ? Stream.withSpan("browser.attachment.subscription")
+                      : (stream) => stream,
                     Stream.tapCause((cause) =>
                       options?.onDefect !== undefined &&
                       cause.reasons.some(
@@ -405,6 +466,11 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         return handled.pipe(
                           Stream.concat(retrySubscription(options.retryExpectedFailureAfter)),
                         );
+                      }
+                      // A reported defect parks until the next session or resubscribe. Failing would
+                      // end the whole subscription, so a mounted screen never syncs again.
+                      if (options?.onDefect !== undefined && Cause.hasDies(cause)) {
+                        return Stream.empty;
                       }
                       return Stream.failCause(cause);
                     }),

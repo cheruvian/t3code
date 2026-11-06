@@ -1,3 +1,10 @@
+import * as ProjectCloneTracker from "../../../project/ProjectCloneTracker.ts";
+import * as RemoteDelegation from "../../../peer/RemoteDelegation.ts";
+import * as PeerLinks from "../../../peer/PeerLinks.ts";
+import * as PeerLinkRequests from "../../../peer/PeerLinkRequests.ts";
+import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
+import * as AssetSigner from "../../../assets/AssetSigner.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as RuntimeLayer from "../../../orchestration-v2/runtimeLayer.ts";
 import * as SqlitePersistence from "../../../persistence/Sqlite.ts";
 import * as ProjectEnrichmentService from "../../../project/ProjectEnrichmentService.ts";
@@ -192,11 +199,11 @@ const serviceLayers = Keybindings.layer.pipe(
   Layer.provideMerge(
     Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-api-toolkit-test-" })),
   ),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 const TestLayer = McpHttpServer.layerApiToolkit.pipe(
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provideMerge(serviceLayers),
 );
 
@@ -455,6 +462,16 @@ const stubRegistryLayer = Layer.succeed(
 
 const HttpTestLayer = HttpRouter.serve(
   McpHttpServer.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(AssetSigner.AssetSigner)({}),
+        Layer.mock(PeerForwarding.PeerForwarding)({}),
+        Layer.mock(PeerLinkRequests.PeerLinkRequests)({}),
+        Layer.mock(PeerLinks.PeerLinks)({}),
+        Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+        Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({}),
+      ),
+    ),
     Layer.provide(Layer.mock(DocumentText.DocumentText)({})),
     Layer.provide(McpProviderSessions.layer),
     Layer.provide(stubRegistryLayer),

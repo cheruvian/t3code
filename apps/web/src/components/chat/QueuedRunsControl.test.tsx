@@ -16,6 +16,7 @@ vi.mock("@t3tools/client-runtime/state/thread-workflows", () => ({
 
 vi.mock("../../state/entities", () => ({
   useThreadProjection: () => state.projection,
+  useQuietThreadShell: () => null,
 }));
 
 vi.mock("../../state/threads", () => ({
@@ -35,13 +36,25 @@ vi.mock("../../state/use-orchestration-command", () => ({
   useOrchestrationCommand: () => async () => undefined,
 }));
 
-vi.mock("../../state/session", () => ({
+vi.mock("../../state/server", async () => {
+  const { Atom } = await import("effect/reactivity");
+  const config = Atom.make(null);
+  return { serverEnvironment: { configValueAtom: () => config } };
+});
+
+vi.mock("../../state/session", async (original) => ({
+  ...(await original<typeof import("../../state/session")>()),
   useEnvironmentScope: () => true,
 }));
 
 vi.mock("../../assets/assetUrls", () => ({
   useAssetUrls: (_environmentId: never, resources: ReadonlyArray<{ attachmentId: string }>) =>
     resources.map((resource) => `https://assets.test/${resource.attachmentId}`),
+}));
+
+vi.mock("./TimelineUserMessageRow", () => ({
+  FoldedMessageHeader: () => null,
+  useScheduledTaskTitle: () => null,
 }));
 
 import { QueuedRunsControl } from "./QueuedRunsControl";
@@ -71,6 +84,8 @@ describe("QueuedRunsControl automatic completion delivery", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        timestampFormat="locale"
+        onOpenThread={() => {}}
         editBlockedReason={null}
         environmentId={"environment:test" as never}
         optimisticMessages={[]}
@@ -113,6 +128,8 @@ describe("QueuedRunsControl attachments and edit mode", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        timestampFormat="locale"
+        onOpenThread={() => {}}
         editBlockedReason={null}
         environmentId={"environment:test" as never}
         optimisticMessages={[]}
@@ -143,6 +160,8 @@ describe("QueuedRunsControl attachments and edit mode", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        timestampFormat="locale"
+        onOpenThread={() => {}}
         editBlockedReason={null}
         environmentId={"environment:test" as never}
         optimisticMessages={[
@@ -169,6 +188,8 @@ describe("QueuedRunsControl attachments and edit mode", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        timestampFormat="locale"
+        onOpenThread={() => {}}
         editBlockedReason={null}
         environmentId={"environment:test" as never}
         optimisticMessages={[]}

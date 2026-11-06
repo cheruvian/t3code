@@ -19,13 +19,13 @@ export function ConnectionTimingSettings() {
   const [saving, setSaving] = useState(false);
   const save = async (next: TimingSettings) => {
     setSaving(true);
-    try {
+    await (async () => {
       const result = await update(next);
       if (result._tag === "Failure")
         toastManager.add({ type: "error", title: "Could not save connection timeouts" });
-    } finally {
+    })().finally(() => {
       setSaving(false);
-    }
+    });
   };
   return (
     <SettingsSection

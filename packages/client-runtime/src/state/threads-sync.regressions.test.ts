@@ -84,7 +84,7 @@ function testSession(
       ...(config?.completionMarker === true ? { threadResumeCompletionMarker: true } : {}),
       ...(config?.assistantPreviews === true ? { assistantPreviews: true } : {}),
     } as never),
-    subscribeServerConfig: (input) => client.subscribeServerConfig(input),
+    subscribeServerConfig: (input) => client.subscribeServerConfig(input ?? {}),
     ready: Effect.void,
     probe: Effect.void,
     inboundFrames: Effect.succeed(0),
@@ -382,7 +382,7 @@ describe("EnvironmentThreads", () => {
             Option.isSome(state.data) && state.data.value.thread.title === "After late preview",
         );
         expect(after.assistantPreviews).toEqual([]);
-        yield* TestClock.adjust("500 millis");
+        yield* TestClock.adjust("10 seconds");
         const saved = yield* Ref.get(h.savedThreads);
         expect(saved.at(-1)?.snapshotSequence).toBe(9);
         expect(saved.at(-1)?.projection.turnItems.find((item) => item.id === earlyItem.id)).toEqual(
@@ -905,7 +905,7 @@ describe("EnvironmentThreads", () => {
         }
         if (mode === "retry") {
           expect(result._tag).toBe("error");
-          expect(yield* harness.loadEarlier()).toEqual({ _tag: "loaded" });
+          expect(yield* harness.loadEarlier(message.messageId)).toEqual({ _tag: "loaded" });
         } else expect(result).toEqual({ _tag: "loaded" });
         const complete = yield* SubscriptionRef.get(harness.threadState);
         expect(complete.history).toMatchObject({

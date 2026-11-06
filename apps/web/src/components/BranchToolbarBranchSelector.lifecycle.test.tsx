@@ -1,7 +1,6 @@
-import { act } from "react";
-import { create, type ReactTestRenderer } from "react-test-renderer";
+import { act, create } from "react-test-renderer";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   stopSession: vi.fn(),
@@ -32,7 +31,10 @@ vi.mock("../state/use-atom-command", () => ({
     label === "thread session stop" ? state.stopSession : state.updateMetadata,
 }));
 vi.mock("../state/query", () => ({
-  useEnvironmentQuery: () => ({ data: { refName: state.refName }, isPending: false }),
+  useEnvironmentQuery: () => ({
+    data: { refName: state.refName, workingTree: { rootPath: "/repo" } },
+    isPending: false,
+  }),
 }));
 vi.mock("../state/queries", () => ({
   usePaginatedBranches: () => ({ refs: [], data: null, isPending: false }),
@@ -61,19 +63,9 @@ vi.mock("./ui/combobox", () => ({
 
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 
-let renderer: ReactTestRenderer | undefined;
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  state.refName = "main";
-});
-afterEach(async () => {
-  if (renderer) await act(async () => renderer?.unmount());
-  renderer = undefined;
-  vi.clearAllMocks();
-  vi.unstubAllGlobals();
-});
-
 it("preserves an established worktree and provider session when branch status refreshes", async () => {
+  state.refName = "main";
+  vi.clearAllMocks();
   const renderSelector = () => (
     <BranchToolbarBranchSelector
       environmentId={EnvironmentId.make("env-1")}
@@ -83,13 +75,17 @@ it("preserves an established worktree and provider session when branch status re
       onStartFromOriginChange={() => {}}
     />
   );
-  await act(async () => {
-    renderer = create(renderSelector());
+  let screen!: ReturnType<typeof create>;
+  await act(() => {
+    screen = create(renderSelector());
   });
+  using _screen = {
+    [Symbol.dispose]: () => {
+      act(() => screen.unmount());
+    },
+  };
   state.refName = "feature/task";
-  await act(async () => {
-    renderer?.update(renderSelector());
-  });
+  await act(() => screen.update(renderSelector()));
   expect(state.stopSession).not.toHaveBeenCalled();
   expect(state.updateMetadata).not.toHaveBeenCalled();
   expect(state.setDraftContext).not.toHaveBeenCalled();

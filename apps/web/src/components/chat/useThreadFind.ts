@@ -1,7 +1,7 @@
 import type { InlineSkill } from "@t3tools/shared/inlineSkills";
 import type { OrchestrationV2SearchThreadResult, ScopedThreadRef } from "@t3tools/contracts";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { useMemo, useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { orchestrationEnvironment } from "~/state/orchestration";
 import { useThreadProjection } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
@@ -57,19 +57,16 @@ export function useThreadFind({
     skills,
     progressive,
   );
-  const loaded = useMemo(
-    () =>
-      serverSearch || !isOpen
-        ? null
-        : findLoadedThreadItems(
-            content?.visibleTurnItems ?? [],
-            state.query,
-            state.start,
-            state.offset,
-            skills,
-          ),
-    [serverSearch, isOpen, content, state.query, state.start, state.offset, skills],
-  );
+  const loaded = (() =>
+    serverSearch || !isOpen
+      ? null
+      : findLoadedThreadItems(
+          content?.visibleTurnItems ?? [],
+          state.query,
+          state.start,
+          state.offset,
+          skills,
+        ))();
   const remote = serverSearch
     ? server
     : {
@@ -205,11 +202,13 @@ export function useThreadFind({
       }));
     }
   });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reruns a live refresh that was coalesced behind a server search once that search settles
   useEffect(() => {
     if (!refreshAfterSearchRef.current || remote.isPending) return;
     refreshAfterSearchRef.current = false;
     if (!remote.error) refreshLiveResults();
   }, [remote.isPending, remote.error]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- starts a debounce timer to refresh find results when streamed thread content changes
   useEffect(() => {
     if (lastContentRef.current === content) return;
     lastContentRef.current = content;
@@ -219,6 +218,7 @@ export function useThreadFind({
       refreshLiveResults();
     }, 300);
   }, [content, isOpen, state.query]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears the pending refresh timer when the thread, open state or query changes
   useEffect(() => {
     if (!isOpen || threadKey === null || !state.query.trim()) return;
     return () => {

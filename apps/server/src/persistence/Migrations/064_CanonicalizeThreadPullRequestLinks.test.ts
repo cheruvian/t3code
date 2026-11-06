@@ -9,7 +9,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as EventStore from "../../orchestration-v2/EventStore.ts";
 import * as ProjectionStore from "../../orchestration-v2/ProjectionStore.ts";
-import * as ProjectionMaintenance from "../../orchestration-v2/ProjectionMaintenance.ts";
+import * as ProjectionReplay from "../../orchestration-v2/testkit/ProjectionReplay.ts";
 import { listLinkedPullRequestThreads } from "../../pullRequest/linkedThreads.ts";
 import { runMigrations } from "../Migrations.ts";
 
@@ -53,7 +53,7 @@ const thread = (id: string) => ({
 });
 
 const layer = it.layer(
-  ProjectionMaintenance.layer.pipe(
+  ProjectionReplay.layer.pipe(
     Layer.provideMerge(
       Layer.mergeAll(EventStore.layer, ProjectionStore.layer).pipe(
         Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
@@ -62,11 +62,11 @@ const layer = it.layer(
   ),
 );
 
-layer("064_CanonicalizeThreadPullRequestLinks", (it) => {
+layer("075_CanonicalizeThreadPullRequestLinks", (it) => {
   it.effect("migrates single links once, preserves arrays, and keeps links after a rebuild", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 63 });
+      yield* runMigrations({ toMigrationInclusive: 74 });
       const fixtures = [
         { ...thread("github"), linkedPullRequest: linked },
         {
@@ -123,10 +123,10 @@ layer("064_CanonicalizeThreadPullRequestLinks", (it) => {
           'user', ${v1Payload}, '{}', 1)
       `;
 
-      assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 64 }), [
-        [64, "CanonicalizeThreadPullRequestLinks"],
+      assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 75 }), [
+        [75, "CanonicalizeThreadPullRequestLinks"],
       ]);
-      assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 64 }), []);
+      assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 75 }), []);
       const rows = yield* sql<{ readonly thread_id: string; readonly payload_json: string }>`
         SELECT thread_id, payload_json FROM orchestration_v2_projection_threads
       `;
@@ -156,7 +156,7 @@ layer("064_CanonicalizeThreadPullRequestLinks", (it) => {
       `;
       assert.equal(v1?.payload_json, v1Payload);
 
-      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const maintenance = yield* ProjectionReplay.ProjectionReplay;
       assert.isTrue((yield* maintenance.rebuild).valid);
       for (const [host, repository, id] of [
         ["github.com", "acme/web", "github"],

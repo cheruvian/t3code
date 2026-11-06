@@ -21,7 +21,6 @@ import {
   ProviderThreadId,
   ProviderTurnId,
   RuntimeRequestId,
-  RunAttemptId,
   RunId,
   ThreadId,
   TurnItemId,
@@ -184,79 +183,6 @@ const addRolledBackRecoveryCandidate = Effect.fn("addRolledBackRecoveryCandidate
     driver,
     occurredAt: now,
     payload: { ...run, status: "rolled_back", completedAt: now },
-  });
-
-  return threadId;
-});
-
-const addOrphanedRecoveryCandidate = Effect.fn("addOrphanedRecoveryCandidate")(function* (
-  suffix: string,
-) {
-  const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-  const now = yield* DateTime.now;
-  const threadId = ThreadId.make(`thread:${suffix}:orphaned`);
-  const runId = RunId.make(`run:${suffix}:missing`);
-  const rootNodeId = NodeId.make(`node:${suffix}:orphaned`);
-
-  yield* projectionStore.apply({
-    id: EventId.make(`event:${suffix}:thread-created`),
-    type: "thread.created",
-    threadId,
-    occurredAt: now,
-    payload: {
-      createdBy: "user",
-      creationSource: "web",
-      id: threadId,
-      projectId: ProjectId.make(`project:${suffix}`),
-      title: "Orphaned recovery candidate",
-      providerInstanceId,
-      modelSelection,
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: null,
-      worktreePath: null,
-      activeProviderThreadId: null,
-      lineage: {
-        parentThreadId: null,
-        relationshipToParent: null,
-        rootThreadId: threadId,
-      },
-      forkedFrom: null,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null,
-      settledOverride: null,
-      settledAt: null,
-      lastVisitedAt: null,
-      deletedAt: null,
-    },
-  });
-  yield* projectionStore.apply({
-    id: EventId.make(`event:${suffix}:item-running`),
-    type: "turn-item.updated",
-    threadId,
-    runId,
-    nodeId: rootNodeId,
-    driver,
-    occurredAt: now,
-    payload: {
-      id: TurnItemId.make(`item:${suffix}:orphaned`),
-      threadId,
-      runId,
-      nodeId: rootNodeId,
-      providerThreadId: null,
-      providerTurnId: null,
-      nativeItemRef: null,
-      parentItemId: null,
-      ordinal: 1,
-      status: "running",
-      title: "orphaned command",
-      startedAt: now,
-      completedAt: null,
-      updatedAt: now,
-      type: "command_execution",
-      input: "sleep 60",
-    },
   });
 
   return threadId;
@@ -1184,7 +1110,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       const latestPlan = yield* sql<{ detail: string }>`EXPLAIN QUERY PLAN
         SELECT run_id FROM orchestration_v2_projection_runs
         WHERE thread_id = 'thread:test' AND status <> 'queued'
-          AND NOT (status = 'cancelled' AND json_extract(payload_json, '$.startedAt') IS NULL)
+          AND CASE WHEN json_valid(payload_json)
+            THEN NOT (status = 'cancelled' AND json_extract(payload_json, '$.startedAt') IS NULL) ELSE 0 END
         ORDER BY completed_at IS NULL DESC, completed_at DESC, ordinal DESC, run_id DESC LIMIT 1`;
       assert.isFalse(latestPlan.some((row) => row.detail.includes("TEMP B-TREE")));
     }),
@@ -1338,7 +1265,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             payload_json: payloadJson,
           };
         });
-        yield* sql`INSERT INTO orchestration_v2_projection_turn_items ${sql.insert(rows)}`;
+        if (rows[0] !== undefined)
+          yield* sql`INSERT INTO orchestration_v2_projection_turn_items ${sql.insert([rows[0], ...rows.slice(1)])}`;
       }
       const { statements, tracer } = traceSqlStatements();
       const initial = yield* Effect.acquireUseRelease(
@@ -1372,7 +1300,14 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         windowPlan.map((row) => row.detail).join("\n"),
         /SEARCH item USING INDEX orchestration_v2_projection_turn_items_user_message_idx \(thread_id=\? AND ordinal<\?\)/,
       );
-      const topLevel = windowPlan.filter((row) => row.parent === 0).map((row) => row.detail);
+      const payloadStatement = statements.find((statement) =>
+        statement.includes("SELECT item.payload_json, tail.turn_item_id"),
+      );
+      assert.isDefined(payloadStatement);
+      const payloadPlan = yield* sql.unsafe<{ readonly parent: number; readonly detail: string }>(
+        `EXPLAIN QUERY PLAN ${payloadStatement}`,
+      );
+      const topLevel = payloadPlan.filter((row) => row.parent === 0).map((row) => row.detail);
       assert.include(topLevel, "SEARCH item USING INTEGER PRIMARY KEY (rowid=?)");
       assert.notInclude(topLevel, "USE TEMP B-TREE FOR ORDER BY");
       const nodeStatement = statements.find((statement) =>
@@ -1558,7 +1493,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           itemRow(runId, notification(`Steer ${run}`)),
         ];
         startIds.push(rows[1]!.turn_item_id);
-        yield* sql`INSERT INTO orchestration_v2_projection_turn_items ${sql.insert(rows)}`;
+        if (rows[0] !== undefined)
+          yield* sql`INSERT INTO orchestration_v2_projection_turn_items ${sql.insert([rows[0], ...rows.slice(1)])}`;
       }
 
       const { statements, tracer } = traceSqlStatements();
@@ -1775,11 +1711,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         const snapshot = yield* projectionStore
           .getThreadSnapshotWindow(threadId, { rowLimit: 75 })
           .pipe(Effect.withTracer(tracer));
-        const nodeStatement = statements.find(
-          (statement) =>
-            statement.includes("payload_json") &&
-            statement.includes("orchestration_v2_projection_nodes") &&
-            !statement.includes("WITH RECURSIVE"),
+        const nodeStatement = statements.find((statement) =>
+          statement.includes("SELECT node.payload_json, retained.key AS position"),
         );
         assert.isDefined(nodeStatement);
         const nodePlan = yield* (yield* SqlClient.SqlClient).unsafe<{ readonly detail: string }>(

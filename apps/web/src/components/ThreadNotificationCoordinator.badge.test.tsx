@@ -1,10 +1,10 @@
-import { WORKING_EXIT_GRACE_MS } from "@t3tools/client-runtime/state/thread-inbox";
-import { threadNotificationTag } from "../threadNotifications";
+const WORKING_EXIT_GRACE_MS = 2_000;
+
 vi.mock("../webPush", () => ({ isWebPushEnabled: () => false }));
 import { EnvironmentId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
-import { Atom, AtomRegistry } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import type { AnyRouter } from "@tanstack/react-router";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
@@ -25,7 +25,10 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 vi.mock("./ui/toast", () => ({ toastManager: { add: state.toast } }));
 vi.mock("../state/shell", () => ({
-  environmentShell: { stateValueAtom: (id: string) => shellAtom(id) },
+  environmentShell: {
+    stateValueAtom: (id: string) => shellAtom(id),
+    stateAtom: (id: string) => Atom.make((get) => AsyncResult.success(get(shellAtom(id)))),
+  },
 }));
 vi.mock("../state/presentation", () => ({
   environmentSummaries: {
@@ -192,7 +195,6 @@ beforeEach(() => {
   visibility = "visible";
   TestNotification.permission = "granted";
   TestNotification.sent = [];
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("Notification", TestNotification);
   vi.stubGlobal("window", Object.assign(new EventTarget(), { focus: vi.fn() }));
   vi.stubGlobal(

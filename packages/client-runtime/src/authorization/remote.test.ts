@@ -1,3 +1,4 @@
+import * as Redacted from "effect/Redacted";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -250,9 +251,7 @@ describe("remote environment authorization", () => {
         httpBaseUrl: "https://remote.example.com/",
         bearerToken: "bearer-token",
       }).pipe(provideRemoteHttp(fetch.fetchFn));
-      expect(ticket).toMatchObject({
-        ticket: "ws-ticket",
-      });
+      expect(Redacted.value(ticket.ticket)).toBe("ws-ticket");
 
       expectFetchCall(fetch.calls, 1, {
         url: "https://remote.example.com/.well-known/t3/environment",
@@ -341,10 +340,10 @@ describe("remote environment authorization", () => {
         }
         expect(oldSignal?.aborted).toBe(true);
         const current = yield* request;
-        expect(current.ticket).toBe("fresh-ticket");
+        expect(Redacted.value(current.ticket)).toBe("fresh-ticket");
         resolveOld(response("stale-ticket"));
         yield* Effect.yieldNow;
-        expect(current.ticket).toBe("fresh-ticket");
+        expect(Redacted.value(current.ticket)).toBe("fresh-ticket");
         expect(callCount).toBe(2);
       }).pipe(Effect.provide(TestClock.layer())),
   );

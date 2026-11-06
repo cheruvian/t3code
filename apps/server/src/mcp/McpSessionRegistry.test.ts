@@ -1,4 +1,6 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Layer from "effect/Layer";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -70,7 +72,7 @@ const makeRegistry = (
       Effect.provideService(ServerConfig.ServerConfig, fakeServerConfig),
       Effect.provideService(ProjectionStore.ProjectionStoreV2, makeProjectionStub(projectionStub)),
       Effect.provideService(ProjectStore.ProjectStoreV2, projectStub),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     );
 
 it.effect("stores only a token hash, resolves the bearer token, and revokes by thread", () =>

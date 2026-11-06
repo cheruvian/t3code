@@ -48,11 +48,11 @@ function DeploymentNoticeContent({ environmentId }: { environmentId: Environment
     )
       return;
     setPending(true);
-    try {
+    await (async () => {
       await act({ environmentId, input: { id: state.id, action } });
-    } finally {
+    })().finally(() => {
       setPending(false);
-    }
+    });
   };
   return (
     <div className="min-w-0 rounded-lg border border-sidebar-border bg-sidebar-control-surface/50 p-2.5 text-xs text-sidebar-foreground">

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NetService from "@t3tools/shared/Net";
 import * as Layer from "effect/Layer";
 import { assert, it } from "@effect/vitest";
@@ -46,7 +47,11 @@ it.effect("dispatches the documented isolated message-file launch with provider 
     assert.equal(calls[0]!.flags.baseBranch, "main");
     assert.equal(calls[0]!.flags.messageFile, "/tmp/prompt.md");
     assert.deepEqual(calls[0]!.flags.instance, Option.some("codex"));
-  }).pipe(Effect.provide(Layer.merge(NodeServices.layer, NetService.layer))),
+  }).pipe(
+    Effect.provide(
+      Layer.merge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer), NetService.layer),
+    ),
+  ),
 );
 
 it.effect("dispatches message-file sends and unscoped thread lists", () =>
@@ -61,5 +66,9 @@ it.effect("dispatches message-file sends and unscoped thread lists", () =>
     );
     assert.equal(calls[0]!.flags.threadId, "thread-1");
     assert.deepEqual(calls[1]!.flags.limit, Option.some(12));
-  }).pipe(Effect.provide(Layer.merge(NodeServices.layer, NetService.layer))),
+  }).pipe(
+    Effect.provide(
+      Layer.merge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer), NetService.layer),
+    ),
+  ),
 );

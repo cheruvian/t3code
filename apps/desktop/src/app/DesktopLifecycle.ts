@@ -1,3 +1,4 @@
+import * as DesktopSafeShutdown from "./DesktopSafeShutdown.ts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -9,10 +10,13 @@ import * as Scope from "effect/Scope";
 
 import type * as Electron from "electron";
 
+import * as HostProcess from "@t3tools/shared/HostProcess";
+
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
+import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopState from "./DesktopState.ts";
@@ -97,7 +101,7 @@ const requestDesktopShutdownAndWait = Effect.fn("desktop.lifecycle.requestShutdo
 );
 
 interface QuitState {
-  phase: "running" | "waiting" | "allowed";
+  phase: "running" | "draining" | "waiting" | "allowed";
   waitingSinceNanos: bigint;
 }
 
@@ -151,6 +155,7 @@ function handleBeforeQuit(
   }
 
   event.preventDefault();
+  if (quit.phase === "draining") return;
   if (quit.phase === "waiting") {
     void runEffect(exitIfShutdownStalled(quit, "before-quit"));
     return;
@@ -159,6 +164,15 @@ function handleBeforeQuit(
     Effect.gen(function* () {
       const state = yield* DesktopState.DesktopState;
       const electronWindow = yield* ElectronWindow.ElectronWindow;
+      quit.phase = "draining";
+      const safe = yield* Effect.serviceOption(DesktopSafeShutdown.DesktopSafeShutdown);
+      if (
+        safe._tag === "Some" &&
+        (yield* safe.value.request("shutdown")).resolution !== "committed"
+      ) {
+        quit.phase = "running";
+        return false;
+      }
       yield* startWaitingForShutdown(quit);
       yield* Ref.set(state.quitting, true);
       yield* logLifecycleInfo("before-quit received");
@@ -169,8 +183,18 @@ function handleBeforeQuit(
           ),
         ),
       );
-    }).pipe(Effect.withSpan("desktop.lifecycle.beforeQuit")),
-  ).finally(() => {
+      return true;
+    }).pipe(
+      Effect.catchCause((cause) =>
+        logLifecycleError("failed to drain before shutdown", { cause }).pipe(Effect.as(false)),
+      ),
+      Effect.withSpan("desktop.lifecycle.beforeQuit"),
+    ),
+  ).then((committed) => {
+    if (!committed) {
+      quit.phase = "running";
+      return;
+    }
     quit.phase = "allowed";
     void runEffect(
       Effect.gen(function* () {
@@ -223,9 +247,12 @@ export const make = DesktopLifecycle.of({
         yield* electronApp.exit(75);
         return;
       }
+      // Startup already acted on the app link that launched it; passing it on replays it.
+      const appLinkPrefix = `${ElectronProtocol.getDesktopScheme(environment.isDevelopment)}:`;
+      const args = yield* HostProcess.Arguments;
       yield* electronApp.relaunch({
-        execPath: process.execPath,
-        args: process.argv.slice(1),
+        execPath: yield* HostProcess.ExecutablePath,
+        args: args.slice(1).filter((arg) => !arg.toLowerCase().startsWith(appLinkPrefix)),
       });
       yield* electronApp.exit(0);
     }).pipe(

@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Executes the shipped Pi extension at its native JavaScript boundary.
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
 import { loadMcpBridge } from "./mcpBridge.testkit.ts";
 import * as NodeModule from "node:module";
 import * as NodeVM from "node:vm";
@@ -9,6 +12,42 @@ type RequestHook = (
   event: { payload: unknown },
   ctx: { model: { provider: string } },
 ) => Record<string, unknown> | undefined;
+
+interface SkillCommand {
+  readonly name: string;
+  readonly source: string;
+  readonly sourceInfo: { readonly path: string };
+}
+
+async function loadHooks(
+  commands: ReadonlyArray<SkillCommand> = [],
+  argv: ReadonlyArray<string> = [],
+) {
+  const handlers = new Map<string, unknown>();
+  const source = NodeModule.stripTypeScriptTypes(
+    PI_T3_MCP_EXTENSION_SOURCE.replace(/^import\b[\s\S]*?;$/gm, "").replace(
+      "export default async function",
+      "async function",
+    ),
+  );
+  await NodeVM.runInNewContext(`${source}\nt3McpExtension(pi)`, {
+    process: { env: {}, argv },
+    NodeFSP,
+    NodePath,
+    stripFrontmatter: (content: string) => content,
+    pi: {
+      on: (name: string, handler: (...args: unknown[]) => unknown) => {
+        const previous = handlers.get(name) as ((...args: unknown[]) => unknown) | undefined;
+        handlers.set(name, async (...args: unknown[]) => {
+          await previous?.(...args);
+          return handler(...args);
+        });
+      },
+      getCommands: () => commands,
+    },
+  });
+  return handlers;
+}
 
 describe("Pi orchestration prompt section", () => {
   it.each([
@@ -38,6 +77,32 @@ describe("Pi orchestration prompt section", () => {
       assert.isTrue(result!.systemPrompt.startsWith(`${event.systemPrompt}\n\n`));
       assert.include(result!.systemPrompt, "orchestrator_capabilities");
     }
+  });
+});
+
+describe("Pi project trust", () => {
+  it.each([
+    { name: "a trusted folder", trusted: true, argv: [], notices: 0 },
+    { name: "an untrusted folder", trusted: false, argv: [], notices: 1 },
+    { name: "--no-approve", trusted: false, argv: ["--approve", "-na"], notices: 0 },
+  ])("sends $notices trust notice per session for $name", async ({ trusted, argv, notices }) => {
+    const sent: string[] = [];
+    const ctx = {
+      cwd: "/repo",
+      isProjectTrusted: () => trusted,
+      ui: { notify: (message: string) => sent.push(message) },
+    };
+    // Pi reruns extension factories on session replacement without asking about trust again.
+    for (const _session of [1, 2]) {
+      const handlers = (await loadHooks([], ["node", "pi", ...argv])) as Map<
+        string,
+        (event: unknown, ctx: unknown) => unknown
+      >;
+      for (const _turn of [1, 2]) await handlers.get("before_agent_start")!({}, ctx);
+    }
+    assert.equal(sent.length, notices * 2);
+    for (const message of sent)
+      assert.include(message, "for /repo because the folder is not trusted");
   });
 });
 

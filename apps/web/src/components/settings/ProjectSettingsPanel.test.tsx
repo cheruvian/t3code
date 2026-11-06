@@ -74,10 +74,22 @@ vi.mock("~/rpc/atomRegistry", () => ({
   },
 }));
 vi.mock("~/state/environments", () => ({
+  readEnvironment: (id: EnvironmentId) => ({
+    ...environments.find((environment) => environment.environmentId === id),
+    connection: { phase: "connected" },
+    serverConfig: {},
+  }),
   useEnvironments: () => ({ environments }),
   usePrimaryEnvironmentId: () => primaryId,
 }));
 vi.mock("~/state/entities", () => ({
+  useServerConfigs: () =>
+    new Map(
+      environments.map((environment) => [
+        environment.environmentId,
+        { environment: { capabilities: { projectSettingsOverrides: true } } },
+      ]),
+    ),
   useProjects: () => state.projects,
   useThreadShells: () => [],
   waitForProjectRemoval: async () => true,
@@ -244,7 +256,6 @@ function deferred<T>() {
 let renderer: ReactTestRenderer | undefined;
 
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.clearAllMocks();
   state.registry = AtomRegistry.make();
   state.sessions.clear();

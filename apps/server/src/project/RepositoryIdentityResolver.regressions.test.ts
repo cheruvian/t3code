@@ -8,7 +8,6 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { TestClock } from "effect/testing";
 
@@ -59,7 +58,15 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
     const layerResolver = Layer.effect(
       RepositoryIdentityResolver.RepositoryIdentityResolver,
       RepositoryIdentityResolver.make(),
-    ).pipe(Layer.provide(layerProcessRunner));
+    ).pipe(
+      Layer.provide(layerProcessRunner),
+      Layer.provide(
+        FileSystem.layerNoop({
+          stat: () => Effect.succeed({ type: "Directory" } as FileSystem.File.Info),
+          exists: () => Effect.succeed(false),
+        }),
+      ),
+    );
 
     return Effect.gen(function* () {
       const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
@@ -118,7 +125,15 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
           );
         },
       }),
-    ).pipe(Layer.provide(layerProcessRunner));
+    ).pipe(
+      Layer.provide(layerProcessRunner),
+      Layer.provide(
+        FileSystem.layerNoop({
+          stat: () => Effect.succeed({ type: "Directory" } as FileSystem.File.Info),
+          exists: () => Effect.succeed(false),
+        }),
+      ),
+    );
 
     return Effect.gen(function* () {
       const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
@@ -186,7 +201,15 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
     const layerResolver = Layer.effect(
       RepositoryIdentityResolver.RepositoryIdentityResolver,
       RepositoryIdentityResolver.make(),
-    ).pipe(Layer.provide(layerProcessRunner));
+    ).pipe(
+      Layer.provide(layerProcessRunner),
+      Layer.provide(
+        FileSystem.layerNoop({
+          stat: () => Effect.succeed({ type: "Directory" } as FileSystem.File.Info),
+          exists: () => Effect.succeed(false),
+        }),
+      ),
+    );
 
     return Effect.gen(function* () {
       const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
@@ -198,14 +221,6 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       expect(recovered?.rootPath).toBe("/repo");
       expect(calls).toEqual([
         ["-C", "/repo/packages/web", "rev-parse", "--show-toplevel"],
-        [
-          "-C",
-          "/repo/packages/web",
-          "--git-dir=.",
-          "rev-parse",
-          "--is-bare-repository",
-          "--absolute-git-dir",
-        ],
         ["-C", "/repo/packages/web", "rev-parse", "--show-toplevel"],
         ["-C", "/repo", "remote", "-v"],
       ]);

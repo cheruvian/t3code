@@ -15,7 +15,7 @@ import {
 
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -325,7 +325,7 @@ const isProtocolMismatch = Schema.is(NativeTelemetryProtocolMismatch);
 const isDecodeFailed = Schema.is(NativeTelemetryDecodeFailed);
 const isCommandFailed = Schema.is(NativeTelemetryCommandFailed);
 
-function eventVersion(value: unknown): number | undefined {
+export function eventVersion(value: unknown): number | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const version = Reflect.get(value, "version");
   return typeof version === "number" ? version : undefined;
@@ -364,7 +364,7 @@ function canCommandNativeTelemetrySidecar(
 export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(function* () {
   const binary = yield* ResourceMonitorBinary.ResourceMonitorBinary;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const config = yield* ServerConfig.ServerConfig;
   const initializedAt = yield* DateTime.now;
   const state = yield* Ref.make(initialState);
@@ -863,7 +863,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
         reason: Option.getOrElse(current.lastError, () => "sidecar is not running"),
       });
     }
-    const requestId = yield* crypto.randomUUIDv4().pipe(
+    const requestId = yield* random.uuidV4().pipe(
       Effect.mapError(
         (cause) =>
           new NativeTelemetryCommandFailed({
@@ -922,7 +922,7 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
       });
     }
 
-    const requestId = yield* crypto.randomUUIDv4().pipe(
+    const requestId = yield* random.uuidV4().pipe(
       Effect.mapError(
         (cause) =>
           new NativeTelemetryCommandFailed({
@@ -977,8 +977,8 @@ export const make = Effect.fn("resourceTelemetry.nativeTelemetryClient.make")(fu
       });
     }
 
-    const requestId = yield* crypto
-      .randomUUIDv4()
+    const requestId = yield* random
+      .uuidV4()
       .pipe(
         Effect.mapError(
           (cause) => new NativeTelemetryCommandFailed({ operation: "createRequestId", cause }),

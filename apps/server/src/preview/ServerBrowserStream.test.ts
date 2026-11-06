@@ -34,7 +34,7 @@ const makeAuth = (
   const requests: string[] = [];
   const layer = Layer.mock(EnvironmentAuth.EnvironmentAuth, {
     authenticateWebSocketUpgrade: (request) => {
-      requests.push(request.originalUrl);
+      requests.push(request.url);
       return error
         ? Effect.fail(error)
         : Effect.succeed({
@@ -89,7 +89,7 @@ it.effect.each([
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       releaseSettledThread: () => Effect.void,
-      reportProfiles: () => Effect.void,
+      profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       scriptBridge: () => Effect.die("Script bridge not exercised by stream tests"),
@@ -165,7 +165,7 @@ it.effect("sends replies ahead of stale frames and only the newest frame after a
     });
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
-      reportProfiles: () => Effect.void,
+      profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       scriptBridge: () => Effect.die("unused scriptBridge"),
@@ -239,7 +239,7 @@ it.effect.each([
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       releaseSettledThread: () => Effect.void,
-      reportProfiles: () => Effect.void,
+      profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       scriptBridge: () => Effect.die("Script bridge not exercised by stream tests"),
@@ -282,7 +282,7 @@ it.effect("serves a tab's download only to an authorized session", () =>
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       releaseSettledThread: () => Effect.void,
-      reportProfiles: () => Effect.void,
+      profileReporter: Effect.succeed(() => Effect.void),
       openDownload: (input) =>
         Effect.sync(() => {
           requests.push(input);
@@ -332,7 +332,7 @@ it.effect("passes uploaded files to the page's open picker and needs operate sco
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       releaseSettledThread: () => Effect.void,
-      reportProfiles: () => Effect.void,
+      profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: (input) =>
         Effect.sync(() => {
@@ -403,7 +403,7 @@ it.effect.each([
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       releaseSettledThread: () => Effect.void,
-      reportProfiles: () => Effect.void,
+      profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       scriptBridge: () => Effect.die("Script bridge not exercised by stream tests"),

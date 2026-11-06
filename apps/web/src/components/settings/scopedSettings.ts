@@ -33,10 +33,10 @@ interface ScopedSettingsEnvironment {
   readonly label: string;
   readonly connection: { readonly phase: EnvironmentConnectionPhase };
   readonly serverConfig: {
-    readonly settings: ServerSettings;
     readonly environment?: {
-      readonly capabilities: { readonly projectSettingsOverrides?: boolean | undefined };
+      readonly capabilities: { readonly projectSettingsOverrides?: boolean };
     };
+    readonly settings: ServerSettings;
   } | null;
 }
 

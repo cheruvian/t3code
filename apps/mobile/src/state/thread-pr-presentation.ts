@@ -1,14 +1,11 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import type {
-  ExecutionEnvironmentCapabilities,
-  ThreadPullRequestLink,
-  VcsStatusResult,
-} from "@t3tools/contracts";
+import type { ThreadPullRequestLink, VcsStatusResult } from "@t3tools/contracts";
 import {
   sourceControlClients,
   type ChangeRequestTerminology,
 } from "@t3tools/client-runtime/source-control-clients";
 
+import type { ExecutionEnvironmentCapabilities } from "@t3tools/contracts";
 import {
   resolveThreadCurrentPullRequestLink,
   resolveThreadPullRequestBadge,

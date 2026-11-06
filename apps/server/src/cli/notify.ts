@@ -7,7 +7,11 @@ import * as Schema from "effect/Schema";
 import { Command, Flag } from "effect/cli";
 
 import { projectLocationFlags } from "./config.ts";
-import { encodeCliJson, makeEnvironmentHttpClient, withLocalEnvironment } from "./environment.ts";
+import {
+  encodeCliJson,
+  makeEnvironmentHttpClient,
+  withLocalEnvironment,
+} from "./localEnvironment.ts";
 
 class NotifyCliError extends Schema.TaggedError<NotifyCliError>()("NotifyCliError", {
   reason: Schema.Literals(["message-source", "no-devices", "delivery"]),

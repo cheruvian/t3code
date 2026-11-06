@@ -8,7 +8,7 @@ import {
   type HtmlRenderReference,
 } from "@t3tools/shared/htmlRender";
 import { Maximize2Icon, PanelRightOpenIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useAssetUrlRefresh } from "~/assets/assetUrls";
 import { useLongLivedAssetUrl } from "~/assets/longLivedAssetUrls";
@@ -56,16 +56,13 @@ export function HtmlRenderFrame(props: {
   const [contentHeight, setContentHeight] = useState<number>();
   const height = htmlRenderFrameHeight(props.htmlRender, width, contentHeight);
   const fileName = htmlRenderFileName(title);
-  const resource = useMemo(
-    () => ({
-      _tag: "attachment" as const,
-      attachmentId,
-      fileName,
-      mimeType: "text/html",
-      disposition: "inline" as const,
-    }),
-    [attachmentId, fileName],
-  );
+  const resource = (() => ({
+    _tag: "attachment" as const,
+    attachmentId,
+    fileName,
+    mimeType: "text/html",
+    disposition: "inline" as const,
+  }))();
   // Keep the loaded URL stable while the page is mounted.
   const [loaded, setLoaded] = useState<{ src: string; expiresAt: number } | null>(null);
   const assetUrl = useLongLivedAssetUrl(
@@ -81,12 +78,16 @@ export function HtmlRenderFrame(props: {
   const [expandedSrc, setExpandedSrc] = useState<string | null>(null);
   // The page stays hidden behind a skeleton until it reports its content.
   const [ready, setReady] = useState(false);
-  const showPage = useCallback(() => setReady(true), []);
-  const fitPage = useCallback((contentHeight: number) => {
+  const showPage = () => setReady(true);
+  const fitPage = (contentHeight: number) => {
     setContentHeight(contentHeight);
     setReady(true);
-  }, []);
+  };
   const { onFullscreenChange } = props;
+  // Tied to the viewer's lifetime: unmounting while expanded must still release
+  // the timeline's follow pin, which a close handler alone never reaches.
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- holds the parent's fullscreen pin while expanded and releases it on collapse or unmount
   useEffect(() => {
     if (expandedSrc === null) return;
     onFullscreenChange?.(true);

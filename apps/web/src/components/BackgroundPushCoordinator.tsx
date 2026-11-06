@@ -20,6 +20,7 @@ function EnvironmentPushRegistration({ environmentId }: { environmentId: Environ
   const shell = useAtomValue(environmentShell.stateValueAtom(environmentId));
   const connected = shell.status === "live";
   const update = useAtomCommand(serverEnvironment.webPushUpdate, { reportFailure: false });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Reconciles the browser PushManager subscription with the connected environment.
   useEffect(() => {
     if (!enabled || !connected) return;
     let cancelled = false;

@@ -100,6 +100,11 @@ export function startTimelinePositionRestore({
   });
   const finish = () => {
     stop();
+    console.log(
+      "restore-finish",
+      list.getScrollableNode()?.scrollTop,
+      list.getScrollableNode()?.scrollHeight,
+    );
     onPositioned(listIdentityKey);
   };
   const scrolling =
@@ -116,7 +121,7 @@ export function startTimelinePositionRestore({
         listOpenedOn === listIdentityKey
         ? undefined
         : list.scrollToEnd({ animated: false });
-  const settlesAtEnd = position?.atEnd !== false && scrolling !== undefined;
+  const settlesAtEnd = position?.atEnd !== false;
   void Promise.resolve(scrolling).then(async () => {
     if (cancelled) return;
     if (settlesAtEnd) {

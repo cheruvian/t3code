@@ -1,3 +1,5 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -124,7 +126,7 @@ server.listen(Number(process.env.T3_TEST_PORT ?? 0), "127.0.0.1", () => {
 
         const port = yield* runServer();
         assert.equal(yield* runServer(port), port);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeCrypto.layer, NodeServices.layer)), Effect.scoped),
     );
   },
 );
@@ -246,7 +248,10 @@ server.listen(0, "127.0.0.1", () => {
             assert.equal(yield* child.exitCode, 0);
             assert.equal(yield* fs.readFileString(signalPath), mode === "timeout" ? "2" : "1");
           }
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeCrypto.layer, NodeServices.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );

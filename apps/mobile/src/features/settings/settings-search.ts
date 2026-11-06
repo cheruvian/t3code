@@ -75,6 +75,8 @@ const SETTINGS_SEARCH_TERMS = {
     "agent credits",
     "default branch",
     "automatically pull",
+    "clone into host folders",
+    "ghq",
   ],
   SettingsWorktrees: [
     "worktree",
@@ -83,7 +85,7 @@ const SETTINGS_SEARCH_TERMS = {
     "submodules",
     "start from remote",
   ],
-  SettingsLabs: ["legacy", "plan mode", "beta"],
+  SettingsLabs: ["legacy", "plan mode", "beta", "linked environments", "link machine"],
   SettingsEnvironmentMaintenance: ["updates", "provider updates", "restart", "manage environments"],
   SettingsAbout: [
     "version",

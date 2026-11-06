@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import type { VcsStatusResult } from "@t3tools/contracts";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -12,7 +11,8 @@ const harness = vi.hoisted(() => ({
   navigatedRoutes: [] as string[],
 }));
 
-vi.mock("@react-navigation/native", () => {
+vi.mock("@react-navigation/native", async () => {
+  const { createContext } = await import("react");
   const navigation = {
     canGoBack: () => true,
     dispatch: () => {},
@@ -29,8 +29,13 @@ vi.mock("@react-navigation/native", () => {
   return {
     StackActions: { replace: () => ({}) },
     useNavigation: () => navigation,
+    NavigationContext: createContext(navigation),
+    NavigationRouteContext: createContext({ key: "thread-route" }),
   };
 });
+vi.mock("../workspace/WorkspaceTabsContext", () => ({ useWorkspaceTabs: () => null }));
+vi.mock("../layout/useSidebarToggle", () => ({ useSidebarToggle: () => null }));
+vi.mock("../../native/native-layout-metrics", () => ({ useDeviceType: () => "phone" }));
 vi.mock("../../native/useOpenPullRequest", () => ({ useOpenPullRequest: () => () => {} }));
 
 vi.mock("../../state/session", () => ({ useEnvironmentScope: () => true }));
@@ -42,6 +47,11 @@ vi.mock("../../components/ui/AppBar", async () => {
     ),
   };
 });
+vi.mock("../../components/ui/Toolbar", () => ({
+  Toolbar: { Button: "Button", Menu: "Menu", MenuAction: "MenuAction" },
+}));
+vi.mock("../../components/ui/Dialog", () => ({ confirm: () => {} }));
+vi.mock("../../components/ui/ScreenHeaderButton", () => ({ ScreenHeaderButton: () => null }));
 vi.mock("react-native", () => ({ Alert: { alert: () => {} }, Linking: {}, Platform: {} }));
 vi.mock("../layout/AdaptiveWorkspaceLayout", () => ({
   useAdaptiveWorkspaceLayout: () => ({

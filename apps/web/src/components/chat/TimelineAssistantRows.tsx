@@ -3,19 +3,20 @@ import { MessageSpeechRateControl } from "./MessageSpeechRateControl";
 import { MessageSpeechSections } from "./MessageSpeechSections";
 import { getMessageSpeechPlayer, messageSpeechSections } from "~/lib/messageSpeech";
 import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
-import { type RunId } from "@t3tools/contracts";
+import type { RunId } from "@t3tools/contracts";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
-import { memo, use, useState, useMemo, useCallback } from "react";
-import { type ChatMessage, type TurnDiffSummary } from "../../types";
+import { memo, use, useState } from "react";
+import type { ChatMessage, TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
 import { GitForkIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import { McpAppFrame } from "./McpAppFrame";
+import { checkpointFileTotals } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { useFileContextMenuHandler } from "../../fileContextMenu";
-import { useProject, useThreadShell } from "../../state/entities";
+import { useAssistantMessageText, useProject, useThreadShell } from "../../state/entities";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantCitationSource } from "./AssistantCitationSource";
 import { resolveAssistantMessageCopyState } from "./MessagesTimeline.logic";
@@ -29,23 +30,20 @@ import { MESSAGE_HEADING_LEVEL, MessageAuthorHeading } from "./TimelineRowParts"
 
 export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
-  const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
-  const speechSections = useMemo(
-    () =>
-      !row.message.streaming && getMessageSpeechPlayer() ? messageSpeechSections(messageText) : [],
-    [messageText, row.message.streaming],
+  // The timeline holds a streaming message's row while only its text grows.
+  const liveText = useAssistantMessageText(
+    row.message.streaming ? ctx.threadRef : null,
+    row.projectedItem?.item.id,
   );
-  const speechOffsets = useMemo(
-    () => speechSections.map((section) => section.startOffset),
-    [speechSections],
-  );
+  const text = liveText ?? row.message.text;
+  const messageText = text || (row.message.streaming ? "" : "(empty response)");
+  const speechSections = (() =>
+    !row.message.streaming && getMessageSpeechPlayer() ? messageSpeechSections(messageText) : [])();
+  const speechOffsets = (() => speechSections.map((section) => section.startOffset))();
   const owner = `${ctx.routeThreadKey}:${row.message.id}`;
   const isLatest = ctx.latestSpokenReplyId === row.message.id;
-  const renderSpeechSectionActions = useCallback(
-    (index: number) => (
-      <MessageSpeechSections owner={owner} sections={speechSections} index={index} />
-    ),
-    [owner, speechSections],
+  const renderSpeechSectionActions = (index: number) => (
+    <MessageSpeechSections owner={owner} sections={speechSections} index={index} />
   );
 
   return (
@@ -396,6 +394,7 @@ function AssistantChangedFilesSectionInner({
     <ChangedFilesCard
       runId={turnSummary.runId}
       files={checkpointFiles}
+      totals={checkpointFileTotals(turnSummary)}
       allDirectoriesExpanded={allDirectoriesExpanded}
       resolvedTheme={resolvedTheme}
       onToggleAllDirectories={() =>

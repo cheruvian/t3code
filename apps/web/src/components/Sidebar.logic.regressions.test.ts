@@ -1,3 +1,4 @@
+import { isThreadWorking as isSidebarThreadWorking } from "@t3tools/client-runtime/state/thread-inbox";
 import { resolveServerBackedAppStageLabel as resolveSidebarStageBadgeLabel } from "../branding.logic";
 import { formatWorkingDurationLabel } from "@t3tools/client-runtime/state/models";
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
@@ -5,36 +6,30 @@ import * as DateTime from "effect/DateTime";
 
 import { describe, expect, it } from "vite-plus/test";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
-import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import {
   animateSidebarLayoutChanges,
   applySidebarThreadDrop,
   sidebarListItemId,
   sidebarMarkerId,
-  archiveSelectedThreadEntries,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
-  buildMultiSelectThreadContextMenuItems,
   deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
   filterSidebarV2VisibleThreads,
   getFallbackThreadIdAfterDelete,
   getProjectSortTimestamp,
   getSidebarForkParentThreadId,
-  getSidebarThreadIdsToPrewarm,
   hasUnseenCompletion,
   hasUnreadAssistantMessage,
   resolveSidebarV2UnreadState,
   isContextMenuPointerDown,
-  isSidebarSubagentThread,
-  isSidebarThreadWorking,
+  isSidebarHiddenThread,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
   reduceSidebarProjectScopeMenuState,
   resolveAdjacentThreadId,
-  resolveProjectStatusIndicator,
   resolveSidebarOrderingThreads,
   resolveSidebarSweepKeys,
   resolveSidebarThreadSection,
@@ -46,7 +41,6 @@ import {
   resolveWorkingStartedAt,
   pullRequestMatchesSearchQuery,
   searchSidebarThreads,
-  shouldClearThreadSelectionOnMouseDown,
   shouldShowSidebarV2Duration,
   shouldRecedeSidebarThread,
   sortLogicalProjectsForSidebar,
@@ -54,7 +48,7 @@ import {
   planSidebarThreadDrop,
   sortPinnedThreadsForSidebar,
   sortThreadsForSidebar,
-  sortProjectsForSidebar,
+  sortScopedProjectsForSidebar,
   sidebarThreadSortSignature,
   shouldNavigateAfterThreadPark,
   type SidebarListItem,
@@ -151,8 +145,6 @@ describe("resolveSidebarThreadSection", () => {
 describe("deleteSelectedThreadEntries", () => {
   const entries = [{ threadKey: "one" }, { threadKey: "two" }, { threadKey: "three" }] as const;
   const success = AsyncResult.success(undefined);
-  const failure = AsyncResult.failure(Cause.fail(new Error("Delete failed")));
-  const interrupted = AsyncResult.failure(Cause.interrupt());
 
   it("does not count a skipped entry as deleted", async () => {
     const visibleEntries = new Set(entries.map(({ threadKey }) => threadKey));
@@ -171,28 +163,6 @@ describe("deleteSelectedThreadEntries", () => {
     expect(outcome).toEqual({
       deletedThreadKeys: new Set(["one", "three"]),
       firstFailure: null,
-    });
-  });
-});
-
-describe("archiveSelectedThreadEntries", () => {
-  const entries = [{ threadKey: "one" }, { threadKey: "two" }, { threadKey: "three" }] as const;
-  const success = { _tag: "Success" } as const;
-  const failure = { _tag: "Failure" } as const;
-
-  it("records every entry after full success", async () => {
-    const outcome = await archiveSelectedThreadEntries({
-      entries,
-      archive: async (_entry, onArchived) => {
-        onArchived();
-        return success;
-      },
-    });
-
-    expect(outcome).toEqual({
-      archivedThreadKeys: ["one", "two", "three"],
-      mutationFailure: null,
-      followupFailures: [],
     });
   });
 });
@@ -243,20 +213,6 @@ describe("buildBulkTitleRegenerationContextMenuItem", () => {
         actionableCount: 0,
       }),
     ).toBeNull();
-  });
-});
-
-describe("buildMultiSelectThreadContextMenuItems", () => {
-  it("offers bulk archive with the selected count", () => {
-    expect(
-      buildMultiSelectThreadContextMenuItems({ count: 3, hasRunningThread: false }),
-    ).toContainEqual({ id: "archive", label: "Archive (3)", disabled: false });
-  });
-
-  it("disables bulk archive when a selected thread is running", () => {
-    expect(
-      buildMultiSelectThreadContextMenuItems({ count: 2, hasRunningThread: true }),
-    ).toContainEqual({ id: "archive", label: "Archive (2)", disabled: true });
   });
 });
 
@@ -344,6 +300,7 @@ describe("sidebar thread lineage helpers", () => {
       filterSidebarV2VisibleThreads(
         [root, subagent, fork, archived, otherProject],
         new Set([`${environmentId}:${projectId}`]),
+        new Set([`${subagent.environmentId}:${subagent.id}`]),
       ).map((thread) => thread.id),
     ).toEqual([parentId, fork.id]);
   });
@@ -358,8 +315,8 @@ describe("sidebar thread lineage helpers", () => {
       },
     });
 
-    expect(isSidebarSubagentThread(subagent)).toBe(true);
-    expect(isSidebarSubagentThread(makeThreadFixture())).toBe(false);
+    expect(isSidebarHiddenThread(subagent)).toBe(true);
+    expect(isSidebarHiddenThread(makeThreadFixture())).toBe(false);
   });
 
   it("resolves the parent thread for fork sidebar affordances", () => {
@@ -539,48 +496,6 @@ describe("shouldRecedeSidebarThread", () => {
         isSelected: false,
       }),
     ).toBe(false);
-  });
-});
-
-describe("getSidebarThreadIdsToPrewarm", () => {
-  it("returns only the first visible thread ids up to the prewarm limit", () => {
-    expect(getSidebarThreadIdsToPrewarm(["t1", "t2", "t3"], 2)).toEqual(["t1", "t2"]);
-  });
-
-  it("returns all visible thread ids when they fit within the limit", () => {
-    expect(getSidebarThreadIdsToPrewarm(["t1", "t2"], 10)).toEqual(["t1", "t2"]);
-  });
-
-  it("returns no thread ids when the limit is zero", () => {
-    expect(getSidebarThreadIdsToPrewarm(["t1", "t2"], 0)).toEqual([]);
-  });
-});
-
-describe("shouldClearThreadSelectionOnMouseDown", () => {
-  it("preserves selection for thread items", () => {
-    const child = {
-      closest: (selector: string) =>
-        selector.includes("[data-thread-item]") ? ({} as Element) : null,
-    } as unknown as HTMLElement;
-
-    expect(shouldClearThreadSelectionOnMouseDown(child)).toBe(false);
-  });
-
-  it("preserves selection for thread list toggle controls", () => {
-    const selectionSafe = {
-      closest: (selector: string) =>
-        selector.includes("[data-thread-selection-safe]") ? ({} as Element) : null,
-    } as unknown as HTMLElement;
-
-    expect(shouldClearThreadSelectionOnMouseDown(selectionSafe)).toBe(false);
-  });
-
-  it("clears selection for unrelated sidebar clicks", () => {
-    const unrelated = {
-      closest: () => null,
-    } as unknown as HTMLElement;
-
-    expect(shouldClearThreadSelectionOnMouseDown(unrelated)).toBe(true);
   });
 });
 
@@ -2088,56 +2003,6 @@ describe("resolveThreadStatusPill", () => {
   });
 });
 
-describe("resolveProjectStatusIndicator", () => {
-  it("returns null when no threads have a notable status", () => {
-    expect(resolveProjectStatusIndicator([null, null])).toBeNull();
-  });
-
-  it("surfaces the highest-priority actionable state across project threads", () => {
-    expect(
-      resolveProjectStatusIndicator([
-        {
-          label: "Completed",
-          colorClass: "text-emerald-600",
-          dotClass: "bg-emerald-500",
-          pulse: false,
-        },
-        {
-          label: "Pending Approval",
-          colorClass: "text-amber-600",
-          dotClass: "bg-amber-500",
-          pulse: false,
-        },
-        {
-          label: "Working",
-          colorClass: "text-sky-600",
-          dotClass: "bg-sky-500",
-          pulse: true,
-        },
-      ]),
-    ).toMatchObject({ label: "Pending Approval", dotClass: "bg-amber-500" });
-  });
-
-  it("prefers plan-ready over completed when no stronger action is needed", () => {
-    expect(
-      resolveProjectStatusIndicator([
-        {
-          label: "Completed",
-          colorClass: "text-emerald-600",
-          dotClass: "bg-emerald-500",
-          pulse: false,
-        },
-        {
-          label: "Plan Ready",
-          colorClass: "text-violet-600",
-          dotClass: "bg-violet-500",
-          pulse: false,
-        },
-      ]),
-    ).toMatchObject({ label: "Plan Ready", dotClass: "bg-violet-500" });
-  });
-});
-
 function makeProject(overrides: Partial<Project> = {}): Project {
   const { defaultModelSelection, ...rest } = overrides;
   return {
@@ -2190,6 +2055,7 @@ function makeThread(overrides: ThreadFixtureOverrides = {}): Thread {
 describe("getFallbackThreadIdAfterDelete", () => {
   it("returns the top remaining thread in the deleted thread's project sidebar order", () => {
     const fallbackThreadId = getFallbackThreadIdAfterDelete({
+      now: "2026-06-20T12:00:00.000Z",
       threads: [
         makeThread({
           id: ThreadId.make("thread-oldest"),
@@ -2551,3 +2417,21 @@ describe("monitoring completion prominence", () => {
     expect(resolveThreadStatusPill({ thread })).toMatchObject({ label: "Waiting" });
   });
 });
+
+function sortProjectsForSidebar<
+  T extends Parameters<typeof sortScopedProjectsForSidebar>[0][number],
+  U extends Omit<
+    Parameters<typeof sortScopedProjectsForSidebar>[1][number],
+    "environmentId" | "archivedAt"
+  >,
+>(
+  projects: readonly T[],
+  threads: readonly U[],
+  order: Parameters<typeof sortScopedProjectsForSidebar>[2],
+): T[] {
+  return sortScopedProjectsForSidebar(
+    projects,
+    threads.map((thread) => ({ ...thread, environmentId: localEnvironmentId, archivedAt: null })),
+    order,
+  );
+}

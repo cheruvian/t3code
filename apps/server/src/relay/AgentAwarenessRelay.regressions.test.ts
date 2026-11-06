@@ -1,3 +1,4 @@
+import * as EnvironmentKeys from "../cloud/environmentKeys.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
@@ -138,6 +139,24 @@ const makeTestRelay = Effect.fnUntraced(function* (
   const catchUp = { shellSnapshotReads: 0 };
   const threads = ThreadManagementService.ThreadManagementService.of({
     getThreadShellForEvent: unused,
+    listAppOwnedChildThreadIds: unused,
+    countThreads: unused,
+    listActiveShellIndex: () => Effect.succeed([]),
+    getThreadTitles: unused,
+    forceStopThread: unused,
+    getAgentAwarenessSnapshot: (threadId) =>
+      threadId === undefined
+        ? Effect.sync(() => {
+            catchUp.shellSnapshotReads += 1;
+            return { snapshotSequence: 1, threads: [] };
+          })
+        : Effect.sync(() => shellReads.push(threadId)).pipe(
+            Effect.andThen(options.readShell?.(threadId) ?? Ref.get(currentShell)),
+            Effect.map((thread) => ({
+              snapshotSequence: 1,
+              threads: thread === null ? [] : [thread],
+            })),
+          ),
     listActiveSubagentThreadIds: unused,
     listOlderSettledThreads: unused,
     awaitBackgroundTasks: unused,
@@ -167,7 +186,6 @@ const makeTestRelay = Effect.fnUntraced(function* (
     getThreadTranscript: unused,
     getThreadSnapshotWindow: unused,
     getProjectThreadRecords: () => Effect.die("unused project record read"),
-    getProjectThread: unused,
     listProjectThreads: unused,
     sendToThread: unused,
     assertProviderInstanceEnabled: unused,
@@ -215,6 +233,7 @@ const makeTestRelay = Effect.fnUntraced(function* (
     { preconnect: () => {} },
   );
   const relay = yield* AgentAwarenessRelay.make.pipe(
+    Effect.provide(EnvironmentKeys.layer),
     Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
     Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
     Effect.provideService(ServerEnvironment.ServerEnvironment, {
@@ -233,6 +252,7 @@ const makeTestRelay = Effect.fnUntraced(function* (
       snapshot: Effect.succeed({ projects: [] } as never),
       getShell: unused,
       listShells: unused,
+      listPage: unused,
       getById: () =>
         Effect.succeedSome({
           id: PROJECT_ID,

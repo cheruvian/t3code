@@ -1,8 +1,11 @@
+import * as ServerDrainCoordinator from "./serverDrainCoordinator.ts";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import {
   CommandId,
   DEFAULT_MODEL,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_SERVER_SETTINGS,
+  isListedThreadLineage,
   type ModelSelection,
   type Project,
   ProjectId,
@@ -13,7 +16,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -180,11 +183,11 @@ const recordStartupHeartbeat = Effect.gen(function* () {
 
   const { threadCount, projectCount } = yield* Effect.all({
     projects: projects.snapshot,
-    threads: threads.getShellSnapshot(),
+    threadCount: threads.countThreads(),
   }).pipe(
-    Effect.map(({ projects: projectSnapshot, threads: shellSnapshot }) => ({
+    Effect.map(({ projects: projectSnapshot, threadCount }) => ({
       projectCount: projectSnapshot.projects.length,
-      threadCount: shellSnapshot.threads.length + shellSnapshot.archivedThreads.length,
+      threadCount,
     })),
     Effect.catch((cause) =>
       Effect.logWarning("failed to gather V2 startup counts for telemetry", {
@@ -289,19 +292,19 @@ const resolveWelcomeBase = Effect.gen(function* () {
 const ensureT3CodeMetaprojectRegistered = Effect.fn("ensureT3CodeMetaprojectRegistered")(function* (
   workspaceRoot: string,
 ) {
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const projects = yield* ProjectService.ProjectService;
   yield* projects.bootstrap({
-    commandId: CommandId.make(yield* crypto.randomUUIDv4()),
-    projectId: ProjectId.make(yield* crypto.randomUUIDv4()),
+    commandId: CommandId.make(yield* crypto.uuidV4()),
+    projectId: ProjectId.make(yield* crypto.uuidV4()),
     title: T3_CHAT_HELPER_TITLE,
     workspaceRoot,
   });
 });
 
 const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
-  const randomUUID = crypto.randomUUIDv4();
+  const random = yield* SecureRandom.SecureRandom;
+  const randomUUID = random.uuidV4();
   const serverConfig = yield* ServerConfig.ServerConfig;
   const projects = yield* ProjectService.ProjectService;
   const threads = yield* ThreadManagement.ThreadManagementService;
@@ -319,10 +322,8 @@ const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
       title: path.basename(serverConfig.cwd) || "project",
       workspaceRoot: serverConfig.cwd,
     });
-    const shell = yield* threads.getShellSnapshot();
-    const existingThread = shell.threads.find(
-      (thread) =>
-        thread.projectId === project.id && thread.lineage.relationshipToParent !== "subagent",
+    const existingThread = (yield* threads.listActiveShellIndex()).find(
+      (thread) => thread.projectId === project.id && isListedThreadLineage(thread.lineage),
     );
     if (existingThread === undefined) {
       const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -492,15 +493,18 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
   const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
 
+  const drain = yield* Effect.serviceOption(ServerDrainCoordinator.ServerDrainCoordinator);
   const commandGate = yield* makeCommandGate;
   const httpListening = yield* Deferred.make<void>();
   const effectWorkerFiber = yield* Ref.make<Fiber.Fiber<void, never> | null>(null);
 
   yield* Effect.addFinalizer(() =>
     Effect.gen(function* () {
+      if (drain._tag === "Some")
+        yield* drain.value.drainForProcessExit.pipe(Effect.ignoreCause({ log: true }));
       yield* commandGate.failCommandReady(
         new ServerRuntimeStartupError({
           mode: serverConfig.mode,
@@ -600,7 +604,9 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       autoBootstrap: (serverConfig.autoBootstrapProjectFromCwd
         ? runStartupPhase(
             "welcome.autobootstrap",
-            resolveAutoBootstrapWelcomeTargets.pipe(Effect.provideService(Crypto.Crypto, crypto)),
+            resolveAutoBootstrapWelcomeTargets.pipe(
+              Effect.provideService(SecureRandom.SecureRandom, random),
+            ),
           )
         : Effect.succeed({})
       ).pipe(Effect.map((targets): AutoBootstrapWelcomeTargets => targets)),

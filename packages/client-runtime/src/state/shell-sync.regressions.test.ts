@@ -57,7 +57,7 @@ function session(client: WsRpcProtocolClient): RpcSession.RpcSession {
   return {
     client,
     initialConfig: Effect.succeed({ shellResumeCompletionMarker: true } as never),
-    subscribeServerConfig: (input) => client.subscribeServerConfig(input),
+    subscribeServerConfig: (input) => client.subscribeServerConfig(input ?? {}),
     ready: Effect.void,
     probe: Effect.void,
     inboundFrames: Effect.succeed(0),
@@ -602,7 +602,14 @@ describe("environment shell synchronization", () => {
       const sendSnapshot = Effect.fn(function* (sequence: number) {
         yield* Queue.offer(events, {
           kind: "snapshot",
-          snapshot: { ...LIVE_SHELL_SNAPSHOT, snapshotSequence: sequence },
+          snapshot: {
+            ...LIVE_SHELL_SNAPSHOT,
+            snapshotSequence: sequence,
+            threads: LIVE_SHELL_SNAPSHOT.threads.map((thread) => ({
+              ...thread,
+              title: `Update ${sequence}`,
+            })),
+          },
         });
         yield* SubscriptionRef.changes(shellState).pipe(
           Stream.filter(

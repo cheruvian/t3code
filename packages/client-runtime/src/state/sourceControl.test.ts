@@ -46,7 +46,6 @@ const PUBLISH_RESULT: SourceControlPublishRepositoryResult = {
   remoteName: "origin",
   remoteUrl: "git@github.com:t3tools/t3code.git",
   branch: "main",
-  upstreamBranch: "origin/main",
   status: "pushed",
 };
 
@@ -54,7 +53,7 @@ function session(client: WsRpcProtocolClient): RpcSession {
   return {
     client,
     initialConfig: Effect.never,
-    subscribeServerConfig: (input) => client.subscribeServerConfig(input),
+    subscribeServerConfig: (input) => client.subscribeServerConfig(input ?? {}),
     ready: Effect.void,
     probe: Effect.void,
     inboundFrames: Effect.succeed(0),

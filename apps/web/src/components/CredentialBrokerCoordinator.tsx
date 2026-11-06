@@ -125,7 +125,7 @@ function EnvironmentBroker({
       if (input.type === "unlock" || input.type === "lock") setAddingAccount(false);
     }
   };
-  // oxlint-disable-next-line t3code/react-effect-budget -- Publish presenter visibility to the credential broker.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Publish presenter visibility to the credential broker.
   useEffect(() => {
     if (!state?.status || !canAct) return;
     const visible = () => {
@@ -152,7 +152,7 @@ function EnvironmentBroker({
     state?.requests.filter((r) => ["running", "preparing", "saving"].includes(r.state)) ?? [];
   const hasRequests = pending.length + active.length > 0;
   const locked = state?.status === "locked" || state?.status === "unlocking";
-  // oxlint-disable-next-line t3code/react-effect-budget -- Report dialog ownership across environment presenters.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Report dialog ownership across environment presenters.
   useEffect(() => {
     report(environmentId, open);
     return () => report(environmentId, false);
@@ -546,7 +546,7 @@ function ApprovalCard({
   const submit = async (choice: "deny" | "once" | "always") => {
     if (disabled || submitting) return;
     setSubmitting(true);
-    try {
+    await (async () => {
       await act({
         type: "decide",
         requestId: request.requestId,
@@ -556,9 +556,9 @@ function ApprovalCard({
         ...(choice !== "deny" && saveHost ? { saveHost: true } : {}),
         ...(choice !== "deny" && selection ? { candidateId: selection } : {}),
       });
-    } finally {
+    })().finally(() => {
       setSubmitting(false);
-    }
+    });
   };
   return (
     <section className="space-y-5">
@@ -909,7 +909,7 @@ function AutomaticNotice({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const acknowledged = useRef(false);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Acknowledge notices only after they become visible.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Acknowledge notices only after they become visible.
   useEffect(() => {
     if (!ref.current || disabled || acknowledged.current) return;
     const observer = new IntersectionObserver(

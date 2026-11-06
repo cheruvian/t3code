@@ -1,3 +1,7 @@
+import ChatMarkdown from "../ChatMarkdown";
+import { V2ItemInspector } from "./V2ItemInspector";
+import { isV2LifecycleItem } from "./V2LifecycleRow";
+import { v2EventPresentation } from "./TimelineV2EventRow.logic";
 import { WorkLogBlock } from "./WorkLog";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useAtomValue } from "@effect/atom-react";
@@ -7,20 +11,14 @@ import {
   summarizeSubagentStatuses,
 } from "@t3tools/client-runtime/state/subagent-display";
 import { memo, use, useState } from "react";
-import ChatMarkdown from "../ChatMarkdown";
 import { ChevronDownIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
-import { V2ItemInspector } from "./V2ItemInspector";
 import { Collapsible, CollapsibleTrigger, CollapsiblePanel } from "../ui/collapsible";
-import {
-  isV2LifecycleItem,
-  EnvironmentSubagentAvatar,
-  SubagentElapsed,
-  V2LifecycleRow,
-} from "./V2LifecycleRow";
+import { EnvironmentSubagentAvatar, SubagentElapsed, V2LifecycleRow } from "./V2LifecycleRow";
+import { LinkRequestCard } from "./LinkRequestCard";
 import { SecretRequestCard } from "./SecretRequestCard";
 import { TimelineRowCtx, type TimelineRow } from "./timelineRowContext";
-import { v2EventPresentation, subagentGroupTiming } from "./TimelineV2EventRow.logic";
+import { subagentGroupTiming } from "./TimelineV2EventRow.logic";
 
 export function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event" }> }) {
   const ctx = use(TimelineRowCtx);
@@ -37,14 +35,20 @@ export function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: 
       />
     );
   }
+  if (item.type === "link_request")
+    return (
+      <LinkRequestCard
+        environmentId={ctx.activeThreadEnvironmentId}
+        item={item}
+        visibility={visibility}
+      />
+    );
   if (isV2LifecycleItem(item)) {
     return (
       <V2LifecycleRow
         environmentId={ctx.activeThreadEnvironmentId}
         item={item}
         resourceSummary={row.resourceSummary}
-        createdAt={row.createdAt}
-        timestampFormat={ctx.timestampFormat}
         runs={ctx.runs}
         onOpenThread={ctx.onOpenThread}
       />
@@ -123,7 +127,7 @@ export function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: 
               cwd={ctx.markdownCwd}
               workspaceRoot={ctx.workspaceRoot}
               onOpenThread={ctx.onOpenThread}
-              onOpenTurnDiff={ctx.onOpenTurnDiff}
+              onOpenToolDiff={ctx.onOpenToolDiff}
               onRollbackCheckpoint={ctx.onRollbackCheckpoint}
               onImageExpand={ctx.onImageExpand}
               source={ctx.turnItemSource}
@@ -199,7 +203,7 @@ export function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: 
               cwd={ctx.markdownCwd}
               workspaceRoot={ctx.workspaceRoot}
               onOpenThread={ctx.onOpenThread}
-              onOpenTurnDiff={ctx.onOpenTurnDiff}
+              onOpenToolDiff={ctx.onOpenToolDiff}
               onRollbackCheckpoint={ctx.onRollbackCheckpoint}
               onImageExpand={ctx.onImageExpand}
               source={ctx.turnItemSource}
@@ -269,6 +273,7 @@ const V2SubagentGroup = memo(function V2SubagentGroup({
                 environmentId={ctx.activeThreadEnvironmentId}
                 providerInstanceId={item.providerInstanceId}
                 driver={item.driver}
+                remote={item.remoteChild}
                 status={agents.length === 1 ? status : undefined}
               />
             ))}
@@ -309,8 +314,6 @@ const V2SubagentGroup = memo(function V2SubagentGroup({
                   environmentId={ctx.activeThreadEnvironmentId}
                   key={item.id}
                   item={item}
-                  createdAt={row.createdAt}
-                  timestampFormat={ctx.timestampFormat}
                   runs={ctx.runs}
                   onOpenThread={ctx.onOpenThread}
                 />

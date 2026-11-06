@@ -64,6 +64,8 @@ export const ApplicationProjectMetaUpdatedPayload = Schema.Struct({
   disabledInheritedScriptIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   resourceLocks: Schema.optional(Schema.Array(ProjectResourceLock)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
+  pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   updatedAt: IsoDateTime,
 });
 export type ApplicationProjectMetaUpdatedPayload = typeof ApplicationProjectMetaUpdatedPayload.Type;

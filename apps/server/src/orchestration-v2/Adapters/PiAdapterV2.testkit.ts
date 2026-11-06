@@ -1,24 +1,13 @@
-import * as ServerSettings from "../../serverSettings.ts";
 /**
- * Pi RPC replay: swaps the `ChildProcessSpawner` that `PiAdapterV2` uses to
- * spawn `pi --mode rpc` for one that answers from a recorded transcript. The
- * real adapter and `PiRpc` framing run unchanged against recorded Pi output.
- *
- * Transcript entries are stdio records. `expect_outbound` is one JSONL record
- * the adapter wrote to stdin and `emit_inbound` is one record Pi wrote to
- * stdout. Pi echoes the adapter's request ids, so a recorded id is rebound to
- * the id the replaying adapter actually sent. `<any>` in an outbound frame
- * matches any value.
- *
- * Every spawned Pi process begins with a synthetic `process_start` outbound
- * record carrying its argv. Records of the Nth process (N > 1) carry an `@pN`
- * label suffix, because a native fork runs a short-lived `--fork` process
- * next to the session process.
+ * Replay real PiRpc framing against stdio transcripts, rebinding recorded request IDs.
+ * <any> accepts any outbound value; process_start records argv.
+ * @pN suffixes identify additional processes such as native forks.
  */
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ProviderReplayEntry,
-  type ProviderInstanceEnvironment,
+  ProviderInstanceId,
+  type ResolvedProviderInstanceEnvironment,
   type ProviderReplayTranscript,
   type ProviderReplayEntry as ProviderReplayEntryType,
 } from "@t3tools/contracts";
@@ -396,19 +385,21 @@ export function layer<E, R>(input: {
   readonly spawner: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner, E, R>;
   readonly binaryPath: string;
   readonly launchArgs: string;
-  readonly environment?: ProviderInstanceEnvironment;
+  readonly environment?: ResolvedProviderInstanceEnvironment;
 }) {
-  return ProviderAdapterRegistry.layerFromDrivers({
-    drivers: [PiAdapterV2Driver],
-    configMap: {
-      [PI_PROVIDER]: {
-        driver: PI_PROVIDER,
-        enabled: true,
-        config: { binaryPath: input.binaryPath, launchArgs: input.launchArgs },
-        ...(input.environment === undefined ? {} : { environment: input.environment }),
+  return ProviderAdapterRegistry.layerFromAdaptersEffect(
+    PiAdapterV2Driver.create({
+      instanceId: ProviderInstanceId.make(PI_PROVIDER),
+      environment: input.environment ?? [],
+      displayName: undefined,
+      enabled: true,
+      config: {
+        ...PiAdapterV2Driver.defaultConfig(),
+        binaryPath: input.binaryPath,
+        launchArgs: input.launchArgs,
       },
-    },
-  }).pipe(
+    }).pipe(Effect.map((adapter) => [adapter])),
+  ).pipe(
     Layer.provide(input.spawner),
     Layer.provide(
       Layer.mergeAll(

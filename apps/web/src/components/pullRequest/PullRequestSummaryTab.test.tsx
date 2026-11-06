@@ -5,12 +5,16 @@ import {
   type PullRequestDetailView,
 } from "@t3tools/contracts";
 
-import { act, type ReactNode } from "react";
-import { create, type ReactTestRenderer } from "react-test-renderer";
+import { type ReactNode } from "react";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
-vi.mock("~/state/pullRequests", () => ({ pullRequestEnvironment: {} }));
+vi.mock("~/state/pullRequests", async () => {
+  const { Atom } = await import("effect/reactivity");
+  const allowed = Atom.make(true);
+  return { pullRequestEnvironment: { update: { permissionAtom: () => allowed } } };
+});
 vi.mock("~/browser/useOpenLink", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("./PullRequestMarkdown", () => ({
   PullRequestMarkdown: ({ text }: { text: string }) => <p>{text}</p>,
@@ -85,7 +89,6 @@ const detail: PullRequestDetailView = {
 
 let renderer: ReactTestRenderer;
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const store = new Map<string, string>();
   vi.stubGlobal(
     "window",

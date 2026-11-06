@@ -44,7 +44,15 @@ vi.mock("../../state/server", async () => {
       },
       refreshProviders: {
         label: "refresh",
-        run: (_registry: unknown, input: unknown) => refreshProviders(input),
+        run: async (
+          registry: import("effect/reactivity").AtomRegistry.AtomRegistry,
+          input: { environmentId: string },
+        ) => {
+          const result = await refreshProviders(input);
+          const atom = providerAtoms.get(input.environmentId);
+          if (result._tag === "Success" && atom) registry.set(atom, result.value.providers);
+          return result;
+        },
       },
     },
   };

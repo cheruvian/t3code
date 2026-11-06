@@ -3,7 +3,7 @@ import {
   CredentialExecution,
   OrchestratorMcpFailure,
 } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { Tool, Toolkit } from "effect/ai";
 import * as CredentialBroker from "../../../secrets/CredentialBroker.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -19,7 +19,7 @@ export const CredentialsToolkit = Toolkit.make(
     failure: OrchestratorMcpFailure,
     failureMode: "return",
     dependencies: [
-      Crypto.Crypto,
+      SecureRandom.SecureRandom,
       CredentialBroker.CredentialBroker,
       McpInvocationContext.McpInvocationContext,
       ThreadManagementService.ThreadManagementService,

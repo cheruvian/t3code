@@ -135,7 +135,7 @@ const layerWakeups = Wakeups.layer({
       Stream.callback<"application-active" | "application-active-long">((queue) =>
         Effect.acquireRelease(
           Effect.sync(() => {
-            const client = clientMetadata();
+            const client = currentClientMetadata();
             const isIosWeb = client.surface === "web" && client.os === "iOS";
             let hiddenAtMs: number | null = null;
             const listener = () => {
@@ -168,7 +168,7 @@ const layerWakeups = Wakeups.layer({
   ),
 });
 
-function clientMetadata() {
+export function currentClientMetadata() {
   return clientPresentationMetadata({
     appVersion: APP_VERSION,
     hosted: isHostedStaticApp(),
@@ -330,19 +330,21 @@ const ANALYTICS_DEVICE_ID_KEY = "t3code:analytics-device-id";
 
 // Lives as long as this browser profile's site data. Storage can be blocked, which only drops the id.
 const analyticsDevice = {
-  id: Effect.try(() => {
-    const existing = window.localStorage.getItem(ANALYTICS_DEVICE_ID_KEY);
-    if (existing) return existing;
-    const created = randomUUID();
-    window.localStorage.setItem(ANALYTICS_DEVICE_ID_KEY, created);
-    return created;
-  }).pipe(Effect.option),
+  id: Effect.sync(
+    Option.liftThrowable(() => {
+      const existing = window.localStorage.getItem(ANALYTICS_DEVICE_ID_KEY);
+      if (existing) return existing;
+      const created = randomUUID();
+      window.localStorage.setItem(ANALYTICS_DEVICE_ID_KEY, created);
+      return created;
+    }),
+  ),
 };
 
 const layerCapabilities = Layer.effectContext(
   Effect.sync(() => {
     const presentation = ClientCapabilities.ClientPresentation.of({
-      metadata: clientMetadata(),
+      metadata: currentClientMetadata(),
     });
     const cloudSession = ClientCapabilities.CloudSession.of({
       identity: Effect.sync(() =>
@@ -479,7 +481,7 @@ const loadSecondaryConnectionRegistration = Effect.fn(
     httpBaseUrl,
     credential: entry.bootstrapToken,
     scopes: AuthStandardClientScopes,
-    clientMetadata: clientMetadata(),
+    clientMetadata: currentClientMetadata(),
   }).pipe(Effect.mapError(mapRemoteEnvironmentError));
   // Desktop operations need the pool backend id to reach the owning instance; RPC uses the environment id.
   const connectionId = desktopLocalConnectionId(entry.id);

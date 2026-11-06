@@ -1,3 +1,5 @@
+import * as ManagedPolicy from "./policy/ManagedPolicy.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
@@ -20,12 +22,13 @@ vi.mock("./NodeFileWatch.ts", async () => {
 });
 
 const layer = ServerSettings.layer.pipe(
+  Layer.provide(ManagedPolicy.layerTest()),
   Layer.provide(ServerSecretStore.layer),
   Layer.provideMerge(Layer.fresh(Sqlite.layerMemory)),
   Layer.provideMerge(
     ServerConfig.layerTest(process.cwd(), { prefix: "t3-settings-missed-event-" }),
   ),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 it.effect("reloads externally replaced settings when the native watcher emits no events", () =>

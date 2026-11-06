@@ -1,5 +1,5 @@
 import { useStableCallback } from "../../hooks/useStableCallback";
-import { type MessageId, type RunId } from "@t3tools/contracts";
+import type { MessageId, RunId } from "@t3tools/contracts";
 import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
 import { Debouncer } from "@tanstack/react-pacer";
 import {
@@ -9,15 +9,16 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { type LegendListRef } from "@legendapp/list/react";
+import type { LegendListRef } from "@legendapp/list/react";
 import {
   CHAT_TIMELINE_ANCHOR_OFFSET,
   timelineContentOverflowsViewport,
   readTimelinePosition,
   observeTimelineRun,
+  scheduleAnchoredTimelineFollow,
   type TimelineRunObservation,
 } from "./timelineScrollAnchoring";
-import { type ChatComposerHandle } from "./ChatComposer";
+import type { ChatComposerHandle } from "./ChatComposer";
 import { createPageScrollController, type PageScrollKey } from "./pageScrollController";
 import {
   FOLLOWING,
@@ -148,7 +149,7 @@ function sameRunObservation(
 
 interface TimelineFollowInput {
   readonly legendListRef: RefObject<LegendListRef | null>;
-  readonly composerRef: RefObject<ChatComposerHandle | null>;
+  readonly composerRef?: RefObject<ChatComposerHandle | null>;
   readonly composerTimelineInset: number;
   readonly routeThreadKey: string;
   readonly activeThreadKey: string | null;
@@ -311,7 +312,7 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   );
   const handlePageScrollStart = useStableCallback((key: PageScrollKey) => {
     visitScroll().intent = key === "PageUp" ? "away-from-end" : "toward-end";
-    composerRef.current?.collapseForTimelineScrollKey(key);
+    composerRef?.current?.collapseForTimelineScrollKey(key);
     if ((key === "PageUp" && timelineRealContentOverflowsViewport()) || !isTimelineAtLogicalEnd()) {
       // Through the viewport, so a running position restore stops too.
       viewportRef.current?.navigate({ releasesFollow: true });
@@ -358,7 +359,7 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   // The list does not follow footer layout, so the resting composer cannot scroll it. Growth
   // above the composer (a new notice) would cover the last rows instead.
   const followedInsetRef = useRef(composerTimelineInset);
-  // oxlint-disable-next-line t3code/react-effect-budget -- scrolls the list after its bottom inset grows
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the list after its bottom inset grows
   useLayoutEffect(() => {
     const grew = composerTimelineInset > followedInsetRef.current;
     followedInsetRef.current = composerTimelineInset;
@@ -366,7 +367,7 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   }, [composerTimelineInset, readCurrentFollow, scrollToEndStable]);
 
   const handleNavigation = (navigation: TimelineNavigation) => {
-    const composer = composerRef.current;
+    const composer = composerRef?.current;
     const awayFromEnd = () => resolveTimelineIsAtEnd(legendListRef.current?.getState()) === false;
     const releases = navigationReleasesFollow(navigation, {
       contentScrollsUp: timelineRealContentOverflowsViewport,
@@ -507,7 +508,7 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   const onTimelineAnchorSizeChangedStable = useStableCallback(onTimelineAnchorSizeChanged);
 
   const onToolOutputCollapsedAtEnd = () => {
-    composerRef.current?.restoreAfterTimelineReachedEnd();
+    composerRef?.current?.restoreAfterTimelineReachedEnd();
   };
   const onToolOutputCollapsedAtEndStable = useStableCallback(onToolOutputCollapsedAtEnd);
   // The list ignores footer layout, so a new queued turn or status line there would land
@@ -530,7 +531,7 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     if (after === before) return;
     if (after.mode === "following") {
       if (scroll.intent === "toward-end") {
-        composerRef.current?.restoreAfterTimelineReachedEnd();
+        composerRef?.current?.restoreAfterTimelineReachedEnd();
       }
       setTimelineAnchor(releaseChatTimelineAnchor);
       scroll.showScrollDebouncer.cancel();
@@ -552,6 +553,7 @@ export function useTimelineFollow(input: TimelineFollowInput) {
   // the anchored end space; the trigger is streamed thread data. A
   // totalSize listener cannot replace it: the anchored end space can already
   // be 0, so dropping it changes no size and no list event fires.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the timeline to the end after the commit that drops anchored end space
   useLayoutEffect(() => {
     if (timelineAnchorMessageId === null || !timelineLiveFollowEnabled) return;
     if (
@@ -570,6 +572,40 @@ export function useTimelineFollow(input: TimelineFollowInput) {
     runningTurnHasReasoning,
     scrollToEndStable,
     timelineAnchorMessageId,
+    timelineEntries,
+    timelineLiveFollowEnabled,
+  ]);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- follows streamed text growth while native end-follow is disabled by anchor spacing
+  useLayoutEffect(() => {
+    if (timelineAnchorMessageId === null || !timelineLiveFollowEnabled) return;
+    const messageId = timelineAnchorMessageId;
+    return scheduleAnchoredTimelineFollow({
+      shouldFollow: () =>
+        readCurrentFollow().mode === "following" &&
+        visitScrollRef.current?.settledAnchor === messageId &&
+        listShowsMessage(legendListRef.current, messageId),
+      getMeasurement: () => {
+        const state = legendListRef.current?.getState();
+        if (!state) return null;
+        const rows = state.data as ReadonlyArray<MessagesTimelineRow>;
+        const anchorIndex = rows.findIndex(
+          (row) => row.kind === "message" && row.message.id === messageId,
+        );
+        return anchorIndex < 0 ? null : { state, anchorIndex };
+      },
+      composerOverlayHeight: composerTimelineInset,
+      anchorOffset: CHAT_LIST_ANCHOR_OFFSET,
+      scrollToOffset: (offset) => {
+        void legendListRef.current?.scrollToOffset({ offset, animated: false });
+      },
+    });
+  }, [
+    composerTimelineInset,
+    legendListRef,
+    readCurrentFollow,
+    timelineAnchorMessageId,
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Streamed text growth changes measured height without changing the anchor ID.
     timelineEntries,
     timelineLiveFollowEnabled,
   ]);

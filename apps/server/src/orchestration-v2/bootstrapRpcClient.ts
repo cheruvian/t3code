@@ -1,3 +1,4 @@
+import * as Redacted from "effect/Redacted";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
   ORCHESTRATION_PROTOCOL_QUERY_PARAM,
@@ -34,7 +35,7 @@ export const withEnvironmentRpc = Effect.fn("withEnvironmentRpc")(function* <A, 
   const url = new URL(input.origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = "/ws";
-  url.searchParams.set("wsTicket", ticket.ticket);
+  url.searchParams.set("wsTicket", Redacted.value(ticket.ticket));
   url.searchParams.set(ORCHESTRATION_PROTOCOL_QUERY_PARAM, String(ORCHESTRATION_PROTOCOL_VERSION));
   const protocolLayer = RpcClient.layerProtocolSocket().pipe(
     Layer.provide(

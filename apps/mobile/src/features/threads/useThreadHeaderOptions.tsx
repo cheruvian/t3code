@@ -1,6 +1,6 @@
+import { useMemo } from "react";
 import { useWorkspaceSidebarHeaderItem } from "../layout/useWorkspaceSidebarHeaderItem";
 import { StackActions, useNavigation } from "@react-navigation/native";
-import { useMemo } from "react";
 import { threadHeaderAppearance } from "./thread-header-appearance";
 import { isDuoDevice } from "../../lib/device-type";
 import type { AppNativeStackNavigationOptions } from "../../native/StackHeader";
@@ -56,7 +56,7 @@ export function useThreadHeaderOptions(props: {
             }),
           ]
         : []),
-      sidebarHeaderItem,
+      ...(sidebarHeaderItem ? [sidebarHeaderItem] : []),
       ...(!usesDuoHeader && !props.draft
         ? [
             withNativeGlassHeaderItem({
@@ -76,18 +76,15 @@ export function useThreadHeaderOptions(props: {
   // native back button does not render. Provide an explicit Home escape for
   // that case; when history exists the native back button is used instead.
   const canGoBack = navigation.canGoBack();
-  const compactHomeHeaderItems = useMemo<NativeHeaderItems>(
-    () => [
-      withNativeGlassHeaderItem({
-        accessibilityLabel: "Go to threads list",
-        icon: { name: "list.bullet", type: "sfSymbol" as const },
-        identifier: "thread-left-home",
-        onPress: () => navigation.dispatch(StackActions.replace("Home")),
-        type: "button" as const,
-      }),
-    ],
-    [navigation],
-  );
+  const compactHomeHeaderItems: NativeHeaderItems = [
+    withNativeGlassHeaderItem({
+      accessibilityLabel: "Go to threads list",
+      icon: { name: "list.bullet", type: "sfSymbol" as const },
+      identifier: "thread-left-home",
+      onPress: () => navigation.dispatch(StackActions.replace("Home")),
+      type: "button" as const,
+    }),
+  ];
 
   const options: AppNativeStackNavigationOptions = {
     ...threadHeaderAppearance(props.usesNativeHeaderGlass),
@@ -126,7 +123,6 @@ export function useThreadHeaderOptions(props: {
       gitStatus?.refName,
       gitStatus?.pr?.url,
     ],
-    sidebar: false,
     fallback:
       !layout.usesSplitView && !props.usesNativeHeaderGlass ? (
         <ThreadGitControls {...props.gitControls} showActionControls />

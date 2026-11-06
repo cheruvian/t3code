@@ -43,47 +43,55 @@ function EnvironmentPushSettings({
   const change = async () => {
     setBusy(true);
     setMessage(null);
-    try {
-      if (enabled) {
-        const subscription = await getWebPushSubscription(environmentId);
-        if (subscription) {
-          const result = await update({
-            environmentId,
-            input: { type: "unsubscribe", endpoint: subscription.endpoint },
-          });
+    await (async () => {
+      try {
+        if (enabled) {
+          const subscription = await getWebPushSubscription(environmentId);
+          if (subscription) {
+            const result = await update({
+              environmentId,
+              input: { type: "unsubscribe", endpoint: subscription.endpoint },
+            });
+            if (!AsyncResult.isSuccess(result))
+              failPushSettings(
+                new Error("Could not disable push on this environment. Reconnect and try again."),
+              );
+            setWebPushEnabled(environmentId, false);
+            await subscription.unsubscribe();
+          } else setWebPushEnabled(environmentId, false);
+        } else {
+          // Permission must be requested directly from the button gesture on iOS.
+          if ((await Notification.requestPermission()) !== "granted") {
+            failPushSettings(
+              new Error("Allow notifications in browser or system settings, then try again."),
+            );
+          }
+          const result = await config({ environmentId, input: {} });
           if (!AsyncResult.isSuccess(result))
-            throw new Error("Could not disable push on this environment. Reconnect and try again.");
-          setWebPushEnabled(environmentId, false);
-          await subscription.unsubscribe();
-        } else setWebPushEnabled(environmentId, false);
-      } else {
-        // Permission must be requested directly from the button gesture on iOS.
-        if ((await Notification.requestPermission()) !== "granted") {
-          throw new Error("Allow notifications in browser or system settings, then try again.");
+            failPushSettings(new Error("Could not connect to this environment's push service."));
+          const subscription = await subscribeWebPush(environmentId, result.value.publicKey);
+          const saved = await update({
+            environmentId,
+            input: {
+              type: "subscribe",
+              subscription: serializeWebPushSubscription(subscription),
+              notificationMode,
+            },
+          });
+          if (!AsyncResult.isSuccess(saved))
+            failPushSettings(
+              new Error("Could not enable push on this environment. Reconnect and try again."),
+            );
+          setWebPushEnabled(environmentId, true);
         }
-        const result = await config({ environmentId, input: {} });
-        if (!AsyncResult.isSuccess(result))
-          throw new Error("Could not connect to this environment's push service.");
-        const subscription = await subscribeWebPush(environmentId, result.value.publicKey);
-        const saved = await update({
-          environmentId,
-          input: {
-            type: "subscribe",
-            subscription: serializeWebPushSubscription(subscription),
-            notificationMode,
-          },
-        });
-        if (!AsyncResult.isSuccess(saved))
-          throw new Error("Could not enable push on this environment. Reconnect and try again.");
-        setWebPushEnabled(environmentId, true);
+      } catch (error) {
+        setMessage(
+          error instanceof Error ? error.message : "Could not change background push settings.",
+        );
       }
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Could not change background push settings.",
-      );
-    } finally {
+    })().finally(() => {
       setBusy(false);
-    }
+    });
   };
 
   return (
@@ -123,4 +131,8 @@ export function BackgroundPushSettings() {
       ))}
     </SettingsSearchTarget>
   );
+}
+
+function failPushSettings(cause: unknown): never {
+  throw cause;
 }

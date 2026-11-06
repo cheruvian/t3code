@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 /** Native and canonical views share write state to avoid races on the same thread file. */
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
@@ -19,7 +20,10 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
-import { toSafeThreadAttachmentSegment } from "../attachmentStore.ts";
+import {
+  ATTACHMENT_ID_THREAD_SEGMENT_MAX_CHARS,
+  toSafeThreadAttachmentSegment,
+} from "../attachmentStore.ts";
 import type { ResourceAttribution } from "../resourceTelemetry/ResourceAttribution.ts";
 
 const MEBIBYTE = 1024 * 1024;
@@ -135,24 +139,6 @@ export interface EventNdjsonLogStoreOptions {
   readonly attribution?: ResourceAttribution["Service"];
 }
 
-export interface EventNdjsonLoggerOptions extends EventNdjsonLogStoreOptions {
-  readonly stream: EventNdjsonStream;
-}
-
-export class EventNdjsonLogConfigurationError extends Schema.TaggedError<EventNdjsonLogConfigurationError>()(
-  "EventNdjsonLogConfigurationError",
-  {
-    filePath: Schema.String,
-    option: Schema.String,
-    value: Schema.Number,
-    minimum: Schema.Number,
-  },
-) {
-  override get message(): string {
-    return `Provider event log option '${this.option}' must be an integer >= ${this.minimum}; received ${this.value} for '${this.filePath}'`;
-  }
-}
-
 export class EventNdjsonLogDirectoryError extends Schema.TaggedError<EventNdjsonLogDirectoryError>()(
   "EventNdjsonLogDirectoryError",
   {
@@ -166,8 +152,8 @@ export class EventNdjsonLogDirectoryError extends Schema.TaggedError<EventNdjson
 }
 
 export type EventNdjsonLogStoreError =
-  | EventNdjsonLogConfigurationError
-  | EventNdjsonLogDirectoryError;
+  | EventNdjsonLogDirectoryError
+  | EventNdjsonLogConfigurationError;
 
 export class EventNdjsonLogCloseTimeout extends Schema.TaggedError<EventNdjsonLogCloseTimeout>()(
   "EventNdjsonLogCloseTimeout",
@@ -235,7 +221,10 @@ interface StoreState {
   readonly pending: ReadonlyArray<QueuedRecord>;
   readonly submissions: ReadonlyArray<PendingSubmission>;
   readonly pendingBytes: number;
-  readonly sinks: ReadonlyMap<string, EventNdjsonSink>;
+  readonly sinks: ReadonlyMap<
+    string,
+    { readonly sink: EventNdjsonSink; readonly lastWriteAt: number }
+  >;
   readonly inFlightRecords: number;
   readonly inFlightSubmission: boolean;
   readonly closed: boolean;
@@ -271,18 +260,20 @@ const defaultSinkFactory: EventNdjsonSinkFactory = (input) => {
   let sink: Effect.Success<ReturnType<typeof makeAsyncRotatingFileSink>> | undefined;
   return {
     write: Effect.fnUntraced(function* (lines) {
-      sink ??= yield* makeAsyncRotatingFileSink(input).pipe(
-        Effect.provide(NodeServices.layer),
-        Effect.orDie,
-      );
-      yield* sink.write(lines).pipe(Effect.orDie);
-    }),
+      sink ??= yield* makeAsyncRotatingFileSink(input).pipe(Effect.provide(NodeServices.layer));
+      yield* sink.write(lines);
+    }, Effect.orDie),
   };
 };
 
 function resolveThreadSegment(raw: string | null | undefined): string {
-  const normalized = typeof raw === "string" ? toSafeThreadAttachmentSegment(raw) : null;
-  return normalized ?? GLOBAL_THREAD_SEGMENT;
+  if (typeof raw !== "string") return GLOBAL_THREAD_SEGMENT;
+  const normalized = toSafeThreadAttachmentSegment(raw);
+  if (normalized === null) return GLOBAL_THREAD_SEGMENT;
+  // Delegated thread ids share a prefix longer than the segment, so ids that may be cut get a hash.
+  if (raw.length <= ATTACHMENT_ID_THREAD_SEGMENT_MAX_CHARS) return normalized;
+  const hash = NodeCrypto.createHash("sha256").update(raw).digest("hex").slice(0, 16);
+  return `${normalized}-${hash}`;
 }
 
 function resolveStreamLabel(stream: EventNdjsonStream): string {
@@ -1164,8 +1155,15 @@ export const makeEventNdjsonLogStore = Effect.fnUntraced(function* (
   });
 
   const getSink = Effect.fnUntraced(function* (threadSegment: string) {
+    const now = yield* Clock.currentTimeMillis;
     const existing = (yield* SynchronizedRef.get(stateRef)).sinks.get(threadSegment);
-    if (existing) return existing;
+    if (existing) {
+      yield* SynchronizedRef.update(stateRef, (state) => ({
+        ...state,
+        sinks: new Map(state.sinks).set(threadSegment, { sink: existing.sink, lastWriteAt: now }),
+      }));
+      return existing.sink;
+    }
     const ownedPath = providerLogPath(directory, filePrefix, threadSegment);
     const sink = yield* Effect.sync(() =>
       resolved.sinkFactory({
@@ -1176,7 +1174,7 @@ export const makeEventNdjsonLogStore = Effect.fnUntraced(function* (
     );
     yield* SynchronizedRef.update(stateRef, (state) => ({
       ...state,
-      sinks: new Map(state.sinks).set(threadSegment, sink),
+      sinks: new Map(state.sinks).set(threadSegment, { sink, lastWriteAt: now }),
     }));
     return sink;
   });
@@ -1221,7 +1219,18 @@ export const makeEventNdjsonLogStore = Effect.fnUntraced(function* (
       if (now - state.lastRetentionAt < resolved.retentionCheckIntervalMs) {
         return [undefined, state] as const;
       }
-      return [state.sinks, { ...state, lastRetentionAt: now }] as const;
+      const pendingSegments = new Set([
+        ...state.pending.map((record) => record.threadSegment),
+        ...state.submissions.map((record) => record.threadSegment),
+      ]);
+      const sinks = new Map(
+        Array.from(state.sinks).filter(
+          ([segment, entry]) =>
+            pendingSegments.has(segment) ||
+            now - entry.lastWriteAt < resolved.retentionCheckIntervalMs,
+        ),
+      );
+      return [sinks, { ...state, sinks, lastRetentionAt: now }] as const;
     });
     if (!snapshot) return;
     const result = yield* Effect.sync(() =>
@@ -1452,3 +1461,21 @@ export const makeEventNdjsonLogger = Effect.fnUntraced(function* (
   if (!store) return undefined;
   return { ...store.logger(options.stream), close: store.close };
 });
+
+export interface EventNdjsonLoggerOptions extends EventNdjsonLogStoreOptions {
+  readonly stream: EventNdjsonStream;
+}
+
+export class EventNdjsonLogConfigurationError extends Schema.TaggedError<EventNdjsonLogConfigurationError>()(
+  "EventNdjsonLogConfigurationError",
+  {
+    filePath: Schema.String,
+    option: Schema.String,
+    value: Schema.Number,
+    minimum: Schema.Number,
+  },
+) {
+  override get message(): string {
+    return `Provider event log option '${this.option}' must be an integer >= ${this.minimum}; received ${this.value} for '${this.filePath}'`;
+  }
+}

@@ -6,7 +6,7 @@ import {
   ExecutionEnvironmentDescriptor,
   ServerSelfUpdateMethod,
 } from "./environment.ts";
-import { ServerAuthDescriptor } from "./auth.ts";
+import { AuthClientPresentationMetadata, ServerAuthDescriptor } from "./auth.ts";
 import {
   ForwardCompatibleArray,
   IsoDateTime,
@@ -23,11 +23,13 @@ import {
   ResolvedKeybindingsConfig,
 } from "./keybindings.ts";
 import { EditorId, FileManagerRevealKind, RemoteOpenTarget } from "./editor.ts";
+import { ManagedPolicySummary } from "./managedPolicy.ts";
 import { ModelCapabilities, ProviderOptionDescriptor } from "./model.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./providerUsageLimits.ts";
 import { ServerSettings } from "./settings.ts";
+import { DesktopUpdateChannelSchema } from "./ipc.ts";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -243,6 +245,8 @@ export const ServerProviderUpdateState = Schema.Struct({
 export type ServerProviderUpdateState = typeof ServerProviderUpdateState.Type;
 
 export const ServerProvider = Schema.Struct({
+  /** Older servers may require a fresh native session for a model change. */
+  requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   // Only instanceId is stable enough for provider routing.
   instanceId: ProviderInstanceId,
   // Open driver kind slug that selects the implementation handling this
@@ -259,7 +263,6 @@ export const ServerProvider = Schema.Struct({
   // meter once its activities load. Clients reserve the meter's space on it.
   reportsContextWindow: Schema.optional(Schema.Boolean),
   supportedRuntimeModes: Schema.optional(ForwardCompatibleArray(RuntimeMode)),
-  requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   supportsConversationRollback: Schema.optional(Schema.Boolean),
   supportsTextGeneration: Schema.optional(Schema.Boolean),
   setup: Schema.optional(
@@ -294,11 +297,8 @@ export const ServerProvider = Schema.Struct({
   auth: ServerProviderAuth,
   checkedAt: IsoDateTime,
   message: Schema.optional(TrimmedNonEmptyString),
-  // Optional for back-compat: every legacy producer omits this field and
-  // an absent value is interpreted as `"available"` by consumers (see
-  // `isProviderAvailable`). New `ProviderInstanceRegistry` outputs set it
-  // explicitly so the UI can render unavailable shadows from
-  // `ServerSettings.providerInstances`.
+  // Absent availability means available for compatibility. Registry output sets it explicitly
+  // so clients can render configured provider instances that are currently unavailable.
   availability: Schema.optional(ServerProviderAvailability),
   // Human-readable reason populated when `availability === "unavailable"`.
   // Surfaces in the UI alongside the missing-driver affordance.
@@ -384,6 +384,33 @@ export const OtlpEndpointCheckResult = Schema.Union([
   Schema.TaggedStruct("Unreachable", { timedOut: Schema.Boolean }),
 ]);
 export type OtlpEndpointCheckResult = typeof OtlpEndpointCheckResult.Type;
+
+/** The client tells the server what it is, so the triage context can name it. */
+export const ServerPrepareTriageInput = Schema.Struct({
+  client: AuthClientPresentationMetadata,
+});
+export type ServerPrepareTriageInput = typeof ServerPrepareTriageInput.Type;
+
+export const ServerPrepareTriageResult = Schema.Struct({
+  /** Composer text that links the session's prompt file. */
+  prompt: Schema.String,
+});
+export type ServerPrepareTriageResult = typeof ServerPrepareTriageResult.Type;
+
+/**
+ * The prompt file links as a chip in the user's message; clients spot a triage
+ * draft by it.
+ */
+export const TRIAGE_PROMPT_FILE_NAME = "triage-playbook.md";
+
+export class ServerPrepareTriageError extends Schema.TaggedError<ServerPrepareTriageError>()(
+  "ServerPrepareTriageError",
+  { cause: Schema.optional(Schema.Defect()) },
+) {
+  override get message(): string {
+    return "Could not write the triage session files.";
+  }
+}
 
 export const ServerTraceDiagnosticsErrorKind = Schema.Literals([
   "trace-file-not-found",
@@ -580,11 +607,8 @@ export const ServerSignalProcessResult = Schema.Struct({
 export type ServerSignalProcessResult = typeof ServerSignalProcessResult.Type;
 
 /**
- * A palette the environment's machine publishes for T3 Code to follow, read
- * from a theme file next to the rest of the environment's state. Two seed
- * colors rather than a full palette: clients derive the remaining roles with
- * the same generator the guided theme editor uses, so a desktop theme carries
- * over as a coherent T3 Code palette instead of a foreign one.
+ * The environment publishes two theme seed colors. Clients derive the remaining roles
+ * with the guided editor’s generator so the palette stays coherent.
  */
 export const EnvironmentThemeColor = Schema.String.check(
   Schema.isPattern(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/),
@@ -598,12 +622,8 @@ export const EnvironmentThemeId = Schema.String.check(
 export type EnvironmentThemeId = typeof EnvironmentThemeId.Type;
 
 /**
- * Role colors as published. Values are any CSS color the client's theme
- * parser accepts (exported theme files use oklch), canonicalized client-side;
- * roles a build does not know are dropped there, so a machine may publish
- * roles a newer client added without breaking an older one. Keys must still
- * be role-shaped and values color-sized, so the record stays open to future
- * vocabulary without being an arbitrary-payload channel.
+ * Clients canonicalize supported CSS colors and discard unknown roles.
+ * Limit key shapes and value sizes so extensible palettes cannot carry arbitrary payloads.
  */
 const EnvironmentThemeColors = Schema.Record(
   Schema.String.check(Schema.isPattern(/^[a-zA-Z][a-zA-Z0-9]{0,63}$/)),
@@ -701,7 +721,8 @@ export const ServerConfig = Schema.Struct({
   directEndpoints: Schema.optionalKey(ForwardCompatibleArray(ServerDirectEndpoint)),
   observability: ServerObservability,
   settings: ServerSettings,
-  /** Whether shell subscriptions can emit an opt-in catch-up completion marker. */
+  /** Present when an administrator's policy file manages this environment. */
+  managedPolicy: Schema.optionalKey(ManagedPolicySummary),
   shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /**
    * The shell can leave idle subagent children out of snapshots (`omitIdleSubagents`), and
@@ -722,15 +743,13 @@ export const ServerConfig = Schema.Struct({
   threadResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /** Send window fields only when advertised. */
   threadSnapshotPagination: Schema.optionalKey(Schema.Boolean),
-  /** Whether thread reads accept the reasoningMessages opt-in. */
   reasoningMessages: Schema.optionalKey(Schema.Boolean),
   threadFind: Schema.optionalKey(Schema.Boolean),
   threadFindProgressive: Schema.optionalKey(Schema.Boolean),
-  /**
-   * Folder behind this environment's Scratch project, for threads that need
-   * no repository. Present only on servers that answer projects.ensureScratch
-   * and whose data dir is outside a Git checkout.
-   */
+  /** Settings patches may carry `secretProviders`; older servers drop the key without an error. */
+  secretProviderSettings: Schema.optionalKey(Schema.Boolean),
+  /** Secret settings may point at a secret provider; older servers drop the reference. */
+  secretReferences: Schema.optionalKey(Schema.Boolean),
   scratchWorkspaceRoot: Schema.optionalKey(TrimmedNonEmptyString),
   /**
    * Folder that holds projects started from just a name. Present only on
@@ -755,12 +774,8 @@ export const ServerConfig = Schema.Struct({
 export type ServerConfig = typeof ServerConfig.Type;
 
 /**
- * The machine an environment should be drawn as: the user's pick, else what
- * the server detected, else a generic server. Settings only exist once
- * connected; a descriptor alone (relay discovery, before any connection)
- * still yields the detected kind. A null config (nothing known yet, or an
- * older server) resolves to the same generic so rows never flicker between
- * glyphs.
+ * Prefer the user’s machine icon, then detected kind, then a generic server.
+ * Disconnected descriptors retain detection; unknown or older configs use the same generic icon.
  */
 export function resolveEnvironmentMachineKind(
   config: {
@@ -986,6 +1001,29 @@ export class ServerProviderUpdateError extends Schema.TaggedError<ServerProvider
   }
 }
 
+export const ServerNpmReleaseInput = Schema.Struct({
+  spec: Schema.String.check(
+    Schema.isMaxLength(64),
+    Schema.isPattern(/^(?:latest|nightly|\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/),
+  ),
+});
+export type ServerNpmReleaseInput = typeof ServerNpmReleaseInput.Type;
+
+export const ServerNpmRelease = Schema.Struct({
+  version: Schema.String,
+  databaseMigration: Schema.optionalKey(Schema.Int),
+});
+export type ServerNpmRelease = typeof ServerNpmRelease.Type;
+
+export class ServerNpmReleaseError extends Schema.TaggedError<ServerNpmReleaseError>()(
+  "ServerNpmReleaseError",
+  { reason: Schema.String },
+) {
+  override get message(): string {
+    return `Could not check the configured npm registry: ${this.reason}`;
+  }
+}
+
 export const ServerSelfUpdateInput = Schema.Struct({
   /** Exact npm version, never a dist-tag, so server and client agree on the request. */
   targetVersion: TrimmedNonEmptyString,
@@ -993,6 +1031,10 @@ export const ServerSelfUpdateInput = Schema.Struct({
       hands off to its replacement. Missing and false keep restart behavior
       conservative under version skew. */
   continueRunningThreads: Schema.optionalKey(Schema.Boolean),
+  /** Desktop-managed hosts move their app to this update track first. Sent only for a track switch. */
+  channel: Schema.optionalKey(DesktopUpdateChannelSchema),
+  /** The target release's highest migration; the host refuses to leave Nightly without it. */
+  targetDatabaseMigration: Schema.optionalKey(Schema.Int),
 });
 export type ServerSelfUpdateInput = typeof ServerSelfUpdateInput.Type;
 
@@ -1039,3 +1081,55 @@ export class ServerSelfUpdateError extends Schema.TaggedError<ServerSelfUpdateEr
     return `Server update failed: ${this.reason}`;
   }
 }
+
+export const ServerDrainAction = Schema.Literals(["shutdown", "restart", "update"]);
+export type ServerDrainAction = typeof ServerDrainAction.Type;
+
+export const ServerDrainPhase = Schema.Literals(["draining", "action-required", "committing"]);
+export type ServerDrainPhase = typeof ServerDrainPhase.Type;
+
+export const ServerDrainSnapshot = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  action: ServerDrainAction,
+  phase: ServerDrainPhase,
+  activeWorkCount: NonNegativeInt,
+  blockedThreadIds: Schema.Array(ThreadId),
+  canCancel: Schema.Boolean,
+  canForce: Schema.Boolean,
+  requestedAt: IsoDateTime,
+});
+export type ServerDrainSnapshot = typeof ServerDrainSnapshot.Type;
+
+export const ServerDrainControlInput = Schema.Union([
+  Schema.Struct({
+    operation: Schema.Literal("begin"),
+    action: ServerDrainAction,
+  }),
+  Schema.Struct({
+    operation: Schema.Literal("cancel"),
+    drainId: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    operation: Schema.Literal("force"),
+    drainId: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    operation: Schema.Literal("resume"),
+    drainId: TrimmedNonEmptyString,
+  }),
+]);
+export type ServerDrainControlInput = typeof ServerDrainControlInput.Type;
+
+export class ServerDrainControlError extends Schema.TaggedError<ServerDrainControlError>()(
+  "ServerDrainControlError",
+  {
+    reason: Schema.Literals([
+      "already-draining",
+      "not-draining",
+      "drain-mismatch",
+      "already-committing",
+      "persistence-failed",
+    ]),
+    message: TrimmedNonEmptyString,
+  },
+) {}

@@ -1,16 +1,7 @@
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import { useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
-import {
-  type ComponentType,
-  useLayoutEffect,
-  useRef,
-  useState,
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-} from "react";
+import { type ComponentType, useLayoutEffect, useRef, useState } from "react";
 import {
   FlatList,
   Platform,
@@ -257,6 +248,7 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
   ) : undefined;
 
   // Layout effect so a pending jump is cancelled in the commit that swaps the file.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the FlatList to the target line and cancels a pending jump when the file changes
   useLayoutEffect(() => {
     if (targetIndex === null) {
       return;

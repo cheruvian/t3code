@@ -19,7 +19,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { readLocalApi } from "../../localApi";
 import { findRevertCheckpoint } from "../../session-logic";
-import { type ChatMessage } from "../../types";
+import type { ChatMessage } from "../../types";
 import { newThreadId } from "~/lib/utils";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { useComposerDraftStore } from "../../composerDraftStore";
@@ -43,7 +43,6 @@ interface TimelineRewindInput {
   readonly timelineMessages: ReadonlyArray<ChatMessage>;
   readonly paintOnlyDisplayedTimeline: boolean;
   readonly phase: SessionPhase;
-  readonly isConnecting: boolean;
   readonly isSendBusy: boolean;
   readonly isRevertingCheckpoint: boolean;
   readonly supportsConversationRollback: boolean;
@@ -57,7 +56,7 @@ interface TimelineRewindInput {
 
 /**
  * Going back in a thread's timeline: reverting to an earlier turn (restoring that message into
- * the composer), rolling back a provider checkpoint, and forking a new thread from a run.
+ * the composer) and forking a new thread from a run.
  */
 export function useTimelineRewind(input: TimelineRewindInput) {
   const {
@@ -70,7 +69,6 @@ export function useTimelineRewind(input: TimelineRewindInput) {
     timelineMessages,
     paintOnlyDisplayedTimeline,
     phase,
-    isConnecting,
     isSendBusy,
     isRevertingCheckpoint,
     supportsConversationRollback,
@@ -124,7 +122,7 @@ export function useTimelineRewind(input: TimelineRewindInput) {
       );
       return;
     }
-    if (phase === "running" || isSendBusy || isConnecting) {
+    if (phase === "running" || isSendBusy) {
       setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
       return;
     }
@@ -187,7 +185,7 @@ export function useTimelineRewind(input: TimelineRewindInput) {
       );
       return;
     }
-    if (phase === "running" || isSendBusy || isConnecting) {
+    if (phase === "running" || isSendBusy) {
       setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
       return;
     }
@@ -278,9 +276,9 @@ export function useTimelineRewind(input: TimelineRewindInput) {
   };
   const onRevertTimelineTurnStable = useStableCallback(onRevertTimelineTurn);
   return {
+    onTimelineRollbackCheckpointStable,
     onConfirmRevertStable,
     onForkFromRunStable,
     onRevertTimelineTurnStable,
-    onTimelineRollbackCheckpointStable,
   };
 }

@@ -1,5 +1,9 @@
 import * as NodeAssert from "node:assert/strict";
 
+import {
+  T3_CODE_BROWSER_TOOL_INSTRUCTIONS,
+  T3_CODE_DEVICE_TOOL_INSTRUCTIONS,
+} from "@t3tools/provider-core/server/orchestrationInstructions";
 import { describe, it } from "vite-plus/test";
 
 import {
@@ -15,6 +19,14 @@ describe("buildCodexAdditionalContext", () => {
       "keeps every entry within Codex's per-entry cap with tools %j",
       (availability) => {
         const context = buildCodexAdditionalContext(runtime, availability);
+
+        NodeAssert.equal(
+          Object.entries(context)
+            .filter(([key]) => /^t3_code_tools_\d+$/.test(key))
+            .map(([, entry]) => entry.value)
+            .join("\n\n"),
+          T3_CODE_BROWSER_TOOL_INSTRUCTIONS,
+        );
 
         for (const [key, entry] of Object.entries(context)) {
           // Codex counts ceil(UTF-8 bytes / 4) tokens, excluding keys and wrappers.
@@ -64,7 +76,10 @@ describe("Codex orchestration context", () => {
 
     NodeAssert.ok(orchestration.includes("use your native tool when the child uses your provider"));
     NodeAssert.ok(orchestration.includes("`run_in_background:false`"));
-    NodeAssert.ok(orchestration.includes("A native type running another provider's model"));
+    NodeAssert.ok(orchestration.includes("A native type on another provider's model"));
+    NodeAssert.ok(
+      orchestration.includes("Background agent: `delegate_task`, never a background `Agent`."),
+    );
     NodeAssert.ok(
       orchestration.includes("Every new delegate review or re-check is a new `delegate_task`"),
     );
@@ -73,6 +88,22 @@ describe("Codex orchestration context", () => {
     NodeAssert.ok(!orchestration.includes("Prefer native"));
     // The ACP terminal fallback is ACP-only; Codex agents never need it.
     NodeAssert.ok(!orchestration.includes("acp-mcp-call"));
+  });
+});
+
+describe("Codex device context", () => {
+  it("adds the shared device block only when the session holds device access", () => {
+    const tools = (device: boolean) =>
+      Object.entries(
+        buildCodexAdditionalContext({ model: "gpt-6.1-sol" }, { browser: true, device }),
+      )
+        .filter(([key]) => key.startsWith("t3_code_tools"))
+        .map(([, entry]) => entry.value)
+        .join("\n\n");
+
+    NodeAssert.ok(tools(true).includes(T3_CODE_DEVICE_TOOL_INSTRUCTIONS));
+    NodeAssert.ok(!tools(true).includes("ToolSearch"));
+    NodeAssert.ok(!tools(false).includes("## T3 Code devices"));
   });
 });
 

@@ -1,14 +1,8 @@
-import type { ThreadShell } from "./types";
 import { threadShellIsIdleForWorktreeCleanup } from "@t3tools/client-runtime/state/models";
 import { getWorktreeCleanupOwners } from "@t3tools/shared/worktreeOwnership";
+import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 
-function normalizeWorktreePath(path: string | null): string | null {
-  const trimmed = path?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed;
-}
+import type { ThreadShell } from "./types";
 
 export function getOrphanedWorktreePathForThread(
   threads: ReadonlyArray<
@@ -30,13 +24,18 @@ export function getOrphanedWorktreePathForThread(
     return null;
   }
 
-  const targetWorktreePath = normalizeWorktreePath(targetThread.worktreePath);
+  const targetWorktreePath = targetThread.worktreePath?.trim();
   if (!targetWorktreePath) {
     return null;
   }
 
   const owners = getWorktreeCleanupOwners(
-    threads.filter((thread) => normalizeWorktreePath(thread.worktreePath) === targetWorktreePath),
+    threads.filter(
+      (thread) =>
+        thread.worktreePath !== null &&
+        normalizeProjectPathForComparison(thread.worktreePath) ===
+          normalizeProjectPathForComparison(targetWorktreePath),
+    ),
     threadId,
     threadShellIsIdleForWorktreeCleanup,
   );

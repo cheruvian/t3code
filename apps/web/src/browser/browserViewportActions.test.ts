@@ -9,6 +9,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   resize: Symbol("preview-resize"),
+  serverEpoch: "server-a",
   runAtomCommand: vi.fn(),
   updatePreviewServerSnapshot: vi.fn(),
 }));
@@ -21,6 +22,7 @@ vi.mock("~/rpc/atomRegistry", () => ({ appAtomRegistry: {} }));
 vi.mock("~/state/preview", () => ({ previewEnvironment: { resize: mocks.resize } }));
 vi.mock("~/previewStateStore", () => ({
   updatePreviewServerSnapshot: mocks.updatePreviewServerSnapshot,
+  readThreadPreviewState: () => ({ serverEpoch: mocks.serverEpoch }),
 }));
 vi.mock("~/components/ui/toast", () => ({ toastManager: { add: vi.fn() } }));
 
@@ -85,4 +87,68 @@ describe("browserViewportActions", () => {
     );
     expect(mocks.updatePreviewServerSnapshot).toHaveBeenCalledWith(threadRef, snapshot);
   });
+});
+
+it("does not publish a resize response from a replaced server", async () => {
+  mocks.serverEpoch = "server-a";
+  mocks.updatePreviewServerSnapshot.mockClear();
+  let resolve!: (result: unknown) => void;
+  let started!: () => void;
+  const start = new Promise<void>((done) => {
+    started = done;
+  });
+  mocks.runAtomCommand.mockImplementationOnce(() => {
+    started();
+    return new Promise((done) => {
+      resolve = done;
+    });
+  });
+  const resizing = commitBrowserViewportChange(
+    {
+      threadRef: {
+        environmentId: EnvironmentId.make("env-stale"),
+        threadId: ThreadId.make("thread-stale"),
+      },
+      tabId: "stale-tab",
+      runtimeTabId: "stale-runtime",
+    },
+    { _tag: "freeform", width: 800, height: 600 },
+  );
+  await start;
+  mocks.serverEpoch = "server-b";
+  resolve({ _tag: "Success", value: { tabId: "stale-tab" } });
+  await resizing;
+  expect(mocks.updatePreviewServerSnapshot).not.toHaveBeenCalled();
+});
+
+it("keeps a timed-out resize ahead of a newer resize until the real operation finishes", async () => {
+  vi.useFakeTimers();
+  try {
+    let release!: () => void;
+    let started!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const order: string[] = [];
+    const first = queueBrowserViewportCommit("timeout-order", async () => {
+      started();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      order.push("first settled");
+    });
+    const failure = first.catch((error: Error) => error.message);
+    await firstStarted;
+    const second = queueBrowserViewportCommit("timeout-order", async () => {
+      order.push("newer resize");
+    });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await failure).toContain("Timed out committing");
+    expect(order).toEqual([]);
+    release();
+    await second;
+    expect(order).toEqual(["first settled", "newer resize"]);
+  } finally {
+    vi.useRealTimers();
+  }
 });

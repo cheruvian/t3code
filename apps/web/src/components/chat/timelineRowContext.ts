@@ -1,4 +1,9 @@
-import type { WorktreeSetupSnapshot } from "@t3tools/contracts";
+import type { ToolCallDiffTarget } from "../../diffPanelStore";
+import type {
+  ProviderApprovalDecision,
+  RuntimeRequestId,
+  WorktreeSetupSnapshot,
+} from "@t3tools/contracts";
 import {
   type EnvironmentId,
   type MessageId,
@@ -14,15 +19,16 @@ import type { AsyncResult, Atom } from "effect/reactivity";
 import type { CommandOutputView } from "@t3tools/client-runtime/state/command-output";
 import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRuntime";
 import { createContext, type MouseEvent, type ReactNode } from "react";
-import { type LegendListRef } from "@legendapp/list/react";
+import type { LegendListRef } from "@legendapp/list/react";
 import type { CodexArtifactTemplate } from "@t3tools/shared/codexArtifactTemplates";
-import { type ChatFileAttachment } from "../../types";
+import type { PendingApproval } from "../../session-logic";
+import type { ChatFileAttachment } from "../../types";
 import { ExpandedImagePreview } from "./ExpandedImagePreview";
-import { type AssistantCitationTarget } from "./AssistantCitationSource";
-import { type MessagesTimelineRow, type WorkGroupScrollAnchor } from "./MessagesTimeline.logic";
-import { type TimestampFormat } from "@t3tools/contracts/settings";
+import type { AssistantCitationTarget } from "./AssistantCitationSource";
+import type { MessagesTimelineRow, WorkGroupScrollAnchor } from "./MessagesTimeline.logic";
+import type { TimestampFormat } from "@t3tools/contracts/settings";
 import type { TurnItemDetailSource } from "../../state/queries";
-import { type HandoffTimelineRun } from "./V2LifecycleRow";
+import type { HandoffTimelineRun } from "./V2LifecycleRow";
 
 /**
  * Where an expanded row reads an item's detail and a command's output. The owner's rows read them
@@ -39,6 +45,12 @@ export interface TurnItemSource {
 export interface TimelineRowSharedState {
   latestSpokenReplyId: string | null;
   detachedAssistantMetaIds: ReadonlySet<string>;
+  pendingApprovals: ReadonlyMap<RuntimeRequestId, PendingApproval>;
+  respondingRequestIds: ReadonlyArray<RuntimeRequestId>;
+  canOperateThread: boolean;
+  onRespondToApproval:
+    | ((requestId: RuntimeRequestId, decision: ProviderApprovalDecision) => Promise<unknown>)
+    | undefined;
   citationRequest: AssistantCitationTarget | null;
   listRef: React.RefObject<LegendListRef | null>;
   timestampFormat: TimestampFormat;
@@ -58,6 +70,7 @@ export interface TimelineRowSharedState {
   findActive: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   displayThreadKey?: string;
+  onOpenToolDiff: ((target: ToolCallDiffTarget) => void) | undefined;
   /** Unset where there is no diff to open, so the timeline shows no "Open diff" button. */
   onOpenTurnDiff: ((runId: RunId, filePath?: string) => void) | undefined;
   /**
@@ -96,7 +109,6 @@ export interface TimelineRowActivityState {
   isWorking: boolean;
   isCompacting: boolean;
   isRevertingCheckpoint: boolean;
-  activeTurnInProgress: boolean;
   awaitingUser: boolean;
   isPreparingWorktree: boolean;
   latestRunId: RunId | null;

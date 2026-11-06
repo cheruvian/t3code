@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useState } from "react";
+import { useState } from "react";
 import { ThreadResources } from "../ThreadResources";
 import {
   projectScriptsMatch,
@@ -97,69 +97,57 @@ export function ProjectActionsSettings() {
   );
   const updateProject = useAtomCommand(projectEnvironment.update);
   const disabledInheritedScriptIds = representativeMember?.disabledInheritedScriptIds ?? [];
-  const inheritedScripts = useMemo(
-    () =>
-      resolveInheritedProjectScripts(
-        [],
-        t3File.scripts,
-        representativeConfig?.settings.globalScripts ?? [],
-        [],
-      ),
-    [t3File.scripts, representativeConfig?.settings.globalScripts],
-  );
-  const setInheritedScriptDisabled = useCallback(
-    async (scriptId: string, disabled: boolean) => {
-      for (const member of scope.members) {
-        const current = member.disabledInheritedScriptIds ?? [];
-        const next = disabled
-          ? [...new Set([...current, scriptId])]
-          : current.filter((id) => id !== scriptId);
-        await updateProject({
-          environmentId: member.environmentId,
-          input: { projectId: member.id, disabledInheritedScriptIds: next },
-        });
-      }
-    },
-    [scope.members, updateProject],
-  );
-  const importableScripts = useMemo(
-    () =>
-      t3File.scripts.filter(
-        (fileScript) =>
-          !scripts.some(
-            (script) =>
-              script.command === fileScript.command ||
-              script.name.toLowerCase() === fileScript.name.toLowerCase(),
-          ),
-      ),
-    [scripts, t3File.scripts],
-  );
-  const importFileScript = useCallback(
-    async (fileScript: T3ProjectFileScript) => {
-      const payload: NewProjectScriptInput = {
-        name: fileScript.name,
-        command: fileScript.command,
-        ...(fileScript.resource ? { resource: fileScript.resource } : {}),
-        icon: fileScript.icon ?? "play",
-        runOnWorktreeCreate: fileScript.runOnWorktreeCreate ?? false,
-        waitForSetup: fileScript.runOnWorktreeCreate === true && fileScript.async === false,
-        runOnSettle: fileScript.runOnSettle ?? false,
-        keybinding: null,
-        previewUrl: fileScript.previewUrl ?? null,
-        autoOpenPreview: fileScript.previewUrl ? (fileScript.autoOpenPreview ?? false) : false,
-      };
-      const result = await submit(null, payload);
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        setRequest({
-          scriptId: null,
-          initial: payload,
-          error: error instanceof Error ? error.message : "Failed to import action.",
-        });
-      }
-    },
-    [submit],
-  );
+  const inheritedScripts = (() =>
+    resolveInheritedProjectScripts(
+      [],
+      t3File.scripts,
+      representativeConfig?.settings.globalScripts ?? [],
+      [],
+    ))();
+  const setInheritedScriptDisabled = async (scriptId: string, disabled: boolean) => {
+    for (const member of scope.members) {
+      const current = member.disabledInheritedScriptIds ?? [];
+      const next = disabled
+        ? [...new Set([...current, scriptId])]
+        : current.filter((id) => id !== scriptId);
+      await updateProject({
+        environmentId: member.environmentId,
+        input: { projectId: member.id, disabledInheritedScriptIds: next },
+      });
+    }
+  };
+  const importableScripts = (() =>
+    t3File.scripts.filter(
+      (fileScript) =>
+        !scripts.some(
+          (script) =>
+            script.command === fileScript.command ||
+            script.name.toLowerCase() === fileScript.name.toLowerCase(),
+        ),
+    ))();
+  const importFileScript = async (fileScript: T3ProjectFileScript) => {
+    const payload: NewProjectScriptInput = {
+      name: fileScript.name,
+      command: fileScript.command,
+      ...(fileScript.resource ? { resource: fileScript.resource } : {}),
+      icon: fileScript.icon ?? "play",
+      runOnWorktreeCreate: fileScript.runOnWorktreeCreate ?? false,
+      waitForSetup: fileScript.runOnWorktreeCreate === true && fileScript.async === false,
+      runOnSettle: fileScript.runOnSettle ?? false,
+      keybinding: null,
+      previewUrl: fileScript.previewUrl ?? null,
+      autoOpenPreview: fileScript.previewUrl ? (fileScript.autoOpenPreview ?? false) : false,
+    };
+    const result = await submit(null, payload);
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      setRequest({
+        scriptId: null,
+        initial: payload,
+        error: error instanceof Error ? error.message : "Failed to import action.",
+      });
+    }
+  };
 
   return (
     <SettingsSection id="project-actions" title="Actions">

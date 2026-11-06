@@ -11,6 +11,7 @@ vi.mock("react-native", () => ({
   get Platform() {
     return { OS: harness.platform };
   },
+  useWindowDimensions: () => ({ width: 390, height: 844, scale: 3, fontScale: 1 }),
   View: "View",
   Text: "Text",
   ScrollView: "ScrollView",

@@ -1,9 +1,5 @@
 import type { ConnectionTarget } from "@t3tools/client-runtime/connection";
-import {
-  PRIMARY_LOCAL_ENVIRONMENT_ID,
-  type DesktopBridge,
-  type DesktopEnvironmentBootstrap,
-} from "@t3tools/contracts";
+import { PRIMARY_LOCAL_ENVIRONMENT_ID, type DesktopEnvironmentBootstrap } from "@t3tools/contracts";
 
 const DESKTOP_LOCAL_CONNECTION_ID_PREFIX = "local:";
 
@@ -44,7 +40,13 @@ export interface DesktopSecondaryBootstrapsReader {
 
 /** Empty reads clear the snapshot; failed reads retain platform registrations. */
 export function createDesktopSecondaryBootstrapsReader(
-  resolveBridge: () => Pick<DesktopBridge, "getLocalEnvironmentBootstraps"> | undefined,
+  resolveBridge: () =>
+    | {
+        getLocalEnvironmentBootstraps: () =>
+          | ReadonlyArray<DesktopEnvironmentBootstrap>
+          | Promise<ReadonlyArray<DesktopEnvironmentBootstrap>>;
+      }
+    | undefined,
 ): DesktopSecondaryBootstrapsReader {
   let snapshot: ReadonlyArray<DesktopEnvironmentBootstrap> = [];
 

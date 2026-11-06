@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { RegistryContext } from "@effect/atom-react";
 import {
   EnvironmentId,
@@ -11,6 +10,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { makeThreadShellFixture } from "../test-fixtures";
 import { ThreadPrVisibilityContext } from "./thread-pr-visibility";
+
+vi.mock("../lib/appState", () => ({ useAppActive: () => true }));
 
 const harness = vi.hoisted(() => ({ active: 0, reads: 0 }));
 vi.mock("../connection/runtime", () => ({ connectionAtomRuntime: {} }));
@@ -27,6 +28,11 @@ vi.mock("@t3tools/client-runtime/state/pull-requests", async (importOriginal) =>
   const original =
     await importOriginal<typeof import("@t3tools/client-runtime/state/pull-requests")>();
   const { Atom, AsyncResult } = await import("effect/reactivity");
+  type OnSummary = NonNullable<
+    Parameters<typeof original.createLinkedPullRequestSummaryAtomFamily>[2]
+  >;
+  let onSummary: OnSummary | undefined;
+  const targets = new Map<number, Parameters<OnSummary>[0]>();
   const summaries = Atom.family((number: number) =>
     Atom.make((get) => {
       harness.active++;
@@ -46,13 +52,25 @@ vi.mock("@t3tools/client-runtime/state/pull-requests", async (importOriginal) =>
         baseBranch: "main",
         updatedAt: "2026-10-15T00:00:00Z",
       };
+      const target = targets.get(number);
+      if (target && onSummary)
+        get.registry.get(Atom.make(onSummary(target, summary, get.registry)));
       return AsyncResult.success(summary);
     }).pipe(Atom.setIdleTTL(0)),
   );
   return {
     ...original,
-    createLinkedPullRequestSummaryAtomFamily: () => (target: { input: { number: number } }) =>
-      summaries(target.input.number),
+    createLinkedPullRequestSummaryAtomFamily: (
+      _runtime: unknown,
+      _options: unknown,
+      observer: OnSummary,
+    ) => {
+      onSummary = observer;
+      return (target: Parameters<OnSummary>[0]) => {
+        targets.set(target.input.number, target);
+        return summaries(target.input.number);
+      };
+    },
   };
 });
 

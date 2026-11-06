@@ -1,3 +1,5 @@
+import { vi } from "vite-plus/test";
+vi.mock("react-native", () => ({ Platform: { OS: "ios" } }));
 import {
   ORCHESTRATION_CACHE_SCHEMA_VERSION,
   ORCHESTRATION_THREAD_CACHE_SCHEMA_VERSION,
@@ -252,7 +254,7 @@ function makeDatabase() {
       }),
     clearAllCaches: Effect.sync(() => values.clear()),
     inspectCaches: Effect.succeed([]),
-    loadPreferencesJson: Effect.succeed(Option.none()),
+    loadPreferencesJson: Effect.succeedNone,
     savePreferencesJson: () => Effect.void,
   });
   return { database, removed, schemaVersions, values };

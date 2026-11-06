@@ -31,12 +31,14 @@ describe("migrateLegacyConnectionCatalog", () => {
               wsBaseUrl: "wss://relay.example.test",
               bearerToken: null,
               authenticationMethod: "dpop",
+              dpopAccessToken: "short-lived-token",
               relayManaged: true,
             },
           ],
         }),
       );
 
+      expect(JSON.stringify(catalog)).not.toContain("short-lived-token");
       expect(catalog.targets).toHaveLength(2);
       expect(
         catalog.targets.find((target) => target.environmentId === bearerEnvironmentId)?._tag,

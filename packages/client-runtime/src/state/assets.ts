@@ -1,3 +1,5 @@
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import {
   ASSET_URL_BATCH_MAX_SIZE,
   type AssetCreateUrlInput,
@@ -23,17 +25,19 @@ import * as RequestResolver from "effect/RequestResolver";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
-import { request, getInitialServerConfig } from "../rpc/client.ts";
+import { request, getInitialServerConfig, EnvironmentRpcUnavailableError } from "../rpc/client.ts";
 import type { ProjectFaviconCache, ProjectFaviconTarget } from "../projectFaviconCache.ts";
 import { createEnvironmentQueryAtomFamily } from "./runtime.ts";
 
 const ASSET_URL_REFRESH_INTERVAL_MS = 30 * 60_000;
 const ASSET_URL_STALE_TIME_MS = 5 * 60_000;
 const ASSET_URL_IDLE_TTL_MS = 60 * 60_000;
+export const ASSET_URL_MAX_IN_FLIGHT = 6;
 
 export class InvalidAssetCollectionKeyError extends Schema.TaggedError<InvalidAssetCollectionKeyError>()(
   "InvalidAssetCollectionKeyError",
@@ -147,12 +151,118 @@ export function assetUrlStateFromResult(
 }
 
 class AssetUrlRead extends Request.Class<
-  AssetCreateUrlInput,
+  AssetCreateUrlInput & { readonly sessionGeneration: number },
   AssetCreateUrlResult,
   | Effect.Error<ReturnType<typeof request<typeof WS_METHODS.assetsCreateUrl>>>
   | Effect.Error<ReturnType<typeof getInitialServerConfig>>,
   EnvironmentSupervisor.EnvironmentSupervisor
 > {}
+type AssetUrlTarget = {
+  readonly environmentId: EnvironmentId;
+  readonly input: { readonly resource: AssetResource };
+};
+
+const decodeRevisionedAssetUrlKey = Schema.decodeUnknownSync(
+  Schema.Tuple([EnvironmentId, AssetResource, Schema.NullOr(Schema.String)]),
+);
+
+const isSettled = (result: AsyncResult.AsyncResult<unknown, unknown>) =>
+  !AsyncResult.isInitial(result) && !result.waiting;
+
+const KEEP_URL_MIN_LIFE_MS = 5 * 60_000;
+
+/**
+ * A re-mint signs a new URL even when the file is unchanged, and a new URL reloads the image.
+ * Keep the shown URL while the server reports the same file revision and it has time left.
+ */
+function keepUnchangedFile(
+  shown: AsyncResult.AsyncResult<AssetCreateUrlResult, unknown>,
+  next: AsyncResult.AsyncResult<AssetCreateUrlResult, unknown>,
+  now: number,
+) {
+  if (
+    shown._tag !== "Success" ||
+    next._tag !== "Success" ||
+    next.value.fileRevision === undefined ||
+    next.value.fileRevision !== shown.value.fileRevision ||
+    shown.value.expiresAt - now <= KEEP_URL_MIN_LIFE_MS
+  ) {
+    return next;
+  }
+  const kept = AsyncResult.success(shown.value);
+  return next.waiting ? AsyncResult.waiting(kept) : kept;
+}
+
+/**
+ * The URL is minted per resource and shared across revisions, so reading a
+ * different revision (even an earlier one after a revert) re-mints it. An
+ * in-flight mint is shared only on first read; after an edit the server must
+ * re-read the file, so the re-mint waits for that mint to settle.
+ */
+export function makeRevisionedAssetUrlFamily(
+  createUrl: (
+    target: AssetUrlTarget,
+  ) => Atom.Atom<AsyncResult.AsyncResult<AssetCreateUrlResult, unknown>>,
+  now: () => number = Date.now,
+) {
+  // Outside the nodes: a node is dropped once unmounted, and the next read of
+  // its revision must still see the revisions minted since. Never pruned on
+  // purpose: pruning would forget the revision and re-mint on the next mount.
+  // It holds one short entry per file shown, and goes with the registry.
+  const mintedUnder = new WeakMap<AtomRegistry.AtomRegistry, Map<string, string | null>>();
+  // Also per resource: a new revision builds a new node, which must keep the URL on screen.
+  const shownUnder = new WeakMap<
+    AtomRegistry.AtomRegistry,
+    Map<string, AsyncResult.AsyncResult<AssetCreateUrlResult, unknown>>
+  >();
+  const family = Atom.family((key: string) => {
+    const [environmentId, resource, revision] = decodeRevisionedAssetUrlKey(JSON.parse(key));
+    const resourceKey = JSON.stringify([environmentId, resource]);
+    const query = createUrl({ environmentId, input: { resource } });
+    return Atom.transform(
+      query,
+      (get) => {
+        let minted = mintedUnder.get(get.registry);
+        if (minted === undefined) {
+          minted = new Map();
+          mintedUnder.set(get.registry, minted);
+        }
+        const firstRead = !minted.has(resourceKey);
+        let pending = minted.get(resourceKey) !== revision;
+        const current = get.once(query);
+        if (pending && (firstRead || isSettled(current))) {
+          pending = false;
+          minted.set(resourceKey, revision);
+          if (isSettled(current)) get.refresh(query);
+        }
+        let shownByResource = shownUnder.get(get.registry);
+        if (shownByResource === undefined) {
+          shownByResource = new Map();
+          shownUnder.set(get.registry, shownByResource);
+        }
+        const show = (value: AsyncResult.AsyncResult<AssetCreateUrlResult, unknown>) => {
+          const previous = shownByResource.get(resourceKey);
+          const shown = previous === undefined ? value : keepUnchangedFile(previous, value, now());
+          shownByResource.set(resourceKey, shown);
+          return shown;
+        };
+        get.subscribe(query, (value) => {
+          get.setSelf(show(value));
+          if (!pending || !isSettled(value)) return;
+          pending = false;
+          minted.set(resourceKey, revision);
+          get.refresh(query);
+        });
+        return show(get.once(query));
+      },
+      { initialValueTarget: query },
+      // No idle TTL: each mount rebuilds the node, so a revision read again after
+      // another one is compared against the record instead of a cached node.
+    ).pipe(Atom.setIdleTTL(0));
+  });
+  return (target: AssetUrlTarget & { readonly revision: string | null }) =>
+    family(JSON.stringify([target.environmentId, target.input.resource, target.revision]));
+}
 
 export function createAssetEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, E>,
@@ -161,15 +271,27 @@ export function createAssetEnvironmentAtoms<R, E>(
     readonly httpBaseUrl: string;
   } | null>,
 ) {
+  const mintLimits = new Map<EnvironmentId, Semaphore.Semaphore>();
+  const mintLimit = (environmentId: EnvironmentId) => {
+    let limit = mintLimits.get(environmentId);
+    if (limit === undefined) {
+      limit = Semaphore.makeUnsafe(ASSET_URL_MAX_IN_FLIGHT);
+      mintLimits.set(environmentId, limit);
+    }
+    return limit;
+  };
   const resolver = RequestResolver.makeGrouped<AssetUrlRead, string>({
     key: ({ request, context }) =>
       JSON.stringify([
         Context.get(context, EnvironmentSupervisor.EnvironmentSupervisor).target.environmentId,
+        request.sessionGeneration,
         // Keep filesystem reads separate so a denied file cannot hide an authorized attachment.
         ["workspace-file", "media-file", "draft-workspace-file"].includes(request.resource._tag),
       ]),
-    resolver: (entries) =>
-      Effect.gen(function* () {
+    resolver: Effect.fn("AssetUrls.resolveBatch")(
+      function* (entries) {
+        const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+        const limit = mintLimit(supervisor.target.environmentId);
         const supportsBatch =
           entries.length > 1 &&
           (yield* getInitialServerConfig()).environment.capabilities.assetUrlBatches === true;
@@ -178,16 +300,17 @@ export function createAssetEnvironmentAtoms<R, E>(
             entries,
             (entry) =>
               request(WS_METHODS.assetsCreateUrl, entry.request).pipe(
+                limit.withPermit,
                 Effect.exit,
                 Effect.map((exit) => entry.completeUnsafe(exit)),
               ),
-            { concurrency: 4, discard: true },
+            { concurrency: ASSET_URL_MAX_IN_FLIGHT, discard: true },
           );
           return;
         }
         const results = yield* request(WS_METHODS.assetsCreateUrls, {
           resources: entries.map(({ request }) => request.resource),
-        });
+        }).pipe(limit.withPermit);
         if (results.length !== entries.length)
           return yield* Effect.die(
             new Error("Asset URL batch returned an unexpected result count."),
@@ -198,17 +321,60 @@ export function createAssetEnvironmentAtoms<R, E>(
             Result.isSuccess(result) ? Exit.succeed(result.success) : Exit.fail(result.failure),
           );
         }
-      }).pipe(
-        Effect.provideContext(entries[0].context),
-        Effect.catchCause((cause) =>
-          Effect.sync(() => {
-            for (const entry of entries) entry.completeUnsafe(Exit.failCause(cause));
-          }),
+      },
+      (work) =>
+        Effect.gen(function* () {
+          const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+          const session = yield* SubscriptionRef.get(supervisor.session);
+          const replaced = SubscriptionRef.changes(supervisor.session).pipe(
+            Stream.filter(
+              (current) =>
+                !Option.isSome(current) ||
+                !Option.isSome(session) ||
+                current.value !== session.value,
+            ),
+            Stream.runHead,
+            Effect.flatMap(() =>
+              Effect.fail(
+                new EnvironmentRpcUnavailableError({
+                  environmentId: supervisor.target.environmentId,
+                  message: "The asset request session was replaced.",
+                }),
+              ),
+            ),
+          );
+          return yield* work.pipe(Effect.raceFirst(replaced));
+        }),
+      (work, entries) =>
+        work.pipe(
+          Effect.provideContext(entries[0].context),
+          Effect.catchCause((cause) =>
+            Effect.sync(() => {
+              for (const entry of entries) entry.completeUnsafe(Exit.failCause(cause));
+            }),
+          ),
         ),
-      ),
+    ),
   }).pipe(RequestResolver.batchN(ASSET_URL_BATCH_MAX_SIZE));
-  const read = (input: AssetCreateUrlInput) => Effect.request(new AssetUrlRead(input), resolver);
+  const sessionGenerations = new WeakMap<object, number>();
+  let nextSessionGeneration = 0;
+  const read = Effect.fn("assets.read")(function* (input: AssetCreateUrlInput) {
+    const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+    const session = yield* SubscriptionRef.get(supervisor.session);
+    if (Option.isNone(session))
+      return yield* new EnvironmentRpcUnavailableError({
+        environmentId: supervisor.target.environmentId,
+        message: "The asset environment is not connected.",
+      });
+    let sessionGeneration = sessionGenerations.get(session.value);
+    if (sessionGeneration === undefined) {
+      sessionGeneration = ++nextSessionGeneration;
+      sessionGenerations.set(session.value, sessionGeneration);
+    }
+    return yield* Effect.request(new AssetUrlRead({ ...input, sessionGeneration }), resolver);
+  });
   const execute = Effect.fn("assets.createUrl")(function* (input: AssetCreateUrlInput) {
+    const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
     const result = yield* read(input).pipe(Effect.result);
     if (Result.isSuccess(result)) return result.success;
     const error = result.failure;
@@ -216,7 +382,6 @@ export function createAssetEnvironmentAtoms<R, E>(
     const local = localMediaEnvironment
       ? (yield* AtomRegistry.AtomRegistry).get(localMediaEnvironment)
       : null;
-    const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
     if (
       !local ||
       local.environmentId === supervisor.target.environmentId ||
@@ -334,7 +499,7 @@ export function createProjectFaviconUrlAtomFamily(input: {
     return Atom.make((get): string | null => {
       const result = get(image);
       if (isProjectFaviconFallbackUrl(get(resolvedUrl))) return null;
-      return Option.getOrElse(AsyncResult.value(result), () => cache.peek(target));
+      return AsyncResult.getOrElse(result, () => cache.peek(target));
     }).pipe(Atom.setIdleTTL(ASSET_URL_IDLE_TTL_MS));
   });
   return (target: ProjectFaviconTarget) =>

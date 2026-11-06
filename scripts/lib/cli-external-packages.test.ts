@@ -76,6 +76,7 @@ describe("selectCliRuntimeExternalDependencies", () => {
         "@cursor/sdk",
         "@ff-labs/fff-node",
         "@napi-rs/keyring",
+        "ffi-rs",
         "node-pty",
         "playwright-core",
         "undici",
@@ -85,14 +86,7 @@ describe("selectCliRuntimeExternalDependencies", () => {
   });
 });
 
-// An external package is loaded from the real filesystem, so its own `require`
-// also resolves from the real filesystem. If one of its dependencies was
-// bundled away instead of left external, that dependency does not follow the
-// selected root into the sidecar.
-//
-// Found the hard way: msgpackr-extract's node-gyp-build-optional-packages
-// required detect-libc, which was bundled. Windows was fine; WSL got
-// MODULE_NOT_FOUND.
+// Sidecar packages must retain their transitive filesystem dependencies.
 it.layer(NodeServices.layer)("external package dependency closure", (it) => {
   // Follow installed dependency links, including pnpm's shared virtual store.
   // Read package.json by path so package exports cannot hide the manifest.
@@ -140,25 +134,22 @@ it.layer(NodeServices.layer)("external package dependency closure", (it) => {
 
   // A cold walk of the pnpm store can exceed the root timeout when the Windows
   // lane runs four filesystem-heavy workspace suites at once.
-  it.effect(
-    "finds the runtime-external packages on disk",
-    () =>
-      Effect.gen(function* () {
-        const installed = yield* readInstalledPackages;
-        const found = [...installed.keys()].filter(isRuntimeExternal);
+  it.effect("finds the runtime-external packages on disk", () =>
+    Effect.gen(function* () {
+      const installed = yield* readInstalledPackages;
+      const found = [...installed.keys()].filter(isRuntimeExternal);
 
-        // Without this the closure check below can pass vacuously: if nothing is
-        // read, nothing is checked. node-pty is the one native root every
-        // platform ships, and node-addon-api is its transitive runtime
-        // dependency, so require them by name.
-        for (const required of ["node-pty", "node-addon-api"]) {
-          assert.ok(
-            found.includes(required),
-            `expected ${required} in the pnpm store; the closure check is only meaningful if it can read these (found ${found.length})`,
-          );
-        }
-      }),
-    120_000,
+      // Without this the closure check below can pass vacuously: if nothing is
+      // read, nothing is checked. node-pty is the one native root every
+      // platform ships, and node-addon-api is its transitive runtime
+      // dependency, so require them by name.
+      for (const required of ["node-pty", "node-addon-api"]) {
+        assert.ok(
+          found.includes(required),
+          `expected ${required} in the pnpm store; the closure check is only meaningful if it can read these (found ${found.length})`,
+        );
+      }
+    }),
   );
 
   it.effect("keeps every runtime dependency of an external package external too", () =>
@@ -279,11 +270,7 @@ var x = 1;
     assert.strictEqual(result.regionCount, 2);
   });
 
-  // regionCount is what separates "clean" from "this scan went blind because the
-  // marker format changed". A caller that ignores it gets a vacuous pass.
-  // The scan has to answer both directions. Checking only that externals are
-  // absent still passes on a bundle that externalized everything, which is the
-  // failure this whole change prevents.
+  // Both counts detect a stale marker format or an accidentally all-external bundle.
   it("reports the packages that were inlined, not just the violations", () => {
     const source =
       region("../../node_modules/.pnpm/effect@4.0.0/node_modules/effect/dist/index.js") +

@@ -13,3 +13,14 @@ export function recordBrowserAttachment(
     ),
   );
 }
+
+export function observeBrowserHostGate(attributes: {
+  environmentId: string;
+  configKnown: boolean;
+  hostsPrimary: boolean;
+}): () => void {
+  recordBrowserAttachment("host-gate", { ...attributes, replay: false });
+  return ClientTracer.onReady(() =>
+    recordBrowserAttachment("host-gate", { ...attributes, replay: true }),
+  );
+}

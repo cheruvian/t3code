@@ -13,13 +13,7 @@ import {
   useState,
   type Ref,
 } from "react";
-import {
-  type NativeSyntheticEvent,
-  type ViewProps,
-  Platform,
-  StyleSheet,
-  Image,
-} from "react-native";
+import { type NativeSyntheticEvent, type ViewProps, Platform, StyleSheet } from "react-native";
 
 import {
   composerChipSizeSuffix,
@@ -239,6 +233,7 @@ export function ComposerEditor({
     mostRecentEventCount: controlledEventCount,
     isNativeEcho,
   });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- prunes native editor event snapshots once a committed payload acknowledges them
   useEffect(() => {
     if (!acknowledgesLatestNativeEvent) return;
     nativeEventSnapshotsRef.current = pruneAcknowledgedComposerNativeEvents(
@@ -247,6 +242,7 @@ export function ComposerEditor({
     );
   }, [acknowledgesLatestNativeEvent, mostRecentEventCount, nativeEventSnapshotsRef]);
   const assumedValue = props.value;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- records the committed controlled payload as the native editor's assumed state
   useEffect(() => {
     // Newer native events make this payload stale; do not record it as applied.
     if (isNativeEcho || controlledEventCount !== mostRecentEventCountRef.current) return;

@@ -19,7 +19,7 @@ import { enrichedMermaidBlocks, hasMermaid, mermaidNodeMarkdown } from "../lib/e
 import { enrichedFileLinks } from "../lib/enrichedFileLinks";
 import { MarkdownCodeBlock } from "../features/threads/MarkdownCodeBlock";
 import { isValidElement, useCallback, useMemo, useState, type ReactNode } from "react";
-import { Platform, Share, StyleSheet, Text, View } from "react-native";
+import { Platform, Share, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import {
   EnrichedMarkdownText,
   type MarkdownImageBlock,
@@ -42,6 +42,7 @@ import {
 function enrichedStyle(
   style: SelectableMarkdownTextProps["textStyle"],
   dark: boolean,
+  fontScale: number,
 ): MarkdownStyle {
   const monospace = Platform.OS === "ios" ? "Menlo" : "monospace";
   // Keep the radius modest: iOS clips square table-cell borders without stroking the corner arcs.
@@ -139,7 +140,13 @@ function enrichedStyle(
       borderWidth: 2,
       gapWidth: 12,
     },
-    list: { ...body, bulletColor: style.mutedColor, markerColor: style.mutedColor, gapWidth: 6 },
+    list: {
+      ...body,
+      bulletColor: style.mutedColor,
+      markerColor: style.mutedColor,
+      // The bullet is centred on the gap's edge and scales with the system text size; the gap must too.
+      gapWidth: 12 * fontScale,
+    },
     thematicBreak: { color: style.dividerColor, height: 1, marginTop: 8, marginBottom: 8 },
     table: {
       ...body,
@@ -192,7 +199,13 @@ function EnrichedMarkdownDocument(
     );
     const files = markdownWithFileEmbeds(content, fileEmbedLabel);
     return { ...files, markdown: markdownWithTableBreaks(files.markdown) };
-  }, [authoredMarkdown, fileEmbedLabel, props.fileResolutions, props.authoredImagePaths]);
+  }, [
+    authoredMarkdown,
+    fileEmbedLabel,
+    props.fileResolutions,
+    props.authoredImagePaths,
+    props.markdown,
+  ]);
   const mermaid = useMemo(
     () =>
       Platform.OS === "web"
@@ -216,14 +229,14 @@ function EnrichedMarkdownDocument(
   );
   const markdown = files.markdown;
   const [parsedLinkUrls, setParsedLinkUrls] = useState<ReadonlyArray<string>>([]);
-  const onLinksChange = useCallback((links: MarkdownLinkOccurrence[]) => {
+  const onLinksChange = (links: MarkdownLinkOccurrence[]) => {
     const urls = [...new Set(links.map((link) => link.url))];
     setParsedLinkUrls((previous) =>
       previous.length === urls.length && previous.every((url, index) => url === urls[index])
         ? previous
         : urls,
     );
-  }, []);
+  };
   const skillRegex = useMemo(() => enrichedSkillLinkRegex(props.skills), [props.skills]);
   // Skill links come from linkRecognition, which runs as the text is drawn, so
   // onLinksChange never reports them. Joined so a streaming tick keeps the value.
@@ -335,14 +348,22 @@ function EnrichedMarkdownDocument(
         : {}),
     };
   }, [props.contextClipboardFragment, props.markdown, props.skills, files, linkUrls]);
-  const markdownStyle = useMemo(
-    () => ({ ...enrichedStyle(props.textStyle, themeAppearance === "dark"), linkVariants }),
-    [props.textStyle, themeAppearance, linkVariants],
-  );
+  const { fontScale } = useWindowDimensions();
+  const markdownStyle = useMemo(() => {
+    const style = enrichedStyle(props.textStyle, themeAppearance === "dark", fontScale);
+    return {
+      ...style,
+      paragraph: props.textAlign
+        ? { ...style.paragraph, textAlign: props.textAlign }
+        : style.paragraph,
+      linkVariants,
+    };
+  }, [props.textStyle, props.textAlign, themeAppearance, fontScale, linkVariants]);
   const renderers = useMemo(
     () =>
       renderImage || mermaid.blocks.size > 0
         ? {
+            // oxlint-disable-next-line react/no-unstable-nested-components -- Native markdown calls this renderer as a block callback, not a React component type.
             image: (block: MarkdownImageBlock) => {
               const node = mermaid.blocks.get(block.url);
               if (node)
@@ -393,6 +414,7 @@ function EnrichedMarkdownDocument(
         <EnrichedMarkdownText
           markdown={files.markdown}
           markdownStyle={markdownStyle}
+          writingDirection={props.writingDirection}
           onLinksChange={onLinksChange}
           renderers={renderers}
           resolveImageSource={resolveNativeImageSource}
@@ -412,8 +434,10 @@ function EnrichedMarkdownDocument(
             latexMath: mathRenderingEnabled,
             hardSoftBreaks: props.preserveSoftBreaks ?? false,
             admonitions: true,
+            preserveWindowsPaths: true,
           }}
-          enableTaskListItemToggle={false}
+          enableTaskListItemToggle={props.onTaskListItemPress !== undefined}
+          onTaskListItemPress={props.onTaskListItemPress}
           enableCodeBlockWrapToggle
           spoilerOverlay="solid"
           onLinkPress={
@@ -490,7 +514,10 @@ function MermaidMarkdownBlock({
     return (
       <View style={{ minWidth: 0 }}>
         {node.children.map((item, index) => (
-          <View key={index} style={{ flexDirection: "row", minWidth: 0 }}>
+          <View
+            key={item.position?.start.offset ?? index}
+            style={{ flexDirection: "row", minWidth: 0 }}
+          >
             <Text
               style={{
                 color: style.color,
@@ -507,7 +534,7 @@ function MermaidMarkdownBlock({
               )}
               {item.children.map((child, childIndex) => (
                 <MermaidMarkdownBlock
-                  key={childIndex}
+                  key={child.position?.start.offset ?? childIndex}
                   node={child}
                   definitions={definitions}
                   markdownProps={markdownProps}
@@ -525,7 +552,7 @@ function MermaidMarkdownBlock({
       >
         {node.children.map((child, index) => (
           <MermaidMarkdownBlock
-            key={index}
+            key={child.position?.start.offset ?? index}
             node={child}
             definitions={definitions}
             markdownProps={markdownProps}
@@ -537,7 +564,7 @@ function MermaidMarkdownBlock({
     <View>
       {node.children.map((child, index) => (
         <MermaidMarkdownBlock
-          key={index}
+          key={child.position?.start.offset ?? index}
           node={child as RootContent}
           definitions={definitions}
           markdownProps={markdownProps}

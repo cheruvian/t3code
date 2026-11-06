@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Stream from "effect/Stream";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 // @effect-diagnostics nodeBuiltinImport:off
@@ -353,6 +354,8 @@ describe.each(["confirmed", "settled"] as const)("%s worktree removal", (mode) =
                   {
                     ...project,
                     projectId: project.id,
+                    pinnedAt: null,
+                    archivedAt: null,
                     defaultThreadEnvMode: null,
                     autoPull: false,
                     faviconPath: null,
@@ -399,7 +402,7 @@ describe.each(["confirmed", "settled"] as const)("%s worktree removal", (mode) =
                 baseDir,
               ),
             ),
-            Layer.provide(NodeServices.layer),
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           );
           const removed = yield* Effect.gen(function* () {
             const cleanup = yield* make;
@@ -488,7 +491,7 @@ describe.each(["confirmed", "settled"] as const)("%s worktree removal", (mode) =
           if (mode === "confirmed")
             expect(yield* fs.exists(`${worktree}/.env`)).toBe(!shouldRemove);
           expect(git("branch", "--list", "feature")).toContain("feature");
-        }).pipe(Effect.provide(NodeServices.layer)),
+        }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
       ),
   );
 });

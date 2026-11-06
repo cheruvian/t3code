@@ -6,13 +6,13 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as EventStore from "../../orchestration-v2/EventStore.ts";
-import * as ProjectionMaintenance from "../../orchestration-v2/ProjectionMaintenance.ts";
+import * as ProjectionReplay from "../../orchestration-v2/testkit/ProjectionReplay.ts";
 import * as ProjectionStore from "../../orchestration-v2/ProjectionStore.ts";
 import { runMigrations } from "../Migrations.ts";
-import Migration0066 from "./066_RepairClientSettlementTimestamps.ts";
+import Migration0066 from "./077_RepairClientSettlementTimestamps.ts";
 
 const layer = it.layer(
-  ProjectionMaintenance.layer.pipe(
+  ProjectionReplay.layer.pipe(
     Layer.provideMerge(
       Layer.mergeAll(EventStore.layer, ProjectionStore.layer).pipe(
         Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
@@ -28,11 +28,11 @@ const manualAt = "2026-10-01T00:00:00.000Z";
 const plusSeconds = (iso: string, seconds: number) =>
   DateTime.makeUnsafe(iso).pipe(DateTime.add({ seconds }), DateTime.formatIso);
 
-layer("066_RepairClientSettlementTimestamps", (it) => {
+layer("077_RepairClientSettlementTimestamps", (it) => {
   it.effect("repairs only sweep stamps, preserves overrides, and survives a V2 rebuild", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 64 });
+      yield* runMigrations({ toMigrationInclusive: 75 });
       assert.deepEqual(
         yield* sql`SELECT name FROM sqlite_master WHERE name = 'projection_turns'`,
         [],
@@ -314,7 +314,7 @@ layer("066_RepairClientSettlementTimestamps", (it) => {
       `;
       const overridesBefore = yield* overrides;
 
-      yield* runMigrations({ toMigrationInclusive: 66 });
+      yield* runMigrations({ toMigrationInclusive: 77 });
       const legacy = yield* sql`
         SELECT thread_id, settled_override, settled_at FROM projection_threads
         WHERE thread_id LIKE 'sweep-%' ORDER BY thread_id
@@ -359,11 +359,11 @@ layer("066_RepairClientSettlementTimestamps", (it) => {
         sql`SELECT * FROM orchestration_events ORDER BY sequence`,
       ]);
       const repaired = yield* snapshot;
-      assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 66 }), []);
+      assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 77 }), []);
       yield* Migration0066;
       assert.deepEqual(yield* snapshot, repaired);
 
-      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const maintenance = yield* ProjectionReplay.ProjectionReplay;
       assert.isTrue((yield* maintenance.rebuild).valid);
       assert.deepEqual(yield* imported, expectedImported);
     }),

@@ -126,10 +126,10 @@ const RendererStallMetadata = Schema.Struct({
 const encodeMetadata = Schema.encodeSync(Schema.fromJsonString(RendererStallMetadata));
 const encodeProfile = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
-const attempt = <A>(evaluate: () => A): Effect.Effect<A> => Effect.try(evaluate).pipe(Effect.orDie);
+const attempt = <A>(evaluate: () => A): Effect.Effect<A> => Effect.sync(evaluate);
 
 const attemptPromise = <A>(evaluate: () => Promise<A>): Effect.Effect<A> =>
-  Effect.tryPromise(evaluate).pipe(Effect.orDie);
+  Effect.promise(evaluate);
 
 export function makeRendererStallWatchdog(
   dependencies: RendererStallWatchdogDependencies,

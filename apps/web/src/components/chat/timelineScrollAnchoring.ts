@@ -39,23 +39,12 @@ export const CHAT_TIMELINE_ANCHOR_OFFSET = 24;
 
 export type TimelineScrollMode = "following-end" | "anchoring-new-turn" | "free-scrolling";
 
-export interface TimelineListMeasurementState {
+interface TimelineListMeasurementState {
   readonly data: readonly unknown[];
   readonly scroll: number;
   readonly scrollLength: number;
   readonly positionAtIndex: (index: number) => number | undefined;
   readonly sizeAtIndex: (index: number) => number | undefined;
-}
-
-export interface AnchoredTurnMetrics {
-  readonly anchorTop: number;
-  readonly lastBottom: number;
-  readonly turnHeight: number;
-  readonly usableViewportHeight: number;
-  readonly visibleUsableBottom: number;
-  readonly overflowsUsableViewport: boolean;
-  readonly targetScrollToRevealEnd: number;
-  readonly scrollDeltaToRevealEnd: number;
 }
 
 function getRowBottom(state: TimelineListMeasurementState, index: number): number | null {
@@ -90,7 +79,7 @@ export function timelineContentOverflowsViewport(
     return false;
   }
   const lastIndex = state.data.length - 1;
-  // Overflow can use an unmeasured tail's lower bound; anchored-turn metrics need its height.
+  // Overflow can use an unmeasured tail's lower bound.
   const lastTop = state.positionAtIndex(lastIndex);
   const lastBottom =
     getRowBottom(state, lastIndex) ??
@@ -233,4 +222,15 @@ export function rememberTimelinePosition(
     const oldest = rememberedTimelinePositions.keys().next().value;
     if (oldest !== undefined) rememberedTimelinePositions.delete(oldest);
   }
+}
+
+export interface AnchoredTurnMetrics {
+  readonly anchorTop: number;
+  readonly lastBottom: number;
+  readonly turnHeight: number;
+  readonly usableViewportHeight: number;
+  readonly visibleUsableBottom: number;
+  readonly overflowsUsableViewport: boolean;
+  readonly targetScrollToRevealEnd: number;
+  readonly scrollDeltaToRevealEnd: number;
 }

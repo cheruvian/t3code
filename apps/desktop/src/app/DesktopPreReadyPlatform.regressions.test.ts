@@ -1,6 +1,6 @@
+import * as ConfigProvider from "effect/ConfigProvider";
 import { assert, describe, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { afterEach, beforeEach, vi } from "vite-plus/test";
@@ -73,8 +73,9 @@ describe("DesktopPreReadyPlatform", () => {
 
   afterEach(() => vi.unstubAllEnvs());
 
-  for (const platform of ["darwin", "linux", "win32"] as const) {
-    it.effect(`configures renderer debugging before readiness on ${platform}`, () => {
+  it.effect.each(["darwin", "linux", "win32"] as const)(
+    "configures renderer debugging before readiness on %s",
+    (platform) => {
       vi.stubEnv("T3CODE_DESKTOP_DEBUG_PORT", "9222");
       return DesktopPreReadyPlatform.make.pipe(
         Effect.provideService(HostProcess.Platform, platform),
@@ -87,8 +88,8 @@ describe("DesktopPreReadyPlatform", () => {
           }),
         ),
       );
-    });
-  }
+    },
+  );
 
   it.effect("preserves an explicit Linux password-store switch", () => {
     hasSwitchMock.mockImplementation((switchName) => switchName === "password-store");
@@ -190,6 +191,13 @@ describe("DesktopPreReadyPlatform", () => {
         yield* Layer.build(
           DesktopPreReadyPlatform.layer.pipe(
             Layer.provide(Layer.succeed(HostProcess.Platform, "linux")),
+            Layer.provide(
+              ConfigProvider.layer(
+                ConfigProvider.fromEnv({
+                  env: { XDG_DATA_HOME: "/xdg", APPIMAGE: "/Applications/current.AppImage" },
+                }),
+              ),
+            ),
           ),
         );
         const identity = yield* Effect.promise(() => portalIdentity);

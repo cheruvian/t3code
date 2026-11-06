@@ -115,7 +115,7 @@ vi.mock(import("~/state/server"), async (original) => {
     serverEnvironment: { ...actual.serverEnvironment, configValueAtom: (() => config) as never },
   };
 });
-vi.mock(import("~/lib/sourceControlActions"), async (original) => ({
+vi.mock(import("~/state/sourceControlActions"), async (original) => ({
   ...(await original()),
   useSourceControlActionRunning: () => false,
   useGitStackedAction: ((scope: { cwd: string | null }) => ({
@@ -126,6 +126,7 @@ vi.mock(import("~/lib/sourceControlActions"), async (original) => ({
       return {
         _tag: "Success",
         value: {
+          pr: { status: "skipped_not_requested" },
           branch: input.featureBranch
             ? { status: "created", name: "feature" }
             : { status: "skipped_not_requested" },
