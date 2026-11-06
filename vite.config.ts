@@ -4,8 +4,6 @@ import * as NodeURL from "node:url";
 import { remoteCacheUrl } from "./infra/task-cache/src/remoteCache.ts";
 import { cachedTestTasks } from "./scripts/lib/cached-tests.ts";
 
-const DOM_TEST_ENVIRONMENT_ALLOWLIST: Array<string> = [];
-
 const TEST_EXCLUDE = [
   "**/.repos/**",
   "**/.t3/**",
@@ -325,7 +323,6 @@ export default defineConfig({
       },
       {
         files: ["apps/**/src/**", "packages/**/src/**"],
-        excludeFiles: DOM_TEST_ENVIRONMENT_ALLOWLIST,
         rules: { "t3code/no-dom-test-environment": "error" },
       },
       {
@@ -349,7 +346,6 @@ export default defineConfig({
         // These clients are session metadata, device streams, and an Expo update adapter.
         files: [
           "apps/web/src/components/settings/AuthorizedClientsSettings.tsx",
-          "apps/web/src/components/settings/ConnectionsSettings.tsx",
           "apps/mobile/src/features/updates/app-updates.ts",
           "apps/web/src/components/device/DevicePhoneViewport.tsx",
           "apps/web/src/components/device/DeviceDuoViewport.tsx",
@@ -413,8 +409,27 @@ export default defineConfig({
         },
       },
       {
-        // The one module allowed to name lucide's pull-request glyphs; everything else picks
-        // from its vocabulary. The other import restrictions still apply here.
+        files: ["apps/mobile/src/features/**"],
+        rules: {
+          "eslint/no-restricted-imports": [
+            "error",
+            {
+              paths: [...RESTRICTED_IMPORT_PATHS, RESTRICTED_PULL_REQUEST_GLYPH_IMPORTS],
+              patterns: [
+                {
+                  group: [
+                    "**/components/ui/AndroidScreenHeader",
+                    "**/components/ui/WorkspaceAppBar*",
+                  ],
+                  importNames: ["AndroidScreenHeader", "WorkspaceAppBar"],
+                  message: "Use AppBar, so every screen gets the same header and button metrics.",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
         files: ["apps/web/src/components/pullRequest/pullRequestIcons.tsx"],
         rules: { "eslint/no-restricted-imports": ["error", { paths: RESTRICTED_IMPORT_PATHS }] },
       },
@@ -569,6 +584,9 @@ export default defineConfig({
                 "rounded-[0.5em]",
                 "text-[0.86em]",
                 // Project icons render from 14px to 48px and keep one proportional corner.
+                "gap-[0.2em]",
+                "leading-[normal]",
+                "underline-offset-[0.2em]",
                 "rounded-[25%]",
                 // An emoji project icon fills its container, whatever size the parent gives it.
                 "text-[length:80cqh]",
@@ -624,11 +642,6 @@ export default defineConfig({
         },
       },
       {
-        // The sign-in masthead is T3 brand artwork: fixed gradients, not theme surfaces.
-        files: ["apps/web/src/components/auth/AuthSurfaceShell.tsx"],
-        rules: { "shadcn/no-arbitrary-values": "off" },
-      },
-      {
         // ESNext types allow APIs absent from Hermes; restrict shared client code, exempting Node tests.
         files: [
           "apps/mobile/src/**",
@@ -646,7 +659,7 @@ export default defineConfig({
       },
       {
         files: ["apps/web/src/**", "apps/mobile/src/**", "packages/*/src/**"],
-        rules: { "t3code/react-effect-budget": "error" },
+        rules: { "t3code/no-unreasoned-state-sync": "error" },
       },
       {
         // React Compiler caches use* functions only if they call a hook.
@@ -663,20 +676,14 @@ export default defineConfig({
           "apps/mobile/src/features/files/AttachmentFileScreen.tsx",
           "apps/mobile/src/features/files/ThreadFilesRouteScreen.tsx",
           "apps/mobile/src/features/files/thread-file-navigator-pane.tsx",
-          "apps/mobile/src/features/home/HomeHeader.tsx",
           "apps/mobile/src/features/review/ReviewSheet.tsx",
           "apps/mobile/src/features/review/useNativeReviewDiffBridge.ts",
           "apps/mobile/src/features/settings/SettingsEnvironmentsRouteScreen.tsx",
-          "apps/mobile/src/features/threads/GitActionProgressOverlay.tsx",
-          "apps/mobile/src/features/threads/NewTaskDraftScreen.tsx",
           "apps/mobile/src/features/threads/ThreadComposer.tsx",
           "apps/mobile/src/features/threads/ThreadFeed.tsx",
-          "apps/mobile/src/features/settings/appearance/components/FontSizeSliderRow.tsx",
-          "apps/mobile/src/features/threads/NewTaskContextPickerScreens.tsx",
           "apps/mobile/src/features/threads/ThreadQueueControl.tsx",
           "apps/mobile/src/features/review/ReviewCommentCard.tsx",
           "apps/mobile/src/features/threads/ThreadSettingsSheet.tsx",
-          "apps/mobile/src/features/threads/thread-list-items.tsx",
           "apps/mobile/src/features/threads/thread-list-v2-items.tsx",
           "apps/mobile/src/lib/useMobileNavigationTheme.ts",
           "apps/mobile/src/native/T3ComposerEditor.ios.tsx",

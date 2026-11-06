@@ -7,8 +7,8 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import { migrationEntries, migrationManifest, runMigrations } from "./Migrations.ts";
 import PullRequestFilesViewed from "./Migrations/058_PullRequestFilesViewed.ts";
-import RemoveRedundantProjectionIndexes from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
-import OrchestrationV2 from "./Migrations/055_OrchestrationV2.ts";
+import RemoveRedundantProjectionIndexes from "./Migrations/062_RemoveRedundantProjectionIndexes.ts";
+import OrchestrationV2 from "./Migrations/061_OrchestrationV2.ts";
 
 // Published upstream migration IDs are independent of the fork ledger.
 const upstreamPrefix = [45, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57];

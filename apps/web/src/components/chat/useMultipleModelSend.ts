@@ -1,10 +1,6 @@
+import { serverEnvironment } from "../../state/server";
 import { withOptimisticThreadCreation } from "../../optimisticThreadListStore";
-import {
-  type EnvironmentId,
-  type ModelSelection,
-  type RuntimeMode,
-  type ThreadId,
-} from "@t3tools/contracts";
+import type { EnvironmentId, ModelSelection, RuntimeMode, ThreadId } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -22,7 +18,6 @@ import type { ComposerHandleRef } from "../../composerHandleContext";
 import { releaseDraftAttachments } from "../../lib/attachmentUploadQueue";
 import type { buildMessageContext } from "../../lib/composerContextRecords";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
-import { environmentServerConfigsAtom } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { buildThreadRouteParams } from "../../threadRoutes";
@@ -161,7 +156,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
             uncertainSubmissions: uncertainSubmissionsRef.current,
             start: (targetThreadId) => {
               const supportsInlineMessageContext =
-                appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment
+                appAtomRegistry.get(serverEnvironment.configValueAtom(environmentId))?.environment
                   .capabilities.inlineMessageContext === true;
               return withOptimisticThreadCreation(
                 {

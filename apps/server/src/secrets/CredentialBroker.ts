@@ -2,7 +2,7 @@ import {
   Arguments as HostProcessArguments,
   IsExecutable as HostProcessIsExecutable,
 } from "@t3tools/shared/HostProcess";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Option from "effect/Option";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import { loadCaller, unavailable } from "../mcp/threadAccess.ts";
@@ -45,7 +45,7 @@ export class CredentialBroker extends Context.Service<
       | McpInvocationContext.McpInvocationContext
       | ProjectService.ProjectService
       | ThreadManagement.ThreadManagementService
-      | Crypto.Crypto
+      | SecureRandom.SecureRandom
     >;
     readonly action: (
       sessionId: string,
@@ -93,11 +93,11 @@ export const bindToolCall = Effect.fn("bindToolCall")(function* (
   const projects = yield* ProjectService.ProjectService;
   const project = yield* projects.getShell(caller.projectId).pipe(Effect.mapError(unavailable));
   if (Option.isNone(project)) return yield* unavailable();
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
 
   // The UUID names this exact handler invocation and its cancellable fiber.
   // Thread/session/run/workspace come from authenticated server state, never shell labels.
-  const toolCallId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+  const toolCallId = yield* crypto.uuidV4().pipe(Effect.orDie);
   const sequence = yield* context.threads
     .getThreadEventSequence(thread.threadId)
     .pipe(Effect.mapError(unavailable));

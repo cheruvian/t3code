@@ -1,6 +1,8 @@
+import { ServerDrainBanner } from "../components/ServerDrainBanner";
+import { DesktopSafeShutdownCoordinator } from "../components/desktop/DesktopSafeShutdownCoordinator";
 import { BackgroundPushCoordinator } from "../components/BackgroundPushCoordinator";
 import { CredentialBrokerCoordinator } from "../components/CredentialBrokerCoordinator";
-import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
+import type { ServerLifecycleWelcomePayload } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
   Outlet,
@@ -22,6 +24,7 @@ import { CustomSnoozeDialogHost } from "../components/CustomSnoozeDialog";
 import { GuestShareDialogHost } from "../components/chat/GuestShareControls";
 import { AddProjectToMachineDialogHost } from "../components/AddProjectToMachineDialog";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
+import { DevReplayHost } from "../components/DevReplayHost";
 import { FirstRunGate } from "../components/onboarding/FirstRunGate";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
@@ -47,7 +50,7 @@ import {
   deriveLogicalProjectKeyFromSettings,
   derivePhysicalProjectKeyFromPath,
   selectProjectGroupingSettings,
-} from "../logicalProject";
+} from "@t3tools/client-runtime/state/project-grouping";
 import { useUiStateStore } from "../uiStateStore";
 import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
@@ -146,6 +149,8 @@ function RootRouteBranch() {
   const pathname = useLocation({ select: (location) => location.pathname });
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
+  // A sync IPC read; the setting only changes across a relaunch.
+  const [localEnvironmentDisabled] = useState(isLocalEnvironmentDisabled);
   // Once true, stays true: a visit to /welcome means the bootstrap already chose a route.
   const [returningFromWelcome, setReturningFromWelcome] = useState(pathname === "/welcome");
   if (pathname === "/welcome" && !returningFromWelcome) setReturningFromWelcome(true);
@@ -197,8 +202,16 @@ function RootRouteBranch() {
         enabled={primaryEnvironmentAuthenticated}
         hostedStatic={authGateState.status === "hosted-static"}
       >
-        {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
-        {primaryEnvironmentAuthenticated ? <DesktopWebLinkCoordinator /> : null}
+        {primaryEnvironmentAuthenticated ? (
+          <>
+            <DesktopAppActivationCoordinator />
+            <DesktopSafeShutdownCoordinator />
+          </>
+        ) : null}
+        <ServerDrainBanner />
+        {primaryEnvironmentAuthenticated || localEnvironmentDisabled ? (
+          <DesktopWebLinkCoordinator />
+        ) : null}
         {isElectron ? <RunningThreadKeepAlive /> : null}
         <RelayClientInstallDialog />
         <ConnectOnboardingDialog />
@@ -213,6 +226,7 @@ function RootRouteBranch() {
         <GuestShareDialogHost />
         <ProjectCloneToastCoordinator />
         <AddProjectToMachineDialogHost />
+        {import.meta.env.DEV && primaryEnvironmentAuthenticated ? <DevReplayHost /> : null}
         {primaryEnvironmentAuthenticated ? (
           <EventRouter skipInitialBootstrapNavigation={returningFromWelcome} />
         ) : null}
@@ -232,12 +246,8 @@ function RootRouteErrorView({ error }: ErrorComponentProps) {
   const report = errorReport(error, pathname);
 
   return (
-    <StandalonePage tone="error">
-      <StandalonePageHeader
-        eyebrow={APP_DISPLAY_NAME}
-        title="Something went wrong."
-        description={message}
-      />
+    <StandalonePage>
+      <StandalonePageHeader title="Something went wrong." description={message} />
 
       <div className="mt-5 flex flex-wrap gap-2">
         <Button size="sm" onClick={() => void router.invalidate()}>
@@ -376,6 +386,7 @@ function EventRouter({
     })().catch(() => undefined);
   });
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- expands the bootstrap project in the UI store and navigates the router on a server welcome
   useEffect(() => {
     handleWelcome(serverWelcome);
   }, [serverWelcome]);

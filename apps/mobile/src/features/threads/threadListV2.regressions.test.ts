@@ -1,12 +1,11 @@
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import * as DateTime from "effect/DateTime";
-import { planPinnedMove } from "@t3tools/client-runtime/state/thread-sort";
+import { planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
 import {
   createPendingThreadOrder,
   createThreadMovePlanner,
   threadOrderAfterMove,
   threadDropLifecycle,
-  reconcilePendingThreadOrder,
   type PendingThreadOrder,
   type ThreadMoveAvailability,
 } from "./threadOrder";
@@ -69,14 +68,15 @@ describe("resolveThreadListV2SnoozeMenuSelection", () => {
     const displayedPresets = resolveSnoozePresets(menuOpenedAt);
 
     const selection = resolveThreadListV2SnoozeMenuSelection({
-      event: "snooze:evening",
+      presets: undefined,
+      event: "snooze:at:today:18:00",
       displayedPresets,
       now: selectedAt,
     });
 
     expect(selection).toEqual({
       _tag: "selected",
-      preset: displayedPresets.find((preset) => preset.id === "evening"),
+      preset: displayedPresets.find((preset) => preset.id === "at:today:18:00"),
     });
   });
 
@@ -85,7 +85,8 @@ describe("resolveThreadListV2SnoozeMenuSelection", () => {
 
     expect(
       resolveThreadListV2SnoozeMenuSelection({
-        event: "snooze:evening",
+        presets: undefined,
+        event: "snooze:at:today:18:00",
         displayedPresets,
         now: new Date(2026, 4, 8, 18, 0, 1),
       }),
@@ -870,12 +871,11 @@ describe("pending mobile thread moves", () => {
     const ordered = getThreadListV2OrderedSection({ threads: rows, section, now: NOW });
     const orderedIds = ordered.map((row) => `${row.environmentId}:${row.id}`);
     const movedId = orderedIds[2]!;
-    const assignments = planPinnedMove({
-      orderedIds,
+    const assignments = planPinnedReorder({
+      orderedIds: threadOrderAfterMove(orderedIds, movedId, "up")!,
       keysById: new Map(orderedIds.map((id) => [id, null])),
       movedId,
-      direction: "up",
-    })!;
+    });
     const pending = createPendingThreadOrder({
       section,
       ordered,
@@ -1317,11 +1317,6 @@ describe("buildThreadListV2ListItems trailing dividers", () => {
 });
 
 describe("buildThreadListV2ListItems row-state stamps", () => {
-  const readyThread = makeThread({
-    id: ThreadId.make("stamp-ready"),
-    title: "stamp ready",
-    latestUserMessageAt: isoAt(BASE_MS - 5 * MINUTE_MS),
-  });
   const settledThread = makeThread({
     id: ThreadId.make("stamp-settled"),
     title: "stamp settled",

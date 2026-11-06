@@ -61,11 +61,11 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof ORCHESTRATION_V2_WS_METHODS.searchThreadStream
   | typeof WS_METHODS.subscribeAuthAccess
   | typeof WS_METHODS.subscribeServerConfig
+  | typeof WS_METHODS.serverDrainSubscribe
   | typeof WS_METHODS.subscribeServerLifecycle
   | typeof WS_METHODS.scheduledTasksSubscribe
   | typeof WS_METHODS.serverGetStorageCleanupReport
   | typeof WS_METHODS.serverGetDatabaseStorage
-  | typeof WS_METHODS.subscribeTerminalEvents
   | typeof WS_METHODS.subscribeTerminalMetadata
   | typeof WS_METHODS.subscribePreviewEvents
   | typeof WS_METHODS.subscribeDiscoveredLocalServers
@@ -241,6 +241,7 @@ export function runStreamGuarded<TTag extends EnvironmentStreamCommandRpcTag>(
 }
 
 interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
+  /** Reports defects; the subscription then waits for the next session or resubscribe. */
   readonly onDefect?: (
     cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
   ) => Effect.Effect<void, never, never>;
@@ -465,6 +466,11 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         return handled.pipe(
                           Stream.concat(retrySubscription(options.retryExpectedFailureAfter)),
                         );
+                      }
+                      // A reported defect parks until the next session or resubscribe. Failing would
+                      // end the whole subscription, so a mounted screen never syncs again.
+                      if (options?.onDefect !== undefined && Cause.hasDies(cause)) {
+                        return Stream.empty;
                       }
                       return Stream.failCause(cause);
                     }),

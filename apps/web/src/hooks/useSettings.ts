@@ -383,14 +383,15 @@ export function useMergedSettings<T = UnifiedSettings>(
   });
 }
 
-export function resolveEnvironmentIdentificationMode(input: {
+function resolveEnvironmentIdentificationMode(input: {
   mode: EnvironmentIdentificationMode;
   settingsHydrated: boolean;
   paletteThemeActive?: boolean;
   paletteThemeAllowsArtwork?: boolean;
 }): EnvironmentIdentificationMode {
   if (!input.settingsHydrated) return "none";
-  return input.paletteThemeActive && !input.paletteThemeAllowsArtwork && input.mode === "artwork"
+  const isArtwork = input.mode !== "pill" && input.mode !== "none";
+  return input.paletteThemeActive && !input.paletteThemeAllowsArtwork && isArtwork
     ? "pill"
     : input.mode;
 }
@@ -414,12 +415,12 @@ export function useEnvironmentIdentificationMode(): EnvironmentIdentificationMod
   });
 }
 
-/**
- * Held at the default sidebar until client settings hydrate: the pre-hydration snapshot is just
- * the schema defaults, so resolving against it could mount one sidebar and then swap it out
- * once persisted settings land — remounting the whole tree for everyone instead of only for
- * legacy opt-ins.
- */
+/** Legacy sidebar opt-ins still count, so those users land in the boring sidebar. */
+export function useBoringSidebarEnabled(): boolean {
+  return useClientSettings(
+    (settings) => settings.boringSidebarEnabled || settings.legacySidebarEnabled,
+  );
+}
 
 export async function prepareModelPreferencesPatch(
   settings: ServerSettings,
@@ -573,7 +574,7 @@ function useSharedSettingsSyncTargetIds(includePending = false): ReadonlyArray<E
     if (includePending && result._tag === "Initial") {
       return [environmentId];
     }
-    const session = result._tag === "Failure" ? null : Option.getOrNull(AsyncResult.value(result));
+    const session = result._tag === "Failure" ? null : AsyncResult.getOrElse(result, () => null);
     return session !== null && sessionGrantsScope(session, AuthSettingsWriteScope)
       ? [environmentId]
       : [];
@@ -587,8 +588,12 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
     reportFailure: false,
   });
   const { environments } = useEnvironments();
-  const persistServerSettings = async (request: Parameters<typeof persist>[0]) => {
+  const persistServerSettings = async (
+    request: Parameters<typeof persist>[0],
+    onFailed?: () => void,
+  ) => {
     const result = await persist(request);
+    if (result._tag === "Failure") onFailed?.();
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const label =
         environments.find((environment) => environment.environmentId === request.environmentId)
@@ -603,7 +608,10 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
     return result;
   };
   const sharedSettingsSyncTargetIds = useSharedSettingsSyncTargetIds(true);
-  const updateSettings = (patch: UnifiedSettingsPatch) => {
+  const updateSettings = (
+    patch: UnifiedSettingsPatch,
+    options?: { readonly onFailed?: () => void },
+  ) => {
     const { serverPatch, clientPatch } = splitPatch(patch);
 
     const canWriteServerPatch =
@@ -612,6 +620,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
         readEnvironmentScope(environmentId, scope),
       );
     if (Object.keys(serverPatch).length > 0 && !canWriteServerPatch) {
+      options?.onFailed?.();
       toastManager.add({
         type: "warning",
         title: "Setting not saved",
@@ -621,18 +630,20 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
     if (Object.keys(serverPatch).length > 0 && canWriteServerPatch) {
       const { sharedPatch, localPatch } = splitSharedServerPatch(serverPatch);
       // Dropping the write silently leaves the control looking saved.
-      const warnUnsaved = (description = PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE) =>
-        toastManager.add({
+      const warnUnsaved = (description = PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE) => {
+        options?.onFailed?.();
+        return toastManager.add({
           type: "warning",
           title: "Setting not saved",
           description,
         });
+      };
       if (Object.keys(localPatch).length > 0) {
         if (environmentId) {
-          void persistServerSettings({
-            environmentId,
-            input: { patch: localPatch },
-          });
+          void persistServerSettings(
+            { environmentId, input: { patch: localPatch } },
+            options?.onFailed,
+          );
         } else {
           warnUnsaved();
         }
@@ -650,10 +661,10 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
           const target = environments.find((candidate) => candidate.environmentId === targetId);
           const targetPatch = filterSharedServerPatch(
             sharedPatch,
-            target?.serverConfig?.environment.capabilities,
             target?.serverConfig?.settings,
             sourceSettings,
             targetId === environmentId,
+            target?.serverConfig?.environment.capabilities,
           );
           if (Object.keys(targetPatch).length === 0) continue;
           const session = appAtomRegistry.get(environmentSession.sessionStateAtom(targetId));
@@ -688,6 +699,12 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
               result: await persist(request),
             })),
           ).then((outcomes) => {
+            if (
+              deniedLabels.length > 0 ||
+              outcomes.some(({ result }) => result._tag === "Failure")
+            ) {
+              options?.onFailed?.();
+            }
             const failures = outcomes.flatMap(({ label, result }) => {
               if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return [];
               const error = squashAtomCommandFailure(result);

@@ -350,7 +350,7 @@ describe("incoming native shares", () => {
     expect(
       selectIncomingShareAttachmentsForServer({
         attachments: [file],
-        serverConfig: { environment: { capabilities: { attachmentUploads: true } } },
+        serverConfig: { environment: { capabilities: {} } },
       }),
     ).toMatchObject({ status: "ready", attachments: [] });
     expect(

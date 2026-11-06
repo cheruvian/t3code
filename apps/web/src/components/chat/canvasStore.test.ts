@@ -43,18 +43,20 @@ describe("chat canvas model", () => {
     expect(resolve(900)).toBe("popover");
   });
 
-  it("moves the card into a popover when a preview below it leaves too little height", () => {
+  it("keeps the left card inline when the preview fits beside its full height", () => {
     const resolve = (fullContentHeight: number) =>
       resolveChatCanvasModel({
         measurements: measurements(1100, 300),
         detailsCardMeasurement: { threadRef, width: 280, fullContentHeight },
         threadRef,
-        preview: { ...preview, position: { x: 760, y: 150 }, lastInteraction: "drag" },
+        preview: { ...preview, position: { x: 12, y: 150 }, lastInteraction: "drag" },
         detailsCardInlineOpen: true,
       });
     const model = resolve(400);
-    expect(model.layout.overlapsDetailsCard).toBe(true);
-    expect(model.detailsCardMode).toBe("popover");
+    expect(model.preferredDetailsCard?.x).toBe(12);
+    expect(model.layout.frame!.x).toBeGreaterThanOrEqual(292 + 12);
+    expect(model.layout.overlapsDetailsCard).toBe(false);
+    expect(model.detailsCardMode).toBe("inline");
   });
 
   it("ignores a details card measured for another thread", () => {
@@ -62,7 +64,7 @@ describe("chat canvas model", () => {
       measurements: measurements(1100, 300),
       detailsCardMeasurement: { threadRef: otherThreadRef, width: 280, fullContentHeight: 400 },
       threadRef,
-      preview: { ...preview, position: { x: 760, y: 150 }, lastInteraction: "drag" },
+      preview: { ...preview, position: { x: 12, y: 150 }, lastInteraction: "drag" },
       detailsCardInlineOpen: true,
     });
     expect(model.layout.overlapsDetailsCard).toBe(false);

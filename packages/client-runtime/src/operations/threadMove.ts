@@ -11,7 +11,7 @@ import {
 } from "@t3tools/contracts";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import * as Effect from "effect/Effect";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Registry from "../connection/registry.ts";
@@ -333,8 +333,8 @@ export const moveThread = Effect.fn("clientRuntime.moveThread")(function* (input
     Registry.EnvironmentRegistry | Supervisor.EnvironmentSupervisor
   >();
   const execute = Effect.runPromiseWith(context);
-  const crypto = yield* Crypto.Crypto;
-  const moveId = input.moveId ?? (yield* crypto.randomUUIDv4().pipe(Effect.orDie));
+  const crypto = yield* SecureRandom.SecureRandom;
+  const moveId = input.moveId ?? (yield* crypto.uuidV4().pipe(Effect.orDie));
   const sourceEnvironmentId = source.target.environmentId;
   if (sourceEnvironmentId === input.destinationEnvironmentId)
     return yield* new ThreadMoveTransferError({

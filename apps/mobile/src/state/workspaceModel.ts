@@ -1,4 +1,4 @@
-import { type EnvironmentShellSummary } from "@t3tools/client-runtime/state/shell";
+import type { EnvironmentShellSummary } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId, ServerConfig } from "@t3tools/contracts";
 
 import {
@@ -8,7 +8,6 @@ import {
 
 import type { EnvironmentConnectionSummary as WorkspaceEnvironment } from "@t3tools/client-runtime/state/presentation";
 
-export { projectEnvironmentConnectionSummary as projectWorkspaceEnvironment } from "@t3tools/client-runtime/state/presentation";
 export type { EnvironmentConnectionSummary as WorkspaceEnvironment } from "@t3tools/client-runtime/state/presentation";
 
 export interface WorkspaceConnectionState {

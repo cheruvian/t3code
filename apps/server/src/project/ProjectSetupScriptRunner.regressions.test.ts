@@ -1,4 +1,6 @@
-import * as TestClock from "effect/testing/TestClock";
+import * as Stream from "effect/Stream";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+
 import * as Context from "effect/Context";
 import * as Queue from "effect/Queue";
 import { T3ProjectFileLoader } from "./T3ProjectFileLoader.ts";
@@ -57,13 +59,14 @@ const makeProjectionSnapshotQueryLayer = (project: Project) =>
     snapshot: Effect.die("unused"),
     getShell: () => Effect.die("unused"),
     listShells: () => Effect.die("unused"),
+    listPage: () => Effect.die("unused"),
     getById: (id) => Effect.succeed(id === project.id ? Option.some(project) : Option.none()),
     getByWorkspaceRoot: (root) =>
       Effect.succeed(root === project.workspaceRoot ? Option.some(project) : Option.none()),
   });
 
 type TerminalOverrides = Pick<TerminalManager.TerminalManager["Service"], "open" | "write"> &
-  Partial<Pick<TerminalManager.TerminalManager["Service"], "subscribe" | "closeIdle">>;
+  Partial<Pick<TerminalManager.TerminalManager["Service"], "subscribe" | "closeIdle" | "getShell">>;
 
 class SetupWrites extends Context.Service<SetupWrites, Queue.Queue<void>>()(
   "t3/project/ProjectSetupScriptRunner.regressions.test/SetupWrites",
@@ -88,13 +91,14 @@ const makeTerminalManagerLayer = (overrides: TerminalOverrides) =>
       const writes = yield* Queue.unbounded<void>();
       const listeners = new Set<(event: TerminalEvent) => Effect.Effect<void>>();
       const terminal = TerminalManager.TerminalManager.of({
+        getShell: () => Effect.succeed("/bin/zsh"),
+        attachOutputStream: () => Stream.die("unused"),
         hasOpenForThread: () => Effect.succeed(false),
         observeStream: () => Effect.die("unused"),
         attachStream: () => Effect.die("unused"),
         resyncStream: () => Effect.die("unused"),
         resize: () => Effect.void,
         clear: () => Effect.void,
-        restart: () => Effect.die("unused"),
         close: () => Effect.void,
         closeIdle: () => Effect.void,
         subscribeMetadata: () => Effect.succeed(() => undefined),
@@ -144,6 +148,9 @@ const testLayer = (
   fileScripts: readonly T3ProjectFileScript[] = [],
 ) =>
   ProjectSetupScriptRunner.layer.pipe(
+    Layer.provide(
+      Layer.mock(ProjectionStore.ProjectionStoreV2)({ getThreadShell: () => Effect.succeed(null) }),
+    ),
     Layer.provide(NodeCrypto.layer),
     Layer.provide(
       Layer.succeed(T3ProjectFileLoader, {
@@ -822,7 +829,7 @@ describe("ProjectSetupScriptRunner", () => {
       expect(writes).toHaveLength(1);
       expect(writes[0]).toMatch(expected);
     }).pipe(
-      Effect.provide(testLayer(project, { open, write })),
+      Effect.provide(testLayer(project, { open, write, getShell: () => Effect.succeed(shell) })),
       Effect.provideService(HostProcessPlatform, "linux"),
       Effect.provideService(HostProcessEnvironment, { SHELL: shell }),
     );
@@ -931,6 +938,9 @@ it.effect("resolves setup scripts through the standalone project service", () =>
     deletedAt: null,
   };
   const layer = ProjectSetupScriptRunner.layer.pipe(
+    Layer.provide(
+      Layer.mock(ProjectionStore.ProjectionStoreV2)({ getThreadShell: () => Effect.succeed(null) }),
+    ),
     Layer.provideMerge(makeTerminalManagerLayer({ open, write, subscribe, closeIdle })),
     Layer.provide(
       Layer.mergeAll(

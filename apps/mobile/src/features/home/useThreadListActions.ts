@@ -34,6 +34,7 @@ import { refreshArchivedThreadsForEnvironment } from "../archive/useArchivedThre
 import { pinOrderKeyBetween } from "@t3tools/client-runtime/state/thread-sort";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentServerConfigsAtom } from "../../state/server";
+import { connectedEnvironmentIdsAtom } from "../../state/presentation";
 import { readEnvironmentScope } from "../../state/session";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { vcsEnvironment } from "../../state/vcs";
@@ -298,7 +299,7 @@ function useThreadActionExecutor(
 
     inFlightThreadKeys.current.add(key);
     selectionHaptic();
-    try {
+    return await (async () => {
       if (action === "unarchive" && threadMoveUndoParticipants(thread))
         return await undoMobileThreadMove(thread);
       if (
@@ -451,9 +452,9 @@ function useThreadActionExecutor(
       }
       onCompleted?.(action, thread);
       return true;
-    } finally {
+    })().finally(() => {
       inFlightThreadKeys.current.delete(key);
-    }
+    });
   };
 
   return executeAction;
@@ -868,7 +869,7 @@ export function useThreadListActions(): {
   const moveThread = async (thread: EnvironmentThreadShell, direction: ThreadMoveDestination) => {
     if (!checkThreadOperationPermission(thread, "Could not move thread")) return false;
     if (getPendingThreadOrder() !== null || appAtomRegistry.get(threadDropBusyAtom)) return false;
-    const shells = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
+    const shells = appAtomRegistry.get(environmentThreadShells.navigationThreadShellsAtom);
     const current = shells.find(
       (row) => row.id === thread.id && row.environmentId === thread.environmentId,
     );
@@ -890,7 +891,9 @@ export function useThreadListActions(): {
       return settled;
     }
     const configs = appAtomRegistry.get(environmentServerConfigsAtom);
+    const connectedEnvironmentIds = new Set(appAtomRegistry.get(connectedEnvironmentIdsAtom));
     const supportsReorder = (environmentId: EnvironmentThreadShell["environmentId"]) => {
+      if (!connectedEnvironmentIds.has(environmentId)) return false;
       const capabilities = configs.get(environmentId)?.environment.capabilities;
       return section === "pinned"
         ? capabilities?.threadPinReorder === true

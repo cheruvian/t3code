@@ -123,6 +123,7 @@ function EnvironmentBroker({
         : undefined,
     );
   };
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Publish native app visibility to the broker presenter registry.
   useEffect(() => {
     if (!state?.status || !canAct) return;
     const publish = (status: string) => {
@@ -151,10 +152,12 @@ function EnvironmentBroker({
   const setOpen = (open: boolean) => setPresentation({ ...nextPresentation, open });
   const hasAttention = open;
   const shown = focused && open;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Register this dialog's attention state with the native credential coordinator.
   useEffect(() => {
     report(environmentId, hasAttention);
     return () => report(environmentId, false);
   }, [environmentId, hasAttention, report]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Invalidate the native onShow acknowledgment when the modal leaves the visible surface.
   useEffect(() => {
     if (!shown) nativeVisible.current = false;
   }, [shown]);
@@ -519,7 +522,7 @@ function Approval({
   const submit = async (choice: "once" | "always" | "deny") => {
     if (disabled || submitting) return;
     setSubmitting(true);
-    try {
+    return await (async () => {
       await act({
         type: "decide",
         requestId: request.requestId,
@@ -529,9 +532,9 @@ function Approval({
         ...(choice !== "deny" && saveHost ? { saveHost: true } : {}),
         ...(choice !== "deny" && selection ? { candidateId: selection } : {}),
       });
-    } finally {
+    })().finally(() => {
       setSubmitting(false);
-    }
+    });
   };
   return (
     <View className="gap-4">

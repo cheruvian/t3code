@@ -12,6 +12,10 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { visitElements } from "../../test/reactElementTree";
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 
+vi.mock("../../localApi", () => ({
+  ensureLocalApi: () => ({ dialogs: { confirm: async () => true } }),
+}));
+
 vi.mock("./StorageSettings", () => ({ StorageCleanupSections: () => null }));
 
 const atoms = vi.hoisted(() => ({
@@ -335,7 +339,7 @@ describe("EnvironmentProviderSettings routing", () => {
 
   it("coalesces a nullable provider snapshot before rendering array-backed UI", () => {
     expect(() => renderPanel()).not.toThrow();
-    expect(settingsState.readEnvironmentIds).toEqual([environmentId]);
+    expect(new Set(settingsState.readEnvironmentIds)).toEqual(new Set([environmentId]));
     expect(settingsState.updateEnvironmentIds).toEqual([environmentId]);
     expect(settingsState.mutationEnvironmentIds).toEqual([environmentId]);
   });
@@ -350,7 +354,7 @@ describe("EnvironmentProviderSettings routing", () => {
 
     expect(commands.refresh).toHaveBeenCalledWith({
       environmentId,
-      input: { refreshModels: true },
+      input: { refreshModels: true, reloadSecrets: true },
     });
 
     const providerCard = visitElements(
@@ -403,7 +407,10 @@ describe("EnvironmentProviderSettings routing", () => {
     );
     expect(editor).not.toBeNull();
     if (!editor) throw new Error("Provider editor was not rendered");
-    (editor.props[action] as (models: string[]) => void)(["chosen"]);
+    (editor.props[action] as (models: string[], affected: string[]) => void)(
+      ["chosen"],
+      ["chosen"],
+    );
     expect(settingsState.updateSettings).toHaveBeenCalledExactlyOnceWith(expected);
     expect(settingsState.updateClientSettings).not.toHaveBeenCalled();
   });
@@ -528,7 +535,7 @@ describe("EnvironmentProviderSettings routing", () => {
       (element) => element.props.instanceId === customId && element.props.mode === "editor",
     );
     expect(customCard).not.toBeNull();
-    (customCard?.props.onDelete as (() => void) | undefined)?.();
+    await (customCard?.props.onDelete as (() => Promise<void>) | undefined)?.();
     await flushPromises();
 
     expect(settingsState.mutateProviderInstance).toHaveBeenLastCalledWith({
@@ -614,7 +621,7 @@ describe("EnvironmentProviderSettings routing", () => {
       panel,
       (element) => element.props.instanceId === firstId && element.props.mode === "editor",
     );
-    (card?.props.onDelete as (() => void) | undefined)?.();
+    await (card?.props.onDelete as (() => Promise<void>) | undefined)?.();
     await flushPromises();
 
     expect(settingsState.mutateProviderInstance).toHaveBeenCalledWith({

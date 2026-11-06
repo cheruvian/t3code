@@ -1,3 +1,5 @@
+import * as NodePath from "@effect/platform-node/NodePath";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   DEFAULT_SERVER_SETTINGS,
   EventId,
@@ -10,7 +12,7 @@ import {
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -198,7 +200,6 @@ describe("ThreadPullRequestServiceV2 reads", () => {
             listShells: () => Effect.succeed([]),
           }),
           Layer.mock(BackgroundPolicy.BackgroundPolicy)({
-            hasDemand: () => Effect.succeed(true),
             shouldRunScopeWork: () => Effect.succeed(true),
             shouldRunOpportunisticWork: Effect.succeed(true),
           }),
@@ -206,13 +207,8 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           Layer.mock(PullRequestService.PullRequestService)({}),
           Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
           Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
-          Layer.succeed(
-            Crypto.Crypto,
-            Crypto.make({
-              randomBytes: (size) => new Uint8Array(size).fill(1),
-              digest: (_algorithm, data) => Effect.succeed(data),
-            }),
-          ),
+          NodeCrypto.layer,
+          NodePath.layer,
           FileSystem.layerNoop({}),
         );
 
@@ -291,7 +287,6 @@ describe("ThreadPullRequestServiceV2 reads", () => {
             listShells: () => Effect.succeed([]),
           }),
           Layer.mock(BackgroundPolicy.BackgroundPolicy)({
-            hasDemand: () => Effect.succeed(true),
             shouldRunScopeWork: () => Effect.succeed(true),
             shouldRunOpportunisticWork: Effect.succeed(true),
           }),
@@ -299,13 +294,8 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           Layer.mock(PullRequestService.PullRequestService)({}),
           Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
           Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
-          Layer.succeed(
-            Crypto.Crypto,
-            Crypto.make({
-              randomBytes: (size) => new Uint8Array(size).fill(1),
-              digest: (_algorithm, data) => Effect.succeed(data),
-            }),
-          ),
+          NodeCrypto.layer,
+          NodePath.layer,
           FileSystem.layerNoop({}),
         );
 
@@ -428,13 +418,8 @@ describe("ThreadPullRequestServiceV2 reads", () => {
             resolve: () => Effect.succeed(identity),
           }),
           Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
-          Layer.succeed(
-            Crypto.Crypto,
-            Crypto.make({
-              randomBytes: (size) => new Uint8Array(size).fill(1),
-              digest: (_algorithm, data) => Effect.succeed(data),
-            }),
-          ),
+          NodeCrypto.layer,
+          NodePath.layer,
           FileSystem.layerNoop({}),
         );
         yield* Effect.gen(function* () {
@@ -478,7 +463,6 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           }),
           Layer.mock(ProjectStore.ProjectStoreV2)({ listShells: () => Effect.succeed([]) }),
           Layer.mock(BackgroundPolicy.BackgroundPolicy)({
-            hasDemand: () => Effect.succeed(true),
             shouldRunScopeWork: () => Effect.succeed(true),
             shouldRunOpportunisticWork: Effect.succeed(true),
           }),
@@ -486,13 +470,8 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           Layer.mock(PullRequestService.PullRequestService)({}),
           Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
           Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
-          Layer.succeed(
-            Crypto.Crypto,
-            Crypto.make({
-              randomBytes: (size) => new Uint8Array(size).fill(1),
-              digest: (_algorithm, data) => Effect.succeed(data),
-            }),
-          ),
+          NodeCrypto.layer,
+          NodePath.layer,
           FileSystem.layerNoop({}),
         );
         yield* Effect.gen(function* () {

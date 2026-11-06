@@ -1,5 +1,4 @@
 import {
-  useCallback,
   type KeyboardEvent,
   type ReactNode,
   type RefObject,
@@ -26,6 +25,7 @@ import {
 } from "lucide-react";
 import { useLocation } from "@tanstack/react-router";
 
+import { flushSync } from "react-dom";
 import {
   AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
@@ -739,6 +739,7 @@ function useKeybindingRowEditor({
   onSave: (input: ServerUpsertKeybindingInput) => void;
 }) {
   const [draft, setDraft] = useReducer(keybindingRowDraftReducer, row, createKeybindingRowDraft);
+  const pillRef = useRef<HTMLButtonElement>(null);
   const { keyDraft, whenDraft, isRecording, isWhenDraftValid } = draft;
   const whenDraftExpression = whenAstToExpression(whenDraft);
   const isDirty = keyDraft !== row.key || whenDraftExpression !== row.when;
@@ -760,7 +761,13 @@ function useKeybindingRowEditor({
   const captureKeybinding = (event: KeyboardEvent<HTMLInputElement>) => {
     event.preventDefault();
     if (event.key === "Escape") {
-      setDraft({ keyDraft: row.key, isRecording: false });
+      // An unhandled Escape closes the settings page.
+      event.stopPropagation();
+      const field = event.currentTarget;
+      flushSync(() => setDraft({ keyDraft: row.key, isRecording: false }));
+      // The field may unmount for the pill; focus would otherwise drop to the page.
+      if (pillRef.current) pillRef.current.focus();
+      else field.blur();
       return;
     }
     const next = keybindingFromKeyboardEvent(event.nativeEvent, navigator.platform, {
@@ -781,6 +788,7 @@ function useKeybindingRowEditor({
     setDraft,
     save,
     captureKeybinding,
+    pillRef,
   };
 }
 
@@ -812,8 +820,16 @@ function KeybindingKeyControl({
   isSaving: boolean;
   pillClassName?: string | undefined;
 }) {
-  const { keyDraft, isRecording, isDirty, isWhenDraftValid, setDraft, save, captureKeybinding } =
-    editor;
+  const {
+    keyDraft,
+    isRecording,
+    isDirty,
+    isWhenDraftValid,
+    setDraft,
+    save,
+    captureKeybinding,
+    pillRef,
+  } = editor;
   const showPill = !isRecording && keyDraft === row.key && row.key.length > 0 && !isDirty;
 
   return (
@@ -829,6 +845,7 @@ function KeybindingKeyControl({
       ) : null}
       {showPill ? (
         <button
+          ref={pillRef}
           type="button"
           onClick={() => setDraft({ isRecording: true })}
           aria-label={`Edit shortcut for ${commandLabel(row.command)}: ${formatShortcutLabel(row.binding.shortcut)}`}
@@ -875,8 +892,13 @@ function WhenClauseControl({
   onChange: (value: KeybindingWhenNode | undefined) => void;
   onValidityChange: (valid: boolean) => void;
 }) {
+  // Closing unmounts the builder, which drops an unparsed draft and keeps the last valid value.
+  const handleOpenChange = (open: boolean) => {
+    if (!open) onValidityChange(true);
+  };
+
   return (
-    <Popover>
+    <Popover onOpenChange={handleOpenChange}>
       <PopoverTrigger
         render={
           <Button
@@ -1076,7 +1098,10 @@ function useNewKeybindingDraft({
   const captureKeybinding = (event: KeyboardEvent<HTMLInputElement>) => {
     event.preventDefault();
     if (event.key === "Escape") {
+      // An unhandled Escape closes the settings page.
+      event.stopPropagation();
       setDraft({ keyDraft: "", isRecording: false });
+      event.currentTarget.blur();
       return;
     }
     const next = keybindingFromKeyboardEvent(event.nativeEvent, navigator.platform, {
@@ -1343,7 +1368,6 @@ export function KeybindingsSettingsPanel() {
   );
   const [query, setQuery] = useState("");
   const [shortcutQuery, setShortcutQuery] = useState<string | null>(null);
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [savingCommand, setSavingCommand] = useState<KeybindingCommand | null>(null);
   const [isAddingBinding, setIsAddingBinding] = useState(false);
@@ -1358,14 +1382,14 @@ export function KeybindingsSettingsPanel() {
       setShortcutQuery(null);
     }
   }
-  const changeSearch = useCallback((next: string) => {
+  const changeSearch = (next: string) => {
     setQuery(next);
     setShortcutQuery(null);
-  }, []);
-  const searchShortcut = useCallback((next: string) => {
+  };
+  const searchShortcut = (next: string) => {
     setQuery(next);
     setShortcutQuery(next);
-  }, []);
+  };
   const whenVariables = buildWhenVariableOptions();
   const { commandOptions, allRows } = useKeybindingCatalog();
   const rows = filterKeybindingRows(allRows, query, shortcutQuery);

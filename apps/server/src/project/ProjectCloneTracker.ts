@@ -1,11 +1,14 @@
+import { SourceControlProviderKind } from "@t3tools/contracts";
+import type {
+  ProjectCloneSnapshot,
+  ProjectCloneStage,
+  ProjectCloneStartInput,
+  ProjectCloneStartResult,
+  ProjectId,
+  SourceControlCloneProtocol,
+  SourceControlRepositoryInfo,
+} from "@t3tools/contracts";
 import {
-  SourceControlProviderKind,
-  type ProjectCloneSnapshot,
-  type ProjectCloneStage,
-  type ProjectCloneStartInput,
-  type ProjectCloneStartResult,
-  type ProjectId,
-  type SourceControlRepositoryInfo,
   OrchestrationDispatchCommandError,
   PROJECT_CLONE_DETAIL_MAX_LENGTH,
   PROJECT_CLONE_ERROR_MAX_LENGTH,
@@ -84,6 +87,7 @@ interface TrackedClone {
     readonly cloneUrl: string;
     readonly destinationPath: string;
     readonly repository: SourceControlRepositoryInfo | null;
+    readonly protocol: SourceControlCloneProtocol;
   };
 }
 
@@ -215,7 +219,11 @@ export const make = Effect.gen(function* () {
     const pulses = yield* Queue.sliding<void>(1);
     yield* watchForStall(projectId, pulses).pipe(Effect.forkScoped);
     return yield* repositories.cloneRepository(
-      { remoteUrl: tracked.input.cloneUrl, destinationPath: tracked.input.destinationPath },
+      {
+        remoteUrl: tracked.input.cloneUrl,
+        destinationPath: tracked.input.destinationPath,
+        protocol: tracked.input.protocol,
+      },
       {
         onProgress: (update) =>
           Queue.offer(pulses, undefined).pipe(Effect.andThen(progress(projectId, update))),
@@ -294,6 +302,7 @@ export const make = Effect.gen(function* () {
             cloneUrl: prepared.cloneUrl,
             destinationPath: prepared.destinationPath,
             repository: prepared.repository,
+            protocol: input.protocol ?? "auto",
           },
         });
         return [true, next] as const;

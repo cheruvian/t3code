@@ -1,8 +1,12 @@
+import { makeReplayServerConfig } from "../testkit/ProviderReplayHarness.ts";
+import * as Digest from "effect/crypto/Digest";
+import * as PortScanner from "../../preview/PortScanner.ts";
+import * as Redacted from "effect/Redacted";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { parseGoalCommand } from "@t3tools/contracts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as NodeOS from "node:os";
 
-import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
 import {
   makeProviderTextDeltaCoalescer,
   type ProviderTextDeltaUpdate,
@@ -19,7 +23,6 @@ import {
   type OrchestrationV2AppThread,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
-  type OrchestrationV2TurnItem,
   ProjectId,
   type ProviderApprovalDecision,
   ProviderInstanceId,
@@ -29,9 +32,8 @@ import {
   RunAttemptId,
   RunId,
   ThreadId,
-  TurnItemId,
 } from "@t3tools/contracts";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, it, expect } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import * as CodexClient from "effect-codex-app-server/client";
@@ -39,12 +41,12 @@ import * as CodexError from "effect-codex-app-server/errors";
 import * as CodexReplay from "effect-codex-app-server/replay";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
-import * as Crypto from "effect/Crypto";
+
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as FileSystem from "effect/FileSystem";
-import { MCP_APP_OUTPUT_KEY, readMcpAppReference } from "@t3tools/shared/mcpApp";
-import { resolveAttachmentPathById } from "../../attachmentStore.ts";
+import { MCP_APP_OUTPUT_KEY } from "@t3tools/shared/mcpApp";
+
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -66,7 +68,7 @@ import * as ProviderReplayHarness from "../testkit/ProviderReplayHarness.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
-import { makeReplayServerConfig, withCodexReplayChildMetadata } from "./CodexAdapterV2.testkit.ts";
+import { withCodexReplayChildMetadata } from "./CodexAdapterV2.testkit.ts";
 import * as CodexAdapterV2Testkit from "./CodexAdapterV2.testkit.ts";
 
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
@@ -562,7 +564,9 @@ describe("CodexAdapterV2 runtime policy", () => {
         params.additionalContext?.t3_code_runtime?.value ?? "",
         "/runtime/t3code/.agents/skills/t3-cli-api/SKILL.md",
       );
-      assert.isUndefined(params.additionalContext?.t3_code_tools);
+      assert.isFalse(
+        Object.keys(params.additionalContext ?? {}).some((key) => key.startsWith("t3_code_tools")),
+      );
       assert.isUndefined(params.additionalContext?.t3_code_orchestration);
     }),
   );
@@ -588,7 +592,13 @@ describe("CodexAdapterV2 runtime policy", () => {
 
         assert.equal(params.collaborationMode?.mode, "plan");
         assert.isUndefined(params.collaborationMode?.settings.developer_instructions);
-        assert.include(params.additionalContext?.t3_code_tools?.value ?? "", "preview_status");
+        assert.include(
+          Object.entries(params.additionalContext ?? {})
+            .filter(([key]) => key.startsWith("t3_code_tools"))
+            .map(([, entry]) => entry.value)
+            .join("\n\n"),
+          "preview_status",
+        );
       }),
   );
 
@@ -623,7 +633,6 @@ describe("CodexAdapterV2 runtime policy", () => {
           runtimeMode: "full-access",
           interactionMode: "plan",
           cwd: "/workspace/model-options",
-          reasoningEffort: "low",
         },
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
@@ -678,6 +687,7 @@ describe("CodexAdapterV2 process spawning", () => {
 
     assert.deepEqual(
       CodexAdapterV2.codexThreadRuntimeParams({
+        threadId,
         mcpSession,
         modelSelection: { model: "gpt-5.4" },
         runtimePolicy: {
@@ -691,9 +701,18 @@ describe("CodexAdapterV2 process spawning", () => {
         model: "gpt-5.4",
         config: {
           "tools.update_plan.enabled": true,
-          // Codex waits up to 10 s, not 1 s, for MCP servers before the first request (#13437).
+          "shell_environment_policy.set.T3CODE_THREAD_ID": threadId,
+          // Codex waits up to 10 s, not 1 s, for MCP servers before the first request.
           mcp_optional_startup_grace_ms: 10_000,
+          "mcp_servers.t3-code-direct": {
+            url: "http://127.0.0.1:43123/mcp",
+            tool_timeout_sec: 3_900,
+            http_headers: { Authorization: "Bearer secret-codex-token" },
+            enabled_tools: ["t3_thread_wait"],
+            omit_tools_from: ["code_mode", "deferred"],
+          },
           "mcp_servers.t3-code": {
+            disabled_tools: ["t3_thread_wait"],
             url: "http://127.0.0.1:43123/mcp",
             tool_timeout_sec: 3_900,
             http_headers: {
@@ -766,13 +785,20 @@ describe("CodexAdapterV2 process spawning", () => {
     Effect.gen(function* () {
       const spawnedArgs: Array<ReadonlyArray<string>> = [];
       const spawner = ChildProcessSpawner.make((command) => {
-        if (ChildProcess.isStandardCommand(command)) spawnedArgs.push(command.args);
+        if (ChildProcess.isStandardCommand(command))
+          spawnedArgs.push(
+            command.args.map((arg) => (typeof arg === "string" ? arg : Redacted.value(arg))),
+          );
         return Effect.fail(
           PlatformError.systemError({ _tag: "NotFound", module: "ChildProcess", method: "spawn" }),
         );
       });
       const factory = yield* CodexAdapterV2.CodexAppServerClientFactory.pipe(
-        Effect.provide(CodexAdapterV2.layerAppServerClientFactory),
+        Effect.provide(
+          CodexAdapterV2.layerAppServerClientFactory.pipe(
+            Layer.provide(Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => {} })),
+          ),
+        ),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(
           ProviderEventLoggers.ProviderEventLoggers,
@@ -827,7 +853,9 @@ describe("CodexAdapterV2 process spawning", () => {
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
-            CodexAdapterV2.layerAppServerClientFactory,
+            CodexAdapterV2.layerAppServerClientFactory.pipe(
+              Layer.provide(Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => {} })),
+            ),
             ServerSettings.layerTest(),
             ServerConfig.layerTest(process.cwd(), { prefix: "t3-codex-binary-home-" }),
           ),
@@ -851,7 +879,11 @@ describe("CodexAdapterV2 process spawning", () => {
       assert.deepEqual(spawnedCommands, [path.join(NodeOS.homedir(), "bin", "codex")]);
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+        ),
       ),
       Effect.provideService(HostProcess.Platform, "linux"),
     ),
@@ -880,7 +912,7 @@ describe("CodexAdapterV2 dynamic tool projection", () => {
         name: "Computer Use",
         kind: "computer",
       });
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect.each(["inProgress", "completed", "failed"] as const)(
@@ -898,7 +930,7 @@ describe("CodexAdapterV2 dynamic tool projection", () => {
         });
         assert.equal(projection.title, "Read the desktop window");
         assert.equal(projection.toolSurface, "computer");
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect.each(["cua_repl", "node_repl"])(
@@ -932,7 +964,7 @@ describe("CodexAdapterV2 dynamic tool projection", () => {
           (yield* CodexAdapterV2.projectCodexDynamicToolItem({ ...call, server: "github" })).title,
           "js",
         );
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect.each(["inProgress", "completed", "failed"] as const)(
@@ -954,7 +986,7 @@ describe("CodexAdapterV2 dynamic tool projection", () => {
           kind: "integration",
         });
         assert.deepEqual(projection.input, { city: "Berlin" });
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("uses Codex connector names without reading a display title from arguments", () =>
@@ -983,7 +1015,7 @@ describe("CodexAdapterV2 dynamic tool projection", () => {
         logoUrl: "https://example.com/weather.png",
       });
       assert.deepEqual(projection.toolSource?.icon, projection.toolIcon);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("preserves native browser and app icons alongside MCP tool output", () =>
@@ -1038,7 +1070,7 @@ describe("CodexAdapterV2 dynamic tool projection", () => {
         app: { _tag: "app-id", appId: "com.apple.finder" },
       });
       assert.equal(app.toolSource?.name, "Finder");
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("preserves MCP arguments and prefers structured output", () =>
@@ -1070,7 +1102,7 @@ describe("CodexAdapterV2 dynamic tool projection", () => {
         },
         status: "completed",
       });
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("preserves namespaced dynamic tool output", () =>
@@ -1092,7 +1124,7 @@ describe("CodexAdapterV2 dynamic tool projection", () => {
         output: [{ type: "inputText", text: "inspection failed" }],
         status: "failed",
       });
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });
 
@@ -1755,26 +1787,9 @@ function makeCodexReplayTranscript(input: {
   };
 }
 
-function withReplayRequestId(
-  entry: CodexReplay.CodexAppServerReplayEntry,
-  id: number,
-): CodexReplay.CodexAppServerReplayEntry {
-  return entry.type !== "runtime_exit" && Predicate.isObject(entry.frame)
-    ? { ...entry, frame: { ...entry.frame, id } }
-    : entry;
-}
-
 describe("CodexAdapterV2 post-settle continuation", () => {
   const awaitUntil = (predicate: () => boolean, label: string): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      for (let attempt = 0; attempt < 5000; attempt++) {
-        if (predicate()) {
-          return;
-        }
-        yield* Effect.yieldNow;
-      }
-      return yield* Effect.die(`Timed out waiting for ${label}.`);
-    });
+    Effect.promise(() => expect.poll(predicate, { message: label }).toBe(true));
 
   const makeCodexReplayHarness = (
     transcript: CodexReplay.CodexAppServerReplayTranscript,
@@ -1827,7 +1842,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         settings: DEFAULT_CODEX_SETTINGS,
         environment: {},
         clientFactory,
-        crypto: yield* Crypto.Crypto,
+        digest: yield* Digest.Digest,
         fileSystem,
         idAllocator,
         serverConfig,
@@ -1937,7 +1952,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+        ),
       ),
     ),
   );
@@ -1980,7 +1999,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+        ),
       ),
     ),
   );
@@ -2019,7 +2042,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+        ),
       ),
     ),
   );
@@ -2106,7 +2133,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+        ),
       ),
     ),
   );
@@ -2171,7 +2202,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+        ),
       ),
     ),
   );
@@ -2235,7 +2270,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+        ),
       ),
     ),
   );
@@ -2459,7 +2498,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.lengthOf(requests(), 4);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -2562,7 +2605,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(harness.terminalEvents()[0]?.status, "completed");
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -2687,7 +2734,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           );
         }).pipe(
           Effect.provide(
-            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+            Layer.mergeAll(
+              IdAllocator.layer,
+              McpProviderSessions.layer,
+              Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+            ),
           ),
         ),
       ),
@@ -2846,7 +2897,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(DateTime.toEpochMillis(resumed.updatedAt), 1782622450000);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -2933,7 +2988,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(resumed.nativeThreadRef?.nativeId, nativeThreadId);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -3085,7 +3144,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.isAbove(terminalIndex, resumedCommandIndex);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -3188,7 +3251,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -3251,10 +3318,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: prompt,
           }),
         );
-        for (let step = 0; step < 200 && harness.terminalEvents().length === 0; step += 1) {
-          yield* Effect.yieldNow;
-          yield* TestClock.adjust("20 millis");
-        }
+        yield* TestClock.adjust("4 seconds");
         yield* harness.firstTerminal;
 
         const plans = harness.events.flatMap((event) =>
@@ -3276,7 +3340,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -3409,7 +3477,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -3456,7 +3528,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -3504,7 +3580,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -3627,7 +3707,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -3659,7 +3743,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -3692,7 +3780,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -3725,7 +3817,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -3758,7 +3854,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -3791,7 +3891,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -3824,7 +3928,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -3984,7 +4092,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           assert.isFalse(yield* harness.hasPendingBackgroundWork);
         }).pipe(
           Effect.provide(
-            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+            Layer.mergeAll(
+              IdAllocator.layer,
+              McpProviderSessions.layer,
+              Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+            ),
           ),
         ),
       ),
@@ -4149,7 +4261,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(harness.terminalEvents()[0]?.status, "completed");
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -4280,7 +4396,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             ),
           ),
         );
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     );
   });
 
@@ -4400,7 +4516,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             ),
           ),
         );
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     ),
   );
 
@@ -4513,7 +4629,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.lengthOf(harness.terminalEvents(), 1);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -4806,7 +4926,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(commandUpdates[commandUpdates.length - 1]?.turnItem.status, "interrupted");
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -5038,7 +5162,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -5127,7 +5255,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -5219,7 +5351,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -5334,7 +5470,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -5503,7 +5643,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -5772,7 +5916,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -5883,7 +6031,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -6123,7 +6275,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         if (scenario.name === "retry") assert.equal(terminal.retry?.attempt, 1);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -6225,19 +6381,22 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.lengthOf(harness.continuationRequests, 0);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
   );
 
-  const MCP_APP_SCENARIO = "codex-mcp-app-capture";
   const MCP_APP_NATIVE_THREAD = "native-codex-mcp-app-thread";
   const MCP_APP_NATIVE_TURN = "native-codex-mcp-app-turn";
   const MCP_APP_ITEM = "mcp-weather-call";
   const MCP_APP_PROMPT = "Show the weather in Oslo.";
   const MCP_APP_RESOURCE = "ui://weather/dashboard";
-  const MCP_APP_HTML = "<!doctype html><html><body><p>Weather</p><script>1</script></body></html>";
+
   const mcpAppToolItem = (status: "inProgress" | "completed") => ({
     type: "mcpToolCall",
     id: MCP_APP_ITEM,
@@ -6249,80 +6408,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ...(status === "completed"
       ? { result: { content: [{ type: "text", text: "Sunny" }], structuredContent: { temp: 21 } } }
       : {}),
-  });
-
-  const mcpAppTranscript = makeCodexReplayTranscript({
-    scenario: MCP_APP_SCENARIO,
-    entries: [
-      ...codexReplayPreamble({
-        nativeThreadId: MCP_APP_NATIVE_THREAD,
-        nativeTurnId: MCP_APP_NATIVE_TURN,
-        prompt: MCP_APP_PROMPT,
-      }),
-      {
-        type: "emit_inbound",
-        label: "item/started/app-tool",
-        frame: {
-          method: "item/started",
-          params: {
-            item: mcpAppToolItem("inProgress"),
-            threadId: MCP_APP_NATIVE_THREAD,
-            turnId: MCP_APP_NATIVE_TURN,
-            startedAtMs: 1782622440500,
-          },
-        },
-      },
-      {
-        type: "emit_inbound",
-        label: "item/completed/app-tool",
-        frame: {
-          method: "item/completed",
-          params: {
-            item: mcpAppToolItem("completed"),
-            threadId: MCP_APP_NATIVE_THREAD,
-            turnId: MCP_APP_NATIVE_TURN,
-            completedAtMs: 1782622441500,
-          },
-        },
-      },
-      {
-        type: "emit_inbound",
-        label: "turn/completed",
-        frame: {
-          method: "turn/completed",
-          params: {
-            threadId: MCP_APP_NATIVE_THREAD,
-            turn: makeCodexReplayTurn({ id: MCP_APP_NATIVE_TURN, status: "completed" }),
-          },
-        },
-      },
-      {
-        type: "expect_outbound",
-        label: "mcpServer/resource/read",
-        frame: {
-          id: 4,
-          method: "mcpServer/resource/read",
-          params: { threadId: MCP_APP_NATIVE_THREAD, server: "weather", uri: MCP_APP_RESOURCE },
-        },
-      },
-      {
-        type: "emit_inbound",
-        label: "mcpServer/resource/read",
-        frame: {
-          id: 4,
-          result: {
-            contents: [
-              {
-                uri: MCP_APP_RESOURCE,
-                mimeType: "text/html;profile=mcp-app",
-                text: MCP_APP_HTML,
-                _meta: { ui: { csp: { connectDomains: ["https://api.weather.test"] } } },
-              },
-            ],
-          },
-        },
-      },
-    ],
   });
 
   // The turn fails while the app's resource read is still outstanding (Codex
@@ -6409,151 +6494,15 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
   );
-
-  const ORPHAN_WAIT_SCENARIO = "codex-orphaned-dynamic-tool";
-  const ORPHAN_WAIT_NATIVE_THREAD = "native-codex-orphan-wait-thread";
-  const ORPHAN_WAIT_NATIVE_TURN = "native-codex-orphan-wait-turn";
-  const ORPHAN_WAIT_ITEM = "exec-4669f3bb-78c9-4af1-b44e-daa340d2c538";
-  const PERSISTENT_MONITOR_ITEM = "exec-persistent-monitor";
-  const COMPLETED_WAIT_ITEM = "exec-completed-wait";
-  const ORPHAN_WAIT_PROMPT = "Wait on two nested tasks, then finish.";
-
-  const orphanedDynamicToolTranscript = makeCodexReplayTranscript({
-    scenario: ORPHAN_WAIT_SCENARIO,
-    entries: [
-      ...codexReplayPreamble({
-        nativeThreadId: ORPHAN_WAIT_NATIVE_THREAD,
-        nativeTurnId: ORPHAN_WAIT_NATIVE_TURN,
-        prompt: ORPHAN_WAIT_PROMPT,
-      }),
-      {
-        type: "emit_inbound",
-        label: "item/started/completed-wait",
-        frame: {
-          method: "item/started",
-          params: {
-            item: {
-              type: "mcpToolCall",
-              id: COMPLETED_WAIT_ITEM,
-              server: "t3-code",
-              tool: "t3_thread_wait",
-              status: "inProgress",
-              arguments: { threadId: "thread:completed-wait", timeoutMs: 30000 },
-            },
-            threadId: ORPHAN_WAIT_NATIVE_THREAD,
-            turnId: ORPHAN_WAIT_NATIVE_TURN,
-            startedAtMs: 1782622440500,
-          },
-        },
-      },
-      {
-        type: "emit_inbound",
-        label: "item/completed/completed-wait",
-        frame: {
-          method: "item/completed",
-          params: {
-            item: {
-              type: "mcpToolCall",
-              id: COMPLETED_WAIT_ITEM,
-              server: "t3-code",
-              tool: "t3_thread_wait",
-              status: "completed",
-              arguments: { threadId: "thread:completed-wait", timeoutMs: 30000 },
-              result: { content: [{ type: "text", text: "idle" }] },
-            },
-            threadId: ORPHAN_WAIT_NATIVE_THREAD,
-            turnId: ORPHAN_WAIT_NATIVE_TURN,
-            completedAtMs: 1782622441500,
-          },
-        },
-      },
-      {
-        type: "emit_inbound",
-        label: "item/started/orphan-wait",
-        frame: {
-          method: "item/started",
-          params: {
-            item: {
-              type: "mcpToolCall",
-              id: ORPHAN_WAIT_ITEM,
-              server: "t3-code",
-              tool: "t3_thread_wait",
-              status: "inProgress",
-              arguments: {
-                threadId:
-                  "thread:delegated-task:command%3Amcp%3Aaafffab1-e811-458a-ae83-558e542c61ff%3Adelegate-task%3Areview-mobile-reconnect-opus-20260815",
-                timeoutMs: 30000,
-              },
-            },
-            threadId: ORPHAN_WAIT_NATIVE_THREAD,
-            turnId: ORPHAN_WAIT_NATIVE_TURN,
-            startedAtMs: 1782622442500,
-          },
-        },
-      },
-      {
-        type: "emit_inbound",
-        label: "item/started/persistent-monitor",
-        frame: {
-          method: "item/started",
-          params: {
-            item: {
-              type: "dynamicToolCall",
-              id: PERSISTENT_MONITOR_ITEM,
-              namespace: "grok",
-              tool: "monitor",
-              status: "inProgress",
-              arguments: { persistent: true, command: "tail -f" },
-            },
-            threadId: ORPHAN_WAIT_NATIVE_THREAD,
-            turnId: ORPHAN_WAIT_NATIVE_TURN,
-            startedAtMs: 1782622443500,
-          },
-        },
-      },
-      {
-        type: "emit_inbound",
-        label: "turn/completed",
-        frame: {
-          method: "turn/completed",
-          params: {
-            threadId: ORPHAN_WAIT_NATIVE_THREAD,
-            turn: makeCodexReplayTurn({
-              id: ORPHAN_WAIT_NATIVE_TURN,
-              status: "completed",
-            }),
-          },
-        },
-      },
-      {
-        type: "emit_inbound",
-        label: "item/completed/persistent-monitor",
-        afterMs: 30_000,
-        frame: {
-          method: "item/completed",
-          params: {
-            item: {
-              type: "dynamicToolCall",
-              id: PERSISTENT_MONITOR_ITEM,
-              namespace: "grok",
-              tool: "monitor",
-              status: "completed",
-              arguments: { persistent: true, command: "tail -f" },
-              result: { content: [{ type: "text", text: "stopped" }] },
-            },
-            threadId: ORPHAN_WAIT_NATIVE_THREAD,
-            turnId: ORPHAN_WAIT_NATIVE_TURN,
-            completedAtMs: 1782622473500,
-          },
-        },
-      },
-    ],
-  });
 
   const RESUME_SCENARIO = "codex-resume-subagent";
   const RESUME_NATIVE_THREAD = "native-codex-resume-thread";
@@ -6815,7 +6764,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+        ),
       ),
     ),
   );
@@ -6935,7 +6888,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+        ),
       ),
     ),
   );
@@ -7071,7 +7028,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
   );
@@ -7237,7 +7198,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(metadataRequests, name === "current Codex Sol" ? 1 : 2);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -7298,7 +7263,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           assert.deepEqual(metadataRequests, ["thread/read", "thread/resume"]);
         }).pipe(
           Effect.provide(
-            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+            Layer.mergeAll(
+              IdAllocator.layer,
+              McpProviderSessions.layer,
+              Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+            ),
           ),
         ),
       ),
@@ -7401,7 +7370,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           ]);
         }).pipe(
           Effect.provide(
-            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+            Layer.mergeAll(
+              IdAllocator.layer,
+              McpProviderSessions.layer,
+              Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+            ),
           ),
         ),
       ),
@@ -7468,7 +7441,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.include(harness.continuationRequests[0]!.detail, "CODEX_RESUME_DONE");
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -7552,7 +7529,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(DateTime.toEpochMillis(row!.startedAt!), 1782622470000);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     ),
@@ -7718,7 +7699,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           }
         }).pipe(
           Effect.provide(
-            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+            Layer.mergeAll(
+              IdAllocator.layer,
+              McpProviderSessions.layer,
+              Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+            ),
           ),
         ),
       ),
@@ -7890,7 +7875,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
   );
@@ -7951,7 +7940,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     }).pipe(
       Effect.scoped,
       Effect.provide(
-        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+        ),
       ),
     ),
   );
@@ -7983,15 +7976,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         { type: "expect_outbound", label: method, frame: { id, method, params } },
         { type: "emit_inbound", label: method, frame: { id, result } },
       ] satisfies Array<CodexReplay.CodexAppServerReplayEntry>;
-    const withReplayRequestId = (
-      entries: ReadonlyArray<CodexReplay.CodexAppServerReplayEntry>,
-      id: number,
-    ) =>
-      entries.map((entry) =>
-        "frame" in entry && Predicate.isObject(entry.frame) && "id" in entry.frame
-          ? { ...entry, frame: { ...entry.frame, id } }
-          : entry,
-      );
+
     const sessionStart = codexReplayPreamble({
       nativeThreadId,
       nativeTurnId: "unused",
@@ -8015,6 +8000,16 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           }),
         ),
       );
+    const withReplayRequestId = (
+      entries: ReadonlyArray<CodexReplay.CodexAppServerReplayEntry>,
+      id: number,
+    ) =>
+      entries.map((entry) =>
+        "frame" in entry && Predicate.isObject(entry.frame) && "id" in entry.frame
+          ? { ...entry, frame: { ...entry.frame, id } }
+          : entry,
+      );
+
     const providerGoals = (events: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>) =>
       events.flatMap((event) =>
         event.type === "provider_thread.updated" ? [event.providerThread.goal?.status ?? null] : [],
@@ -8120,7 +8115,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     );
@@ -8169,7 +8168,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     );
@@ -8265,7 +8268,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     );
@@ -8349,7 +8356,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     );
@@ -8456,7 +8467,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     );
@@ -8543,7 +8558,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     );
@@ -8645,7 +8664,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     );
@@ -8763,7 +8786,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     );
@@ -8832,7 +8859,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     );

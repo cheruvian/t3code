@@ -14,12 +14,11 @@ const SHARED_SERVER_SETTING_KEYS = [
   "sidebarAutoSettleOnMerge",
   "autoResumeLimitedThreads",
   "snoozeLimitedThreads",
+  "snoozePresets",
   "newWorktreesStartFromOrigin",
   "sourceControlWritingStyle",
   "textGenerationModelSelection",
 ] as const satisfies ReadonlyArray<keyof ServerSettings & keyof ServerSettingsPatch>;
-
-export type SharedServerSettingKey = (typeof SHARED_SERVER_SETTING_KEYS)[number];
 
 const SHARED_KEY_SET = new Set<string>(SHARED_SERVER_SETTING_KEYS);
 
@@ -44,10 +43,10 @@ export function splitSharedServerPatch(patch: ServerSettingsPatch): {
 
 export function filterSharedServerPatch(
   patch: ServerSettingsPatch,
-  capabilities: Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation"> | undefined,
   settings?: ServerSettings,
   sourceSettings = settings,
   targetIsSource = false,
+  capabilities?: Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation">,
 ): ServerSettingsPatch {
   const instanceId =
     patch.textGenerationModelSelection?.instanceId ??
@@ -69,17 +68,6 @@ export function filterSharedServerPatch(
   return capabilities?.threadRestartContinuation === true
     ? patch
     : Struct.omit(patch, ["continueThreadsAfterServerUpdate"]);
-}
-
-export function pickSharedServerSettings(
-  settings: ServerSettings,
-  capabilities?: Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation">,
-): ServerSettingsPatch {
-  return filterSharedServerPatch(
-    Struct.pick(settings, SHARED_SERVER_SETTING_KEYS),
-    capabilities,
-    settings,
-  );
 }
 
 export function supportsSharedSettingsSync(environment: {

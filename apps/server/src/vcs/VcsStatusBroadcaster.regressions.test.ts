@@ -143,7 +143,6 @@ function layerBackgroundPolicy(shouldRunScopeWork: (scope: BackgroundScope) => b
   return Layer.mock(BackgroundPolicy.BackgroundPolicy)({
     reportClientActivity: () => Effect.void,
     removeRpcClient: () => Effect.void,
-    reportHostPowerState: () => Effect.void,
     snapshot: Effect.succeed({
       hostPower: {
         source: "unknown",
@@ -163,8 +162,6 @@ function layerBackgroundPolicy(shouldRunScopeWork: (scope: BackgroundScope) => b
       shouldRunOpportunisticWork: false,
       updatedAt: TEST_EPOCH,
     }),
-    streamChanges: Stream.empty,
-    hasDemand: () => Effect.succeed(true),
     shouldRunScopeWork: (scope) => Effect.sync(() => shouldRunScopeWork(scope)),
     shouldRunOpportunisticWork: Effect.succeed(true),
   });
@@ -1307,11 +1304,8 @@ describe("VcsStatusBroadcaster", () => {
 
       state.currentLocalStatus = branchBLocal;
       yield* broadcaster.refreshLocalStatus("/repo");
-      for (let attempt = 0; attempt < 100 && state.remoteStatusCalls < 4; attempt += 1) {
-        yield* Effect.yieldNow;
-      }
-      assert.equal(state.remoteStatusCalls, 4);
       const branchBEvent = yield* Deferred.await(branchBRemotePublished);
+      assert.equal(state.remoteStatusCalls, 4);
       assert.deepStrictEqual(branchBEvent, {
         _tag: "remoteUpdated",
         remote: branchBRemote,
@@ -1801,11 +1795,8 @@ describe("VcsStatusBroadcaster", () => {
       state.currentLocalStatus = branchBLocal;
       state.currentRemoteStatus = branchBRemote;
       yield* broadcaster.refreshLocalStatus("/repo");
-      for (let attempt = 0; attempt < 100 && state.remoteStatusCalls < 2; attempt += 1) {
-        yield* Effect.yieldNow;
-      }
-      assert.equal(state.remoteStatusCalls, 2);
       const branchBEvent = yield* Deferred.await(branchBRemotePublished);
+      assert.equal(state.remoteStatusCalls, 2);
       assert.deepStrictEqual(branchBEvent, {
         _tag: "remoteUpdated",
         remote: branchBRemote,
@@ -2169,14 +2160,7 @@ describe("VcsStatusBroadcaster", () => {
 
       yield* Deferred.await(remoteStarted);
       yield* Scope.close(streamScope, Exit.void);
-      for (
-        let attempt = 0;
-        attempt < 100 && Option.isNone(yield* Deferred.poll(remoteInterrupted));
-        attempt += 1
-      ) {
-        yield* Effect.yieldNow;
-      }
-      assert.isTrue(Option.isSome(yield* Deferred.poll(remoteInterrupted)));
+      yield* Deferred.await(remoteInterrupted);
     }).pipe(Effect.provide(testLayer));
   });
 
@@ -2360,14 +2344,7 @@ describe("VcsStatusBroadcaster", () => {
       assert.equal(state.remoteStatusCalls, 1);
 
       yield* Scope.close(remoteScope, Exit.void);
-      for (
-        let attempt = 0;
-        attempt < 100 && Option.isNone(yield* Deferred.poll(remoteInterrupted));
-        attempt += 1
-      ) {
-        yield* Effect.yieldNow;
-      }
-      assert.isTrue(Option.isSome(yield* Deferred.poll(remoteInterrupted)));
+      yield* Deferred.await(remoteInterrupted);
 
       state.currentLocalStatus = nextLocalStatus;
       yield* broadcaster.refreshLocalStatus("/repo");

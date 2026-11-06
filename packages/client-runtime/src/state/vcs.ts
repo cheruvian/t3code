@@ -44,6 +44,9 @@ import {
   withVcsRefsPersistenceLock,
 } from "./vcsRefInvalidation.ts";
 
+// Share freshness across search and pagination keys, but keep it local to this registry.
+const serverRefsRevisionAtom = Atom.family((_key: string) => Atom.make(0).pipe(Atom.keepAlive));
+
 const OFFLINE_BRANCH_LIST_LIMIT = 100;
 // Rows retain their rendered status; release live work with the last consumer.
 const VCS_STATUS_IDLE_TTL_MS = 0;
@@ -203,9 +206,17 @@ export const makeCachedVcsRefsChanges = Effect.fn("CachedVcsRefsState.makeChange
         )
       : Option.none<VcsListRefsResult>();
   const refresh = Effect.fn("CachedVcsRefsState.refresh")(function* () {
-    const refs = yield* request(WS_METHODS.vcsListRefs, input).pipe(
-      Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+    const revisionAtom = serverRefsRevisionAtom(
+      `${environmentId.length}:${environmentId}${input.cwd}`,
     );
+    const bypassServerSnapshot =
+      expectedRevision !== undefined &&
+      registry !== undefined &&
+      expectedRevision > registry.get(revisionAtom);
+    const refs = yield* request(
+      WS_METHODS.vcsListRefs,
+      bypassServerSnapshot ? { ...input, refresh: true } : input,
+    ).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
     const persist = cache.saveVcsRefs(environmentId, input.cwd, refs).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Could not persist cached Git refs.").pipe(
@@ -228,6 +239,7 @@ export const makeCachedVcsRefsChanges = Effect.fn("CachedVcsRefsState.makeChange
       expectedRevision,
       persist: persistCache,
     });
+    if (committed && bypassServerSnapshot) registry.set(revisionAtom, expectedRevision);
     return committed ? Option.some(refs) : Option.none<VcsListRefsResult>();
   });
 

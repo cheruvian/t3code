@@ -19,13 +19,13 @@ export function ConnectionTimingSettings() {
   const [saving, setSaving] = useState(false);
   const save = async (next: TimingSettings) => {
     setSaving(true);
-    try {
+    return await (async () => {
       const result = await update(next);
       if (result._tag === "Failure")
         Alert.alert("Could not save connection timeouts", "Try again before leaving this screen.");
-    } finally {
+    })().finally(() => {
       setSaving(false);
-    }
+    });
   };
   return (
     <View className="mt-5 gap-3">

@@ -14,6 +14,7 @@ import {
   WS_METHODS,
   UsageLimitSourceId,
 } from "@t3tools/contracts";
+import { splitSocketFrame } from "@t3tools/shared/socketFrameParts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -293,6 +294,36 @@ const publishConfigEvents = Effect.fn("TestRpcSessionFactory.publishConfigEvents
 });
 
 describe("RpcSessionFactory", () => {
+  it.effect("connects while a large config snapshot downloads at 4000 bytes per second", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const socket = yield* awaitSocket(sockets);
+      socket.open();
+      const request = yield* awaitRequest(socket);
+      // Multi-byte text, so parts must be sized in UTF-8 bytes and never split a surrogate pair.
+      const config = { ...SERVER_CONFIG, cwd: "/" + "é€😀x".repeat(32 * 1024) };
+      const frame = encodeJson({
+        _tag: "Chunk",
+        requestId: request.id,
+        values: [{ version: 1, type: "snapshot", config: encodeServerConfig(config) }],
+      });
+      const parts = new URL(socket.url).searchParams.has("frameParts")
+        ? splitSocketFrame(frame)
+        : [frame];
+
+      for (const part of parts) {
+        const bytes = new TextEncoder().encode(part);
+        yield* TestClock.adjust((bytes.length / 4000) * 1000);
+        socket.serverMessage(new TextDecoder().decode(bytes));
+      }
+      yield* Fiber.join(readyFiber);
+
+      expect(yield* session.initialConfig).toEqual(config);
+    }),
+  );
+
   it.effect("owns one scoped websocket attempt and exposes readiness and closure", () =>
     Effect.gen(function* () {
       const { factory, sockets } = yield* makeFactory();
@@ -300,7 +331,7 @@ describe("RpcSessionFactory", () => {
       const readyFiber = yield* Effect.forkChild(session.ready);
       const socket = yield* awaitSocket(sockets);
 
-      expect(socket.url).toBe(PREPARED.socketUrl);
+      expect(socket.url).toBe(`${PREPARED.socketUrl}&frameParts=1`);
       socket.open();
       yield* completeInitialConfig(socket);
       yield* Fiber.join(readyFiber);
@@ -1177,7 +1208,6 @@ describe("RpcSessionFactory", () => {
       expect(config.availableEditors).toEqual(["zed"]);
     }),
   );
-
   it.effect("uses the legacy config RPC for probes when the server lacks the capability", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -34,6 +34,7 @@ export function MermaidDiagram(props: {
 }) {
   // Coalesce streaming updates instead of creating a WebView for each token.
   const [stableCode, setStableCode] = useState<string | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Debounce native WebView creation until streamed source settles.
   useEffect(() => {
     const timer = setTimeout(() => setStableCode(props.code), 400);
     return () => clearTimeout(timer);
@@ -84,19 +85,21 @@ function MermaidDocumentView({
         onError={() => setFailed(true)}
         onContentProcessDidTerminate={() => setFailed(true)}
         onMessage={(event) => {
+          let message: unknown;
           try {
-            const message: unknown = JSON.parse(event.nativeEvent.data);
-            if (typeof message !== "object" || message === null) return;
-            if ("error" in message) setFailed(true);
-            if (
-              "height" in message &&
-              typeof message.height === "number" &&
-              Number.isFinite(message.height)
-            ) {
-              setHeight(Math.max(80, Math.min(2000, message.height)));
-            }
+            message = JSON.parse(event.nativeEvent.data);
           } catch {
             setFailed(true);
+            return;
+          }
+          if (typeof message !== "object" || message === null) return;
+          if ("error" in message) setFailed(true);
+          if (
+            "height" in message &&
+            typeof message.height === "number" &&
+            Number.isFinite(message.height)
+          ) {
+            setHeight(Math.max(80, Math.min(2000, message.height)));
           }
         }}
       />

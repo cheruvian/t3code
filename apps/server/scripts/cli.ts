@@ -36,7 +36,7 @@ const runCommand = Effect.fn("runCommand")(function* (command: ChildProcess.Stan
   if (exitCode !== 0) {
     return yield* new ServerCliCommandExitError({
       command: command.command,
-      args: command.args,
+      args: command.args.map(String),
       cwd: command.options.cwd,
       exitCode,
     });
@@ -86,10 +86,6 @@ const resolveBuildCommit = Effect.fn("resolveBuildCommit")(function* (repoRoot: 
   return exitCode === 0 && /^[0-9a-f]{7,40}$/i.test(commit) ? commit.toLowerCase() : "";
 });
 
-// ---------------------------------------------------------------------------
-// build subcommand
-// ---------------------------------------------------------------------------
-
 const buildCmd = Command.make(
   "build",
   {
@@ -126,10 +122,6 @@ const buildCmd = Command.make(
       }
     }),
 ).pipe(Command.withDescription("Build the server package (tsdown + bundle web client)."));
-
-// ---------------------------------------------------------------------------
-// build-exe subcommand
-// ---------------------------------------------------------------------------
 
 const buildExeCmd = Command.make(
   "build-exe",
@@ -241,10 +233,6 @@ const publishCmd = Command.make(
       yield* publish(launcherTarball);
     }),
 ).pipe(Command.withDescription("Publish the t3 launcher to npm."));
-
-// ---------------------------------------------------------------------------
-// root command
-// ---------------------------------------------------------------------------
 
 const cli = Command.make("cli").pipe(
   Command.withDescription("T3 server build & publish CLI."),

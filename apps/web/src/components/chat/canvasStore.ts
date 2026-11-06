@@ -100,6 +100,7 @@ export function resolveChatCanvasModel({
   // The preview avoids where an open inline card would sit, whether or not a
   // preview overlap has pushed the card itself into popover mode.
   const preferredDetailsCard = resolveThreadDetailsCardLayout({
+    side: "left",
     container,
     lane,
     frame: null,
@@ -138,6 +139,7 @@ export function resolveChatCanvasModel({
     findBar,
   });
   const detailsCardPlacement = resolveThreadDetailsCardLayout({
+    side: "left",
     container,
     lane,
     frame: layout.frame,

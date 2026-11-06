@@ -1,3 +1,4 @@
+import * as Redacted from "effect/Redacted";
 import { expect, it } from "@effect/vitest";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { AuthSessionId, TerminalClearInput, WS_METHODS } from "@t3tools/contracts";
@@ -18,7 +19,7 @@ it.effect(
   "connects bootstrap RPCs to a server enforcing protocol negotiation without losing its ticket",
   () =>
     Effect.gen(function* () {
-      const calls: Array<typeof TerminalClearInput.Type> = [];
+      const calls: Array<TerminalClearInput> = [];
       const group = RpcGroup.make(
         Rpc.make(WS_METHODS.terminalClear, { payload: TerminalClearInput }),
       );
@@ -64,7 +65,7 @@ it.effect(
           Layer.mock(EnvironmentAuth.EnvironmentAuth)({
             issueWebSocketTicket: () =>
               Effect.succeed({
-                ticket: "bootstrap-test-ticket",
+                ticket: Redacted.make("bootstrap-test-ticket"),
                 expiresAt: DateTime.makeUnsafe("2026-10-15T18:00:00.000Z"),
               }),
           }),

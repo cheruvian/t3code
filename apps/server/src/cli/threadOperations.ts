@@ -1,4 +1,4 @@
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 
 import {
   AuthOrchestrationOperateScope,
@@ -40,7 +40,11 @@ import {
 } from "../orchestration-v2/bootstrapRpcClient.ts";
 import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
-import { encodeCliJson, makeEnvironmentHttpClient, withLocalEnvironment } from "./environment.ts";
+import {
+  encodeCliJson,
+  makeEnvironmentHttpClient,
+  withLocalEnvironment,
+} from "./localEnvironment.ts";
 
 const makeHttpClient = (origin: string) =>
   HttpApiClient.make(EnvironmentHttpApi, { baseUrl: origin });
@@ -173,10 +177,10 @@ export const runIsolatedThreadStart = Effect.fn("cli.thread.runIsolatedThreadSta
               ? project.defaultModelSelection
               : { instanceId: ProviderInstanceId.make(instanceId), model };
           const threadId = ThreadId.make(
-            yield* (yield* Crypto.Crypto).randomUUIDv4().pipe(Effect.orDie),
+            yield* (yield* SecureRandom.SecureRandom).uuidV4().pipe(Effect.orDie),
           );
           const branchSuffix = Array.from(
-            yield* (yield* Crypto.Crypto).randomBytes(4).pipe(Effect.orDie),
+            yield* (yield* SecureRandom.SecureRandom).randomBytes(4).pipe(Effect.orDie),
             (byte) => byte.toString(16).padStart(2, "0"),
           ).join("");
           const branch =
@@ -191,10 +195,10 @@ export const runIsolatedThreadStart = Effect.fn("cli.thread.runIsolatedThreadSta
             branch,
             threadId,
             messageId: MessageId.make(
-              yield* (yield* Crypto.Crypto).randomUUIDv4().pipe(Effect.orDie),
+              yield* (yield* SecureRandom.SecureRandom).uuidV4().pipe(Effect.orDie),
             ),
             commandId: CommandId.make(
-              yield* (yield* Crypto.Crypto).randomUUIDv4().pipe(Effect.orDie),
+              yield* (yield* SecureRandom.SecureRandom).uuidV4().pipe(Effect.orDie),
             ),
           });
           const { thread: created } = yield* dispatchBootstrapRpc({
@@ -276,9 +280,13 @@ export const runThreadMessageFile = (
         type: "message.dispatch" as const,
         createdBy: "user" as const,
         creationSource: "server" as const,
-        commandId: CommandId.make(yield* (yield* Crypto.Crypto).randomUUIDv4().pipe(Effect.orDie)),
+        commandId: CommandId.make(
+          yield* (yield* SecureRandom.SecureRandom).uuidV4().pipe(Effect.orDie),
+        ),
         threadId: thread.id,
-        messageId: MessageId.make(yield* (yield* Crypto.Crypto).randomUUIDv4().pipe(Effect.orDie)),
+        messageId: MessageId.make(
+          yield* (yield* SecureRandom.SecureRandom).uuidV4().pipe(Effect.orDie),
+        ),
         text,
         attachments: [],
         modelSelection: thread.modelSelection,

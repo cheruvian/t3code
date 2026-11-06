@@ -3,11 +3,6 @@ export interface DebugLogger {
   readonly log: (event: string, data?: Record<string, unknown>) => void;
 }
 
-export interface DebugLoggerOptions {
-  readonly enabledInDev?: boolean;
-  readonly legacyGlobalFlag?: string;
-}
-
 function globalValue(name: string): unknown {
   return typeof globalThis === "undefined"
     ? undefined
@@ -16,17 +11,16 @@ function globalValue(name: string): unknown {
 
 export function createDebugLogger(
   namespace: string,
-  options: DebugLoggerOptions = {},
+  options?: { readonly enabledInDev?: boolean; readonly legacyGlobalFlag?: string },
 ): DebugLogger {
   const isEnabled = () => {
-    if (options.enabledInDev === true && typeof __DEV__ !== "undefined" && __DEV__) {
-      return true;
-    }
-    if (options.legacyGlobalFlag !== undefined && globalValue(options.legacyGlobalFlag) === true) {
-      return true;
-    }
     const filter = globalValue("__T3_DEBUG__");
-    return filter === true || (Array.isArray(filter) && filter.includes(namespace));
+    return (
+      filter === true ||
+      (Array.isArray(filter) && filter.includes(namespace)) ||
+      (options?.enabledInDev === true && typeof __DEV__ !== "undefined" && __DEV__) ||
+      (options?.legacyGlobalFlag !== undefined && globalValue(options.legacyGlobalFlag) === true)
+    );
   };
   const log = (event: string, data?: Record<string, unknown>) => {
     if (!isEnabled()) {

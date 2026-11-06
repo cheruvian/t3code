@@ -1,3 +1,4 @@
+import { useDeferredValue } from "react";
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import { ComposerContextLabel } from "./ComposerContextLabel";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
@@ -16,9 +17,8 @@ import {
   type VcsRef,
   type ThreadId,
 } from "@t3tools/contracts";
-import { ChevronDownIcon, GitBranchIcon } from "lucide-react";
+import { GitBranchIcon } from "lucide-react";
 import {
-  useDeferredValue,
   useEffect,
   useImperativeHandle,
   useOptimistic,
@@ -302,6 +302,12 @@ export function BranchToolbarBranchSelector({
           input: { cwd: branchCwd },
         }),
   );
+  const projectStatusQuery = useEnvironmentQuery(
+    activeProjectCwd === null
+      ? null
+      : vcsEnvironment.status({ environmentId, input: { cwd: activeProjectCwd } }),
+  );
+  const activeProjectCheckoutRoot = projectStatusQuery.data?.workingTree.rootPath;
   const trimmedBranchQuery = branchQuery.trim();
   const deferredTrimmedBranchQuery = deferredBranchQuery.trim();
   // The server filters refs by substring, so it has to be given the sanitized
@@ -324,26 +330,21 @@ export function BranchToolbarBranchSelector({
     scopeKey: string;
     isRemoteByName: ReadonlyMap<string, boolean>;
   } | null>(null);
-  useEffect(() => {
-    if (!isBranchMenuOpen || branchRefScopeKey === null || refs.length === 0) {
-      return;
-    }
-    setCachedBranchClassification((current) => {
-      const isSameScope = current?.scopeKey === branchRefScopeKey;
-      const isRemoteByName = new Map(isSameScope ? current.isRemoteByName : []);
-      let changed = !isSameScope;
-      for (const refName of refs) {
-        const isRemote = refName.isRemote === true;
-        if (isRemoteByName.get(refName.name) !== isRemote) {
-          isRemoteByName.set(refName.name, isRemote);
-          changed = true;
-        }
+  if (isBranchMenuOpen && branchRefScopeKey !== null && refs.length > 0) {
+    const isSameScope = cachedBranchClassification?.scopeKey === branchRefScopeKey;
+    const isRemoteByName = new Map(isSameScope ? cachedBranchClassification.isRemoteByName : []);
+    let changed = !isSameScope;
+    for (const refName of refs) {
+      const isRemote = refName.isRemote === true;
+      if (isRemoteByName.get(refName.name) !== isRemote) {
+        isRemoteByName.set(refName.name, isRemote);
+        changed = true;
       }
-      return changed ? { scopeKey: branchRefScopeKey, isRemoteByName } : current;
-    });
-  }, [branchRefScopeKey, isBranchMenuOpen, refs]);
+    }
+    if (changed) setCachedBranchClassification({ scopeKey: branchRefScopeKey, isRemoteByName });
+  }
   const branchByName = (() => new Map(refs.map((refName) => [refName.name, refName] as const)))();
-  const normalizedDeferredBranchQuery = deferredTrimmedBranchQuery.toLowerCase();
+  const normalizedBranchQuery = trimmedBranchQuery.toLowerCase();
   const prReference = parsePullRequestReference(trimmedBranchQuery);
   const isSelectingWorktreeBase =
     effectiveEnvMode === "worktree" && !envLocked && !activeWorktreePath;
@@ -366,12 +367,12 @@ export function BranchToolbarBranchSelector({
     ...(pickerCreateBranchItemValue ? [pickerCreateBranchItemValue] : []),
   ];
   const filteredBranchPickerItems =
-    normalizedDeferredBranchQuery.length === 0
+    normalizedBranchQuery.length === 0
       ? branchPickerItems
       : branchPickerItems.filter((itemValue) =>
           shouldIncludeBranchPickerItem({
             itemValue,
-            normalizedQuery: normalizedDeferredBranchQuery,
+            normalizedQuery: normalizedBranchQuery,
             createBranchItemValue: pickerCreateBranchItemValue,
             checkoutPullRequestItemValue,
           }),
@@ -487,6 +488,7 @@ export function BranchToolbarBranchSelector({
 
     const selectionTarget = resolveBranchSelectionTarget({
       activeProjectCwd,
+      activeProjectCheckoutRoot,
       activeWorktreePath,
       refName,
     });
@@ -583,9 +585,10 @@ export function BranchToolbarBranchSelector({
 
   // The server sets started threads' branches; defaulting here would detach the agent from its worktree.
   const threadStarted = serverSession !== null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- writes a default base branch to the server thread or draft once branches load for a new worktree thread
   useEffect(() => {
     const resolution = resolveWorktreeBaseBranchLifecycle({
-      enabled: effectiveEnvMode === "worktree" && activeWorktreePath === null,
+      enabled: !threadStarted && effectiveEnvMode === "worktree" && activeWorktreePath === null,
       scopeKey: branchRefScopeKey,
       activeThreadBranch,
       candidate: worktreeBaseBranchCandidate,
@@ -738,6 +741,7 @@ export function BranchToolbarBranchSelector({
             (!activeProjectCwd ||
               !resolveBranchSelectionTarget({
                 activeProjectCwd,
+                activeProjectCheckoutRoot,
                 activeWorktreePath,
                 refName,
               }).reuseExistingWorktree))
@@ -830,13 +834,8 @@ export function BranchToolbarBranchSelector({
               )}
             />
             <ComposerContextLabel displayMode={displayMode}>
-              <MiddleTruncate
-                value={triggerLabel}
-                variant={displayMode === "panel" ? "cap-aligned" : "default"}
-                className="w-full"
-              />
+              <MiddleTruncate value={triggerLabel} variant="cap-aligned" className="w-full" />
             </ComposerContextLabel>
-            {displayMode !== "panel" ? <ChevronDownIcon className="size-3 shrink-0" /> : null}
           </ComboboxTrigger>
         </span>
         {displayMode === "panel" && prNumber !== undefined && prUrl !== undefined ? (

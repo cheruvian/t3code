@@ -10,14 +10,11 @@ import {
 import {
   requestProjectResource,
   type RequestProjectResourceInput,
-  type CreateProjectInput,
-  type DeleteProjectInput,
-  type UpdateProjectInput,
   createProject,
   deleteProject,
   updateProject,
 } from "../operations/commands.ts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -91,7 +88,7 @@ export class ResourceReleaseError extends Schema.TaggedError<ResourceReleaseErro
 ) {}
 
 export function createProjectEnvironmentAtoms<R, E>(
-  runtime: Atom.AtomRuntime<EnvironmentRegistry | Crypto.Crypto | R, E>,
+  runtime: Atom.AtomRuntime<EnvironmentRegistry | SecureRandom.SecureRandom | R, E>,
   options: {
     readonly projectAtom: (ref: ScopedProjectRef) => Atom.Atom<EnvironmentProject | null>;
   },
@@ -175,7 +172,7 @@ export function createProjectEnvironmentAtoms<R, E>(
       optimisticFileFamily(optimisticProjectFileKey(target)),
     create: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:project:create",
-      execute: (input: CreateProjectInput) => createProject(input),
+      execute: createProject,
       scheduler: projectScheduler,
       concurrency: projectConcurrency,
     }),
@@ -238,13 +235,13 @@ export function createProjectEnvironmentAtoms<R, E>(
     }),
     update: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:project:update",
-      execute: (input: UpdateProjectInput) => updateProject(input),
+      execute: updateProject,
       scheduler: projectScheduler,
       concurrency: projectConcurrency,
     }),
     delete: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:project:delete",
-      execute: (input: DeleteProjectInput) => deleteProject(input),
+      execute: deleteProject,
       scheduler: projectScheduler,
       concurrency: projectConcurrency,
     }),
@@ -279,6 +276,12 @@ export function createProjectEnvironmentAtoms<R, E>(
     createNew: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:projects:create-new",
       tag: WS_METHODS.projectsCreateNew,
+      scheduler: projectScheduler,
+      concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
+    }),
+    createFromThread: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:projects:create-from-thread",
+      tag: WS_METHODS.projectsCreateFromThread,
       scheduler: projectScheduler,
       concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
     }),

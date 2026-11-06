@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@t3tools/shared/Net";
 import * as Layer from "effect/Layer";
@@ -9,7 +10,9 @@ import { notifyCommand } from "./notify.ts";
 
 const run = (args: readonly string[]) =>
   Command.runWith(notifyCommand, { version: "0.0.0" })(args).pipe(
-    Effect.provide(Layer.merge(NodeServices.layer, NetService.layer)),
+    Effect.provide(
+      Layer.merge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer), NetService.layer),
+    ),
   );
 
 describe("notify CLI validation", () => {

@@ -1,13 +1,13 @@
+import * as ServerDrainAdmission from "../serverDrainAdmission.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import {
   SourceControlProviderKind,
-  type ApplicationStoredEvent,
   CheckpointId,
   CheckpointRef,
   CommandId,
-  ContextTransferId,
   EventId,
   EnvironmentId,
   MessageId,
@@ -37,12 +37,10 @@ import { vi } from "vite-plus/test";
 
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
-import * as Deferred from "effect/Deferred";
-import * as Fiber from "effect/Fiber";
+
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
-import * as Path from "effect/Path";
-import * as Option from "effect/Option";
+
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -52,7 +50,7 @@ import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
-import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
+
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -68,13 +66,13 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
-import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
+
 import * as Orchestrator from "./Orchestrator.ts";
 import { ROLLBACK_FAILED_MESSAGE } from "./CheckpointRollbackService.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
-import * as ProviderRuntimeRecoveryService from "./ProviderRuntimeRecoveryService.ts";
+
 import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as PullRequestWatchReactor from "./PullRequestWatchReactor.ts";
@@ -83,15 +81,14 @@ import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as RuntimeLayer from "./runtimeLayer.ts";
-import { shellStreamItemFromThreadShell } from "./ShellStream.ts";
+
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
-import * as ThreadManagementService from "./ThreadManagementService.ts";
-import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+
 import * as ThreadMoveService from "./ThreadMoveService.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const layerPlatformTest = Layer.merge(
-  NodeServices.layer,
+  Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
   Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
     resolveLink: () => Effect.die("unused title link"),
   }),
@@ -259,23 +256,6 @@ const seedProject = (input: {
     }),
   );
 
-const moveProject = (projectId: ProjectId, workspaceRoot: string, updatedAt: string) =>
-  Effect.flatMap(ProjectStore.ProjectStoreV2, (projects) =>
-    projects.apply({
-      sequence: 0,
-      eventId: EventId.make(`move:${projectId}:${workspaceRoot}`),
-      aggregateKind: "project",
-      aggregateId: projectId,
-      occurredAt: updatedAt,
-      commandId: null,
-      causationEventId: null,
-      correlationId: null,
-      metadata: {},
-      type: "project.meta-updated",
-      payload: { projectId, workspaceRoot, updatedAt },
-    }),
-  );
-
 const layerTest = Layer.mergeAll(
   RuntimeLayer.layer,
   RuntimeLayer.layerEventSink,
@@ -283,25 +263,13 @@ const layerTest = Layer.mergeAll(
   ProjectionStore.layer,
   EffectOutbox.layer,
 ).pipe(
+  Layer.provideMerge(ServerDrainAdmission.layer),
   Layer.provide(McpSessionRegistryTestkit.layer),
   Layer.provide(McpProviderSessions.layer),
   Layer.provide(SqlitePersistence.layerMemory),
   Layer.provide(layerCheckpointStoreTest),
   Layer.provide(layerServerConfig),
   Layer.provideMerge(ServerSettings.layerTest()),
-  Layer.provide(layerTestProviderInstanceRegistry),
-  Layer.provide(layerGitWorkflowTest),
-  Layer.provide(layerProjectServiceTest),
-  Layer.provide(layerPlatformTest),
-);
-
-const layerLegacyImportTest = RuntimeLayer.layer.pipe(
-  Layer.provide(McpSessionRegistryTestkit.layer),
-  Layer.provide(McpProviderSessions.layer),
-  Layer.provideMerge(SqlitePersistence.layerMemory),
-  Layer.provide(layerCheckpointStoreTest),
-  Layer.provide(layerServerConfig),
-  Layer.provide(ServerSettings.layerTest()),
   Layer.provide(layerTestProviderInstanceRegistry),
   Layer.provide(layerGitWorkflowTest),
   Layer.provide(layerProjectServiceTest),
@@ -358,44 +326,6 @@ it.layer(layerEnvironmentMcpTest)("environment MCP runtime wiring", (it) => {
   );
 });
 
-const layerProjectDeletionTest = Layer.mergeAll(
-  RuntimeLayer.layer.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
-  RuntimeLayer.layerProjectService,
-  RuntimeLayer.layerEventSink,
-).pipe(
-  Layer.provide(
-    Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({
-      peek: () =>
-        Effect.succeed({
-          repositoryIdentity: null,
-          faviconPath: null,
-          repositoryIdentityResolved: false,
-        }),
-      getAvailable: () =>
-        Effect.succeed({
-          repositoryIdentity: null,
-          faviconPath: null,
-          repositoryIdentityResolved: false,
-        }),
-      invalidate: () => Effect.void,
-    }),
-  ),
-  Layer.provide(
-    Layer.mock(WorkspacePaths.WorkspacePaths)({
-      normalizeWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
-    }),
-  ),
-  Layer.provide(McpSessionRegistryTestkit.layer),
-  Layer.provide(McpProviderSessions.layer),
-  Layer.provide(SqlitePersistence.layerMemory),
-  Layer.provide(layerCheckpointStoreTest),
-  Layer.provide(layerServerConfig),
-  Layer.provide(ServerSettings.layerTest()),
-  Layer.provide(layerTestProviderInstanceRegistry),
-  Layer.provide(layerGitWorkflowTest),
-  Layer.provide(layerPlatformTest),
-);
-
 const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
   RuntimeLayer.layer.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
   RuntimeLayer.layerProjectService,
@@ -410,6 +340,7 @@ const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
   ),
   Layer.provide(
     Layer.succeed(ProjectEnrichmentService.ProjectEnrichmentService, {
+      readRepositoryIdentity: () => Effect.succeed(null),
       peek: () =>
         Effect.succeed({
           repositoryIdentity: null,
@@ -695,13 +626,11 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
           },
         ],
       });
-      const sessionSpy = vi
-        .spyOn(sessions, "get")
-        .mockReturnValue(
-          Effect.succeedSome({
-            providerSession,
-          } as ProviderAdapter.ProviderAdapterV2SessionRuntime),
-        );
+      const sessionSpy = vi.spyOn(sessions, "get").mockReturnValue(
+        Effect.succeedSome({
+          providerSession,
+        } as ProviderAdapter.ProviderAdapterV2SessionRuntime),
+      );
       yield* Effect.addFinalizer(() => Effect.sync(() => sessionSpy.mockRestore()));
 
       const steerCommandId = CommandId.make("runtime-delivery-intent-auto");
@@ -895,11 +824,12 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
           const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2.pipe(
             Effect.provide(
               ProviderEventIngestor.layer.pipe(
+                Layer.provide(layerTestProviderInstanceRegistry),
                 Layer.provide(IdAllocator.layer),
                 Layer.provide(
                   GitVcsDriver.layer.pipe(
                     Layer.provide(layerServerConfig),
-                    Layer.provide(NodeServices.layer),
+                    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
                   ),
                 ),
               ),
@@ -1302,7 +1232,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         const reactor = yield* PullRequestWatchReactor.make.pipe(
           Effect.provide(
             Layer.mergeAll(
-              NodeServices.layer,
+              Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
               Layer.mock(PullRequestService.PullRequestService)({
                 detail: () =>
                   Effect.suspend(() => {
@@ -1433,7 +1363,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const reactor = yield* PullRequestWatchReactor.make.pipe(
         Effect.provide(
           Layer.mergeAll(
-            NodeServices.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
             Layer.mock(PullRequestService.PullRequestService)({
               detail: () =>
                 Effect.sync(() => ({
@@ -1531,7 +1461,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const reactor = yield* PullRequestWatchReactor.make.pipe(
         Effect.provide(
           Layer.mergeAll(
-            NodeServices.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
             Layer.mock(PullRequestService.PullRequestService)({
               watchFingerprint: () =>
                 Effect.suspend(() =>
@@ -3066,41 +2996,6 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
   );
 });
 
-const queueResumeDisabledInstanceProjectId = ProjectId.make(
-  "project:queue-resume-disabled-instance",
-);
-
-const layerQueueResumeDisabledInstanceTest = Layer.mergeAll(
-  RuntimeLayer.layer,
-  RuntimeLayer.layerEventSink,
-  ProjectStore.layer,
-  ProjectionStore.layer,
-  EffectOutbox.layer,
-  ThreadCommandExecutor.layer,
-).pipe(
-  Layer.provide(McpSessionRegistryTestkit.layer),
-  Layer.provide(McpProviderSessions.layer),
-  Layer.provide(SqlitePersistence.layerMemory),
-  Layer.provide(layerCheckpointStoreTest),
-  Layer.provide(layerServerConfig),
-  Layer.provide(
-    ServerSettings.layerTest({
-      providerInstances: {
-        [alternateInstanceId]: { driver: "codex", enabled: true },
-      },
-      projectSettingsOverrides: {
-        [queueResumeDisabledInstanceProjectId]: {
-          providerInstances: { [alternateInstanceId]: { enabled: false } },
-        },
-      },
-    }),
-  ),
-  Layer.provide(layerTestProviderInstanceRegistry),
-  Layer.provide(layerGitWorkflowTest),
-  Layer.provide(layerProjectServiceTest),
-  Layer.provide(layerPlatformTest),
-);
-
 it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", (it) => {
   it.effect("persists only the changed PR link and replays it without losing other links", () =>
     Effect.gen(function* () {
@@ -3262,5 +3157,61 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
         ["thread.metadata-updated"],
       );
     }),
+  );
+});
+
+it.layer(layerTest)("active-agent drain admission", (it) => {
+  it.effect(
+    "rejects new work while draining, permits stop, and resumes work after cancellation",
+    () =>
+      Effect.gen(function* () {
+        const engine = yield* Orchestrator.OrchestratorV2;
+        const gate = yield* ServerDrainAdmission.ServerDrainAdmission;
+        const threadId = ThreadId.make("drain-admission-thread");
+        yield* seedProject({
+          projectId: ProjectId.make("drain-project"),
+          title: "Drain",
+          workspaceRoot: "/tmp/drain-admission",
+          defaultModelSelection: modelSelection,
+          createdAt: "2026-11-05T00:00:00Z",
+        });
+        yield* engine.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("drain-create"),
+          threadId,
+          projectId: ProjectId.make("drain-project"),
+          title: "Drain admission",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+        });
+        const command = {
+          type: "message.dispatch" as const,
+          createdBy: "user" as const,
+          creationSource: "web" as const,
+          commandId: CommandId.make("drain-send"),
+          threadId,
+          messageId: MessageId.make("drain-message"),
+          text: "Accepted only after cancellation",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" as const },
+        };
+        yield* gate.close;
+        const rejected = yield* engine.dispatch(command).pipe(Effect.flip);
+        assert.equal(rejected._tag, "OrchestratorCommandRejectedError");
+        assert.isEmpty((yield* engine.getThreadProjection(threadId)).runs);
+        yield* engine.dispatch({
+          type: "thread.stop",
+          commandId: CommandId.make("drain-stop"),
+          threadId,
+        });
+        yield* gate.open;
+        yield* engine.dispatch(command);
+        assert.equal((yield* engine.getThreadProjection(threadId)).runs.length, 1);
+      }),
   );
 });

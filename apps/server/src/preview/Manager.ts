@@ -5,9 +5,7 @@ import {
   PreviewInvalidUrlError,
   type PreviewListInput,
   type PreviewListResult,
-  type PreviewNavigateInput,
   type PreviewOpenInput,
-  type PreviewRefreshInput,
   type PreviewReportStatusInput,
   type PreviewResizeInput,
   type PreviewAdjustInput,
@@ -22,7 +20,7 @@ import {
   normalizePreviewUrl,
 } from "@t3tools/shared/preview";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -50,11 +48,12 @@ export class PreviewManager extends Context.Service<
         readonly beforePublish?: (snapshot: PreviewSessionSnapshot) => void;
       },
     ) => Effect.Effect<PreviewSessionSnapshot, PreviewError>;
-    readonly navigate: (
-      input: PreviewNavigateInput,
-    ) => Effect.Effect<PreviewSessionSnapshot, PreviewError>;
     readonly reportStatus: (
       input: PreviewReportStatusInput & { readonly serverControlled?: boolean },
+    ) => Effect.Effect<void, PreviewError>;
+    /** Records that a server tab runs headless. It stays headless until it closes. */
+    readonly markHeadless: (
+      input: PreviewCloseInput & { readonly tabId: string },
     ) => Effect.Effect<void, PreviewError>;
     readonly requestReveal: (
       input: PreviewCloseInput & { readonly tabId: string; readonly force: boolean },
@@ -65,7 +64,6 @@ export class PreviewManager extends Context.Service<
     readonly adjust: (
       input: PreviewAdjustInput,
     ) => Effect.Effect<PreviewSessionSnapshot, PreviewError>;
-    readonly refresh: (input: PreviewRefreshInput) => Effect.Effect<void, PreviewError>;
     readonly close: (input: PreviewCloseInput) => Effect.Effect<void, PreviewError>;
     readonly list: (input: PreviewListInput) => Effect.Effect<PreviewListResult>;
     readonly events: Stream.Stream<PreviewEvent>;
@@ -130,15 +128,15 @@ const currentIsoTimestamp = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
 /** @public */
 export const make = Effect.gen(function* PreviewManagerMake() {
-  const crypto = yield* Crypto.Crypto;
-  const serverEpoch = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+  const random = yield* SecureRandom.SecureRandom;
+  const serverEpoch = yield* random.uuidV4();
   const stateRef = yield* SynchronizedRef.make<ManagerState>(initialState);
   const eventsPubSub = yield* PubSub.unbounded<PreviewEvent>();
   const events: Stream.Stream<PreviewEvent> = Stream.unwrap(
     Effect.gen(function* () {
       // Subscribe before reading state so opens during reconnect cannot fall between the two.
       const subscription = yield* PubSub.subscribe(eventsPubSub);
-      const streamId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const streamId = yield* random.uuidV4().pipe(Effect.orDie);
       const consumer = yield* PreviewEventConsumer;
       yield* Effect.void.pipe(
         Effect.withSpan("browser.attachment.stream-start", {
@@ -289,41 +287,6 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     },
   );
 
-  const navigate: PreviewManager["Service"]["navigate"] = Effect.fn("PreviewManager.navigate")(
-    function* (input) {
-      const url = yield* normalizeUrl(input.url);
-      return yield* mutateExistingSession(
-        input.threadId,
-        input.tabId,
-        Effect.fn("PreviewManager.navigateSession")(function* (session) {
-          if (session.snapshot.runtime === "server")
-            return yield* new PreviewControlRequiredError({ tabId: input.tabId });
-          const updatedAt = yield* currentIsoTimestamp;
-          const previousTitle =
-            session.snapshot.navStatus._tag === "Idle" ? "" : session.snapshot.navStatus.title;
-          const resolvedTitle = input.resolvedTitle ?? previousTitle;
-          const snapshot: PreviewSessionSnapshot = {
-            ...session.snapshot,
-            navStatus: { _tag: "Success", url, title: resolvedTitle },
-            viewport: session.snapshot.viewport ?? FILL_PREVIEW_VIEWPORT,
-            updatedAt,
-          };
-          return {
-            next: { ...session, snapshot },
-            emit: {
-              type: "navigated",
-              threadId: session.threadId,
-              tabId: session.tabId,
-              createdAt: snapshot.updatedAt,
-              snapshot,
-            },
-            result: snapshot,
-          };
-        }),
-      );
-    },
-  );
-
   const reportStatus: PreviewManager["Service"]["reportStatus"] = Effect.fn(
     "PreviewManager.reportStatus",
   )(function* (input) {
@@ -368,6 +331,34 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           next: { ...session, snapshot },
           emit,
           result: undefined as void,
+        };
+      }),
+    );
+  });
+
+  const markHeadless: PreviewManager["Service"]["markHeadless"] = Effect.fn(
+    "PreviewManager.markHeadless",
+  )(function* (input) {
+    return yield* mutateExistingSession(
+      input.threadId,
+      input.tabId,
+      Effect.fn("PreviewManager.markSessionHeadless")(function* (session) {
+        if (session.snapshot.headless) return { next: session, emit: null, result: undefined };
+        const snapshot: PreviewSessionSnapshot = {
+          ...session.snapshot,
+          headless: true,
+          updatedAt: yield* currentIsoTimestamp,
+        };
+        return {
+          next: { ...session, snapshot },
+          emit: {
+            type: "resized",
+            threadId: session.threadId,
+            tabId: session.tabId,
+            createdAt: snapshot.updatedAt,
+            snapshot,
+          },
+          result: undefined,
         };
       }),
     );
@@ -440,14 +431,6 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     },
   );
 
-  const refresh: PreviewManager["Service"]["refresh"] = Effect.fn("PreviewManager.refresh")(
-    function* (input) {
-      yield* mutateExistingSession(input.threadId, input.tabId, (session) =>
-        Effect.succeed({ next: session, emit: null, result: undefined as void }),
-      );
-    },
-  );
-
   const close: PreviewManager["Service"]["close"] = Effect.fn("PreviewManager.close")(
     function* (input) {
       const createdAt = yield* currentIsoTimestamp;
@@ -513,7 +496,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           ...session.snapshot,
           reveal: true,
           revealRequest: {
-            id: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
+            id: yield* random.uuidV4(),
             force: input.force,
           },
           updatedAt: yield* currentIsoTimestamp,
@@ -536,11 +519,10 @@ export const make = Effect.gen(function* PreviewManagerMake() {
   return PreviewManager.of({
     open,
     requestReveal,
-    navigate,
     reportStatus,
+    markHeadless,
     resize,
     adjust,
-    refresh,
     close,
     list,
     events,

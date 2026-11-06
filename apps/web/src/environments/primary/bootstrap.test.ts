@@ -8,8 +8,6 @@ import {
   PrimaryEnvironmentUrlInvalidError,
   readPrimaryEnvironmentTarget,
   resolvePrimaryEnvironmentHttpUrl,
-  resolveInitialPrimaryEnvironmentDescriptor,
-  resetPrimaryEnvironmentDescriptorForTests,
 } from ".";
 import { installEnvironmentHttpTest } from "../../../test/environmentHttpTest";
 import { refreshDesktopSecondaryBootstraps } from "../../connection/desktopLocal";
@@ -73,30 +71,16 @@ describe("environmentBootstrap", () => {
   afterEach(async () => {
     await disposeHttpTest?.();
     disposeHttpTest = undefined;
-    resetPrimaryEnvironmentDescriptorForTests();
     vi.unstubAllEnvs();
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
-  it("reuses an in-flight descriptor bootstrap request", async () => {
-    const testApi = await installDescriptorApi();
-
-    await Promise.all([
-      resolveInitialPrimaryEnvironmentDescriptor(),
-      resolveInitialPrimaryEnvironmentDescriptor(),
-    ]);
-
-    expect(testApi.calls.descriptor).toBe(1);
-  });
-
-  it("uses https descriptor urls when the primary environment uses wss", async () => {
+  it("uses https descriptor urls when the primary environment uses wss", () => {
     vi.stubEnv("VITE_HTTP_URL", "https://remote.example.com");
     vi.stubEnv("VITE_WS_URL", "wss://remote.example.com");
-    await installDescriptorApi();
 
-    await expect(resolveInitialPrimaryEnvironmentDescriptor()).resolves.toEqual(BASE_ENVIRONMENT);
     expect(resolvePrimaryEnvironmentHttpUrl("/.well-known/t3/environment")).toBe(
       "https://remote.example.com/.well-known/t3/environment",
     );
@@ -128,6 +112,7 @@ describe("environmentBootstrap", () => {
         replaceState: vi.fn(),
       },
       desktopBridge: {
+        getLocalEnvironmentEnabled: () => true,
         getLocalEnvironmentBootstraps: () => [
           {
             id: "primary",
@@ -142,7 +127,6 @@ describe("environmentBootstrap", () => {
     await refreshDesktopSecondaryBootstraps();
     await installDescriptorApi();
 
-    await expect(resolveInitialPrimaryEnvironmentDescriptor()).resolves.toEqual(BASE_ENVIRONMENT);
     expect(resolvePrimaryEnvironmentHttpUrl("/.well-known/t3/environment")).toBe(
       "http://127.0.0.1:5733/.well-known/t3/environment",
     );

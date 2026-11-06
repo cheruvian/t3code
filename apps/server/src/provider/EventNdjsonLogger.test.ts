@@ -1,3 +1,4 @@
+import { makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 // @effect-diagnostics nodeBuiltinImport:off - Native process and filesystem fixtures exercise provider boundaries.
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -15,7 +16,6 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as ResourceAttribution from "../resourceTelemetry/ResourceAttribution.ts";
 import {
-  makeEventNdjsonLogger,
   makeEventNdjsonLogStore,
   type EventNdjsonLogStore,
   type EventNdjsonLogStoreOptions,
@@ -116,11 +116,10 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
       circular.self = circular;
 
       try {
-        const logger = yield* makeEventNdjsonLogger(basePath, { stream: "native" });
-        assert.exists(logger);
-        if (!logger) return;
+        const store = yield* makeEventNdjsonLogStore(basePath);
+        const logger = store.logger("native");
         yield* logger.write(circular, ThreadId.make("thread-1"));
-        yield* logger.close();
+        yield* store.close();
 
         const serialized = encodeUnknownJson(messages);
         assert.notInclude(serialized, secret);
@@ -188,15 +187,12 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
         const basePath = NodePath.join(tempDir, "provider-canonical.ndjson");
 
         try {
-          const logger = yield* makeEventNdjsonLogger(basePath, { stream: "orchestration" });
-          assert.notEqual(logger, undefined);
-          if (!logger) {
-            return;
-          }
+          const store = yield* makeEventNdjsonLogStore(basePath);
+          const logger = store.logger("orchestration");
 
           yield* logger.write({ id: "evt-no-thread" }, null);
           yield* logger.write({ id: "evt-invalid-thread" }, "!!!" as unknown as ThreadId);
-          yield* logger.close();
+          yield* store.close();
 
           const globalPath = ownedLogPath(basePath, "_global");
           assert.equal(NodeFS.existsSync(globalPath), true);
@@ -246,6 +242,39 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
               payload: '{"type":"item.completed","id":"canonical-event"}',
             },
           ],
+        );
+      } finally {
+        NodeFS.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }),
+  );
+
+  it.effect("keeps long thread ids that share a prefix in separate files", () =>
+    Effect.gen(function* () {
+      const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-"));
+      const basePath = NodePath.join(tempDir, "events.log");
+      const prefix =
+        "thread:delegated-task:command%3Amcp%3A00000000-0000-4000-8000-000000000000%3Adelegate-task%3A";
+
+      try {
+        const store = yield* makeEventNdjsonLogStore(basePath, { batchWindowMs: 0 });
+        const logger = store.logger("native");
+        yield* logger.write({ id: "first" }, ThreadId.make(`${prefix}review-the-diff`));
+        yield* logger.write({ id: "second" }, ThreadId.make(`${prefix}write-the-tests`));
+        yield* store.close();
+
+        const files = NodeFS.readdirSync(tempDir);
+        assert.equal(files.length, 2);
+        assert.deepEqual(
+          files
+            .map((name) =>
+              NodeFS.readFileSync(NodePath.join(tempDir, name), "utf8")
+                .trim()
+                .split("\n")
+                .map((line) => parseLogLine(line).payload),
+            )
+            .toSorted(),
+          [['{"id":"first"}'], ['{"id":"second"}']],
         );
       } finally {
         NodeFS.rmSync(tempDir, { recursive: true, force: true });
@@ -786,14 +815,8 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
       const basePath = NodePath.join(tempDir, "provider-canonical.ndjson");
 
       try {
-        const logger = yield* makeEventNdjsonLogger(basePath, {
-          stream: "canonical",
-          batchWindowMs: 0,
-        });
-        assert.notEqual(logger, undefined);
-        if (!logger) {
-          return;
-        }
+        const store = yield* makeEventNdjsonLogStore(basePath, { batchWindowMs: 0 });
+        const logger = store.logger("canonical");
 
         yield* Effect.all(
           [
@@ -802,7 +825,7 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
           ],
           { concurrency: "unbounded" },
         );
-        yield* logger.close();
+        yield* store.close();
 
         const globalPath = ownedLogPath(basePath, "_global");
         assert.equal(NodeFS.existsSync(globalPath), true);
@@ -1069,6 +1092,47 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
         assert.equal(snapshot.entries[0]?.operation, "native.append");
         assert.equal(snapshot.entries[0]?.count, 1);
         assert.isAbove(snapshot.entries[0]?.logicalWriteBytes ?? 0, 0);
+      } finally {
+        NodeFS.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }),
+  );
+  it.effect("retires a thread log once a retention interval passes without writes", () =>
+    Effect.gen(function* () {
+      const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-"));
+      const basePath = NodePath.join(tempDir, "events.log");
+      const finishedPath = ownedLogPath(basePath, "finished");
+      const activePath = ownedLogPath(basePath, "active");
+
+      try {
+        const store = yield* makeEventNdjsonLogStore(basePath, {
+          batchWindowMs: 0,
+        });
+        const logger = store.logger("native");
+
+        yield* logger.write({ id: "finished-first" }, ThreadId.make("finished"));
+        yield* store.drain();
+        yield* TestClock.adjust("5 minutes");
+        yield* logger.write({ id: "active-first" }, ThreadId.make("active"));
+        yield* store.drain();
+        assert.equal(NodeFS.existsSync(finishedPath), true);
+        NodeFS.truncateSync(finishedPath, 512 * 1024 * 1024 + 1);
+
+        yield* TestClock.adjust("5 minutes");
+        yield* logger.write({ id: "active-second" }, ThreadId.make("active"));
+        yield* store.drain();
+        assert.equal(NodeFS.existsSync(finishedPath), false);
+        assert.equal(NodeFS.existsSync(activePath), true);
+
+        yield* logger.write({ id: "finished-again" }, ThreadId.make("finished"));
+        yield* store.close();
+        assert.deepEqual(
+          NodeFS.readFileSync(finishedPath, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => parseLogLine(line).payload),
+          ['{"id":"finished-again"}'],
+        );
       } finally {
         NodeFS.rmSync(tempDir, { recursive: true, force: true });
       }

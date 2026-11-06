@@ -5,6 +5,7 @@ import * as ServerSettings from "../../serverSettings.ts";
  * `HttpClient` that answers from the transcript, so request encoding and
  * response decoding are both exercised.
  */
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ProviderInstanceId,
@@ -137,11 +138,8 @@ const operationOf = (
 };
 
 /**
- * An `HttpClient` that answers every request from the transcript. A successful
- * `runtime_exit` ends the event stream: the server has stopped. When entries
- * follow it, the server was restarted and the next `event.subscribe` opens its
- * new stream; a transcript that ends there stays down, so every later request
- * fails to connect as it would against a stopped server.
+ * runtime_exit closes the HTTP event stream. Subsequent transcript entries model a restart;
+ * a terminal runtime_exit makes later requests fail as they would against a stopped server.
  */
 const replayHttpClient = (
   controller: OpenCodeReplayController,
@@ -275,7 +273,9 @@ const makeReplayAdapter = (
     );
   });
 
-const layerReplayHost = TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer));
+const layerReplayHost = TestProviderHost.layer().pipe(
+  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+);
 
 const layerReplayHostWithAttachments = (
   attachmentsDir: string,
@@ -303,7 +303,11 @@ function layerRegistry(
     makeReplayAdapter(transcript, { external: true, ...options }).pipe(
       Effect.map((adapter) => ProviderAdapterRegistry.layerFromAdapters([adapter])),
     ),
-  ).pipe(Layer.provide(Layer.mergeAll(layerReplayHost, IdAllocator.layer, NodeServices.layer)));
+  ).pipe(
+    Layer.provide(
+      Layer.mergeAll(layerReplayHost, IdAllocator.layer, NodeServices.layer, NodeCrypto.layer),
+    ),
+  );
 }
 
 /**
@@ -359,6 +363,7 @@ export const openCode2ReplayRuntime = (
             ),
         IdAllocator.layer,
         NodeServices.layer,
+        NodeCrypto.layer,
       ),
     ),
   );

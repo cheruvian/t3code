@@ -7,12 +7,13 @@ import {
 import type { EnvironmentId, PullRequestSummary } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { Atom } from "effect/reactivity";
-import { useMemo, useCallback, useContext, useEffect } from "react";
+import { use, useMemo, useContext } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { serverEnvironment } from "./server";
 import { useEnvironmentQuery } from "./query";
 import { ThreadPrVisibilityContext } from "./thread-pr-visibility";
+import { ThreadPrDemandContext } from "./thread-pr-demand";
 import {
   rememberBounded,
   resolveThreadPrSource,
@@ -57,11 +58,7 @@ const pullRequestSummaryAtom = createLinkedPullRequestSummaryAtomFamily(
     ),
 );
 
-export {
-  presentThreadPr,
-  type ThreadPr,
-  type ThreadPrPresentation,
-} from "./thread-pr-presentation";
+export { type ThreadPr, type ThreadPrPresentation } from "./thread-pr-presentation";
 
 /**
  * Linked PRs use server snapshots. Branch fallback and legacy references share
@@ -72,9 +69,10 @@ export function useThreadPr(
   enabled = true,
 ): ThreadPrPresentation | null {
   const visible = useContext(ThreadPrVisibilityContext) && enabled;
-  const supportsLinks = useAtomValue(
+  const demand = use(ThreadPrDemandContext);
+  const capabilities = useAtomValue(
     serverEnvironment.configValueAtom(thread.environmentId),
-    (config) => config?.environment.capabilities.threadPullRequests === true,
+    (config) => config?.environment.capabilities,
   );
   const { linkedPresentation, pullRequestRef } = useMemo(
     () =>
@@ -84,9 +82,9 @@ export function useThreadPr(
           linkedPullRequest: thread.linkedPullRequest,
           branchPullRequest: thread.branchPullRequest,
         },
-        { threadPullRequests: supportsLinks },
+        capabilities,
       ),
-    [thread.pullRequests, thread.linkedPullRequest, thread.branchPullRequest, supportsLinks],
+    [thread.pullRequests, thread.linkedPullRequest, thread.branchPullRequest, capabilities],
   );
   const key = pullRequestRef === null ? null : snapshotKey(thread.environmentId, pullRequestRef);
   // Select this row's entry so answers for other pull requests do not re-render it.
@@ -94,7 +92,7 @@ export function useThreadPr(
     key === null ? undefined : current.get(key),
   );
   const pullRequestSummary = useEnvironmentQuery(
-    pullRequestRef === null || !visible
+    pullRequestRef === null || !visible || !demand
       ? null
       : pullRequestSummaryAtom({
           environmentId: thread.environmentId,
@@ -107,16 +105,13 @@ export function useThreadPr(
   );
   const summary = pullRequestRef === null ? undefined : (pullRequestSummary.data ?? snapshot);
   // Rows pass `pr` into callbacks; a fresh object per render would invalidate them.
-  const summaryPresentation = useMemo(
-    () =>
-      summary === undefined
-        ? null
-        : presentThreadPr(pullRequestDetailToVcsStatus(summary), {
-            kind: summary.provider,
-            name: summary.provider,
-            baseUrl: "",
-          }),
-    [summary],
-  );
+  const summaryPresentation =
+    summary === undefined
+      ? null
+      : presentThreadPr(pullRequestDetailToVcsStatus(summary), {
+          kind: summary.provider,
+          name: summary.provider,
+          baseUrl: "",
+        });
   return linkedPresentation ?? summaryPresentation;
 }

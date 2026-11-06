@@ -1,4 +1,3 @@
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/http";
@@ -10,9 +9,9 @@ import {
   EnvironmentHttpInternalServerError,
   EnvironmentHttpUnauthorizedError,
 } from "@t3tools/contracts";
-import {
-  type RelayEnvironmentLinkResponse as RelayEnvironmentLinkResponseType,
-  type RelayManagedEndpointProviderKind,
+import type {
+  RelayEnvironmentLinkResponse as RelayEnvironmentLinkResponseType,
+  RelayManagedEndpointProviderKind,
 } from "@t3tools/contracts/relay";
 import { findErrorTraceId } from "@t3tools/client-runtime/errors";
 import { ManagedRelay, relayRequestFailureDetail } from "@t3tools/client-runtime/relay";
@@ -26,11 +25,14 @@ function readRelayUrl(): string | null {
   return resolveCloudPublicConfig().relay.url;
 }
 
-export class CloudEnvironmentLinkError extends Data.TaggedError("CloudEnvironmentLinkError")<{
-  readonly message: string;
-  readonly cause?: unknown;
-  readonly traceId?: string;
-}> {}
+export class CloudEnvironmentLinkError extends Schema.TaggedError<CloudEnvironmentLinkError>()(
+  "CloudEnvironmentLinkError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+    traceId: Schema.optional(Schema.String),
+  },
+) {}
 
 const isEnvironmentCloudApiError = Schema.is(
   Schema.Union([

@@ -72,9 +72,9 @@ function setup() {
 
 it("follows submitted, running, completion, read, and background waiting in the actual slim row", async () => {
   const props = setup();
-  await using screen = await render(<SidebarThreadRow {...props} />);
   using _clock = { [Symbol.dispose]: () => vi.useRealTimers() };
   vi.setSystemTime("2026-01-01T00:03:00.000Z");
+  await using screen = await render(<SidebarThreadRow {...props} />);
   const update = (patch: Partial<Props["thread"]>) =>
     screen.rerender(<SidebarThreadRow {...props} thread={{ ...props.thread, ...patch }} />);
   await update({ latestUserMessageAt: "2026-01-01T00:03:00.000Z", latestRun: null });
@@ -83,7 +83,14 @@ it("follows submitted, running, completion, read, and background waiting in the 
     await update({
       runtime: { ...props.thread.runtime, status } as NonNullable<Props["thread"]["runtime"]>,
     });
-    await expect.element(screen.getByRole("img", { name: "Working", exact: true })).toBeVisible();
+    await expect
+      .element(
+        screen.getByRole("img", {
+          name: status === "preparing" ? "Setting up" : "Working",
+          exact: true,
+        }),
+      )
+      .toBeVisible();
   }
   const completedAt = "2026-01-01T00:01:00.000Z";
   const latestRun = { ...props.thread.latestRun, status: "completed", completedAt } as NonNullable<

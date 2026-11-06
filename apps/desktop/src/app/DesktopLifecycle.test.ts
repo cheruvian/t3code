@@ -1,9 +1,12 @@
+import * as DesktopSafeShutdown from "./DesktopSafeShutdown.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
+
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import type * as Electron from "electron";
 
@@ -20,6 +23,7 @@ function layerElectronApp(
   appListeners: Map<string, (...args: readonly unknown[]) => void>,
   quit: Effect.Effect<void> = Effect.void,
   exit: (code: number) => Effect.Effect<void> = () => Effect.void,
+  relaunch: (options: Electron.RelaunchOptions) => Effect.Effect<void> = () => Effect.void,
 ) {
   const registerListener = (eventName: string, listener: (...args: readonly unknown[]) => void) =>
     Effect.acquireRelease(
@@ -40,7 +44,7 @@ function layerElectronApp(
     requestSingleInstanceLock: Effect.succeed(true),
     quit,
     exit,
-    relaunch: () => Effect.void,
+    relaunch,
     setPath: () => Effect.void,
     setName: () => Effect.void,
     setAboutPanelOptions: () => Effect.void,
@@ -223,6 +227,50 @@ describe("DesktopLifecycle", () => {
     }),
   );
 
+  it.effect("relaunches without the app link that launched it", () =>
+    Effect.gen(function* () {
+      const relaunched = yield* Deferred.make<Electron.RelaunchOptions>();
+      const layerEnvironment = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+        platform: "linux",
+        isDevelopment: false,
+      } as DesktopEnvironment.DesktopEnvironment["Service"]);
+      const layer = DesktopLifecycle.layer.pipe(
+        Layer.provideMerge(
+          layerElectronApp(
+            new Map(),
+            Effect.void,
+            () => Effect.void,
+            (options) => Deferred.succeed(relaunched, options).pipe(Effect.asVoid),
+          ),
+        ),
+        Layer.provideMerge(layerElectronTheme),
+        Layer.provideMerge(layerElectronWindow()),
+        Layer.provideMerge(layerDesktopWindow()),
+        Layer.provideMerge(layerEnvironment),
+        Layer.provideMerge(DesktopShutdown.layer),
+        Layer.provideMerge(DesktopState.layer),
+      );
+
+      const options = yield* Effect.gen(function* () {
+        const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
+        yield* (yield* DesktopShutdown.DesktopShutdown).markComplete;
+        yield* lifecycle.relaunch("network access changed");
+        return yield* Deferred.await(relaunched);
+      }).pipe(
+        Effect.provide(layer),
+        Effect.provideService(HostProcess.ExecutablePath, "/opt/T3 Code/t3code"),
+        Effect.provideService(HostProcess.Arguments, [
+          "/opt/T3 Code/t3code",
+          "--no-sandbox",
+          "T3CODE://pair?token=spent",
+          "t3code://new?prompt=hello",
+        ]),
+      );
+
+      assert.deepEqual(options, { execPath: "/opt/T3 Code/t3code", args: ["--no-sandbox"] });
+    }),
+  );
+
   it.effect("exits on a repeated quit only once shutdown has stalled", () =>
     Effect.gen(function* () {
       const appListeners = new Map<string, (...args: readonly unknown[]) => void>();
@@ -313,3 +361,92 @@ describe("DesktopLifecycle", () => {
     }),
   );
 });
+
+it.effect(
+  "cancelling the native quit drain keeps windows and backends alive, then a later quit can commit",
+  () =>
+    Effect.gen(function* () {
+      const listeners = new Map<string, (...args: readonly unknown[]) => void>();
+      const firstRequest = yield* Deferred.make<void>();
+      const secondRequest = yield* Deferred.make<void>();
+      const finish = yield* Deferred.make<"committed">();
+      const quitCalled = yield* Deferred.make<void>();
+      let requests = 0;
+      const events: string[] = [];
+      const safe = DesktopSafeShutdown.DesktopSafeShutdown.of({
+        request: () =>
+          Effect.gen(function* () {
+            requests++;
+            if (requests === 1) {
+              yield* Deferred.succeed(firstRequest, undefined);
+              return { requestId: "cancelled", resolution: "cancelled" as const };
+            }
+            yield* Deferred.succeed(secondRequest, undefined);
+            return { requestId: "committed", resolution: yield* Deferred.await(finish) };
+          }),
+        reset: () => Effect.void,
+        resolve: () => Effect.void,
+      });
+      const layer = DesktopLifecycle.layer.pipe(
+        Layer.provideMerge(
+          layerElectronApp(
+            listeners,
+            Effect.sync(() => {
+              events.push("quit");
+            }).pipe(Effect.andThen(Deferred.succeed(quitCalled, undefined)), Effect.asVoid),
+          ),
+        ),
+        Layer.provideMerge(layerElectronTheme),
+        Layer.provideMerge(
+          layerElectronWindow(
+            Effect.sync(() => {
+              events.push("destroy");
+            }),
+          ),
+        ),
+        Layer.provideMerge(layerDesktopWindow()),
+        Layer.provideMerge(
+          Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+            platform: "darwin",
+            isDevelopment: false,
+          } as DesktopEnvironment.DesktopEnvironment["Service"]),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(DesktopShutdown.DesktopShutdown, {
+            request: Effect.sync(() => {
+              events.push("shutdown");
+            }),
+            awaitRequest: Effect.void,
+            markComplete: Effect.void,
+            awaitComplete: Effect.void,
+            isComplete: Effect.succeed(true),
+          }),
+        ),
+        Layer.provideMerge(Layer.succeed(DesktopSafeShutdown.DesktopSafeShutdown, safe)),
+        Layer.provideMerge(DesktopState.layer),
+      );
+      yield* Effect.gen(function* () {
+        yield* (yield* DesktopLifecycle.DesktopLifecycle).register;
+        let prevented = 0;
+        const event = {
+          preventDefault: () => {
+            prevented++;
+          },
+        } as Electron.Event;
+        listeners.get("before-quit")?.(event);
+        yield* Deferred.await(firstRequest);
+        yield* TestClock.adjust("0 millis");
+        assert.isEmpty(events);
+        assert.isFalse(yield* Ref.get((yield* DesktopState.DesktopState).quitting));
+        listeners.get("before-quit")?.(event);
+        yield* Deferred.await(secondRequest);
+        listeners.get("before-quit")?.(event);
+        assert.equal(requests, 2);
+        assert.equal(prevented, 3);
+        assert.isEmpty(events);
+        yield* Deferred.succeed(finish, "committed");
+        yield* Deferred.await(quitCalled);
+        assert.deepEqual(events, ["destroy", "shutdown", "quit"]);
+      }).pipe(Effect.provide(layer));
+    }).pipe(Effect.scoped),
+);

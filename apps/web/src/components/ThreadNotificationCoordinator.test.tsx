@@ -1,10 +1,10 @@
-import { WORKING_EXIT_GRACE_MS } from "@t3tools/client-runtime/state/thread-inbox";
+const WORKING_EXIT_GRACE_MS = 2_000;
 import { threadNotificationTag } from "../threadNotifications";
 vi.mock("../webPush", () => ({ isWebPushEnabled: () => state.push }));
 import type { ClientSettings } from "@t3tools/contracts/settings";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
-import { Atom, AtomRegistry } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import type { AnyRouter } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -146,7 +146,9 @@ vi.mock("../state/presentation", () => ({
     },
   },
 }));
-vi.mock("../state/shell", () => ({ environmentShell: { stateValueAtom: () => shellAtom } }));
+vi.mock("../state/shell", () => ({
+  environmentShell: { stateValueAtom: () => shellAtom, stateAtom: () => shellResultAtom },
+}));
 vi.mock("../threadNotifications", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../threadNotifications")>()),
   playNotificationSound: state.sound,
@@ -162,6 +164,7 @@ let stopNotifications: (() => void) | undefined;
 let registry = AtomRegistry.make();
 const environmentIdsAtom = Atom.make<readonly string[]>([]);
 const settingsListeners = new Set<() => void>();
+const shellResultAtom = Atom.make((get) => AsyncResult.success(get(shellAtom)));
 const shellAtom = Atom.keepAlive(
   Atom.make<unknown>({ status: "disconnected", snapshot: Option.none() }),
 );
@@ -212,7 +215,6 @@ beforeEach(() => {
     delegatedChild: null,
   });
   stableParent = null;
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", new EventTarget());
   vi.stubGlobal("document", {
     get visibilityState() {

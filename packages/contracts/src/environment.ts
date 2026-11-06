@@ -16,6 +16,11 @@ export const ORCHESTRATION_PROTOCOL_VERSION_TEXT = "2";
 export const ORCHESTRATION_PROTOCOL_QUERY_PARAM = "orchestrationProtocol";
 export const ORCHESTRATION_PROTOCOL_HEADER = "x-t3-orchestration-protocol";
 
+/** Wire shapes a client understands, comma-separated; a client that omits one gets the older shape. */
+export const CLIENT_CAPABILITIES_QUERY_PARAM = "clientCapabilities";
+/** Secret fields may hold a secret provider reference instead of a string. */
+export const SETTINGS_SECRET_REFERENCES_CAPABILITY = "settingsSecretReferences";
+
 export const ExecutionEnvironmentPlatformOs = Schema.Literals([
   "darwin",
   "linux",
@@ -66,11 +71,10 @@ export const WorktreeSubmodules = Schema.Literals(["recursive", "top-level", "no
 export type WorktreeSubmodules = typeof WorktreeSubmodules.Type;
 export type ExecutionEnvironmentPlatform = typeof ExecutionEnvironmentPlatform.Type;
 
-/** How a server can replace itself with another version when asked over RPC.
-    New servers only advertise the stable launcher-backed "boot-service" path;
-    "respawn" remains decodable for compatibility with older servers.
-    "desktop-app" means the supervising desktop app updated and relaunched
-    itself, bringing the server back with it. */
+/**
+ * Launcher-backed replacement uses boot-service; respawn remains decodable for older servers.
+ * desktop-app means the supervising desktop relaunch also replaces the server.
+ */
 export const ServerSelfUpdateMethod = Schema.Literals(["boot-service", "respawn", "desktop-app"]);
 export type ServerSelfUpdateMethod = typeof ServerSelfUpdateMethod.Type;
 
@@ -111,7 +115,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       servers from before the pull-request workspace shipped, so clients must not probe them. */
   pullRequests: Schema.optionalKey(Schema.Boolean),
   pullRequestChecks: Schema.optionalKey(Schema.Boolean),
-  /** Absent on older servers; serialize context as legacy text for them. */
+  /** Side chats: hidden `lineage.sideChat` forks. Older servers ignore the fork flag. */
+  sideChats: Schema.optionalKey(Schema.Boolean),
+  /** Every protocol-2 server sends this; older mobile builds still read it. */
   inlineMessageContext: Schema.optionalKey(Schema.Boolean),
   /** Server rejects required worktrees instead of falling back to the project checkout. */
   requiredWorktreeBootstrap: Schema.optionalKey(Schema.Boolean),
@@ -132,6 +138,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server can exclude PR-linked threads from inactivity settlement. */
   threadAutoSettlementScope: Schema.optionalKey(Schema.Boolean),
   /** Server persists the opt-in for continuing interrupted threads after restarts. */
+  serverDrain: Schema.optionalKey(Schema.Boolean),
   threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
   /** Server can export, import, and durably finalize a cross-environment thread move. */
   threadEnvironmentMove: Schema.optionalKey(Schema.Boolean),
@@ -142,7 +149,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server understands thread.snooze / thread.unsnooze commands. Same
       version-skew contract as threadSettlement. */
   threadSnooze: Schema.optionalKey(Schema.Boolean),
-  /** Clear published themes when absent; older servers never send updates. */
+  /** Serves `orchestration.forceStopThread`; hide Force stop where it is absent. */
+  threadForceStop: Schema.optionalKey(Schema.Boolean),
+  /** Every protocol-2 server sends this; older mobile builds still read it. */
   environmentThemes: Schema.optionalKey(Schema.Boolean),
   /** Server streams quota from configured usage-limit sources. Same
       version-skew contract as environmentThemes. */
@@ -164,6 +173,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server understands thread.auto-settle.set (per-thread auto-settle off).
       Same version-skew contract as threadSettlement. */
   threadAutoSettleOptOut: Schema.optionalKey(Schema.Boolean),
+  threadProjectFromScratch: Schema.optionalKey(Schema.Boolean),
   /** Server understands regenerateTitle on thread.meta.update. Absent on
       older servers, so clients hide the action instead of sending it. */
   threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),
@@ -179,6 +189,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       shaping and validation when this is absent. */
   serverResolvedCommandContext: Schema.optionalKey(Schema.Boolean),
   threadStop: Schema.optionalKey(Schema.Boolean),
+  /** Absent on older servers and on Windows hosts, which cannot stop a discovered server. */
+  localServerStop: Schema.optionalKey(Schema.Boolean),
   threadPullRequests: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.pull-request.watch and wakes agents on pull request changes. */
   threadPullRequestWatch: Schema.optionalKey(Schema.Boolean),
@@ -187,6 +199,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       servers that must be relaunched manually (dev checkouts, Windows
       foreground runs, pre-update servers). */
   serverSelfUpdate: Schema.optionalKey(ServerSelfUpdateCapability),
+  /** Server answers server.getNpmRelease using its configured npm registry. */
+  npmReleaseLookup: Schema.optionalKey(Schema.Boolean),
   /** Manual commands must update this install, not the host's default global prefix. */
   serverInstallation: ForwardCompatibleOptional(ServerInstallation),
   /** Server can stream self-update progress before acknowledging the
@@ -202,9 +216,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       Absent on older servers, where clients must clone with the blocking
       `sourceControl.cloneRepository` call instead. */
   projectCloneTracking: Schema.optionalKey(Schema.Boolean),
-  /** Server detects `platform.machine` and persists the `environmentIcon`
-      setting. Older servers drop the key on write, so clients show the
-      picker inert rather than offering a choice that would never stick. */
+  /** Server keeps `pinned` and `archived` from project.update. Older servers drop them. */
+  projectOrganization: Schema.optionalKey(Schema.Boolean),
   /** Server answers projects.listIgnoredFiles. */
   ignoredFileListing: Schema.optionalKey(Schema.Boolean),
   environmentIcon: Schema.optionalKey(Schema.Boolean),
@@ -214,6 +227,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       desktop servers whose app predates the remote trigger, where clients
       must keep telling the user to update the app on that machine. */
   desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
+  /** The desktop app switches update tracks when a server update request names one. */
+  desktopAppChannelSwitch: Schema.optionalKey(Schema.Boolean),
   /** Subscribe to command output only when advertised; older servers never send it. */
   commandOutputStreaming: Schema.optionalKey(Schema.Boolean),
   /** Hosts headless Chromium tabs streamed over /api/preview-stream for clients without a local runtime. */
@@ -221,6 +236,22 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server browser automation uses the hosting desktop app’s native tabs. */
   nativeDesktopBrowser: Schema.optionalKey(Schema.Boolean),
   managedDeployments: Schema.optionalKey(Schema.Boolean),
+  /** Server links to other environments (`PeerLink`) and its agents can work
+      in them. Absent on servers from before linking, which clients must not
+      offer linking for. */
+  peerLinks: Schema.optionalKey(Schema.Boolean),
+  /** Server's `/mcp` narrows an OAuth client's modes from `T3-Mode-Limit`, so
+      a linked environment's calls keep its agent's limits. Another environment
+      links to this one only when it is set. */
+  mcpModeLimitHeader: Schema.optionalKey(Schema.Boolean),
+  /** Work a linked environment starts here stays within its link
+      (`linkOrigin`). Another environment links to this one only when it is
+      set, since without it that work could change the user's own threads. */
+  linkFence: Schema.optionalKey(Schema.Boolean),
+  /** Server answers server.prepareTriage. */
+  triage: Schema.optionalKey(Schema.Boolean),
+  /** Server accepts `{ type: "once" }` scheduled tasks; older servers reject them on save. */
+  oneTimeSchedules: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
@@ -231,6 +262,8 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   serverVersion: TrimmedNonEmptyString,
   /** Absent on hosts from before explicit orchestration protocol negotiation. */
   orchestrationProtocolVersion: Schema.optionalKey(Schema.Int),
+  /** Highest migration this server's database holds; absent on older servers. */
+  databaseMigration: Schema.optionalKey(Schema.Int),
   capabilities: ExecutionEnvironmentCapabilities,
   /** Agent workspace for managing the T3 Code environment itself. */
   t3CodeProjectRoot: Schema.optionalKey(TrimmedNonEmptyString),

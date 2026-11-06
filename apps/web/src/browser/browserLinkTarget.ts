@@ -1,16 +1,11 @@
-/**
- * Where a link clicked inside a thread should open.
- *
- * Settings → Integrations → Browser lets the user choose between the OS
- * default browser and a tab in the in-app browser. This module turns that
- * preference plus the click itself into one answer, so chat markdown and the
- * terminal drawer make the same decision and offer the same escape hatch.
- *
- * @module browserLinkTarget
- */
-import type { BrowserLinkTarget, ScopedThreadRef } from "@t3tools/contracts";
+import {
+  AuthPreviewOperateScope,
+  type BrowserLinkTarget,
+  type ScopedThreadRef,
+} from "@t3tools/contracts";
 
 import { ensureClientSettingsHydrated, getClientSettings } from "~/hooks/useSettings";
+import { readEnvironmentScope } from "~/state/session";
 import { isPreviewAvailableFor } from "./previewRuntime";
 
 export interface ResolveLinkTargetInput {
@@ -27,11 +22,8 @@ export interface ResolveLinkTargetInput {
 }
 
 /**
- * The target a click resolves to. "app" only comes back when the preference
- * asks for it or the client is a Home Screen app, the runtime can honour it,
- * the URL is one the in-app browser can load, and the click carried no modifier — the modifier is the one-gesture
- * way out when the default is in-app, mirroring how change-request links
- * already treat it.
+ * Use the in-app target only for supported URLs and runtimes when requested or in a Home Screen app.
+ * Modifiers retain a one-gesture escape to external browsing.
  */
 export function resolveLinkTarget(input: ResolveLinkTargetInput): BrowserLinkTarget {
   if (input.event.metaKey || input.event.ctrlKey || input.event.button === 1) return "system";
@@ -71,5 +63,9 @@ export async function resolveBrowserLinkTargetPreference(): Promise<BrowserLinkT
 
 /** Whether this thread's environment has an in-app browser available to this client. */
 export function canOpenLinksInApp(threadRef: ScopedThreadRef | null | undefined): boolean {
-  return threadRef != null && isPreviewAvailableFor(threadRef.environmentId);
+  return (
+    threadRef != null &&
+    readEnvironmentScope(threadRef.environmentId, AuthPreviewOperateScope) &&
+    isPreviewAvailableFor(threadRef.environmentId)
+  );
 }

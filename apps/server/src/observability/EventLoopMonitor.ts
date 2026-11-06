@@ -3,7 +3,7 @@ import * as NodeOS from "node:os";
 import * as NodePerfHooks from "node:perf_hooks";
 
 import type { ServerEventLoopStall } from "@t3tools/contracts";
-import { RotatingFileSink } from "@t3tools/shared/logging";
+import { RotatingFileSink, RotatingFileSinkError } from "@t3tools/shared/logging";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -39,8 +39,7 @@ export class EventLoopMonitor extends Context.Reference<{
    */
   readonly latestNoticeableStall: Effect.Effect<ServerEventLoopStall | undefined>;
 }>("t3/observability/EventLoopMonitor", {
-  // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
-  defaultValue: () => ({ latestNoticeableStall: Effect.succeed(undefined) }),
+  defaultValue: () => ({ latestNoticeableStall: Effect.undefined }),
 }) {}
 
 /** One sample interval as Node reports it. Delay in ns, active time in ms, CPU in µs. */
@@ -155,12 +154,8 @@ export interface StallLogOptions {
 }
 
 /**
- * Samples event loop health at the configured interval and records a `server.eventLoop.stall` span
- * with a warning when the loop stalled for more than 2 s, so stalls land in
- * the local trace file and Settings > Diagnostics without OTLP. Each stall is
- * also appended as one NDJSON line to a small stall log, which keeps stall
- * history long after the trace file has rotated. Takes the sampler and log
- * options so tests can inject readings and a small cap.
+ * Event-loop stalls reach local traces, Settings diagnostics, and a bounded NDJSON log.
+ * Injectable sampling and size limits keep stall tests deterministic.
  */
 export const layerWith = (
   makeSampler: Effect.Effect<Effect.Effect<EventLoopReadings>, never, Scope.Scope>,
@@ -186,15 +181,21 @@ export const layerWith = (
       const stallSink =
         stallLog === undefined
           ? undefined
-          : yield* Effect.try(
-              () =>
+          : yield* Effect.try({
+              try: () =>
                 new RotatingFileSink({
                   filePath: stallLog.filePath,
                   maxBytes: stallLog.maxBytes,
                   maxFiles: 1,
                   throwOnError: true,
                 }),
-            ).pipe(
+              catch: (cause) =>
+                new RotatingFileSinkError({
+                  operation: "initialize",
+                  filePath: stallLog.filePath,
+                  cause,
+                }),
+            }).pipe(
               Effect.catch(() =>
                 Effect.logWarning("event loop stall log unavailable", {
                   filePath: stallLog.filePath,
@@ -252,12 +253,22 @@ export const layerWith = (
         yield* Effect.logWarning(`event loop stalled for ${delayMaxMs} ms`).pipe(
           Effect.withSpan("server.eventLoop.stall", { root: true, level: "Warn", attributes }),
         );
-        if (stallSink !== undefined) {
+        if (stallSink !== undefined && stallLog !== undefined) {
           yield* encodeStallLine({ time: detectedAt, ...attributes }).pipe(
-            Effect.flatMap((line) => Effect.try(() => stallSink.write(`${line}\n`))),
+            Effect.flatMap((line) =>
+              Effect.try({
+                try: () => stallSink.write(`${line}\n`),
+                catch: (cause) =>
+                  new RotatingFileSinkError({
+                    operation: "write",
+                    filePath: stallLog.filePath,
+                    cause,
+                  }),
+              }),
+            ),
             Effect.catch(() =>
               Effect.logWarning("event loop stall log write failed", {
-                filePath: stallLog?.filePath,
+                filePath: stallLog.filePath,
               }),
             ),
           );

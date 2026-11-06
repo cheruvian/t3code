@@ -54,21 +54,7 @@ export function resolveChatCanvasLayout({
       : container.width - padding;
   const normalWidth = Math.max(0, Math.min(centeredWidth, laneRight - laneLeft));
   const canvasCenterLeft = (container.width - normalWidth) / 2;
-  const cardExtent = detailsCard
-    ? cardOnLeft
-      ? detailsCard.right
-      : container.width - detailsCard.left
-    : 0;
-  const clearance = cardOnLeft
-    ? canvasCenterLeft - laneLeft
-    : laneRight - canvasCenterLeft - normalWidth;
-  const besideShift = detailsCard
-    ? Math.min(cardExtent / 2, Math.max(0, cardExtent / 2 - clearance))
-    : 0;
-  const normalLeft = Math.max(
-    laneLeft,
-    Math.min(canvasCenterLeft + (cardOnLeft ? besideShift : -besideShift), laneRight - normalWidth),
-  );
+  const normalLeft = Math.max(laneLeft, Math.min(canvasCenterLeft, laneRight - normalWidth));
   const placeChat = (left: number, width: number) => ({
     left,
     width,

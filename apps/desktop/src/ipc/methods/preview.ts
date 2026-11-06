@@ -9,6 +9,7 @@ import {
   DesktopPreviewRegisterWebviewInputSchema,
   DesktopPreviewScreenshotArtifactSchema,
   DesktopPreviewSetAudioMutedInputSchema,
+  DesktopPreviewSetShownInputSchema,
   DesktopPreviewSetColorSchemeInputSchema,
   DesktopPreviewSetZoomFactorInputSchema,
   BrowserImportResult,
@@ -49,9 +50,6 @@ export const installPreviewEventForwarding = Effect.fn(
   );
   yield* manager.subscribeStateChanges((tabId, state) =>
     electronWindow.sendAll(IpcChannels.PREVIEW_STATE_CHANGE_CHANNEL, tabId, state),
-  );
-  yield* manager.subscribeRecordingFrames((frame) =>
-    electronWindow.sendAll(IpcChannels.PREVIEW_RECORDING_FRAME_CHANNEL, frame),
   );
   yield* manager.subscribeRecordingInputs((event) =>
     electronWindow.sendAll(IpcChannels.PREVIEW_RECORDING_INPUT_CHANNEL, event),
@@ -219,6 +217,15 @@ const setAllAudioMuted = DesktopIpc.makeIpcMethod({
   }),
 });
 
+const setShown = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_SET_SHOWN_CHANNEL,
+  payload: DesktopPreviewSetShownInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.setShown")(function* ({ tabId, shown }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.setShown(tabId, shown);
+  }),
+});
 const openDevTools = tabMethod(
   IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL,
   "desktop.ipc.preview.openDevTools",
@@ -460,6 +467,7 @@ export const methods = [
   setAudioMuted,
   getAllAudioMuted,
   setAllAudioMuted,
+  setShown,
   openDevTools,
   clearCookies,
   clearCache,

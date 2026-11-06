@@ -41,6 +41,9 @@ export function useSettingsRestore(onRestored?: () => void) {
   const isBackgroundActivityDirty = hasChangedBackgroundActivitySettings(settings);
 
   const changedSettingLabels = [
+    ...(settings.effortDisplay !== DEFAULT_UNIFIED_SETTINGS.effortDisplay
+      ? ["Effort display"]
+      : []),
     ...(settings.htmlPreviewDefaultMode !== DEFAULT_UNIFIED_SETTINGS.htmlPreviewDefaultMode
       ? ["HTML previews"]
       : []),
@@ -234,6 +237,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       return;
     }
     updateSettings({
+      effortDisplay: DEFAULT_UNIFIED_SETTINGS.effortDisplay,
       htmlPreviewDefaultMode: DEFAULT_UNIFIED_SETTINGS.htmlPreviewDefaultMode,
       sidebarCompactMode: DEFAULT_UNIFIED_SETTINGS.sidebarCompactMode,
       sidebarThreadSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarThreadSortOrder,

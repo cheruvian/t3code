@@ -23,7 +23,7 @@ let serverList = emptyList;
 let pendingList: Promise<PreviewListResult> | undefined;
 const listTargets: unknown[] = [];
 const listRequest = vi.fn(() => pendingList ?? Promise.resolve(serverList));
-const baseline = Atom.make(() => Effect.tryPromise(listRequest)).pipe(Atom.setIdleTTL(0));
+const baseline = Atom.make(() => Effect.promise(listRequest)).pipe(Atom.setIdleTTL(0));
 const events = Atom.make<AsyncResult.AsyncResult<PreviewEvent>>(AsyncResult.initial());
 let unmountHost = () => {};
 

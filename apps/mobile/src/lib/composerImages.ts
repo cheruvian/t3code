@@ -127,10 +127,8 @@ export async function persistComposerAttachmentFile(
   const { Directory, File, FileMode, Paths } = await import("expo-file-system");
   const directory = new Directory(Paths.document, COMPOSER_ATTACHMENT_DIRECTORY);
   directory.create({ idempotent: true, intermediates: true });
-  const safeName =
-    Array.from(name, (character) =>
-      character === "/" || character === "\\" || character.charCodeAt(0) < 32 ? "-" : character,
-    ).join("") || "file";
+  // Android's java.net.URI rejects characters expo-file-system leaves unencoded, such as `[` and `]`.
+  const safeName = name.replace(/[^\w. -]/g, "-") || "file";
   const destination = new File(directory, `${uuidv4()}-${safeName}`);
   const source = new File(uri);
   const sourceSize = source.size;
@@ -220,7 +218,7 @@ export async function removePersistedComposerAttachmentFile(uri: string): Promis
   }
 }
 
-async function createComposerFileAttachment(input: {
+export async function createComposerFileAttachment(input: {
   readonly uri: string;
   readonly name: string;
   readonly mimeType: string;
@@ -360,14 +358,6 @@ async function loadImagePicker() {
     return await import("expo-image-picker");
   } catch (error) {
     throw new Error("The photo library is unavailable right now.", { cause: error });
-  }
-}
-
-async function loadClipboard() {
-  try {
-    return await import("expo-clipboard");
-  } catch (error) {
-    throw new Error("Clipboard paste is unavailable right now.", { cause: error });
   }
 }
 
@@ -545,6 +535,109 @@ export async function pickComposerMedia(input: {
   };
 }
 
+function mimeTypeFromUri(uri: string): string {
+  const ext = uri.split(".").pop()?.toLowerCase();
+  switch (ext) {
+    case "png":
+      return "image/png";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "gif":
+      return "image/gif";
+    case "webp":
+      return "image/webp";
+    case "heic":
+      return "image/heic";
+    default:
+      return "image/png";
+  }
+}
+
+function isOwnedPastedImageUri(uri: string): boolean {
+  try {
+    const url = new URL(uri);
+    if (url.protocol !== "file:") {
+      return false;
+    }
+    const segments = url.pathname.split("/").filter(Boolean);
+    return (
+      segments.at(-2) === OWNED_PASTED_IMAGE_DIRECTORY && segments.at(-1)?.endsWith(".png") === true
+    );
+  } catch {
+    return false;
+  }
+}
+
+export async function convertPastedImagesToAttachments(input: {
+  readonly uris: ReadonlyArray<string>;
+  readonly existingCount: number;
+}): Promise<ReadonlyArray<DraftComposerImageAttachment>> {
+  const { File } = await import("expo-file-system");
+  const remainingSlots = PROVIDER_SEND_TURN_MAX_ATTACHMENTS - input.existingCount;
+  const results: DraftComposerImageAttachment[] = [];
+
+  for (const [index, uri] of input.uris.entries()) {
+    const temporaryUris = isOwnedPastedImageUri(uri) ? [uri] : [];
+    try {
+      if (index >= Math.max(0, remainingSlots)) {
+        continue;
+      }
+      const file = new File(uri);
+      const reportedMimeType = file.type;
+      const sourceMimeType = reportedMimeType?.startsWith("image/")
+        ? reportedMimeType
+        : mimeTypeFromUri(uri);
+      const mimeType = isProviderSendTurnSupportedImageMimeType(sourceMimeType)
+        ? sourceMimeType
+        : "image/jpeg";
+      const rendered = mimeType === sourceMimeType ? null : await renderPhoto(uri);
+      if (rendered !== null) {
+        temporaryUris.push(rendered.uri);
+      }
+      const pastedBase64 = rendered?.base64 ?? (await file.base64());
+      const fitted = rendered ?? (await fitComposerImage({ uri, mimeType, base64: pastedBase64 }));
+      const base64 = fitted?.base64 ?? pastedBase64;
+      const sizeBytes = estimateBase64ByteSize(base64);
+      if (sizeBytes <= 0 || sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+        continue;
+      }
+      results.push({
+        id: uuidv4(),
+        type: "image",
+        name: `pasted-image.${mimeType.split("/")[1] ?? "png"}`,
+        mimeType,
+        sizeBytes,
+        dataUrl: `data:${mimeType};base64,${base64}`,
+        previewUri: `data:${mimeType};base64,${base64}`,
+      });
+    } catch (error) {
+      console.warn("Failed to read pasted image", uri, error);
+    } finally {
+      for (const temporaryUri of temporaryUris) {
+        try {
+          const file = new File(temporaryUri);
+          if (file.exists) {
+            file.delete();
+          }
+        } catch (error) {
+          console.warn("Failed to remove temporary pasted image", temporaryUri, error);
+        }
+      }
+    }
+  }
+
+  return results;
+}
+
+async function loadClipboard() {
+  try {
+    return await import("expo-clipboard");
+  } catch (error) {
+    throw new Error("Clipboard paste is unavailable right now.", { cause: error });
+  }
+}
+
 export async function pasteComposerClipboard(input: { readonly existingCount: number }): Promise<
   | {
       readonly images: ReadonlyArray<DraftComposerImageAttachment>;
@@ -634,89 +727,4 @@ export async function pasteComposerClipboard(input: { readonly existingCount: nu
     text: null,
     error: "Clipboard does not contain pasteable text or image content.",
   };
-}
-
-function mimeTypeFromUri(uri: string): string {
-  const ext = uri.split(".").pop()?.toLowerCase();
-  switch (ext) {
-    case "png":
-      return "image/png";
-    case "jpg":
-    case "jpeg":
-      return "image/jpeg";
-    case "gif":
-      return "image/gif";
-    case "webp":
-      return "image/webp";
-    case "heic":
-      return "image/heic";
-    default:
-      return "image/png";
-  }
-}
-
-export function isOwnedPastedImageUri(uri: string): boolean {
-  try {
-    const url = new URL(uri);
-    if (url.protocol !== "file:") {
-      return false;
-    }
-    const segments = url.pathname.split("/").filter(Boolean);
-    return (
-      segments.at(-2) === OWNED_PASTED_IMAGE_DIRECTORY && segments.at(-1)?.endsWith(".png") === true
-    );
-  } catch {
-    return false;
-  }
-}
-
-export async function convertPastedImagesToAttachments(input: {
-  readonly uris: ReadonlyArray<string>;
-  readonly existingCount: number;
-}): Promise<ReadonlyArray<DraftComposerImageAttachment>> {
-  const { File } = await import("expo-file-system");
-  const remainingSlots = PROVIDER_SEND_TURN_MAX_ATTACHMENTS - input.existingCount;
-  const results: DraftComposerImageAttachment[] = [];
-
-  for (const [index, uri] of input.uris.entries()) {
-    const ownedTemporaryFile = isOwnedPastedImageUri(uri);
-    try {
-      if (index >= Math.max(0, remainingSlots)) {
-        continue;
-      }
-      const file = new File(uri);
-      const mimeType = mimeTypeFromUri(uri);
-      const pastedBase64 = await file.base64();
-      const fitted = await fitComposerImage({ uri, mimeType, base64: pastedBase64 });
-      const base64 = fitted?.base64 ?? pastedBase64;
-      const sizeBytes = estimateBase64ByteSize(base64);
-      if (sizeBytes <= 0 || sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
-        continue;
-      }
-      results.push({
-        id: uuidv4(),
-        type: "image",
-        name: `pasted-image.${mimeType.split("/")[1] ?? "png"}`,
-        mimeType,
-        sizeBytes,
-        dataUrl: `data:${mimeType};base64,${base64}`,
-        previewUri: ownedTemporaryFile ? `data:${mimeType};base64,${base64}` : (fitted?.uri ?? uri),
-      });
-    } catch (error) {
-      console.warn("Failed to read pasted image", uri, error);
-    } finally {
-      if (ownedTemporaryFile) {
-        try {
-          const file = new File(uri);
-          if (file.exists) {
-            file.delete();
-          }
-        } catch (error) {
-          console.warn("Failed to remove temporary pasted image", uri, error);
-        }
-      }
-    }
-  }
-
-  return results;
 }

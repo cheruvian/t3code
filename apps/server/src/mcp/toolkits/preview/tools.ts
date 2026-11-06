@@ -1,4 +1,5 @@
 import {
+  BrowserNavigationTarget,
   OrchestratorMcpFailure,
   ToolActivityIcon,
   PreviewAutomationActInput,
@@ -62,11 +63,17 @@ const PreviewStatusTool = Tool.make("preview_status", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
+// `url` already covers websites, so open only adds the dev-server target.
+const EnvironmentPortTarget = BrowserNavigationTarget.members[1];
+
 const PreviewOpenTool = browserTool(
   Tool.make("preview_open", {
     description:
-      "Initialize a collaborative browser tab and open its thread-bound inline preview by default. Set open=false for background-only automation. open/show requests presentation; it does not confirm actual panel visibility or wait for a viewer subscription. Pass tabId to reuse a specific existing tab, set reuseExistingTab=false to create another tab, or omit both to use this agent session's current tab. Parallel subagents sharing a provider session must each open with reuseExistingTab=false and pass their returned tabId on every call. Pass profileId (an id or name from preview_status profiles) to open under a browser profile and its saved logins; omit it for the user's default profile. Another agent session's tabs can be read but not operated.",
-    parameters: PreviewAutomationOpenInput,
+      "For a dev server, pass target instead of url. Initialize a collaborative browser tab and open its thread-bound inline preview by default. Set open=false for background-only automation. open/show requests presentation; it does not confirm actual panel visibility or wait for a viewer subscription. Pass tabId to reuse a specific existing tab, set reuseExistingTab=false to create another tab, or omit both to use this agent session's current tab. Parallel subagents sharing a provider session must each open with reuseExistingTab=false and pass their returned tabId on every call. Pass profileId (an id or name from preview_status profiles) to open under a browser profile and its saved logins; omit it for the user's default profile. Another agent session's tabs can be read but not operated.",
+    parameters: PreviewAutomationOpenInput.mapFields(
+      (fields) => ({ ...fields, target: Schema.optional(EnvironmentPortTarget) }),
+      { unsafePreserveChecks: true },
+    ),
     success: PreviewAutomationStatus,
     failure: PreviewToolFailure,
     dependencies,

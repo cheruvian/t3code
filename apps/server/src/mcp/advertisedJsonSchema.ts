@@ -1,3 +1,4 @@
+import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
 import { Tool } from "effect/ai";
 
@@ -102,5 +103,13 @@ const compact = (schema: Json, optional: boolean): Json => {
  * the `null` branch of optional properties. A tagged union of objects becomes one object.
  * Decoding still uses the full schema, so each tag's own required fields still apply.
  */
-export const advertisedJsonSchema = (tool: Tool.Any) =>
-  compact(Tool.getJsonSchema(tool), false) as ReturnType<typeof Tool.getJsonSchema>;
+export const advertisedJsonSchema = (tool: Tool.Any) => {
+  const document = Schema.toJsonSchemaDocument(tool.parametersSchema, {
+    onExcessProperty: Tool.getStrictMode(tool) === true ? "error" : "ignore",
+  });
+  const schema =
+    Object.keys(document.definitions).length === 0
+      ? document.schema
+      : { ...document.schema, $defs: document.definitions };
+  return compact(schema, false) as ReturnType<typeof Tool.getJsonSchema>;
+};

@@ -141,7 +141,7 @@ export function ElectronBrowserHost() {
     primaryEnvironmentId !== null &&
     serverConfigs.get(primaryEnvironmentId)?.environment.capabilities.nativeDesktopBrowser === true;
   const configKnown = primaryEnvironmentId !== null && serverConfigs.has(primaryEnvironmentId);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Record changes to the native host discovery gate.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Records the native host discovery gate and replays it when the external tracer attaches.
   useEffect(() => {
     if (!isElectron) return;
     return observeBrowserHostGate({

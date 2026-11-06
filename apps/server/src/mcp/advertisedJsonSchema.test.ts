@@ -43,3 +43,13 @@ it("drops JSON noise, merges tagged unions, and keeps null where it is required"
     required: ["beforeRunId", "every"],
   });
 });
+
+it("advertises the same excess-property rejection as strict tool decoding", () => {
+  const tool = Tool.make("strict_example", {
+    parameters: Schema.Struct({ nested: Schema.Struct({ value: Schema.String }) }),
+  }).annotate(Tool.Strict, true);
+  expect(advertisedJsonSchema(tool)).toMatchObject({
+    additionalProperties: false,
+    properties: { nested: { additionalProperties: false } },
+  });
+});

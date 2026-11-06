@@ -1,3 +1,4 @@
+import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
@@ -34,7 +35,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 
 const BACKGROUND_REFRESH_MAX_WAIT_MS = 30_000;
-const DEFAULT_VCS_STATUS_REFRESH_INTERVAL = Duration.seconds(30);
+
 const VCS_STATUS_REFRESH_FAILURE_BASE_DELAY = Duration.seconds(30);
 const VCS_STATUS_REFRESH_FAILURE_MAX_DELAY = Duration.minutes(15);
 const VCS_STATUS_REFRESH_MAX_CONSECUTIVE_FAILURES = 3;
@@ -133,6 +134,10 @@ interface VcsStatusChange {
 interface CachedValue<T> {
   readonly fingerprint: string;
   readonly value: T;
+}
+
+interface CachedRemoteStatus extends CachedValue<VcsStatusRemoteResult | null> {
+  readonly branch: string | null;
 }
 
 interface CachedVcsStatus {
@@ -328,9 +333,10 @@ export const make = Effect.gen(function* () {
   )(function* (
     cwd: string,
     options?: { readonly refreshUpstream?: boolean; readonly refreshMissingPullRequest?: boolean },
+    knownLocal?: VcsStatusLocalResult,
   ) {
     const expectedRevision = (yield* getCachedStatus(cwd))?.revision ?? 0;
-    const localBefore = yield* workflow.localStatus({ cwd });
+    const localBefore = knownLocal ?? (yield* workflow.localStatus({ cwd }));
     const effectiveOptions = options ?? {
       refreshUpstream: !Duration.isZero(yield* automaticFetchInterval),
     };
@@ -396,6 +402,9 @@ export const make = Effect.gen(function* () {
                 previous.revision !== options.expectedRevision
               ) {
                 return [{ committed: false, shouldPublish: false }, cache] as const;
+              }
+              if (previous.local?.fingerprint === nextLocal.fingerprint) {
+                return [{ committed: true, shouldPublish: false }, cache] as const;
               }
               const nextCache = new Map(cache);
               nextCache.set(cwd, {
@@ -624,12 +633,9 @@ export const make = Effect.gen(function* () {
             getCompatibleCachedRemote(currentLocal, current)?.value ?? null,
           );
         }
-        const committed = yield* updateCachedStatus(cwd, observed.local, observed.remote, {
+        yield* updateCachedStatus(cwd, observed.local, observed.remote, {
           expectedRevision: observed.expectedRevision,
         });
-        if (committed !== null) {
-          return committed;
-        }
         const current = yield* getCachedStatus(cwd);
         const currentLocal = current?.local?.value ?? observed.local;
         return mergeGitStatusParts(
@@ -640,20 +646,40 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  // A refresh that started after a request saw every change that request could mean, so queued
+  // callers share it instead of each running git status again.
+  const localRefreshLocks = yield* KeyedLock.make<string>();
+  const localRefreshRequests = new Map<string, number>();
+  const localRefreshResults = new Map<
+    string,
+    { readonly startedAt: number; readonly local: VcsStatusLocalResult }
+  >();
   const refreshLocalStatusCore = Effect.fn("VcsStatusBroadcaster.refreshLocalStatusCore")(
     function* (cwd: string) {
-      yield* workflow.invalidateLocalStatus(cwd);
-      const local = yield* workflow.localStatus({ cwd });
-      yield* updateCachedLocalStatus(cwd, local, { publish: true });
-      return local;
+      const requestedAt = (localRefreshRequests.get(cwd) ?? 0) + 1;
+      localRefreshRequests.set(cwd, requestedAt);
+      return yield* localRefreshLocks.withLock(
+        cwd,
+        Effect.gen(function* () {
+          const shared = localRefreshResults.get(cwd);
+          if (shared !== undefined && shared.startedAt >= requestedAt) return shared.local;
+          const startedAt = localRefreshRequests.get(cwd) ?? requestedAt;
+          yield* workflow.invalidateLocalStatus(cwd);
+          const local = yield* workflow.localStatus({ cwd });
+          localRefreshResults.set(cwd, { startedAt, local });
+          yield* updateCachedLocalStatus(cwd, local, { publish: true });
+          return local;
+        }),
+      );
     },
   );
 
   const maybeAutoPull = Effect.fn("VcsStatusBroadcaster.maybeAutoPull")(function* (
     cwd: string,
-    remote: VcsStatusRemoteResult | null,
+    remoteRead: CachedRemoteStatus | null,
     policyCwds: ReadonlyArray<string>,
   ) {
+    const remote = remoteRead?.value ?? null;
     let pullAttempted = false;
     let expectedRevision = 0;
     return yield* Effect.gen(function* () {
@@ -672,7 +698,13 @@ export const make = Effect.gen(function* () {
 
       yield* workflow.invalidateLocalStatus(cwd);
       const local = yield* workflow.localStatus({ cwd });
-      if (!local.isRepo || !local.isDefaultRef || local.hasWorkingTreeChanges) return null;
+      if (
+        !local.isRepo ||
+        !local.isDefaultRef ||
+        local.hasWorkingTreeChanges ||
+        local.refName !== remoteRead?.branch
+      )
+        return null;
 
       expectedRevision = (yield* getCachedStatus(cwd))?.revision ?? 0;
       pullAttempted = true;
@@ -732,7 +764,15 @@ export const make = Effect.gen(function* () {
         const pulled =
           options?.refreshUpstream === false
             ? null
-            : yield* maybeAutoPull(cwd, observed.remote, options?.policyCwds ?? [cwd]);
+            : yield* maybeAutoPull(
+                cwd,
+                {
+                  branch: observed.local.refName,
+                  value: observed.remote,
+                  fingerprint: fingerprintStatusPart(observed.remote),
+                },
+                options?.policyCwds ?? [cwd],
+              );
         if (pulled !== null) return { _tag: "stable" as const, remote: pulled.remote };
         const committed = yield* updateCachedRemoteStatus(cwd, observed.remote, observed.local, {
           expectedRevision: observed.expectedRevision,
@@ -750,14 +790,16 @@ export const make = Effect.gen(function* () {
     rawCwd: string,
     shouldRun: Effect.Effect<boolean>,
   ) {
+    if (!(yield* shouldRun)) return undefined;
+    // Publish local changes even while another remote lookup owns the lock.
+    yield* workflow.invalidateStatus(cwd);
+    const local = yield* workflow.localStatus({ cwd });
+    yield* updateCachedLocalStatus(cwd, local, { publish: true });
     return yield* withRemoteOperationLock(
       cwd,
       Effect.gen(function* () {
         if (!(yield* shouldRun)) return undefined;
-        // invalidateStatus (not the two partial invalidations) so an explicit
-        // refresh also bypasses GitManager's slow PR-lookup cache.
-        yield* workflow.invalidateStatus(cwd);
-        const observed = yield* observeRemoteStatusWithinLock(cwd);
+        const observed = yield* observeRemoteStatusWithinLock(cwd, undefined, local);
         if (observed._tag === "unstable") {
           const committed = yield* updateCachedLocalStatus(cwd, observed.local, {
             expectedRevision: observed.expectedRevision,
@@ -776,15 +818,27 @@ export const make = Effect.gen(function* () {
         }
         const pulled = Duration.isZero(yield* automaticFetchInterval)
           ? null
-          : yield* maybeAutoPull(cwd, observed.remote, [rawCwd]);
-        if (pulled !== null) return mergeGitStatusParts(pulled.local, pulled.remote);
-        const committed = yield* updateCachedStatus(cwd, observed.local, observed.remote, {
+          : yield* maybeAutoPull(
+              cwd,
+              {
+                branch: observed.local.refName,
+                value: observed.remote,
+                fingerprint: fingerprintStatusPart(observed.remote),
+              },
+              [rawCwd],
+            );
+        if (pulled !== null) {
+          const current = yield* getCachedStatus(cwd);
+          const currentLocal = current?.local?.value ?? pulled.local;
+          return mergeGitStatusParts(
+            currentLocal,
+            getCompatibleCachedRemote(currentLocal, current)?.value ?? null,
+          );
+        }
+        yield* updateCachedStatus(cwd, observed.local, observed.remote, {
           expectedRevision: observed.expectedRevision,
           publish: true,
         });
-        if (committed !== null) {
-          return committed;
-        }
         const current = yield* getCachedStatus(cwd);
         const currentLocal = current?.local?.value ?? observed.local;
         return mergeGitStatusParts(
@@ -957,7 +1011,7 @@ export const make = Effect.gen(function* () {
         Effect.gen(function* () {
           if (!(yield* shouldRun)) return undefined;
           const cached = yield* getCachedStatus(cwd);
-          if (cached?.remote?.value == null) return null;
+          if (cached?.local == null) return null;
           const poller = (yield* SynchronizedRef.get(pollersRef)).get(cwd);
           const demandCwds = poller ? [...(yield* Ref.get(poller.demandCwds)).keys()] : [rawCwd];
           const shouldRefresh = (yield* Effect.forEach(

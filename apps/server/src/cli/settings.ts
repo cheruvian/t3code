@@ -7,7 +7,7 @@ import { Command, Flag } from "effect/cli";
 
 import { withEnvironmentRpc } from "../orchestration-v2/bootstrapRpcClient.ts";
 import { projectLocationFlags } from "./config.ts";
-import { encodeCliJson, withLocalEnvironment } from "./environment.ts";
+import { encodeCliJson, withLocalEnvironment } from "./localEnvironment.ts";
 
 const decodeSettingsPatch = Schema.decodeEffect(Schema.fromJsonString(ServerSettingsPatch));
 

@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { secondTick } from "@t3tools/client-runtime/clock";
-import { type VcsActionState, type VcsActionTarget } from "@t3tools/client-runtime/state/vcs";
+import type { VcsActionState, VcsActionTarget } from "@t3tools/client-runtime/state/vcs";
 import { Atom } from "effect/reactivity";
 import * as Haptics from "expo-haptics";
 import { useSyncExternalStore } from "react";
@@ -52,7 +52,7 @@ export function dismissGitActionResult(): void {
   broadcast(null);
 }
 
-export function useGitActionResultNotification(): {
+function useGitActionResultNotification(): {
   readonly result: GitActionResultNotification | null;
   readonly dismiss: () => void;
 } {

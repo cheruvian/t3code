@@ -1,8 +1,8 @@
+import { useBranches } from "./queries";
 import { useAtomMount } from "@effect/atom-react";
-import { useCallback, useMemo } from "react";
 
 import { EnvironmentProject, EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { executeAtomQuery, type AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+import { type AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import {
   createVcsStatusRevalidationAtomFamily,
   type GitActionRequestInput,
@@ -56,6 +56,7 @@ export function useSelectedThreadGitActions({ active = true }: { readonly active
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const readRefs = useAtomCommand(vcsEnvironment.readRefs, { reportFailure: false });
   const refreshStatus = useAtomCommand(vcsEnvironment.refreshStatus, { reportFailure: false });
   const switchRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
   const createRef = useAtomCommand(vcsEnvironment.createRef, { reportFailure: false });
@@ -81,6 +82,13 @@ export function useSelectedThreadGitActions({ active = true }: { readonly active
   );
 
   const selectedThreadGitRootCwd = selectedThreadProject?.workspaceRoot ?? null;
+  const branchTarget = {
+    environmentId: selectedThread?.environmentId ?? null,
+    cwd: selectedThreadGitRootCwd,
+    query: null,
+    enabled: active,
+  };
+  const branchState = useBranches(branchTarget);
   const updateThreadGitContext = async (
     thread: NonNullable<typeof selectedThread>,
     nextState: {
@@ -204,28 +212,20 @@ export function useSelectedThreadGitActions({ active = true }: { readonly active
     return result.value;
   };
 
-  const refreshSelectedThreadBranches = async (): Promise<ReadonlyArray<VcsRef>> => {
-    if (selectedThread === null || selectedThreadGitRootCwd === null) {
-      return [];
-    }
-
-    const atom = vcsEnvironment.listRefs({
-      environmentId: selectedThread.environmentId,
-      input: {
-        cwd: selectedThreadGitRootCwd,
-        limit: 100,
-        refresh: true,
-      },
-    });
-    appAtomRegistry.refresh(atom);
-    const result = await executeAtomQuery(appAtomRegistry, atom, {
-      label: "refresh selected thread branches",
-      reportDefect: false,
-      reportFailure: false,
+  const refreshSelectedThreadBranches = async (): Promise<ReadonlyArray<VcsRef> | null> => {
+    if (branchTarget.environmentId === null || branchTarget.cwd === null) return null;
+    const result = await readRefs({
+      environmentId: branchTarget.environmentId,
+      input: { cwd: branchTarget.cwd, limit: 100, refresh: true },
     });
     if (AsyncResult.isFailure(result)) {
-      return [];
+      const error = Cause.squash(result.cause);
+      const message = error instanceof Error ? error.message : "Failed to refresh branches.";
+      setPendingConnectionError(message);
+      showGitActionResult({ type: "error", title: "Git action failed", description: message });
+      return null;
     }
+    setPendingConnectionError(null);
     return dedupeRemoteBranchesWithLocalMatches(result.value.refs).filter(
       (branch) => !branch.isRemote,
     );
@@ -243,6 +243,7 @@ export function useSelectedThreadGitActions({ active = true }: { readonly active
     const updateResult = input.nextThreadState
       ? await updateThreadGitContext(input.thread, input.nextThreadState)
       : AsyncResult.success(undefined);
+    branchState.refresh();
     await refreshSelectedThreadGitStatus({ quiet: true, cwd: input.cwd });
     return AsyncResult.isFailure(updateResult)
       ? AsyncResult.failure(updateResult.cause)

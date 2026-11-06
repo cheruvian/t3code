@@ -1,17 +1,18 @@
+// @effect-diagnostics processEnvInEffect:off
+// Exercises the inherited child-process environment, restoring it after each scenario.
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
-import * as Clock from "effect/Clock";
+
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
-import * as ManagedRuntime from "effect/ManagedRuntime";
+
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
-import { ChildProcessSpawner } from "effect/process";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
@@ -39,7 +40,7 @@ const isDesktopBackendObservabilitySettingsReadError = Schema.is(
 );
 
 const layerShellEnvironment = (prepared = true) =>
-  Layer.succeed(DesktopShellEnvironment.DesktopShellEnvironment, {
+  Layer.mock(DesktopShellEnvironment.DesktopShellEnvironment)({
     installIntoProcess: Effect.succeed(prepared),
   });
 
@@ -142,7 +143,7 @@ const withHarness = <A, E, R>(
         ),
       ),
     );
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 interface PackagedWslHarnessContext {
   readonly baseDir: string;
@@ -234,7 +235,7 @@ const withPackagedWslHarness = <A, E, R>(
         ),
       ),
     );
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 describe("DesktopBackendConfiguration", () => {
   it.effect("only the local primary bootstrap claims the prepared shell environment", () =>
@@ -423,7 +424,7 @@ describe("DesktopBackendConfiguration", () => {
           ),
         ),
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("environment observability endpoints win over the persisted settings file", () =>
@@ -470,7 +471,7 @@ describe("DesktopBackendConfiguration", () => {
           ),
         ),
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("logs structured context when persisted observability settings cannot be read", () =>
@@ -531,7 +532,7 @@ describe("DesktopBackendConfiguration", () => {
         error.message,
         `Failed to read persisted backend observability settings at ${settingsPath}.`,
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("resolvePrimary captures backend output in dev so child logs can be persisted", () =>
@@ -563,7 +564,7 @@ describe("DesktopBackendConfiguration", () => {
           ),
         ),
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("resolveWsl carries the kill switch into the distro", () =>
@@ -611,7 +612,7 @@ describe("DesktopBackendConfiguration", () => {
         restoreEnv("OTEL_SDK_DISABLED", previousDisabled);
         restoreEnv("T3CODE_TELEMETRY_ENABLED", previousTelemetry);
       }
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect(
@@ -678,7 +679,7 @@ describe("DesktopBackendConfiguration", () => {
           restoreEnv("WSLENV", previousWslEnv);
           for (const [name, value] of ambientOtel) restoreEnv(name, value);
         }
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("resolveWsl keeps a transient distro-list failure retryable", () =>
@@ -714,7 +715,7 @@ describe("DesktopBackendConfiguration", () => {
           ),
         ),
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("resolveWsl surfaces sidecar extraction failures through typed preflight", () =>
@@ -756,7 +757,7 @@ describe("DesktopBackendConfiguration", () => {
           ),
         ),
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("resolveWsl marks a missing selected distro as a fatal preflight failure", () =>
@@ -789,7 +790,7 @@ describe("DesktopBackendConfiguration", () => {
           ),
         ),
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("resolvePrimaryLabel reports the WSL distro when wsl-only and WSL is available", () =>
@@ -821,7 +822,7 @@ describe("DesktopBackendConfiguration", () => {
           ),
         ),
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("prefers the release resource monitor when both development builds exist", () =>
@@ -866,7 +867,7 @@ describe("DesktopBackendConfiguration", () => {
           ),
         ),
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("resolvePrimaryLabel reports the local environment on non-Windows platforms", () =>
@@ -911,6 +912,6 @@ describe("DesktopBackendConfiguration", () => {
           ),
         ),
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });

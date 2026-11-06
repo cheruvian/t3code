@@ -173,7 +173,7 @@ const runners = {
     (rule) =>
       Effect.gen(function* () {
         const keybindings = yield* Keybindings.Keybindings;
-        return { keybindings: yield* keybindings.upsertKeybindingRule(rule), issues: [] };
+        return yield* keybindings.upsertKeybindingRule(rule);
       }),
   ),
   [WS_METHODS.serverRemoveKeybinding]: makeRunner(
@@ -183,7 +183,7 @@ const runners = {
     (rule) =>
       Effect.gen(function* () {
         const keybindings = yield* Keybindings.Keybindings;
-        return { keybindings: yield* keybindings.removeKeybindingRule(rule), issues: [] };
+        return yield* keybindings.removeKeybindingRule(rule);
       }),
   ),
   [WS_METHODS.projectsSearchEntries]: makeRunner(

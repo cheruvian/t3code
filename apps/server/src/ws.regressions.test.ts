@@ -17,7 +17,6 @@ import {
   type OrchestrationV2StoredEvent,
   type OrchestrationProjectShell,
   type ServerConfig,
-  type ServerConfigStreamEvent,
   type ApplicationStoredEvent,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
@@ -55,7 +54,7 @@ import {
   shouldUseBoundedThreadSnapshot,
   subscribeOrchestrationV2Shell,
   subscribeOrchestrationV2Thread,
-  withLateEditorConfig,
+  withLateConfigDiscovery,
 } from "./ws.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -199,21 +198,17 @@ it.effect("does not block server config when editor discovery never resolves", (
 const snapshotConfig = (fields: Partial<ServerConfig>) =>
   ({ availableEditors: [], settings: {}, ...fields }) as unknown as ServerConfig;
 
-const settingsUpdated = (settings: object): ServerConfigStreamEvent => ({
-  version: 1,
-  type: "settingsUpdated",
-  payload: { settings: settings as ServerConfig["settings"] },
-});
-
 it.effect("sends no late snapshot when the scan matches the snapshot", () =>
   Effect.gen(function* () {
-    const events = yield* withLateEditorConfig(
+    const events = yield* withLateConfigDiscovery(
       snapshotConfig({ availableEditors: ["vscode"] }),
       Stream.empty,
       {
         resolveAvailableEditors: () => Effect.succeed(["vscode"]),
-        resolveFileManagerRevealKind: () => Effect.sync(() => undefined),
+        resolveFileManagerRevealKind: () => Effect.undefined,
       },
+      { resolveTargets: () => Effect.succeed([]) },
+      { resolve: () => Effect.succeed([]) },
     ).pipe(Stream.runCollect);
 
     assert.equal(events.length, 0);
@@ -274,10 +269,12 @@ it.effect("recovers editors after a real scan outlasts the config timeout", () =
     const snapshotEditors = yield* Fiber.join(snapshotFiber);
     assert.deepEqual(snapshotEditors, []);
 
-    const lateFiber = yield* withLateEditorConfig(
+    const lateFiber = yield* withLateConfigDiscovery(
       snapshotConfig({ availableEditors: snapshotEditors }),
       Stream.empty,
       editors,
+      { resolveTargets: () => Effect.succeed([]) },
+      { resolve: () => Effect.succeed([]) },
     ).pipe(Stream.runCollect, Effect.forkChild);
     yield* releaseProbes;
 
@@ -293,13 +290,15 @@ it.effect("recovers a reveal kind whose real probe outlasts the config timeout",
   Effect.gen(function* () {
     const { editors, probeParked, releaseProbes } = yield* makeParkedWindowsLauncher;
 
-    const lateFiber = yield* withLateEditorConfig(
+    const lateFiber = yield* withLateConfigDiscovery(
       snapshotConfig({ availableEditors: ["file-manager"] }),
       Stream.empty,
       {
         resolveAvailableEditors: () => Effect.succeed(["file-manager"]),
         resolveFileManagerRevealKind: editors.resolveFileManagerRevealKind,
       },
+      { resolveTargets: () => Effect.succeed([]) },
+      { resolve: () => Effect.succeed([]) },
     ).pipe(Stream.runCollect, Effect.forkChild);
     yield* probeParked;
     yield* TestClock.adjust(Duration.seconds(6));

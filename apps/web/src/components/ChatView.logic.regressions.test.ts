@@ -316,7 +316,7 @@ describe("buildExpiredTerminalContextToastCopy", () => {
     });
     expect(buildExpiredTerminalContextToastCopy(2, "omitted")).toEqual({
       title: "Expired terminal contexts omitted from message",
-      description: "Re-add it if you want that terminal output included.",
+      description: "Re-add them if you want that terminal output included.",
     });
   });
 });
@@ -1003,13 +1003,6 @@ describe("resolveComposerProviderSelection", () => {
         ...overrides,
       },
     ])[0]!;
-  }
-
-  function importedThread(instanceId: ProviderInstanceId) {
-    return makeThread({
-      modelSelection: { instanceId, model: "default" },
-      itemCount: 1,
-    });
   }
 
   it("leaves a new draft free to select a different driver", () => {

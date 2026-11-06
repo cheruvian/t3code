@@ -377,7 +377,8 @@ const make = Effect.gen(function* () {
     ORDER BY positions.ordinal
   `;
 
-  const listShellMessages = (threadId: ThreadId) => sql<LegacyMessageRow>`
+  const listShellMessages = (threadId: ThreadId) =>
+    sql<LegacyMessageRow>`
     ${transcriptPositions(threadId)}
     SELECT message.*, positions.ordinal FROM projection_thread_messages AS message
     JOIN positions ON positions.kind = 'message' AND positions.source_id = message.message_id
@@ -390,7 +391,7 @@ const make = Effect.gen(function* () {
           AND role = 'user' ORDER BY created_at DESC, message_id DESC LIMIT 1
       )
     ) ORDER BY positions.ordinal
-  `;
+  `.pipe(NodeSqliteClient.readOnly);
 
   const prepareActivityPositions = (threadId: ThreadId) =>
     sql.withTransaction(
@@ -491,7 +492,7 @@ const make = Effect.gen(function* () {
          OR json_type(projection.payload_json, '$.branchPullRequest') IS NULL
          OR json_type(projection.payload_json, '$.activeOrderKey') IS NULL
       ORDER BY thread.created_at ASC, thread.thread_id ASC
-    `;
+    `.pipe(NodeSqliteClient.readOnly);
     let repairedThreadCount = 0;
     for (const row of repairRows) {
       const decoded = decodeStoredThread(row.payload_json);
@@ -589,7 +590,7 @@ const make = Effect.gen(function* () {
           AND event.event_type = 'thread.created'
       )
       ORDER BY thread.created_at ASC, thread.thread_id ASC
-    `;
+    `.pipe(NodeSqliteClient.readOnly);
     let importedThreadCount = repairedThreadCount;
     let importedMessageCount = 0;
     for (const row of rows) {
@@ -692,7 +693,7 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  // transcript_imported_at never resets; cache confirmed imports for the process lifetime to skip repeated locks and reads.
+  // Both results are final for this process: transcript_imported_at never resets, and only startup shell reconciliation creates legacy rows.
   const confirmedTranscriptThreadIds = new Set<ThreadId>();
 
   const ensureTranscriptBase = (threadId: ThreadId) =>
@@ -710,9 +711,7 @@ const make = Effect.gen(function* () {
           imported === undefined ||
           (imported.transcript_imported_at !== null && imported.activity_imported_at !== null)
         ) {
-          if (imported !== undefined) {
-            confirmedTranscriptThreadIds.add(threadId);
-          }
+          confirmedTranscriptThreadIds.add(threadId);
           return { importedThreadCount: 0, importedMessageCount: 0 };
         }
         if (imported.activity_imported_at === null) yield* prepareActivityPositions(threadId);

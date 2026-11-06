@@ -13,7 +13,7 @@ import {
 import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { turnItemUpdateCanEndBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -92,7 +92,7 @@ function relevantEvent(event: OrchestrationV2DomainEvent): boolean {
 }
 
 const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const deliveryLock = yield* Semaphore.make(1);
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const sessions = yield* AuthSessions.AuthSessionRepository;
@@ -250,7 +250,7 @@ const make = Effect.gen(function* () {
       const message = yield* decodeNotification(input).pipe(
         Effect.mapError(() => new WebPushError({ reason: "invalid-message" })),
       );
-      const notificationId = `custom:${message.idempotencyKey ?? (yield* crypto.randomUUIDv4())}`;
+      const notificationId = `custom:${message.idempotencyKey ?? (yield* crypto.uuidV4())}`;
       const payload = {
         title: message.title,
         body: message.body,

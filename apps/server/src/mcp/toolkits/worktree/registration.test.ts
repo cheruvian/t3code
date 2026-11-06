@@ -1,3 +1,10 @@
+import * as ProjectCloneTracker from "../../../project/ProjectCloneTracker.ts";
+import * as RemoteDelegation from "../../../peer/RemoteDelegation.ts";
+import * as PeerLinks from "../../../peer/PeerLinks.ts";
+import * as PeerLinkRequests from "../../../peer/PeerLinkRequests.ts";
+import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
+import * as AssetSigner from "../../../assets/AssetSigner.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as WorkspacePaths from "../../../workspace/WorkspacePaths.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as DocumentText from "../../../provider/DocumentText.ts";
@@ -110,7 +117,19 @@ const decodeToolsListPayload = Schema.decodeUnknownEffect(ToolsListPayload);
 it.effect("production mcp layer lists worktree tools over http", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const layerRoutes = McpHttpServer.layer.pipe(Layer.provideMerge(McpSessionRegistry.layer));
+      const layerRoutes = McpHttpServer.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(AssetSigner.AssetSigner)({}),
+            Layer.mock(PeerForwarding.PeerForwarding)({}),
+            Layer.mock(PeerLinkRequests.PeerLinkRequests)({}),
+            Layer.mock(PeerLinks.PeerLinks)({}),
+            Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+            Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({}),
+          ),
+        ),
+        Layer.provideMerge(McpSessionRegistry.layer),
+      );
       const context = yield* HttpRouter.serve(layerRoutes, {
         disableListenLog: true,
         disableLogger: true,
@@ -189,9 +208,9 @@ it.effect("production mcp layer lists worktree tools over http", () =>
       Layer.mergeAll(
         NodeHttpServer.layerTest,
         ServerConfig.layerTest(process.cwd(), { prefix: "t3-worktree-mcp-" }).pipe(
-          Layer.provide(NodeServices.layer),
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
-        NodeServices.layer,
+        Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
       ),
     ),
   ),

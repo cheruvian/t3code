@@ -33,6 +33,16 @@ const upstreamNames = [
   "WebhookDedupe",
   "ShellStopRequestIndex",
   "ThreadMessageSearch",
+  "PeerLinks",
+  "PeerLinkFence",
+  "WaitingLinkRequestIndex",
+  "ActiveTurnItemIndexes",
+  "ExcludeAttachmentPlaceholdersFromSearch",
+  "SubagentDeliveryState",
+  "ProjectionProjectsPinArchive",
+  "RepairBooleanSettledOverride",
+  "DropOrchestrationEventCorrelationIndex",
+  "DelegatedRecoveryIndexes",
 ];
 
 /** Reconcile known upstream ledgers atomically; never renumber a published fork ledger. */

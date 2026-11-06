@@ -165,6 +165,9 @@ export interface EnvironmentThreadShell {
   readonly worktreePath: string | null;
   readonly lineage: OrchestrationV2ThreadShell["lineage"];
   readonly forkedFrom: OrchestrationV2ThreadShell["forkedFrom"];
+  readonly linkOrigin: OrchestrationV2ThreadShell["linkOrigin"] | null;
+  /** The thread in a linked environment that delegated this one, if one did. */
+  readonly delegatedFrom: OrchestrationV2ThreadShell["delegatedFrom"] | null;
   readonly activeProviderThreadId: OrchestrationV2ThreadShell["activeProviderThreadId"];
   readonly latestRun: ThreadRunSummary | null;
   readonly runtime: ThreadRuntimeSummary | null;
@@ -232,11 +235,8 @@ function terminalRunStatus(status: OrchestrationV2RunStatus): boolean {
   );
 }
 
-// Awaited work holds completion. Explicitly unattended monitors, such as dev
-// servers, present the run's own status; monitor rosters without an awaited
-// field retain the blocking default. The
-// server suppresses the roster while an interruptible activity run exists, so a
-// remaining roster is stronger than checkpoint-oriented waiting.
+// Awaited work holds completion; unattended monitors show the run’s own status.
+// Missing awaited fields remain blocking. A roster excludes interruptible activity runs.
 function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary | null {
   const parkAtIdle =
     backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? []) &&
@@ -294,11 +294,6 @@ export function presentThreadShell(
           assistantMessageId: null,
         } satisfies ThreadRunSummary);
   const runtime = shellRuntime(thread);
-  // Waiting runs have ended their provider turn and are only draining effects.
-  const runtimeIsWorking =
-    runtime?.status === "preparing" ||
-    runtime?.status === "starting" ||
-    runtime?.status === "running";
   return {
     environmentId,
     id: thread.id,
@@ -318,6 +313,8 @@ export function presentThreadShell(
     branchPullRequest: thread.branchPullRequest ?? null,
     lineage: thread.lineage,
     forkedFrom: thread.forkedFrom,
+    linkOrigin: thread.linkOrigin ?? null,
+    delegatedFrom: thread.delegatedFrom ?? null,
     activeProviderThreadId: thread.activeProviderThreadId,
     environmentMove: thread.environmentMove,
     environmentMoveOrigin: thread.environmentMoveOrigin,
@@ -333,9 +330,8 @@ export function presentThreadShell(
       thread.pendingRuntimeRequest !== null &&
       thread.pendingRuntimeRequest.kind !== "user_input" &&
       thread.pendingRuntimeRequest.kind !== "auth_refresh",
-    hasPendingUserInput:
-      thread.pendingRuntimeRequest?.kind === "user_input" &&
-      (thread.pendingRuntimeRequest.blocking !== false || !runtimeIsWorking),
+    // Async questions count too, so a thread with any open question leaves Working.
+    hasPendingUserInput: thread.pendingRuntimeRequest?.kind === "user_input",
     pendingSubagentRequest,
     pendingGuestMessageCount: thread.pendingGuestMessageCount ?? 0,
     hasActionableProposedPlan: thread.hasActionableProposedPlan,

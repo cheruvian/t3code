@@ -1,3 +1,14 @@
+import Migration0091 from "./Migrations/091_GuardRecoveryPayloadIndexes.ts";
+import Migration0081 from "./Migrations/081_PeerLinks.ts";
+import Migration0082 from "./Migrations/082_PeerLinkFence.ts";
+import Migration0083 from "./Migrations/083_WaitingLinkRequestIndex.ts";
+import Migration0084 from "./Migrations/084_ActiveTurnItemIndexes.ts";
+import Migration0085 from "./Migrations/085_ExcludeAttachmentPlaceholdersFromSearch.ts";
+import Migration0086 from "./Migrations/086_SubagentDeliveryState.ts";
+import Migration0087 from "./Migrations/087_ProjectionProjectsPinArchive.ts";
+import Migration0088 from "./Migrations/088_RepairBooleanSettledOverride.ts";
+import Migration0089 from "./Migrations/089_DropOrchestrationEventCorrelationIndex.ts";
+import Migration0090 from "./Migrations/090_DelegatedRecoveryIndexes.ts";
 /** Migration runner with inline loader  Uses Migrator.make with fromRecord to define migrations inline. All migrations are statically imported - no dynamic file system loading.  SQLite persistence runs migrations during initialization, ensuring the database schema is always up-to-date before the application starts. */
 
 import * as Migrator from "effect/sql/Migrator";
@@ -72,30 +83,30 @@ import Migration0057 from "./Migrations/057_ProjectionThreadTitleState.ts";
 import Migration0059 from "./Migrations/059_ProjectResourceLocks.ts";
 import Migration0060 from "./Migrations/060_ProjectionThreadsAutoSettleDisabledAt.ts";
 import Migration0058 from "./Migrations/058_PullRequestFilesViewed.ts";
-import Migration0064 from "./Migrations/057_ScheduledTaskWebhooks.ts";
-import Migration0065 from "./Migrations/058_WebhookRelayDeliveries.ts";
-import Migration0066 from "./Migrations/059_McpAppModelContext.ts";
+import Migration0064 from "./Migrations/064_ScheduledTaskWebhooks.ts";
+import Migration0065 from "./Migrations/065_WebhookRelayDeliveries.ts";
+import Migration0066 from "./Migrations/066_McpAppModelContext.ts";
 import Migration0067 from "./Migrations/067_BackgroundThreadLookupIndexes.ts";
 import Migration0068 from "./Migrations/068_ThreadShellReadCosts.ts";
-import Migration0069 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
-import Migration0070 from "./Migrations/061_PullRequestReviewGuides.ts";
-import Migration0071 from "./Migrations/062_ThreadFailureLookupIndex.ts";
-import Migration0072 from "./Migrations/071_AssistantMessageShellIndex.ts";
+import Migration0069 from "./Migrations/069_ThreadSnapshotWindowIndexes.ts";
+import Migration0070 from "./Migrations/070_PullRequestReviewGuides.ts";
+import Migration0071 from "./Migrations/071_ThreadFailureLookupIndex.ts";
+import Migration0072 from "./Migrations/072_AssistantMessageShellIndex.ts";
 import Migration0073 from "./Migrations/073_LegacyV1ActivityImport.ts";
 
 /** Migration loader with all migrations defined inline.  Key format: "{id}_{name}" where: - id: numeric migration ID (determines execution order) - name: descriptive name for the migration  Uses Migrator.fromRecord which parses the key format and returns migrations sorted by ID. */
-import Migration0061 from "./Migrations/055_OrchestrationV2.ts";
-import Migration0062 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
+import Migration0061 from "./Migrations/061_OrchestrationV2.ts";
+import Migration0062 from "./Migrations/062_RemoveRedundantProjectionIndexes.ts";
 
 import Migration0063 from "./Migrations/063_ThreadWorkspaceMoveFence.ts";
 
-import Migration0074 from "./Migrations/063_DropUnusedV1Projections.ts";
-import Migration0075 from "./Migrations/064_CanonicalizeThreadPullRequestLinks.ts";
-import Migration0076 from "./Migrations/065_CodexUsageNativeTurnIndex.ts";
-import Migration0077 from "./Migrations/066_RepairClientSettlementTimestamps.ts";
-import Migration0078 from "./Migrations/067_WebhookDedupe.ts";
-import Migration0079 from "./Migrations/068_ShellStopRequestIndex.ts";
-import Migration0080 from "./Migrations/069_ThreadMessageSearch.ts";
+import Migration0074 from "./Migrations/074_DropUnusedV1Projections.ts";
+import Migration0075 from "./Migrations/075_CanonicalizeThreadPullRequestLinks.ts";
+import Migration0076 from "./Migrations/076_CodexUsageNativeTurnIndex.ts";
+import Migration0077 from "./Migrations/077_RepairClientSettlementTimestamps.ts";
+import Migration0078 from "./Migrations/078_WebhookDedupe.ts";
+import Migration0079 from "./Migrations/079_ShellStopRequestIndex.ts";
+import Migration0080 from "./Migrations/080_ThreadMessageSearch.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -178,6 +189,17 @@ export const migrationEntries = [
   [78, "WebhookDedupe", Migration0078],
   [79, "ShellStopRequestIndex", Migration0079],
   [80, "ThreadMessageSearch", Migration0080],
+  [81, "PeerLinks", Migration0081],
+  [82, "PeerLinkFence", Migration0082],
+  [83, "WaitingLinkRequestIndex", Migration0083],
+  [84, "ActiveTurnItemIndexes", Migration0084],
+  [85, "ExcludeAttachmentPlaceholdersFromSearch", Migration0085],
+  [86, "SubagentDeliveryState", Migration0086],
+  [87, "ProjectionProjectsPinArchive", Migration0087],
+  [88, "RepairBooleanSettledOverride", Migration0088],
+  [89, "DropOrchestrationEventCorrelationIndex", Migration0089],
+  [90, "DelegatedRecoveryIndexes", Migration0090],
+  [91, "GuardRecoveryPayloadIndexes", Migration0091],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
