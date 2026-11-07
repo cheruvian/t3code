@@ -73,6 +73,7 @@ export const CredentialExecutionFailureCode = Schema.Literals([
   "no_matching_ssh_key",
   "vault_search_failed",
   "consumer_start_failed",
+  "consumer_exit_failed",
   "supervisor_start_failed",
   "credential_cleanup_failed",
 ]);

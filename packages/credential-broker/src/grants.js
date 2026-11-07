@@ -45,7 +45,22 @@ export async function commandScope(request, provider) {
   };
 }
 export function approvalScope(scope, level = "thread") {
-  if (level === "thread") return scope;
+  if (level === "thread") {
+    if (!scope.origin) return scope;
+    return {
+      provider: scope.provider,
+      site: scope.site,
+      kind: scope.kind,
+      field: scope.field,
+      client: scope.client,
+      origin: scope.origin,
+      cwd: scope.cwd,
+      file_env: scope.file_env,
+      argv: scope.argv?.slice(0, 1),
+      ...(scope.argv0 ? { argv0: scope.argv0 } : {}),
+      approvalScope: "thread",
+    };
+  }
   if (!scope.origin || !["project", "t3"].includes(level))
     throw new BrokerError("Unsupported approval scope.");
   if (level === "project" && !scope.origin.workspace)

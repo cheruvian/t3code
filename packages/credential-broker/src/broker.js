@@ -529,10 +529,12 @@ export class Broker {
         request.grant_id &&
         (!grant ||
           scopeKey(
-            approvalScope(
-              await commandScope(request, this.provider.mode),
-              grant.scope.approvalScope,
-            ),
+            grant.scope.approvalScope
+              ? approvalScope(
+                  await commandScope(request, this.provider.mode),
+                  grant.scope.approvalScope,
+                )
+              : await commandScope(request, this.provider.mode),
           ) !== grant.key)
       )
         throw new Error();
@@ -742,9 +744,11 @@ export class Broker {
             if (message.state === "failed") {
               request.error = "Approved command failed. Child output is withheld.";
               if (
-                ["consumer_start_failed", "credential_cleanup_failed"].includes(
-                  message.failure_code,
-                )
+                [
+                  "consumer_start_failed",
+                  "consumer_exit_failed",
+                  "credential_cleanup_failed",
+                ].includes(message.failure_code)
               )
                 request.failure_code = message.failure_code;
             }

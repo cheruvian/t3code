@@ -23,8 +23,11 @@ Vault choices and grant metadata reach human clients only. Execution results
 are explicitly limited to IDs, status, expiry, exit code, and signal.
 
 Always-allow scope includes the authenticated environment, thread, provider
-instance, and workspace, along with the selected login, site, fields, exact
-command, file variable, script/executable fingerprints, and maximum TTL.
+instance, and workspace, along with the selected login, site, field, executable,
+working directory, file variable, and maximum TTL. Thread approvals survive
+changes to consumer scripts and arguments. CLI, project, and environment-wide
+approvals retain exact command and script fingerprints. Existing saved grants
+retain the scope originally approved.
 Run/session/invocation IDs do not persist in a grant, so a subsequent run in the
 same thread can match. Labels have no authority. Imported dependencies and
 arbitrary program behavior are not covered by direct-script fingerprints.

@@ -198,3 +198,20 @@ test(
     });
   },
 );
+
+test("nonzero consumer exit is a terminal failure with its exit code", async (t) => {
+  const { runtime, broker } = await setup(t);
+  const request = broker.request({
+    ...base,
+    cwd: runtime,
+    argv: [process.execPath, "-e", "process.exit(1)"],
+  });
+  await broker.decide(request.request_id, true);
+  const result = await until(async () => {
+    const state = await broker.status(request.request_id);
+    return ["completed", "failed"].includes(state.state) ? state : undefined;
+  });
+  assert.equal(result.state, "failed");
+  assert.equal(result.exit_code, 1);
+  assert.equal(result.failure_code, "consumer_exit_failed");
+});

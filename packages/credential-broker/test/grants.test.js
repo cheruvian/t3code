@@ -260,3 +260,32 @@ test("approval scopes retain environment and command boundaries", () => {
     approvalScope({ ...other, origin: { ...other.origin, environmentId: "remote" } }, "t3"),
   );
 });
+
+test("thread credential scope survives consumer edits and retains access boundaries", () => {
+  const scope = {
+    provider: "bw",
+    site: "example.com",
+    field: "username",
+    origin: {
+      environmentId: "env",
+      threadId: "thread",
+      providerInstanceId: "codex",
+      workspace: "/project",
+    },
+    argv: ["node", "old.mjs"],
+    cwd: "/project",
+    files: [{ sha256: "old" }],
+    file_env: "CB_CREDENTIAL_FILE",
+  };
+  const saved = approvalScope(scope);
+  assert.deepEqual(
+    saved,
+    approvalScope({ ...scope, argv: ["node", "new.mjs"], files: [{ sha256: "new" }] }),
+  );
+  for (const changed of [
+    { site: "other.com" },
+    { field: "password" },
+    { origin: { ...scope.origin, threadId: "other" } },
+  ])
+    assert.notDeepEqual(saved, approvalScope({ ...scope, ...changed }));
+});

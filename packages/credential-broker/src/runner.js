@@ -57,7 +57,14 @@ try {
     if (!finished && process.connected) process.send({ state: "running" });
   });
   child.once("error", () => finish("failed", null, null, "consumer_start_failed"));
-  child.once("exit", (code, signal) => finish("completed", code, signal));
+  child.once("exit", (code, signal) =>
+    finish(
+      code === 0 ? "completed" : "failed",
+      code,
+      signal,
+      code === 0 ? undefined : "consumer_exit_failed",
+    ),
+  );
 } catch {
   finish("failed", null, null, "consumer_start_failed");
 }
