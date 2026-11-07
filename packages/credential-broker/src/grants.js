@@ -106,7 +106,7 @@ export class GrantStore {
           scopeKey(grant.scope) !== grant.key
         )
           throw new Error();
-        this.#grants.set(grant.grant_id, grant);
+        this.#grants.set(grant.grant_id, { ...grant, max_ttl: 300 });
       }
     } catch (error) {
       if (error.code !== "ENOENT")
@@ -130,12 +130,11 @@ export class GrantStore {
       (g) =>
         g.key ===
           (g.scope.approvalScope ? scopeKey(approvalScope(scope, g.scope.approvalScope)) : key) &&
-        ids.includes(g.item_id) &&
-        request.ttl_seconds <= g.max_ttl,
+        ids.includes(g.item_id),
     );
     return matches.length === 1 ? matches[0] : undefined;
   }
-  async add(scope, item_id, max_ttl, durationSeconds) {
+  async add(scope, item_id, _max_ttl, durationSeconds) {
     if (durationSeconds !== undefined && durationSeconds !== 3600)
       throw new BrokerError("Unsupported approval duration.");
     const grant = {
@@ -143,7 +142,7 @@ export class GrantStore {
       key: scopeKey(scope),
       scope,
       item_id,
-      max_ttl,
+      max_ttl: 300,
       created_at: Date.now(),
       ...(durationSeconds ? { expires_at: Date.now() + durationSeconds * 1000 } : {}),
     };

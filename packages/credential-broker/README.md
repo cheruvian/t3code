@@ -24,7 +24,8 @@ are explicitly limited to IDs, status, expiry, exit code, and signal.
 
 Always-allow scope includes the authenticated environment, thread, provider
 instance, and workspace, along with the selected login, site, field, executable,
-working directory, file variable, and maximum TTL. Thread approvals survive
+working directory, and file variable. Each execution has its own lifetime of
+5–300 seconds; this does not limit or expire saved authorization. Thread approvals survive
 changes to consumer scripts and arguments. CLI, project, and environment-wide
 approvals retain exact command and script fingerprints. Existing saved grants
 retain the scope originally approved.

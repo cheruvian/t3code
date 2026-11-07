@@ -95,7 +95,6 @@ test("always allow persists without credentials and only the selected exact comm
     { client: "different caller" },
     { field: "password" },
     { field: "sshKey" },
-    { ttl_seconds: 31 },
     { argv: [...input.argv, "extra"] },
   ]) {
     const request = await pending(broker, { ...input, ...changed });
@@ -288,4 +287,17 @@ test("thread credential scope survives consumer edits and retains access boundar
     { origin: { ...scope.origin, threadId: "other" } },
   ])
     assert.notDeepEqual(saved, approvalScope({ ...scope, ...changed }));
+});
+
+test("saved authorization reuses a 120-second grant for a 300-second execution after restart", async (t) => {
+  const { runtime, input } = await setup(t);
+  const store = new GrantStore(runtime);
+  const scope = await commandScope(input, "demo");
+  const grant = await store.add(scope, DEMO_ITEM, 120);
+  const restarted = new GrantStore(runtime);
+  await restarted.initialize();
+  const request = { ...input, ttl_seconds: 300, candidates: [{ item_id: DEMO_ITEM }] };
+  assert.equal(restarted.match(scope, request)?.grant_id, grant.grant_id);
+  await restarted.revoke(grant.grant_id);
+  assert.equal(restarted.match(scope, request), undefined);
 });
