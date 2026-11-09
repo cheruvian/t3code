@@ -2404,6 +2404,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   });
   const hasBlockingComposerTopDrawer =
     activePendingApproval !== null || pendingUserInputs.length > 0;
+  const nonPersistedComposerImageIdSet = new Set(nonPersistedComposerImageIds);
   const hasImageAttachmentAttention = standaloneComposerImages.some((image) => {
     const upload = uploadsByImageId[image.id];
     const failedInCurrentEnvironment =
@@ -2412,7 +2413,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       upload.environmentId === environmentId;
     return nonPersistedComposerImageIdSet.has(image.id) && !failedInCurrentEnvironment;
   });
-  const nonPersistedComposerImageIdSet = new Set(nonPersistedComposerImageIds);
   const composerHasExpandedChrome =
     showComposerTopDrawer ||
     composerMenuOpen ||
