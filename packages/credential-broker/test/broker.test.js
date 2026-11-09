@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm, stat, writeFile, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { Broker } from "../src/broker.js";
+import { AccountProvider } from "../src/accounts.js";
 import { DemoProvider, DEMO_ITEM, DEMO_PASSWORD } from "../src/providers.js";
 
 const input = {
@@ -89,18 +90,19 @@ test("file expiry and explicit release remove paths and stop returning them", as
 });
 
 test("release during credential retrieval cancels delivery", async (t) => {
-  let resolve;
+  const retrieval = Promise.withResolvers();
+  const started = Promise.withResolvers();
   const provider = new DemoProvider();
-  provider.get = () =>
-    new Promise((r) => {
-      resolve = r;
-    });
+  provider.get = () => {
+    started.resolve();
+    return retrieval.promise;
+  };
   const broker = await setup(t, provider);
   const request = broker.request(input);
   const approval = broker.decide(request.request_id, true);
-  while (!resolve) await new Promise((r) => setImmediate(r));
+  await started.promise;
   await broker.release(request.request_id);
-  resolve(DEMO_PASSWORD);
+  retrieval.resolve(DEMO_PASSWORD);
   assert.equal((await approval).state, "released");
   assert.deepEqual(await readdir(broker.leaseDir), []);
 });
@@ -160,10 +162,15 @@ test("concurrent releases await credential deletion and supervisor exit", async 
   const pending = broker.request(input);
   await broker.decide(pending.request_id, true);
   const request = broker.find(pending.request_id);
-  let finish;
-  request.runnerExit = new Promise((resolve) => {
-    finish = resolve;
-  });
+  const finished = Promise.withResolvers();
+  const waiting = Promise.withResolvers();
+  request.runnerExit = {
+    // oxlint-disable-next-line unicorn/no-thenable -- Observe cleanup awaiting the simulated supervisor exit.
+    then(resolve, reject) {
+      waiting.resolve();
+      return finished.promise.then(resolve, reject);
+    },
+  };
   const first = broker.release(request.request_id);
   let secondCompleted = false;
   const second = broker.release(request.request_id).then(() => {
@@ -173,10 +180,10 @@ test("concurrent releases await credential deletion and supervisor exit", async 
   const joined = Promise.all([first, second]).then(() => {
     completed = true;
   });
-  await new Promise((resolve) => setImmediate(resolve));
+  await waiting.promise;
   assert.equal(secondCompleted, false);
   assert.equal(completed, false);
-  finish();
+  finished.resolve();
   await joined;
   assert.equal(broker.public(request, true).settled, true);
   await assert.rejects(stat(request.path), { code: "ENOENT" });
@@ -197,4 +204,55 @@ test("cleanup failure settles as failed", async (t) => {
   broker.remove = remove;
   request.cleanupPromise = undefined;
   await broker.remove(request);
+});
+
+test("generated logins are created only after explicit approval and secrets stay private", async (t) => {
+  let saved;
+  const provider = new DemoProvider();
+  provider.create = async (site, login) => {
+    saved = { site, ...login };
+    return { item_id: DEMO_ITEM, name: "New login", username: login.username, hosts: [site] };
+  };
+  provider.get = async () => JSON.stringify({ username: saved.username, password: saved.password });
+  const accounts = new AccountProvider();
+  const personal = new DemoProvider();
+  personal.create = async () => assert.fail("Must not save into the personal vault");
+  await accounts.add("personal", personal);
+  await accounts.add("LSE", provider);
+  const broker = await setup(t, accounts);
+  for (const generateAccount of [undefined, "locked-account"]) {
+    assert.throws(
+      () =>
+        broker.request(
+          { ...input, item_id: undefined, site: "example.com", field: "login" },
+          undefined,
+          { allowSave: true, generateUsername: "agent@example.com", generateAccount },
+        ),
+      /unlocked destination account/,
+    );
+  }
+  assert.equal(saved, undefined);
+  const request = broker.request(
+    { ...input, item_id: undefined, site: "example.com", field: "login" },
+    undefined,
+    { allowSave: true, generateUsername: "agent@example.com", generateAccount: "LSE" },
+  );
+  assert.equal(request.state, "pending");
+  assert.equal(saved, undefined);
+  await assert.rejects(broker.decide(request.request_id, true, undefined, true), /once/);
+  assert.equal(saved, undefined);
+  const active = await broker.decide(request.request_id, true);
+  assert.equal(saved.account, "LSE");
+  assert.equal(saved.site, "example.com");
+  assert.equal(saved.username, "agent@example.com");
+  assert.match(saved.password, /^[A-Za-z0-9_-]{32}$/);
+  assert.equal(JSON.parse(await readFile(active.path, "utf8")).password, saved.password);
+  assert.ok(!JSON.stringify(await broker.list()).includes(saved.password));
+  const denied = broker.request(
+    { ...input, item_id: undefined, site: "example.com", field: "login" },
+    undefined,
+    { allowSave: true, generateUsername: "other@example.com", generateAccount: "LSE" },
+  );
+  await broker.decide(denied.request_id, false);
+  assert.equal(saved.username, "agent@example.com");
 });

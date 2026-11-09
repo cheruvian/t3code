@@ -2,7 +2,7 @@ import { constants, closeSync, openSync, writeFileSync } from "node:fs";
 import { lstat, mkdir, readdir, readFile, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { fork, spawn } from "node:child_process";
 import { BrokerError, GUIDANCE, parseRequest } from "./common.js";
 import { GrantStore, commandScope, scopeKey, approvalScope } from "./grants.js";
@@ -125,12 +125,50 @@ export class Broker {
   request(
     input,
     origin,
-    { allowSave = false, allowSearch = false, argv0, consumerEnvironment } = {},
+    {
+      allowSave = false,
+      allowSearch = false,
+      argv0,
+      consumerEnvironment,
+      generateUsername,
+      generateAccount,
+    } = {},
   ) {
     if (this.#closing) throw new BrokerError("Broker is shutting down.", 503);
     const data = parseRequest(input);
     if ([...this.#requests.values()].filter((r) => !terminal.has(r.state)).length >= 100)
       throw new BrokerError("Too many open requests.", 429);
+    if (
+      generateUsername !== undefined &&
+      (!allowSave ||
+        typeof this.provider.create !== "function" ||
+        !data.site ||
+        data.field !== "login" ||
+        typeof generateUsername !== "string" ||
+        !generateUsername ||
+        generateUsername.length > 4096 ||
+        !this.matchesAccount(data, { username: generateUsername }))
+    )
+      throw new BrokerError("Generated logins require a site and matching username.", 400);
+    if (
+      generateAccount !== undefined &&
+      (generateUsername === undefined ||
+        typeof generateAccount !== "string" ||
+        !generateAccount ||
+        generateAccount.length > 4096)
+    )
+      throw new BrokerError("A destination account requires a generated login.", 400);
+    if (
+      generateUsername !== undefined &&
+      this.provider.accounts &&
+      (generateAccount === undefined
+        ? this.provider.accounts.length !== 1
+        : !this.provider.accounts.includes(generateAccount))
+    )
+      throw new BrokerError(
+        "Choose an unlocked destination account before generating a login.",
+        400,
+      );
     const request = {
       ...data,
       ...(argv0 ? { argv0 } : {}),
@@ -160,7 +198,22 @@ export class Broker {
     });
     this.#requests.set(request.request_id, request);
     this.changed();
-    if (data.site) void this.search(request);
+    if (generateUsername !== undefined) {
+      request.generateUsername = generateUsername;
+      request.generateAccount = generateAccount;
+      request.allow_save = false;
+      request.allow_search = false;
+      request.allow_save_host = false;
+      request.candidates = [
+        {
+          item_id: "generate-new-login",
+          name: `Create new Bitwarden login with generated password${generateAccount ? ` (${generateAccount})` : ""}`,
+          username: generateUsername,
+          hosts: [data.site],
+        },
+      ];
+      request.state = "pending";
+    } else if (data.site) void this.search(request);
     else this.offerApproval(request);
     return this.public(request);
   }
@@ -447,6 +500,7 @@ export class Broker {
       await this.sweep();
       // Saving in the vault cannot authorize a caller that was stopped meanwhile.
       if (request.state !== "saving" || this.#closing) return;
+      delete request.generateUsername;
       request.candidates.push(candidate);
       request.state = "pending";
       return await this.decide(id, true, candidate.item_id);
@@ -466,6 +520,29 @@ export class Broker {
     if (!approve) {
       request.state = "denied";
       return this.public(request);
+    }
+    if (request.generateUsername !== undefined) {
+      if (
+        always ||
+        automaticGrant ||
+        options.saveHost ||
+        options.approvalScope ||
+        options.durationSeconds
+      )
+        throw new BrokerError("Generated logins require allow once.", 400);
+      if (itemId !== undefined && itemId !== "generate-new-login")
+        throw new BrokerError("Choose the new generated login.", 400);
+      const username = request.generateUsername;
+      request.allow_save = true;
+      try {
+        return await this.saveLogin(id, {
+          account: request.generateAccount,
+          username,
+          password: randomBytes(24).toString("base64url"),
+        });
+      } finally {
+        request.allow_save = false;
+      }
     }
     let allowHostMismatch = false;
     if (request.site) {

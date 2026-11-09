@@ -18,6 +18,18 @@ export const CredentialCaller = Schema.Struct({
 });
 export type CredentialCaller = typeof CredentialCaller.Type;
 export const CredentialExecInput = Schema.Struct({
+  generateAccount: Schema.optional(
+    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
+  ).annotate({
+    description:
+      "Destination Bitwarden account label for a generated login, for example LSE. This is a vault account, not the website username. Required when multiple accounts are unlocked; a missing or locked destination fails without saving elsewhere.",
+  }),
+  generateUsername: Schema.optional(
+    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
+  ).annotate({
+    description:
+      "Create a NEW Bitwarden login for this username with a cryptographically generated 32-character password after explicit Allow once approval. Requires field=login. Skips saved credentials and remembered grants. Password goes only to Bitwarden and the approved consumer; never returned to the agent.",
+  }),
   browserTabId: Schema.optional(PreviewTabId).annotate({
     description:
       "Existing tab from preview_status for this script to operate. The consumer receives T3_BROWSER_URL; no new page is created. Omit for non-browser scripts.",

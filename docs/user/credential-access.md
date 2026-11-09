@@ -147,3 +147,18 @@ account name. When saving a new login with multiple accounts unlocked, enter its
 destination account name. **Lock vault & stop access** locks every account and
 stops credential use. Unlock each account again after locking or restarting T3;
 use the same profile directories to retain the CLI sign-ins.
+
+## Generate a new password
+
+Ask an agent to create a new Bitwarden login with an automatically generated
+password. It uses `credential_broker_exec` with `generateUsername` set to the
+new login's username, `generateAccount` set to the destination Bitwarden account
+label (such as `LSE`), `field: "login"`, the site hostname, and a prepared script.
+Choose **Allow once** on the entry labeled **Create new Bitwarden login with
+generated password**. T3 generates a random 32-character password, saves a new
+login, and passes the username and password privately to the approved script.
+The password is never returned to the agent. Existing logins are preserved.
+
+Saving the login does not create an account on the destination website; the
+approved script performs that operation. If the script fails, the saved login
+remains in Bitwarden. Check it before requesting another new login.

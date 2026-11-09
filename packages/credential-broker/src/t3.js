@@ -539,6 +539,8 @@ export class T3CredentialBroker {
       throw new BrokerError("Broker unavailable.", 503, "broker_unavailable");
     const request = broker.request(parsed, origin, {
       consumerEnvironment,
+      generateUsername: input.generateUsername,
+      generateAccount: input.generateAccount,
       allowSave: true,
       allowSearch: true,
       argv0: parsedArgv0,

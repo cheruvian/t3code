@@ -1,6 +1,6 @@
 ---
 name: credential-broker
-description: Use a saved Bitwarden password, login, or site-specific Google sign-in identity in a prepared script through T3's approval-gated credential_broker_exec tool. Use when a task needs a saved credential or must choose the saved Google account for a site; existing user-authorized credential files and authenticated sessions remain usable.
+description: Use a saved Bitwarden password, login, or site-specific Google sign-in identity in a prepared script through T3's approval-gated credential_broker_exec tool. Use when a task needs a saved credential, must generate and save a new site password, or must choose the saved Google account for a site; existing user-authorized credential files and authenticated sessions remain usable.
 ---
 
 # Credential Broker
@@ -12,6 +12,28 @@ Use `field: "password"` for a UTF-8 password file, `field: "username"` for a UTF
 Keep credential values inside the consumer. Do not read the file through agent tools, shell-expand its contents, or put secrets in command arguments or model context. Child stdout/stderr are discarded; use the exit code or an explicitly non-sensitive receipt file for diagnostics. The broker deletes the temporary file when execution finishes, expires, or is stopped.
 
 Existing user-authorized credential files and authenticated sessions can be used directly. Do not require migration to the broker or invent a browser login merely to obtain a password.
+
+## Generate and save a new login
+
+For a new username/password login, use `credential_broker_exec` with
+`generateUsername` set to the website username, `generateAccount` set to the
+requested Bitwarden account label (for example `LSE`), and `field: "login"`.
+Prepare the signup consumer and pass the site hostname and `browserTabId` when
+using the integrated browser. The human chooses **Allow once** on **Create new
+Bitwarden login with generated password**, which also shows the destination
+account. The broker generates the password, creates a new vault item, and gives
+only the approved consumer its JSON login. It preserves existing vault items.
+
+Use the broker's account labels; do not inspect local Bitwarden CLI profiles or
+run `bw unlock` to find a destination. If the destination is locked, direct the
+human to unlock that account in **Credential access**, then retry after they do.
+Do not substitute another account. If the exposed tool schema lacks
+`generateUsername` or `generateAccount`, report that the running server needs the
+updated tool; do not claim the new flow is available or silently switch to Google
+sign-in or a password file. An explicitly authorized file fallback remains valid.
+
+Vault creation happens before the consumer runs. A failed signup can leave the
+saved login in Bitwarden; check the existing item before generating another.
 
 ## Existing integrated browser tab
 
