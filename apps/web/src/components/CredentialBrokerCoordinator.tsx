@@ -143,8 +143,15 @@ function EnvironmentBroker({
   const pending =
     state?.requests.filter((r) => ["pending", "awaiting_unlock", "searching"].includes(r.state)) ??
     [];
-  const attentionKey = credentialDialogAttentionKey(pending, environmentId, viewedThread);
-  const nextPresentation = reconcileCredentialDialog(presentation, viewKey, attentionKey);
+  const attentionKey = pending.length
+    ? JSON.stringify(pending.map((request) => request.requestId).sort())
+    : null;
+  const nextPresentation = reconcileCredentialDialog(
+    presentation,
+    viewKey,
+    attentionKey,
+    credentialDialogAttentionKey(pending, environmentId, viewedThread) !== null,
+  );
   if (nextPresentation !== presentation) setPresentation(nextPresentation);
   const open = nextPresentation.open;
   const setOpen = (open: boolean) => setPresentation({ ...nextPresentation, open });

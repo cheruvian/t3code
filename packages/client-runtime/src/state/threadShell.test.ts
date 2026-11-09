@@ -44,11 +44,16 @@ function makeHarness(environmentIds: ReadonlyArray<EnvironmentId> = [environment
       ]),
     ),
   });
+  const pendingCredentialThreadIdsAtom = Atom.family((_id: EnvironmentId) =>
+    Atom.make<ReadonlyArray<ThreadId>>([]),
+  );
   return {
+    pendingCredentialThreadIdsAtom,
     registry: AtomRegistry.make(),
     snapshotAtom,
     catalogValueAtom,
     threads: createEnvironmentThreadShellAtoms({
+      pendingCredentialThreadIdsAtom,
       catalogValueAtom,
       snapshotAtom,
       hiddenThreadTagsAtom: () => Atom.make(null),
@@ -57,6 +62,18 @@ function makeHarness(environmentIds: ReadonlyArray<EnvironmentId> = [environment
 }
 
 describe("v2 thread shell lists", () => {
+  it("shows credential approval attention until the request resolves", () => {
+    const { registry, threads, snapshotAtom, pendingCredentialThreadIdsAtom } = makeHarness();
+    const ref = { environmentId, threadId: v2ThreadShell.id };
+    registry.set(snapshotAtom(environmentId), { ...v2ShellSnapshot, threads: [v2ThreadShell] });
+    expect(registry.get(threads.threadShellAtom(ref))?.pendingSubagentRequest).toBeNull();
+    registry.set(pendingCredentialThreadIdsAtom(environmentId), [ref.threadId]);
+    expect(registry.get(threads.threadShellAtom(ref))?.pendingSubagentRequest).toBe("approval");
+    registry.set(pendingCredentialThreadIdsAtom(environmentId), []);
+    expect(registry.get(threads.threadShellAtom(ref))?.pendingSubagentRequest).toBeNull();
+    registry.dispose();
+  });
+
   it("preserves ordered reference arrays when a middle thread changes", () => {
     const { registry, threads, snapshotAtom } = makeHarness();
     const snapshot = {

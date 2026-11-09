@@ -104,6 +104,7 @@ function pendingSubagentRequestsByThread(
     readonly parentThreadId: ThreadId;
     readonly request: PendingSubagentRequest;
   }> = [],
+  credentialThreadIds: ReadonlyArray<ThreadId> = [],
 ): ReadonlyMap<ThreadId, PendingSubagentRequest> {
   const requests = new Map<ThreadId, PendingSubagentRequest>();
   let byId: ReadonlyMap<ThreadId, OrchestrationV2ThreadShell> | undefined;
@@ -139,6 +140,7 @@ function pendingSubagentRequestsByThread(
     const request = subagentRequest(child);
     if (request !== null) flag(parentId, request, new Set([child.id]));
   }
+  for (const threadId of credentialThreadIds) flag(threadId, "approval", new Set());
   for (const task of delegated) flag(task.parentThreadId, task.request, new Set());
   return requests.size === 0 ? EMPTY_SUBAGENT_REQUESTS : requests;
 }
@@ -199,6 +201,9 @@ function sameApartFromStreaming(
 }
 
 export function createEnvironmentThreadShellAtoms(input: {
+  readonly pendingCredentialThreadIdsAtom?: (
+    environmentId: EnvironmentId,
+  ) => Atom.Atom<ReadonlyArray<ThreadId>>;
   readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
   readonly snapshotAtom: (
     environmentId: EnvironmentId,
@@ -274,7 +279,13 @@ export function createEnvironmentThreadShellAtoms(input: {
   const localSubagentRequestsAtom = Atom.family((environmentId: EnvironmentId) => {
     let previous = EMPTY_SUBAGENT_REQUESTS;
     return Atom.make((get) => {
-      const next = pendingSubagentRequestsByThread(get(environmentThreadsAtom(environmentId)));
+      const next = pendingSubagentRequestsByThread(
+        get(environmentThreadsAtom(environmentId)),
+        [],
+        input.pendingCredentialThreadIdsAtom
+          ? get(input.pendingCredentialThreadIdsAtom(environmentId))
+          : [],
+      );
       if (sameRequests(previous, next)) return previous;
       previous = next;
       return next;
@@ -320,6 +331,9 @@ export function createEnvironmentThreadShellAtoms(input: {
         const requests = pendingSubagentRequestsByThread(
           get(environmentThreadsAtom(environmentId)),
           delegated,
+          input.pendingCredentialThreadIdsAtom
+            ? get(input.pendingCredentialThreadIdsAtom(environmentId))
+            : [],
         );
         if (sameRequests(requestsOf(environmentId), requests)) continue;
         next.set(environmentId, requests);

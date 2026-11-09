@@ -8,9 +8,11 @@ const keyFor = (view: typeof thread | null) => credentialDialogAttentionKey([req
 const initial = { viewKey: JSON.stringify(other), attentionKey: null, open: false };
 
 describe("credential request presentation", () => {
-  it("does not interrupt another thread, and opens on the blocked thread", () => {
-    expect(keyFor(other)).toBeNull();
-    expect(keyFor(null)).toBeNull();
+  it("opens new requests over any thread, including outside a thread", () => {
+    expect(
+      reconcileCredentialDialog(initial, JSON.stringify(other), keyFor(thread), false).open,
+    ).toBe(true);
+    expect(reconcileCredentialDialog(initial, "null", keyFor(thread), false).open).toBe(true);
     const shown = reconcileCredentialDialog(initial, JSON.stringify(thread), keyFor(thread));
     expect(shown.open).toBe(true);
   });
@@ -19,7 +21,7 @@ describe("credential request presentation", () => {
     const shown = reconcileCredentialDialog(initial, JSON.stringify(thread), keyFor(thread));
     const hidden = { ...shown, open: false };
     expect(reconcileCredentialDialog(hidden, JSON.stringify(thread), keyFor(thread))).toBe(hidden);
-    const away = reconcileCredentialDialog(hidden, JSON.stringify(other), keyFor(other));
+    const away = reconcileCredentialDialog(hidden, JSON.stringify(other), keyFor(thread), false);
     expect(away.open).toBe(false);
     const returned = reconcileCredentialDialog(away, JSON.stringify(thread), keyFor(thread));
     expect(returned.open).toBe(true);

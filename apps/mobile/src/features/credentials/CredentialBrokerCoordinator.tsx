@@ -144,9 +144,14 @@ function EnvironmentBroker({
   const hasRequests = pending.length + active.length > 0;
   const locked = state?.status === "locked" || state?.status === "unlocking";
   const attentionKey =
-    credentialDialogAttentionKey(pending, environmentId, viewedThread) ??
+    (pending.length ? JSON.stringify(pending.map((request) => request.requestId).sort()) : null) ??
     (state?.notices.length ? JSON.stringify(state.notices.map((notice) => notice.noticeId)) : null);
-  const nextPresentation = reconcileCredentialDialog(presentation, viewKey, attentionKey);
+  const nextPresentation = reconcileCredentialDialog(
+    presentation,
+    viewKey,
+    attentionKey,
+    credentialDialogAttentionKey(pending, environmentId, viewedThread) !== null,
+  );
   if (nextPresentation !== presentation) setPresentation(nextPresentation);
   const open = nextPresentation.open;
   const setOpen = (open: boolean) => setPresentation({ ...nextPresentation, open });
