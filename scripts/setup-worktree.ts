@@ -118,14 +118,17 @@ for (const file of ENV_FILES) {
 
 const envFile = NodePath.join(worktree, ".env");
 if (NodeFS.existsSync(envFile)) {
-  const direnv = NodeChildProcess.spawnSync("direnv", ["allow", envFile], {
-    cwd: worktree,
-    stdio: "inherit",
-  });
-  if (direnv.error && (direnv.error as NodeJS.ErrnoException).code !== "ENOENT") {
-    throw direnv.error;
+  const direnvFile = NodePath.join(worktree, ".envrc");
+  if (NodeFS.existsSync(direnvFile)) {
+    const direnv = NodeChildProcess.spawnSync("direnv", ["allow", direnvFile], {
+      cwd: worktree,
+      stdio: "inherit",
+    });
+    if (direnv.error && (direnv.error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw direnv.error;
+    }
+    if (!direnv.error && direnv.status !== 0) process.exit(direnv.status ?? 1);
   }
-  if (!direnv.error && direnv.status !== 0) process.exit(direnv.status ?? 1);
 
   const authFile =
     process.env.AUTOENV_AUTH_FILE ?? NodePath.join(process.env.HOME ?? "", ".autoenv_authorized");
