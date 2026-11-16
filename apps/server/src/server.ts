@@ -228,7 +228,7 @@ import * as RunFinalizationService from "./orchestration-v2/RunFinalizationServi
 
 import * as ProjectionStoreV2 from "./orchestration-v2/ProjectionStore.ts";
 import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
-import { acceptsPrivateNetworkConnection, loopbackUrlHostForAddress } from "./startupAccess.ts";
+import { closeNonPrivateNetworkConnections, loopbackUrlHostForAddress } from "./startupAccess.ts";
 import * as OrchestrationHttp from "./orchestration-v2/http.ts";
 import * as ProjectHttp from "./project/http.ts";
 import * as NetService from "@t3tools/shared/Net";
@@ -382,17 +382,14 @@ const layerHttpServer = Layer.unwrap(
       privateNetworkOnly: config.privateNetworkOnly,
     });
     yield* ManagedLimits.closeTailscaleServeTo(policy, { host: bindHost, port: config.port });
+    const runSync = Effect.runSyncWith(yield* Effect.context<never>());
     return NodeHttpServer.layer(
       () => {
         const server = rejectRequestsUntilServing(
           keepIdleConnections(guardHttpResponseWriteErrors(NodeHttp.createServer())),
         );
         if (config.privateNetworkOnly) {
-          server.on("connection", (socket) => {
-            if (!acceptsPrivateNetworkConnection(socket)) {
-              socket.destroy();
-            }
-          });
+          runSync(closeNonPrivateNetworkConnections(server));
         }
         return server;
       },

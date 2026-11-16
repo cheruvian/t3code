@@ -41,6 +41,7 @@ export const make = Effect.gen(function* () {
         if (
           input.resource._tag === "attachment" ||
           input.resource._tag === "native-app-icon" ||
+          input.resource._tag === "environment-theme-background" ||
           input.resource._tag === "tool-output-image" ||
           input.resource._tag === "host-file-download" ||
           // GitHub media names the repository it authenticates through itself.

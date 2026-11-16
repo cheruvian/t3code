@@ -1178,34 +1178,45 @@ describe("shouldRefocusComposerOnWindowFocus", () => {
   }
 
   it("refocuses when nothing or the body holds focus", () => {
-    expect(shouldRefocusComposerOnWindowFocus(null)).toBe(true);
-    expect(shouldRefocusComposerOnWindowFocus(element("BODY"))).toBe(true);
+    expect(shouldRefocusComposerOnWindowFocus(null, null)).toBe(true);
+    expect(shouldRefocusComposerOnWindowFocus(element("BODY"), null)).toBe(true);
   });
 
   it("refocuses away from a plain button, such as a pull request tab", () => {
-    expect(shouldRefocusComposerOnWindowFocus(element("BUTTON"))).toBe(true);
+    expect(shouldRefocusComposerOnWindowFocus(element("BUTTON"), null)).toBe(true);
   });
 
   it("leaves other text fields alone", () => {
-    expect(shouldRefocusComposerOnWindowFocus(element("INPUT"))).toBe(false);
-    expect(shouldRefocusComposerOnWindowFocus(element("TEXTAREA"))).toBe(false);
-    expect(shouldRefocusComposerOnWindowFocus(element("DIV", { editable: true }))).toBe(false);
-    expect(shouldRefocusComposerOnWindowFocus(element("DIV", { role: "textbox" }))).toBe(false);
+    expect(shouldRefocusComposerOnWindowFocus(element("INPUT"), null)).toBe(false);
+    expect(shouldRefocusComposerOnWindowFocus(element("TEXTAREA"), null)).toBe(false);
+    expect(shouldRefocusComposerOnWindowFocus(element("DIV", { editable: true }), null)).toBe(
+      false,
+    );
+    expect(shouldRefocusComposerOnWindowFocus(element("DIV", { role: "textbox" }), null)).toBe(
+      false,
+    );
   });
 
   it.each(["IFRAME", "WEBVIEW"])("leaves a focused %s preview alone", (tagName) => {
-    expect(shouldRefocusComposerOnWindowFocus(element(tagName))).toBe(false);
+    expect(shouldRefocusComposerOnWindowFocus(element(tagName), null)).toBe(false);
   });
 
   it("leaves a focused terminal alone in the drawer and the right panel", () => {
     expect(
-      shouldRefocusComposerOnWindowFocus(element("BUTTON", { within: "data-terminal-owner" })),
+      shouldRefocusComposerOnWindowFocus(
+        element("BUTTON", { within: "data-terminal-owner" }),
+        null,
+      ),
     ).toBe(false);
   });
 
   it("leaves focus inside a dialog or popup alone", () => {
-    expect(shouldRefocusComposerOnWindowFocus(element("BUTTON", { within: "dialog" }))).toBe(false);
-    expect(shouldRefocusComposerOnWindowFocus(element("BUTTON", { within: "-popup" }))).toBe(false);
+    expect(shouldRefocusComposerOnWindowFocus(element("BUTTON", { within: "dialog" }), null)).toBe(
+      false,
+    );
+    expect(shouldRefocusComposerOnWindowFocus(element("BUTTON", { within: "-popup" }), null)).toBe(
+      false,
+    );
   });
 });
 

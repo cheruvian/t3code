@@ -737,6 +737,8 @@ export const EnvironmentTheme = Schema.Struct({
   /** The publishing filename without its extension, stable across recolors. */
   id: EnvironmentThemeId,
   ...environmentThemeFields,
+  /** Revision of the image file published beside the theme; absent without one. */
+  background: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
 });
 export type EnvironmentTheme = typeof EnvironmentTheme.Type;
 

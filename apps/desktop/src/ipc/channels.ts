@@ -150,3 +150,5 @@ export const SAFE_SHUTDOWN_REQUEST_CHANNEL = "t3:safe-shutdown:request";
 export const SAFE_SHUTDOWN_RESOLVE_CHANNEL = "t3:safe-shutdown:resolve";
 export const SAFE_SHUTDOWN_RESET_CHANNEL = "t3:safe-shutdown:reset";
 export const RESTART_AUDIO_SERVICE_CHANNEL = "desktop:restart-audio-service";
+
+export const START_FILE_DRAG_CHANNEL = "desktop:start-file-drag";
