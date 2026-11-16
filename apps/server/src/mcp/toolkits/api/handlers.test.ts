@@ -1,3 +1,5 @@
+import { EnvironmentThemeService } from "../../../environmentTheme.ts";
+import { PullRequestService } from "../../../pullRequest/PullRequestService.ts";
 import * as ProjectCloneTracker from "../../../project/ProjectCloneTracker.ts";
 import * as RemoteDelegation from "../../../peer/RemoteDelegation.ts";
 import * as PeerLinks from "../../../peer/PeerLinks.ts";
@@ -462,6 +464,8 @@ const stubRegistryLayer = Layer.succeed(
 
 const HttpTestLayer = HttpRouter.serve(
   McpHttpServer.layer.pipe(
+    Layer.provide(Layer.mock(EnvironmentThemeService)({})),
+    Layer.provide(Layer.mock(PullRequestService)({})),
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(AssetSigner.AssetSigner)({}),

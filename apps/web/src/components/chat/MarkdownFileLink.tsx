@@ -1,12 +1,15 @@
+import { useAssetUrlState } from "../../assets/assetUrls";
 import { formatFilePathForClipboard } from "@t3tools/client-runtime/media-actions";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
-import { memo, type MouseEvent as ReactMouseEvent } from "react";
+import type { ContextMenuSource, EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import { memo, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { FolderIcon } from "lucide-react";
 
+import { contextMenuSourceOf } from "../../contextMenuSource";
 import { readLocalApi } from "../../localApi";
 import { cn } from "../../lib/utils";
 import { shouldOpenMarkdownFileLinkInEditor } from "../../markdown-links";
@@ -29,6 +32,7 @@ interface MarkdownFileLinkProps {
   href: string;
   targetPath: string;
   iconPath: string;
+  isAppBundle?: boolean;
   workspaceRelativePath: string | null;
   panelPath: string | null;
   line?: number | undefined;
@@ -54,6 +58,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
   href,
   targetPath,
   iconPath,
+  isAppBundle = false,
   workspaceRelativePath,
   panelPath,
   line,
@@ -219,31 +224,25 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
             }),
           ])
         : value.then((text) => navigator.clipboard.writeText(text));
-    void Promise.all([write, value]).then(
-      ([, text]) => {
-        toastManager.add({
-          type: "success",
-          title: `${title} copied`,
-          description: text,
-        });
-      },
-      (error) => {
-        reportMarkdownActionFailure(
-          { operation: "copy-file-path", target: targetPath, copyTarget: title },
-          error,
-        );
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: `Failed to copy ${title.toLowerCase()}`,
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
-      },
-    );
+    void Promise.all([write, value]).catch((error) => {
+      reportMarkdownActionFailure(
+        { operation: "copy-file-path", target: targetPath, copyTarget: title },
+        error,
+      );
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: `Failed to copy ${title.toLowerCase()}`,
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    });
   };
 
-  const showFileContextMenu = async (position: { x: number; y: number }) => {
+  const showFileContextMenu = async (
+    position: { x: number; y: number },
+    source: ContextMenuSource,
+  ) => {
     const api = readLocalApi();
     if (!api) return;
 
@@ -263,6 +262,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
           ...copyItems.map(({ id, label }) => ({ id, label })),
         ] as const,
         position,
+        source,
       );
 
       if (clicked === "download") {
@@ -312,7 +312,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
             return { x: bounds.left, y: bounds.bottom };
           })()
         : { x: event.clientX, y: event.clientY };
-    void showFileContextMenu(position);
+    void showFileContextMenu(position, contextMenuSourceOf(event));
   };
 
   const canOpenInEditor = onOpen !== undefined;
@@ -359,6 +359,11 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
               onContextMenu={handleContextMenu}
             >
               <FileTagChipContent
+                icon={
+                  isAppBundle ? (
+                    <AppBundleIcon environmentId={environmentId} path={iconPath} />
+                  ) : undefined
+                }
                 path={iconPath}
                 environmentId={environmentId}
                 label={label}
@@ -378,6 +383,11 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
               onContextMenu={handleContextMenu}
             >
               <FileTagChipContent
+                icon={
+                  isAppBundle ? (
+                    <AppBundleIcon environmentId={environmentId} path={iconPath} />
+                  ) : undefined
+                }
                 path={iconPath}
                 environmentId={environmentId}
                 label={label}
@@ -388,9 +398,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
         }
       />
       <TooltipPopup side="top" variant="code">
-        <div className="overflow-x-auto whitespace-nowrap scrollbar-thumb-border/78 scrollbar-track-transparent [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border/78 [&::-webkit-scrollbar-track]:bg-transparent">
-          <WorkspaceEntryTooltip path={iconPath} label={targetPath} environmentId={environmentId} />
-        </div>
+        <WorkspaceEntryTooltip path={iconPath} label={targetPath} environmentId={environmentId} />
       </TooltipPopup>
     </Tooltip>
   );
@@ -412,6 +420,7 @@ function areMarkdownFileLinkPropsEqual(
     previous.copyMarkdown === next.copyMarkdown &&
     previous.theme === next.theme &&
     previous.threadRef === next.threadRef &&
+    previous.isAppBundle === next.isAppBundle &&
     previous.onOpen === next.onOpen &&
     previous.onOpenInPanel === next.onOpenInPanel &&
     previous.openInEditorMenuLabel === next.openInEditorMenuLabel &&
@@ -421,5 +430,34 @@ function areMarkdownFileLinkPropsEqual(
     previous.onReveal === next.onReveal &&
     previous.resolveCopyPaths === next.resolveCopyPaths &&
     previous.revealLabel === next.revealLabel
+  );
+}
+
+function AppBundleIcon(props: { environmentId: EnvironmentId | null; path: string }) {
+  const asset = useAssetUrlState(props.environmentId, {
+    _tag: "native-app-icon",
+    app: { _tag: "app-path", path: props.path },
+  });
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const url = asset._tag === "Success" && asset.url !== failedUrl ? asset.url : null;
+  const loaded = url !== null && loadedUrl === url;
+  return (
+    <span
+      data-app-bundle-icon=""
+      aria-hidden="true"
+      className="relative me-[0.2em] inline-block size-[1em] align-[calc((1cap-1em)/2)]"
+    >
+      <FolderIcon className={cn("size-full text-icon-muted", loaded && "invisible")} />
+      {url !== null && (
+        <img
+          src={url}
+          alt=""
+          className={cn("absolute inset-0 size-full object-contain", !loaded && "invisible")}
+          onLoad={() => setLoadedUrl(url)}
+          onError={() => setFailedUrl(url)}
+        />
+      )}
+    </span>
   );
 }

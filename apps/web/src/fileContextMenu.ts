@@ -1,10 +1,4 @@
-/**
- * Right-click actions for a workspace file: reveal it in the environment's
- * file manager and open it in an editor. Reuse the chat file-chip menu's
- * machinery: reveal rides `shell.openInEditor` with `reveal: true`, which the
- * server only honors when its `shellRevealInFileManager` config flag is set,
- * so both actions work for every client and connection mode.
- */
+/** File actions use shell.openInEditor; reveal requires shellRevealInFileManager. */
 import {
   EDITORS,
   type ContextMenuItem,

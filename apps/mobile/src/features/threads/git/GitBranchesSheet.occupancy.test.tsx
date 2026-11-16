@@ -24,13 +24,24 @@ vi.mock("@react-navigation/native", () => ({
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
 vi.mock("../../../components/ui/AppBar", () => ({ AppBar: () => null }));
 vi.mock("../../../components/ui/SheetHeader", () => ({ SheetHeader: () => null }));
-vi.mock("../../../components/ui/ScreenContent", () => ({
-  ScreenContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+vi.mock("../../../components/ui/FitSheet", () => ({
+  FitSheet: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("../../../native/StackHeader", () => ({ NativeStackScreenOptions: () => null }));
-vi.mock("../../../components/ui/AppText", () => ({
-  AppText: ({ children }: { children: ReactNode }) => <span>{children}</span>,
-  AppTextInput: () => null,
+vi.mock("../../../components/ui/FormSection", () => ({
+  FormSection: () => null,
+  FormField: () => null,
+}));
+vi.mock("../../../components/ui/ListSection", () => ({
+  ListSection: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+}));
+vi.mock("../../../components/ui/ListChoiceRow", () => ({
+  ListChoiceRow: (props: { label: string; description: string; disabled: boolean }) => (
+    <button disabled={props.disabled}>
+      <span>{props.label}</span>
+      <span>{props.description}</span>
+    </button>
+  ),
 }));
 vi.mock("./gitSheetComponents", () => ({ SheetActionButton: () => null }));
 vi.mock("../../../state/entities", () => ({}));

@@ -320,6 +320,7 @@ function createTextGeneration(
   overrides: Partial<FakeGitTextGeneration> = {},
 ): TextGeneration.TextGeneration["Service"] {
   const implementation: FakeGitTextGeneration = {
+    generateTranscriptionPostProcessing: () => Effect.die("unexpected transcription in Git test"),
     generateCommitMessage: (input) =>
       Effect.succeed({
         subject: "Implement stacked git actions",
@@ -344,6 +345,7 @@ function createTextGeneration(
   };
 
   return {
+    generateTranscriptionPostProcessing: implementation.generateTranscriptionPostProcessing,
     generateCommitMessage: (input) =>
       implementation.generateCommitMessage(input).pipe(
         Effect.mapError(
@@ -2205,6 +2207,8 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
               {
                 number: 219,
                 title: "Old repository PR",
+                headRepository: { nameWithOwner: "old-owner/old-repository" },
+                headRepositoryOwner: { login: "old-owner" },
                 url: "https://github.com/old-owner/old-repository/pull/219",
                 baseRefName: "main",
                 headRefName: "feature/repointed-lookup",
@@ -2787,7 +2791,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           branch,
           "--all",
           "--per-page",
-          "20",
+          "100",
           "--output",
           "json",
         ]);

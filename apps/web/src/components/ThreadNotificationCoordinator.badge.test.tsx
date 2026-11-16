@@ -23,7 +23,7 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => state.navigate,
   useParams: () => ({}),
 }));
-vi.mock("./ui/toast", () => ({ toastManager: { add: state.toast } }));
+vi.mock("./ui/toast", () => ({ toastManager: { add: state.toast, close: vi.fn() } }));
 vi.mock("../state/shell", () => ({
   environmentShell: {
     stateValueAtom: (id: string) => shellAtom(id),
@@ -173,6 +173,7 @@ async function render() {
   for (const [id, value] of state.shells) registry.set(shellAtom(id), value);
   for (const listener of settingsListeners) listener();
   stopNotifications ??= startThreadNotifications(registry, {
+    subscribe: () => () => {},
     navigate: state.navigate,
     get state() {
       return { matches: [{ params: {} }] };

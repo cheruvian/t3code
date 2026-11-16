@@ -1,13 +1,4 @@
-/**
- * DrainableWorker - A queue-based worker that exposes a `drain()` effect.
- *
- * Wraps the common `Queue.unbounded` + `Effect.forever` pattern and adds
- * a signal that resolves when the queue is empty **and** the current item
- * has finished processing. This lets tests replace timing-sensitive
- * `Effect.sleep` calls with deterministic `drain()`.
- *
- * @module DrainableWorker
- */
+/** Queue worker whose drain waits for both queued and in-flight items. */
 import * as Deferred from "effect/Deferred";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -119,17 +110,8 @@ const hasPending = <A>(queue: PendingQueue<A>): boolean =>
   queue.front !== null || queue.back !== null;
 
 /**
- * Create a drainable worker that processes items from an unbounded queue.
- *
- * The worker is forked into the current scope and will be interrupted when
- * the scope closes. A finalizer shuts down the queue and drops queued items,
- * so `drain` resolves after the scope closes instead of waiting on them.
- *
- * An item that fails or dies is logged and skipped; the worker keeps
- * processing later items and `drain` still resolves.
- *
- * @param process - The effect to run for each queued item.
- * @returns A `DrainableWorker` with `enqueue` and `drain`.
+ * Processes queued items in the current scope, logging and skipping failures.
+ * Closing the scope drops queued items and releases drain waiters.
  */
 export const makeDrainableWorker = Effect.fn("DrainableWorker.makeDrainableWorker")(function* <
   A,

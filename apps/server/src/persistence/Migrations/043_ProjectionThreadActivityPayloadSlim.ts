@@ -1,13 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
-/**
- * Pre-slimmed activity payloads, written next to the full `payload_json` so a
- * thread open reads only what it will ship. Both columns stay NULL on existing
- * rows: reads fall back to slimming `payload_json` whenever
- * `payload_slim_version` does not match the current slimming rules, so no
- * backfill is required for correctness.
- */
+/** Reads fall back to slimming payload_json when the stored slim version is absent or stale. */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const columns = yield* sql<{ readonly name: string }>`

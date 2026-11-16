@@ -26,10 +26,17 @@ vi.mock("../composerDraftStore", () => ({
   useComposerDraftStore: (select: (store: unknown) => unknown) =>
     select({ getDraftThreadByRef: () => null, setDraftThreadContext: state.setDraftContext }),
 }));
-vi.mock("../state/use-atom-command", () => ({
-  useAtomCommand: (_command: unknown, label: unknown) =>
-    label === "thread session stop" ? state.stopSession : state.updateMetadata,
-}));
+vi.mock("../state/use-atom-command", async () => {
+  const { threadEnvironment } = await import("../state/threads");
+  return {
+    useAtomCommand: (command: unknown) =>
+      command === threadEnvironment.stopSession
+        ? state.stopSession
+        : command === threadEnvironment.updateMetadata
+          ? state.updateMetadata
+          : vi.fn(),
+  };
+});
 vi.mock("../state/query", () => ({
   useEnvironmentQuery: () => ({
     data: { refName: state.refName, workingTree: { rootPath: "/repo" } },
@@ -43,7 +50,8 @@ vi.mock("~/hooks/useSupportsMultiplePullRequests", () => ({
   useSupportsMultiplePullRequests: () => false,
 }));
 vi.mock("../lib/openPullRequestLink", () => ({ useOpenPrLink: () => vi.fn() }));
-vi.mock("./ThreadStatusIndicators", () => ({
+vi.mock("./ThreadStatusIndicators", async (original) => ({
+  ...(await original<typeof import("./ThreadStatusIndicators")>()),
   useLinkedThreadPullRequest: () => null,
   prStatusIndicator: () => null,
   resolveThreadPullRequestBadge: () => null,

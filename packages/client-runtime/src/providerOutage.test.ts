@@ -8,6 +8,8 @@ import {
   PROVIDER_OUTAGE_DISMISSAL_MS,
 } from "./providerOutage.ts";
 
+const epoch = Date.parse("2026-10-07T00:00:00Z");
+
 const provider: ServerProvider = {
   instanceId: ProviderInstanceId.make("codex-work"),
   driver: ProviderDriverKind.make("codex"),
@@ -33,7 +35,7 @@ afterEach(() => vi.useRealTimers());
 describe("provider outage dismissal", () => {
   it("persists across instances and reloads, expires at one hour, and leaves other providers visible", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-10-07T00:00:00Z"));
+    vi.setSystemTime(epoch);
     let saved: string | null = null;
     const storage = {
       read: () => saved,
@@ -53,11 +55,11 @@ describe("provider outage dismissal", () => {
     };
     expect(getProviderOutageBannerKey(otherInstance)).toBe(key);
     expect(createProviderOutageDismissals(storage).getSnapshot()[key]).toBe(
-      Date.now() + PROVIDER_OUTAGE_DISMISSAL_MS,
+      epoch + PROVIDER_OUTAGE_DISMISSAL_MS,
     );
     expect(store.getSnapshot().claudeAgent).toBeUndefined();
     vi.advanceTimersByTime(PROVIDER_OUTAGE_DISMISSAL_MS - 1);
-    expect(store.getSnapshot()[key]).toBeGreaterThan(Date.now());
+    expect(store.getSnapshot()[key]).toBe(epoch + PROVIDER_OUTAGE_DISMISSAL_MS);
     vi.advanceTimersByTime(1);
     expect(store.getSnapshot()[key]).toBeUndefined();
     expect(listener).toHaveBeenCalledTimes(2);
@@ -68,6 +70,7 @@ describe("provider outage dismissal", () => {
 
   it("keeps dismissal functional when storage fails and clears expiry when resubscribed", () => {
     vi.useFakeTimers();
+    vi.setSystemTime(epoch);
     const store = createProviderOutageDismissals({
       read: () => {
         throw new Error("blocked");
@@ -78,7 +81,7 @@ describe("provider outage dismissal", () => {
     });
     const unsubscribe = store.subscribe(() => {});
     store.dismiss("codex");
-    expect(store.getSnapshot().codex).toBeGreaterThan(Date.now());
+    expect(store.getSnapshot().codex).toBe(epoch + PROVIDER_OUTAGE_DISMISSAL_MS);
     unsubscribe();
     expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(PROVIDER_OUTAGE_DISMISSAL_MS);

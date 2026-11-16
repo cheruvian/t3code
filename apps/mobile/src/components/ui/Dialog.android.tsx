@@ -12,11 +12,12 @@ import {
   Text,
   useNativeState,
 } from "@expo/ui/jetpack-compose";
+import { verticalScroll } from "@expo/ui/jetpack-compose/modifiers";
 
 import { useAppearancePreferences } from "../../features/settings/appearance/AppearancePreferencesProvider";
 import { useScaledTextRole } from "../../features/settings/appearance/useScaledTextRole";
 
-import { useSyncExternalStore, useState, useEffect, useCallback } from "react";
+import { useSyncExternalStore, useState, useCallback } from "react";
 import { themeColorWithContrast } from "../../lib/mobileTheme";
 import type { Alert, AlertButton } from "react-native";
 import type { ConfirmDialogRequest, TextInputDialogRequest } from "./Dialog.types";
@@ -50,7 +51,10 @@ function setPresented(next: PresentedDialog | null) {
 }
 
 function submitRequest(dialog: DialogRequest) {
+  const replaced = presented;
   setPresented({ ...dialog, id: ++nextPresentationId });
+  // A replaced alert closed without an answer, which its owner hears as a dismissal.
+  if (replaced?.kind === "alert") replaced.request.options?.onDismiss?.();
 }
 
 /** Closes the dialog only if it is still the one the action came from. */
@@ -90,18 +94,18 @@ export function prompt(request: TextInputDialogRequest): void {
 
 export function Host() {
   const presented = useSyncExternalStore(subscribe, getPresented, getPresented);
-  const [inputValue, setInputValue] = useState("");
-  const [options, setOptions] = useState<Record<string, boolean>>({});
-  useEffect(() => {
-    setInputValue(presented?.kind === "text-input" ? presented.request.initialValue : "");
-    setOptions(
-      Object.fromEntries(
-        presented?.kind === "confirm"
-          ? (presented.request.options ?? []).map((option) => [option.id, option.defaultChecked])
-          : [],
-      ),
-    );
-  }, [presented]);
+  return presented ? <PresentedDialogHost key={presented.id} presented={presented} /> : null;
+}
+
+function PresentedDialogHost({ presented }: { presented: PresentedDialog }) {
+  const inputValue = presented.kind === "text-input" ? presented.request.initialValue : "";
+  const [options, setOptions] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(
+      presented.kind === "confirm"
+        ? (presented.request.options ?? []).map((option) => [option.id, option.defaultChecked])
+        : [],
+    ),
+  );
 
   const handleCancel = () => {
     if (!presented) return;
@@ -275,7 +279,7 @@ function DialogPresentation(props: DialogPresentationProps) {
           </AlertDialog.Text>
         ) : props.request.message || props.request.options?.length ? (
           <AlertDialog.Text>
-            <Column>
+            <Column modifiers={[verticalScroll()]}>
               {props.request.message ? (
                 <Text style={bodyTypography}>{props.request.message}</Text>
               ) : null}

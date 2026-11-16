@@ -7,33 +7,46 @@ import {
   ProviderInstanceId,
   RunId,
   ThreadId,
+  type ThreadTitleRegenerationOutcome,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 const state = vi.hoisted(() => ({
   connectedEnvironmentIds: [] as EnvironmentId[],
   unsupportedCapabilities: false,
   pendingOrder: null as object | null,
   dropBusy: false,
+  holdingRows: false,
   failedAction: null as string | null,
+  titleOutcome: null as ThreadTitleRegenerationOutcome | null,
   archivedRefreshes: [] as string[],
+  onArchivedRefresh: undefined as (() => void) | undefined,
   scopes: new Map<string, Set<string>>(),
   shells: [] as EnvironmentThreadShell[],
   requests: [] as {
     action: string;
     environmentId: string;
-    input: { threadId: string; orderKey?: string; snoozedUntil?: string; reason?: string };
+    input: {
+      threadId: string;
+      orderKey?: string;
+      snoozedUntil?: string;
+      reason?: string;
+    };
   }[],
-  dialogs: [] as { onConfirm: () => void }[],
+  dialogs: [] as {
+    onConfirm: () => void;
+  }[],
   alerts: [] as {
     title: string;
-    buttons?: { text: string; onPress?: () => void }[];
+    buttons?: {
+      text: string;
+      onPress?: () => void;
+    }[];
   }[],
   afterRequest: undefined as (() => void) | undefined,
+  heldActions: new Map<string, Promise<void>>(),
 }));
-
 vi.mock("../../state/projects", () => ({
   environmentProjects: { projectsAtom: "projects", projectAtom: () => "project" },
   projectEnvironment: {},
@@ -47,8 +60,14 @@ vi.mock("react", () => ({
 }));
 vi.mock("react-native", () => ({
   Alert: {
-    alert: (title: string, _message: string, buttons?: { text: string; onPress?: () => void }[]) =>
-      state.alerts.push({ title, buttons }),
+    alert: (
+      title: string,
+      _message: string,
+      buttons?: {
+        text: string;
+        onPress?: () => void;
+      }[],
+    ) => state.alerts.push({ title, buttons }),
   },
 }));
 vi.mock("expo-haptics", () => ({
@@ -56,8 +75,14 @@ vi.mock("expo-haptics", () => ({
   ImpactFeedbackStyle: { Light: "light" },
 }));
 vi.mock("../../components/ui/Dialog", () => ({
-  alert: (title: string, _message: string, buttons?: { text: string; onPress?: () => void }[]) =>
-    state.alerts.push({ title, buttons }),
+  alert: (
+    title: string,
+    _message: string,
+    buttons?: {
+      text: string;
+      onPress?: () => void;
+    }[],
+  ) => state.alerts.push({ title, buttons }),
   confirm: (dialog: { title: string; onConfirm: (options?: Record<string, boolean>) => void }) => {
     if (dialog.title === "Settle this conversation?") dialog.onConfirm({ removeAutomations: true });
     else state.dialogs.push(dialog);
@@ -66,6 +91,7 @@ vi.mock("../../components/ui/Dialog", () => ({
 vi.mock("../archive/useArchivedThreadSnapshots", () => ({
   refreshArchivedThreadsForEnvironment: (environmentId: string) => {
     state.archivedRefreshes.push(environmentId);
+    state.onArchivedRefresh?.();
   },
 }));
 vi.mock("../../state/session", () => ({
@@ -78,8 +104,9 @@ vi.mock("../../state/presentation", () => ({
 vi.mock("../../state/server", () => ({
   environmentServerConfigsAtom: "server-configs",
 }));
-vi.mock("../../state/atom-registry", () => ({
-  appAtomRegistry: {
+vi.mock("../../state/atom-registry", async () => {
+  const registry = (await import("effect/reactivity")).AtomRegistry.make();
+  const stub = {
     set: (_atom: string, value: boolean) => {
       state.dropBusy = value;
     },
@@ -90,31 +117,46 @@ vi.mock("../../state/atom-registry", () => ({
           ? state.connectedEnvironmentIds
           : atom === "thread-drop-busy"
             ? state.dropBusy
-            : atom === "thread-shells"
-              ? state.shells
-              : atom === "queued-thread-keys"
-                ? new Set<string>()
-                : new Map(
-                    [...state.scopes.keys()].map((environmentId) => [
-                      environmentId,
-                      {
-                        environment: {
-                          capabilities: state.unsupportedCapabilities
-                            ? {}
-                            : {
-                                threadSettlement: true,
-                                threadSnooze: true,
-                                threadPinning: true,
-                                threadPinReorder: true,
-                                threadActiveReorder: true,
-                                threadTitleRegeneration: true,
-                              },
+            : atom === "steady-shells-holding"
+              ? state.holdingRows
+              : atom === "thread-shells"
+                ? state.shells
+                : atom === "queued-thread-keys"
+                  ? new Set<string>()
+                  : new Map(
+                      [...state.scopes.keys()].map((environmentId) => [
+                        environmentId,
+                        {
+                          environment: {
+                            capabilities: state.unsupportedCapabilities
+                              ? {}
+                              : {
+                                  threadSettlement: true,
+                                  threadSnooze: true,
+                                  threadPinning: true,
+                                  threadPinReorder: true,
+                                  threadActiveReorder: true,
+                                  threadTitleRegeneration: true,
+                                },
+                          },
                         },
-                      },
-                    ]),
-                  ),
-  },
-}));
+                      ]),
+                    ),
+  };
+  // Real atoms such as composerDraftsAtom go to a real registry; strings are stubbed state.
+  return {
+    appAtomRegistry: {
+      get: (atom: unknown) =>
+        typeof atom === "string"
+          ? stub.get(atom)
+          : registry.get(atom as Parameters<typeof registry.get>[0]),
+      set: (atom: unknown, value: unknown) =>
+        typeof atom === "string"
+          ? stub.set(atom, value as boolean)
+          : registry.set(atom as Parameters<typeof registry.set>[0], value),
+    },
+  };
+});
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) => command,
 }));
@@ -136,10 +178,9 @@ vi.mock("../../state/thread-order", () => ({
   },
 }));
 vi.mock("../../state/threads", () => ({
-  environmentThreadShells: {
-    threadShellsAtom: "thread-shells",
-    navigationThreadShellsAtom: "thread-shells",
-  },
+  environmentThreadShells: { threadShellsAtom: "thread-shells" },
+  steadyNavigationThreadShellsAtom: "thread-shells",
+  steadyShellsHoldingAtom: "steady-shells-holding",
   threadEnvironment: Object.fromEntries(
     [
       "archive",
@@ -154,31 +195,35 @@ vi.mock("../../state/threads", () => ({
       "reorderPin",
       "reorderActive",
       "updateMetadata",
+      "regenerateTitle",
     ].map((action) => [
       action,
       async (request: {
         environmentId: string;
-        input: { threadId: string; orderKey?: string };
+        input: {
+          threadId: string;
+          orderKey?: string;
+        };
       }) => {
         state.requests.push({ action, ...request });
+        await state.heldActions.get(action);
         if (!state.scopes.get(request.environmentId)?.has(AuthOrchestrationOperateScope)) {
           return AsyncResult.failure(Cause.fail(new Error("Thread operation denied")));
         }
         if (action === state.failedAction)
           return AsyncResult.failure(Cause.fail(new Error("Server rejected action")));
         state.afterRequest?.();
-        return AsyncResult.success(undefined);
+        return AsyncResult.success(action === "regenerateTitle" ? state.titleOutcome : undefined);
       },
     ]),
   ),
 }));
-
+import { appAtomRegistry } from "../../state/atom-registry";
+import { composerDraftsAtom } from "../../state/use-composer-drafts";
 import { dismissThreadUndoNotice, readThreadUndoNotice } from "./thread-undo-notice";
 import { useThreadListActions } from "./useThreadListActions";
-
 const primaryEnvironmentId = EnvironmentId.make("primary");
 const otherEnvironmentId = EnvironmentId.make("other");
-
 function makeThread(input: Partial<EnvironmentThreadShell> = {}): EnvironmentThreadShell {
   return makeThreadShellFixture({
     id: ThreadId.make("thread"),
@@ -189,7 +234,6 @@ function makeThread(input: Partial<EnvironmentThreadShell> = {}): EnvironmentThr
     ...input,
   });
 }
-
 const mutationCases = [
   ["archiveThread", "archive"],
   ["settleThread", "settle"],
@@ -198,16 +242,18 @@ const mutationCases = [
   ["unsnoozeThread", "unsnooze"],
   ["pinThread", "pin"],
   ["unpinThread", "unpin"],
-  ["regenerateThreadTitle", "updateMetadata"],
+  ["regenerateThreadTitle", "regenerateTitle"],
 ] as const;
-
 beforeEach(() => {
   state.unsupportedCapabilities = false;
   state.connectedEnvironmentIds = [primaryEnvironmentId, otherEnvironmentId];
   state.failedAction = null;
+  state.titleOutcome = null;
   state.archivedRefreshes = [];
+  state.onArchivedRefresh = undefined;
   state.pendingOrder = null;
   state.dropBusy = false;
+  state.holdingRows = false;
   state.scopes = new Map([
     [primaryEnvironmentId, new Set([AuthOrchestrationOperateScope])],
     [otherEnvironmentId, new Set<string>()],
@@ -217,48 +263,56 @@ beforeEach(() => {
   state.dialogs = [];
   state.alerts = [];
   state.afterRequest = undefined;
+  state.heldActions = new Map();
 });
-
 afterEach(() => {
   dismissThreadUndoNotice();
   vi.useRealTimers();
   vi.unstubAllEnvs();
 });
-
+it("reports a failed title generation as unsuccessful and allows another request", async () => {
+  const actions = useThreadListActions();
+  const thread = makeThread();
+  state.titleOutcome = { status: "failed", message: "Model unavailable" };
+  expect(await actions.regenerateThreadTitle(thread)).toBe(false);
+  state.titleOutcome = { status: "renamed" };
+  expect(await actions.regenerateThreadTitle(thread)).toBe(true);
+});
 describe("thread list operation permissions", () => {
   it.each(mutationCases)(
     "%s rejects a retained callback after its environment loses permission",
     async (handler) => {
       const actions = useThreadListActions();
       state.scopes.get(primaryEnvironmentId)!.clear();
-
       await actions[handler](makeThread(), "2099-01-01T00:00:00.000Z");
-
       expect(state.requests).toEqual([]);
     },
   );
-
   it.each(mutationCases)("%s requires the target environment's permission", async (handler) => {
     await useThreadListActions()[handler](
       makeThread({ environmentId: otherEnvironmentId }),
       "2099-01-01T00:00:00.000Z",
     );
-
     expect(state.requests).toEqual([]);
   });
-
-  it("rechecks permission after a retained delete confirmation", async () => {
+  it("rechecks permission after a retained delete confirmation, then clears the draft", async () => {
+    const draft = { text: "unsent", attachments: [] };
+    appAtomRegistry.set(composerDraftsAtom, { "primary:thread": draft, "primary:other": draft });
     useThreadListActions().confirmDeleteThread(makeThread());
     const confirm = state.dialogs[0]?.onConfirm;
     expect(confirm).toBeTypeOf("function");
     state.scopes.get(primaryEnvironmentId)!.clear();
-
     await confirm!();
-
     expect(state.requests).toEqual([]);
+    expect(Object.keys(appAtomRegistry.get(composerDraftsAtom))).toContain("primary:thread");
+    state.scopes.get(primaryEnvironmentId)!.add(AuthOrchestrationOperateScope);
+    const deleted = new Promise<void>((resolve) => (state.onArchivedRefresh = resolve));
+    confirm!();
+    await deleted;
+    expect(state.requests).toEqual([expect.objectContaining({ action: "delete" })]);
+    expect(Object.keys(appAtomRegistry.get(composerDraftsAtom))).toEqual(["primary:other"]);
   });
 });
-
 describe("pinned thread operation permissions", () => {
   it("checks every materialization target before writing any keys", async () => {
     const moved = makeThread({ pinnedAt: "2026-09-02T00:00:00.000Z" });
@@ -271,11 +325,9 @@ describe("pinned thread operation permissions", () => {
         createdAt: "2026-09-02T00:00:00.000Z",
       }),
     ];
-
     expect(await useThreadListActions().moveThread(moved, "up")).toBe(false);
     expect(state.requests).toEqual([]);
   });
-
   it("moves a keyed thread past a read-only neighbor without writing that neighbor", async () => {
     const moved = makeThread({ pinnedAt: "2026-09-02T00:00:00.000Z", pinOrderKey: "m" });
     state.shells = [
@@ -287,13 +339,16 @@ describe("pinned thread operation permissions", () => {
         pinOrderKey: "g",
       }),
     ];
-
+    // Rows that wait to show can hold order keys the server has replaced.
+    state.holdingRows = true;
+    expect(await useThreadListActions().moveThread(moved, "up")).toBe(false);
+    expect(state.requests).toEqual([]);
+    state.holdingRows = false;
     expect(await useThreadListActions().moveThread(moved, "up")).toBe(true);
     expect(state.requests).toEqual([
       expect.objectContaining({ action: "reorderPin", environmentId: primaryEnvironmentId }),
     ]);
   });
-
   it("rechecks permission between materialization writes", async () => {
     const moved = makeThread({ pinnedAt: "2026-09-02T00:00:00.000Z" });
     state.shells = [
@@ -305,12 +360,10 @@ describe("pinned thread operation permissions", () => {
       }),
     ];
     state.afterRequest = () => state.scopes.get(primaryEnvironmentId)!.clear();
-
     expect(await useThreadListActions().moveThread(moved, "up")).toBe(false);
     expect(state.requests).toHaveLength(1);
   });
 });
-
 describe("thread reorder connection availability", () => {
   it.each(["active", "pinned"] as const)(
     "rejects %s materialization involving a cached capable offline neighbor",
@@ -329,13 +382,10 @@ describe("thread reorder connection availability", () => {
       ];
       state.scopes.get(otherEnvironmentId)?.add(AuthOrchestrationOperateScope);
       state.connectedEnvironmentIds = [primaryEnvironmentId];
-
       const { moveThread } = useThreadListActions();
       expect(await moveThread(moved, "up")).toBe(false);
       expect(state.requests).toEqual([]);
-
       state.connectedEnvironmentIds = [primaryEnvironmentId, otherEnvironmentId];
-
       expect(await moveThread(moved, "up")).toBe(true);
       expect(state.requests).toHaveLength(2);
       expect(new Set(state.requests.map(({ environmentId }) => environmentId))).toEqual(
@@ -343,7 +393,6 @@ describe("thread reorder connection availability", () => {
       );
     },
   );
-
   it.each(["active", "pinned"] as const)(
     "uses the latest connection state in a retained %s move callback",
     async (section) => {
@@ -364,12 +413,9 @@ describe("thread reorder connection availability", () => {
       ];
       const { moveThread } = useThreadListActions();
       state.connectedEnvironmentIds = [];
-
       expect(await moveThread(moved, "up")).toBe(false);
       expect(state.requests).toEqual([]);
-
       state.connectedEnvironmentIds = [primaryEnvironmentId];
-
       expect(await moveThread(moved, "up")).toBe(true);
       expect(state.requests).toEqual([
         expect.objectContaining({
@@ -380,7 +426,6 @@ describe("thread reorder connection availability", () => {
     },
   );
 });
-
 describe("thread action undo", () => {
   it.each([
     ["settleThread", "settle", "Settled", "unsettle"],
@@ -391,7 +436,6 @@ describe("thread action undo", () => {
       const actions = useThreadListActions();
       const thread = makeThread();
       const first = actions[handler](thread, "2099-01-01T09:00:00.000Z");
-
       expect(await actions[handler](thread, "2099-01-01T09:00:00.000Z")).toBe(false);
       expect(await first).toBe(true);
       expect(state.requests.map(({ action }) => action)).toEqual([action]);
@@ -400,7 +444,6 @@ describe("thread action undo", () => {
       expect(state.requests.map(({ action }) => action)).toEqual([action, inverse]);
     },
   );
-
   it("keeps the latest unpin undo after concurrent unpin requests", async () => {
     const actions = useThreadListActions();
     const thread = makeThread();
@@ -412,7 +455,6 @@ describe("thread action undo", () => {
     await readThreadUndoNotice()!.undo();
     expect(state.requests.map(({ action }) => action)).toEqual(["unpin", "unpin", "pin"]);
   });
-
   it("rejects a concurrent archive request without sending another mutation", async () => {
     const actions = useThreadListActions();
     const thread = makeThread();
@@ -422,7 +464,20 @@ describe("thread action undo", () => {
     expect(state.requests.map(({ action }) => action)).toEqual(["archive"]);
     expect(state.archivedRefreshes).toEqual([primaryEnvironmentId]);
   });
-
+  it("sends a different action while one is pending for the same thread", async () => {
+    const actions = useThreadListActions();
+    const thread = makeThread();
+    const settleResponse = Promise.withResolvers<void>();
+    state.heldActions.set("settle", settleResponse.promise);
+    const pending = [
+      actions.settleThread(thread),
+      actions.unsettleThread(thread),
+      actions.settleThread(thread),
+    ];
+    settleResponse.resolve();
+    expect(await Promise.all(pending)).toEqual([true, true, true]);
+    expect(state.requests.map(({ action }) => action)).toEqual(["settle", "unsettle", "settle"]);
+  });
   it("restores pin placement and snooze after settling, only once", async () => {
     const thread = makeThread({
       pinnedAt: "2026-09-02T00:00:00.000Z",
@@ -447,7 +502,6 @@ describe("thread action undo", () => {
     });
     expect(readThreadUndoNotice()).toBeNull();
   });
-
   // regression: #21401 restore archive and thread action undo
   it("wakes a snoozed thread through the undo action", async () => {
     const thread = makeThread();
@@ -460,7 +514,6 @@ describe("thread action undo", () => {
       input: { threadId: thread.id, reason: "user" },
     });
   });
-
   it.each([null, "2099-01-01T09:00:00.000Z", "2000-01-01T09:00:00.000Z"])(
     "restores an unpinned thread's previous position and unexpired snooze (%s)",
     async (snoozedUntil) => {
@@ -490,7 +543,24 @@ describe("thread action undo", () => {
       }
     },
   );
-
+  it.each(["settleThread", "unpinThread"] as const)(
+    "%s plans its undo from the live row when the list holds an older one",
+    async (handler) => {
+      const held = makeThread({ pinnedAt: "2026-09-02T00:00:00.000Z", pinOrderKey: "m" });
+      const live = makeThread({
+        pinnedAt: "2026-09-02T00:00:00.000Z",
+        pinOrderKey: "t",
+        snoozedUntil: "2099-01-01T09:00:00.000Z",
+      });
+      state.shells = [live];
+      await useThreadListActions()[handler](held);
+      await readThreadUndoNotice()!.undo();
+      expect(state.requests.slice(-2)).toMatchObject([
+        { action: "pin", input: { threadId: live.id, orderKey: "t" } },
+        { action: "snooze", input: { threadId: live.id, snoozedUntil: live.snoozedUntil } },
+      ]);
+    },
+  );
   // regression: #21401 restore archive and thread action undo
   it("does not restore snooze if undoing an unpin fails", async () => {
     const thread = makeThread({
@@ -502,7 +572,6 @@ describe("thread action undo", () => {
     await readThreadUndoNotice()!.undo();
     expect(state.requests.map(({ action }) => action)).toEqual(["unpin", "pin"]);
   });
-
   it("invalidates a retained undo when another hook pins the thread", async () => {
     const thread = makeThread();
     await useThreadListActions().unpinThread(thread);
@@ -512,14 +581,12 @@ describe("thread action undo", () => {
     expect(state.requests.map(({ action }) => action)).toEqual(["unpin", "pin"]);
     expect(readThreadUndoNotice()).toBeNull();
   });
-
   // regression: #21401 restore archive and thread action undo
   it("does not offer undo for a failed action", async () => {
     state.failedAction = "settle";
     expect(await useThreadListActions().settleThread(makeThread())).toBe(false);
     expect(readThreadUndoNotice()).toBeNull();
   });
-
   it("stops restoring after a failed inverse command", async () => {
     const thread = makeThread({
       pinnedAt: "2026-09-02T00:00:00.000Z",
@@ -531,33 +598,34 @@ describe("thread action undo", () => {
     expect(state.requests.map(({ action }) => action)).toEqual(["settle", "unsettle"]);
     expect(state.alerts.at(-1)?.title).toBe("Could not un-settle thread");
   });
-
   it("rechecks the destination permission before undoing", async () => {
     await useThreadListActions().unpinThread(makeThread());
     state.scopes.get(primaryEnvironmentId)!.clear();
     await readThreadUndoNotice()!.undo();
     expect(state.requests.map(({ action }) => action)).toEqual(["unpin"]);
   });
-
   // regression: #21401 restore archive and thread action undo
   it("expires undo after five seconds", async () => {
     vi.useFakeTimers();
     await useThreadListActions().unpinThread(makeThread());
     const undo = readThreadUndoNotice()!.undo;
-    vi.advanceTimersByTime(5_000);
+    vi.advanceTimersByTime(5000);
     expect(readThreadUndoNotice()).toBeNull();
     await undo();
     expect(state.requests.map(({ action }) => action)).toEqual(["unpin"]);
   });
-
-  // regression: #21401 restore archive and thread action undo
-  it("refreshes the archive after archiving on a settlement-capable server", async () => {
-    await useThreadListActions().archiveThread(makeThread());
-    expect(state.requests.map(({ action }) => action)).toEqual(["archive"]);
-    expect(state.archivedRefreshes).toEqual([primaryEnvironmentId]);
+  it("keeps the earlier Undo until archiving succeeds", async () => {
+    const actions = useThreadListActions();
+    const thread = makeThread();
+    await actions.settleThread(thread);
+    state.failedAction = "archive";
+    expect(await actions.archiveThread(thread)).toBe(false);
+    expect(readThreadUndoNotice()?.action).toBe("Settled");
+    state.failedAction = null;
+    expect(await actions.archiveThread(thread)).toBe(true);
+    expect(readThreadUndoNotice()).toBeNull();
   });
 });
-
 describe("thread archive guard", () => {
   it("keeps active provider runs out of the archive", async () => {
     const thread = makeThread({
@@ -574,9 +642,12 @@ describe("thread archive guard", () => {
     expect(state.requests).toEqual([]);
     expect(state.archivedRefreshes).toEqual([]);
     expect(state.alerts.at(-1)?.title).toBe("Could not archive thread");
+    // A list can hold a row from before the run started.
+    state.shells = [thread];
+    expect(await useThreadListActions().archiveThread(makeThread())).toBe(false);
+    expect(state.requests).toEqual([]);
   });
 });
-
 describe("older server capability guards", () => {
   it.each(mutationCases.filter(([method]) => method !== "archiveThread"))(
     "refuses %s when a connected server omits its capability",

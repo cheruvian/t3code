@@ -37,7 +37,7 @@ it("preserves the caller's project, compiler arguments, and diagnostic exit code
     );
     const invalid = check();
     expect(invalid.error).toBeUndefined();
-    expect(invalid.status).toBe(1);
+    expect(invalid.status).toBe(2);
     expect(invalid.stdout).toContain("TS2322");
     expect(invalid.stdout).toContain("effect(globalDate)");
 

@@ -1,3 +1,4 @@
+// @effect-diagnostics globalDate:off - The CDP recorder fixture uses the browser wall clock for copy-key windows.
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 // @effect-diagnostics globalFetchInEffect:off - Consumer bridge fixtures exercise real loopback HTTP without a browser or vault.
@@ -71,6 +72,7 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
 function makeFrame() {
   const frame = {
     copy: "",
+    copyAt: 0,
     detached: false,
     isDetached: () => frame.detached,
     recording: Promise.withResolvers<void>(),
@@ -95,14 +97,33 @@ function makeSession(frame?: ReturnType<typeof makeFrame>) {
         return { data: header.toString("base64") };
       }
       if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
-      if (method === "Page.createIsolatedWorld") return { executionContextId: 7 };
+      if (method === "Page.createIsolatedWorld") {
+        const contexts: Record<string, number> = {
+          "t3-preview-viewport": 9,
+          "t3-preview-title": 11,
+          "t3-preview": 1,
+        };
+        return { executionContextId: contexts[(input as { worldName: string }).worldName] ?? 7 };
+      }
+      if (method === "Runtime.evaluate" && (input as { contextId?: number }).contextId === 11)
+        return new Promise(() => {});
+      if (method === "Runtime.evaluate" && (input as { contextId?: number }).contextId === 1)
+        return { result: { value: [] } };
       if (method === "Page.addScriptToEvaluateOnNewDocument") frame?.recording.resolve();
       if (method === "Input.dispatchKeyEvent" && (input as { commands?: unknown }).commands) {
-        if (focusedFrame) focusedFrame.copy = keyCopy || focusedFrame.copy;
-        else pageCopy = keyCopy || pageCopy;
+        if (focusedFrame) {
+          focusedFrame.copy = keyCopy;
+          focusedFrame.copyAt = Date.now();
+        } else pageCopy = keyCopy;
       }
       if (method === "Runtime.evaluate" && (input as { contextId?: number }).contextId === 7) {
-        const value = frame ? frame.copy : pageCopy;
+        const expression = (input as { expression: string }).expression;
+        const window = /takeCopy\?\.\((\d+), (\d+)\)/.exec(expression);
+        const inWindow =
+          !frame ||
+          !window ||
+          (frame.copyAt >= Number(window[1]) && frame.copyAt <= Number(window[2]));
+        const value = inWindow ? (frame ? frame.copy : pageCopy) : "";
         if (frame) frame.copy = "";
         else pageCopy = "";
         return { result: { value } };
@@ -268,6 +289,7 @@ const dependencies = Layer.mergeAll(
     installed: Effect.die("mock Chromium does not need an executable"),
   }),
   Layer.succeed(DesktopChannel.DesktopBrowserChannel, {
+    loadFailure: () => undefined,
     get available() {
       return desktopUnavailable || desktopRendersNext || desktopTabs.size > 0;
     },
@@ -1082,8 +1104,13 @@ it.live("a file picker replaces a stalled viewer backlog instead of being droppe
       yield* Queue.clear(viewer.output);
       stallViewer(viewer, { _tag: "viewport", width: 1, height: 1 });
       accept.resolve(".csv");
-      yield* Effect.promise(() => expect.poll(() => Queue.sizeUnsafe(viewer.output)).toBe(2));
-      expect(yield* Queue.clear(viewer.output)).toEqual([
+      yield* Effect.promise(() =>
+        expect.poll(() => Queue.sizeUnsafe(viewer.output)).toBeLessThan(64),
+      );
+      const delivered = yield* Queue.clear(viewer.output);
+      // A refreshed still may follow the compacted control messages.
+      for (const item of delivered) if (item._tag === "frame") yield* item.ack;
+      expect(delivered.filter((item) => item._tag !== "frame")).toEqual([
         expect.objectContaining({ _tag: "fileChooser", accept: ".csv" }),
         { _tag: "viewport", width: 1, height: 1 },
       ]);

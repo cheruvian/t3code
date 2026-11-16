@@ -13,8 +13,6 @@ import * as Hash from "effect/Hash";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
-import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
-
 import * as BuiltInDrivers from "./builtInDrivers.ts";
 import { sourceControlDefinitions } from "./sourceControlDefinitions.ts";
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";

@@ -7,6 +7,9 @@ import {
 import { ensureClientSettingsHydrated, getClientSettings } from "~/hooks/useSettings";
 import { readEnvironmentScope } from "~/state/session";
 import { isPreviewAvailableFor } from "./previewRuntime";
+import { isWebUrl } from "./webUrl";
+
+export { isWebUrl };
 
 export interface ResolveLinkTargetInput {
   readonly url: string;
@@ -46,15 +49,6 @@ export function isStandaloneWebApp(): boolean {
  * Only http(s) can load in the in-app browser. Anything else — mailto:,
  * vscode://, a bare fragment — belongs to the shell whatever the preference.
  */
-export function isWebUrl(url: string): boolean {
-  try {
-    const { protocol } = new URL(url);
-    return protocol === "http:" || protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
 /** Before hydration, the default "system" would ignore a saved "app" link target. */
 export async function resolveBrowserLinkTargetPreference(): Promise<BrowserLinkTarget> {
   await ensureClientSettingsHydrated();

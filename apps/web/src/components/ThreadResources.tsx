@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { resourceActionLogs, formatResourceActionLog } from "@t3tools/shared/resourceActions";
 
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "./ui/dialog";
@@ -22,7 +22,7 @@ export function ThreadResources({
   turnItems?: Parameters<typeof resourceActionLogs>[0];
 }) {
   const [logsOpen, setLogsOpen] = useState(false);
-  const logs = useMemo(() => resourceActionLogs(turnItems), [turnItems]);
+  const logs = resourceActionLogs(turnItems);
   const request = useAtomCommand(projectEnvironment.resource);
   const locks = (project.resourceLocks ?? []).filter((lock) => lock.threadId === threadId);
   if (locks.length === 0 && logs.length === 0) return null;

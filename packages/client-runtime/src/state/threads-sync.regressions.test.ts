@@ -1507,7 +1507,7 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
-  it.effect("marks a cold definitive HTTP miss deleted without socket subscribe or retry", () =>
+  it.effect("backs off repeated cold HTTP misses without opening a socket subscription", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
         httpSnapshot: { _tag: "missing" },
@@ -1524,18 +1524,14 @@ describe("EnvironmentThreads", () => {
       expect(yield* Ref.get(harness.removedThreads)).toEqual([THREAD_ID]);
       expect(yield* SubscriptionRef.get(harness.subscriptionCount)).toBe(0);
 
-      yield* TestClock.adjust("1 second");
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        yield* Effect.yieldNow;
-      }
-      yield* harness.replaceSession;
-      yield* Queue.offer(harness.wakeups, "application-active");
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        yield* Effect.yieldNow;
-      }
+      yield* TestClock.adjust("250 millis");
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(2);
+      yield* TestClock.adjust("499 millis");
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(2);
+      yield* TestClock.adjust("1 millis");
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(3);
       expect(yield* SubscriptionRef.get(harness.subscriptionCount)).toBe(0);
       expect(yield* Ref.get(harness.retryCount)).toBe(0);
-      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
       expect((yield* Ref.get(harness.latest)).status).toBe("deleted");
     }),
   );

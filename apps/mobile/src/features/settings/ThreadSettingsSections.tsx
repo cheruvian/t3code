@@ -9,9 +9,9 @@ import { AutoSettleDaysField } from "./components/AutoSettleDaysField";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
+import type { ComponentProps } from "react";
 import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -33,10 +33,8 @@ import {
   resolveMobileSettingsTargets,
   uniformMobileSetting,
 } from "./settings-scoped-server";
-
 export function SettingsLabsRouteScreen() {
   const insets = useSafeAreaInsets();
-
   return (
     <SettingsScreen title="Labs">
       <ScrollView
@@ -47,13 +45,24 @@ export function SettingsLabsRouteScreen() {
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
         <ThreadOrderSettings />
-        <BetaSettingsSection />
-        <LegacySettingsSection />
+        <MachineBetaSection
+          title="Linked environments"
+          icon="link"
+          capability="peerLinks"
+          setting="linkedEnvironmentsEnabled"
+          description="Let agents on a machine work on your other machines, and theirs on it. Turn it on for each machine. While off, nothing new starts over a link; running tasks finish."
+        />
+        <MachineBetaSection
+          title="Fast worktree checkout"
+          icon="bolt.circle"
+          capability="fastWorktreeCheckout"
+          setting="fastWorktreeCheckout"
+          description="On a Mac, clone new worktrees from a checkout cached in the T3 home folder instead of writing every file. Uses Git’s normal checkout when it can’t. Turning it off deletes the cache."
+        />
       </ScrollView>
     </SettingsScreen>
   );
 }
-
 function ThreadOrderSettings() {
   const allowUnpinnedReorder = useAtomValue(allowUnpinnedReorderAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
@@ -69,9 +78,7 @@ function ThreadOrderSettings() {
     </SettingsSection>
   );
 }
-
-const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_SERVER_SETTINGS.sidebarAutoSettleAfterDays ?? 3;
-
+const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_SERVER_SETTINGS.sidebarAutoSettleAfterDays ?? 7;
 /**
  * Usage-limit and auto-settle rows. The Threads page owns their writes, so they share its queue
  * with the page's other project overrides, and their project override reset.
@@ -84,7 +91,6 @@ export function AutoSettleSettingsRows(props: {
   const selectedProject = projectGroups.find((group) => group.key === selectedProjectKey);
   const writableEnvironments = useEnvironmentsWithScope(selectedTargets, AuthSettingsWriteScope);
   const projectSelected = selectedProjectKey !== null;
-
   const projectMembers = projectSelected
     ? (selectedProject?.members.map((member) => member.project) ?? [])
     : null;
@@ -100,18 +106,15 @@ export function AutoSettleSettingsRows(props: {
     );
   const reference = displayTargets[0] ?? null;
   const referenceSettings = reference?.settings ?? null;
-
   if (reference === null || referenceSettings === null) {
     return null;
   }
-
   const writeToAll = (
     patch: Partial<AutoSettleSettings> & {
       autoResumeLimitedThreads?: boolean;
       snoozeLimitedThreads?: boolean;
     },
   ) => props.write(patch);
-
   const { patch: autoSettlePatch, mismatches } = planAutoSettleSettingsSync(
     {
       environmentId: reference.environment.environmentId,
@@ -125,7 +128,6 @@ export function AutoSettleSettingsRows(props: {
       settings: target.settings,
     })),
   );
-
   const supportsProjectOverrides = displayTargets.every(
     (target) =>
       target.environment.serverConfig.environment.capabilities.projectSettingsOverrides === true,
@@ -135,7 +137,6 @@ export function AutoSettleSettingsRows(props: {
   const disabledFor = (...keys: string[]) =>
     disabled || managedSettingReason(displayTargets, ...keys) !== undefined;
   const afterDays = referenceSettings.sidebarAutoSettleAfterDays;
-
   return (
     <View className="gap-6">
       {!projectSelected ? (
@@ -206,13 +207,11 @@ export function AutoSettleSettingsRows(props: {
     </View>
   );
 }
-
 export function WorkingSectionSettings() {
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const preferences = useAtomValue(mobilePreferencesAtom);
   const workingShelfEnabled =
     AsyncResult.isSuccess(preferences) && preferences.value.workingShelfEnabled !== false;
-
   return (
     <View className="gap-3">
       <SettingsSection title="Sidebar">
@@ -231,13 +230,11 @@ export function WorkingSectionSettings() {
     </View>
   );
 }
-
 export function NewThreadSettingsSection() {
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const preferences = useAtomValue(mobilePreferencesAtom);
   const useLastProject =
     AsyncResult.isSuccess(preferences) && preferences.value.useLastProjectForNewThreads !== false;
-
   return (
     <SettingsSection title="New threads">
       <SettingsSwitchRow
@@ -250,73 +247,63 @@ export function NewThreadSettingsSection() {
     </SettingsSection>
   );
 }
-
-/** Per machine, since each machine's own setting decides whether it links and answers links. */
-function BetaSettingsSection() {
+type MachineBetaSetting = "linkedEnvironmentsEnabled" | "fastWorktreeCheckout";
+/** One switch per connected machine that offers the beta, since each machine's own setting decides. */
+function MachineBetaSection({
+  title,
+  icon,
+  capability,
+  setting,
+  description,
+}: {
+  readonly title: string;
+  readonly icon: ComponentProps<typeof SettingsSwitchRow>["icon"];
+  readonly capability: "peerLinks" | "fastWorktreeCheckout";
+  readonly setting: MachineBetaSetting;
+  readonly description: string;
+}) {
   const { environments } = useEnvironments();
   const supported = environments.filter(
     (environment) =>
       environment.connection.phase === "connected" &&
-      environment.serverConfig?.environment.capabilities.peerLinks === true,
+      environment.serverConfig?.environment.capabilities[capability] === true,
   );
   const writable = useEnvironmentsWithScope(supported, AuthSettingsWriteScope);
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
-    label: "linked environments beta update",
+    label: `${setting} beta update`,
     reportFailure: true,
   });
   if (supported.length === 0) return null;
   return (
     <View className="gap-3">
-      <SettingsSection title="Beta: Linked environments">
+      <SettingsSection title={`Beta: ${title}`}>
         {supported.map((environment) => {
           const policy = environment.serverConfig?.managedPolicy;
-          const managed = isManagedSettingPath(policy, "linkedEnvironmentsEnabled");
+          const managed = isManagedSettingPath(policy, setting);
           return (
             <SettingsSwitchRow
               key={environment.environmentId}
-              icon="link"
+              icon={icon}
               label={environment.label}
               {...(managed ? { subtitle: `Managed by ${policy?.organization}.` } : {})}
-              value={environment.serverConfig?.settings.linkedEnvironmentsEnabled === true}
+              value={environment.serverConfig?.settings[setting] === true}
               disabled={managed || !writable.has(environment.environmentId)}
               onValueChange={(value) =>
                 void updateSettings({
                   environmentId: environment.environmentId,
-                  input: { patch: { linkedEnvironmentsEnabled: value } },
+                  input: {
+                    patch:
+                      setting === "linkedEnvironmentsEnabled"
+                        ? { linkedEnvironmentsEnabled: value }
+                        : { fastWorktreeCheckout: value },
+                  },
                 })
               }
             />
           );
         })}
       </SettingsSection>
-      <Text className="px-2 text-sm text-foreground-muted">
-        Let agents on a machine work on your other machines, and theirs on it. Turn it on for each
-        machine. While it is off, nothing new starts over a link; tasks already running finish.
-      </Text>
-    </View>
-  );
-}
-
-function LegacySettingsSection() {
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
-  const preferences = useAtomValue(mobilePreferencesAtom);
-  const planModeEnabled =
-    AsyncResult.isSuccess(preferences) && preferences.value.planModeEnabled === true;
-
-  return (
-    <View className="gap-3">
-      <SettingsSection title="Legacy">
-        <SettingsSwitchRow
-          icon="hammer"
-          label="Plan Mode"
-          value={planModeEnabled}
-          onValueChange={(value) => savePreferences({ planModeEnabled: value })}
-        />
-      </SettingsSection>
-      <Text className="px-2 text-sm text-foreground-muted">
-        Opt into retired interfaces kept for compatibility. Plan Mode restores the Build/Plan
-        control; otherwise every task runs in Build mode.
-      </Text>
+      <Text className="px-2 text-sm text-foreground-muted">{description}</Text>
     </View>
   );
 }

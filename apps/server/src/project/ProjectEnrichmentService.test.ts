@@ -1,16 +1,16 @@
-import { TestClock } from "effect/testing";
 import { assert, it } from "@effect/vitest";
 import type { RepositoryIdentity } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
-
+import * as TestClock from "effect/testing/TestClock";
 import * as ProjectEnrichment from "./ProjectEnrichmentService.ts";
 import * as ProjectFaviconResolver from "./ProjectFaviconResolver.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
-
 const identity = (workspaceRoot: string, version = 1): RepositoryIdentity => ({
   canonicalKey: `example.test/v${version}${workspaceRoot}`,
   locator: {
@@ -20,7 +20,6 @@ const identity = (workspaceRoot: string, version = 1): RepositoryIdentity => ({
   },
   rootPath: workspaceRoot,
 });
-
 const waitForAvailable = Effect.fn("ProjectEnrichmentServiceTest.waitForAvailable")(function* (
   service: ProjectEnrichment.ProjectEnrichmentService["Service"],
   workspaceRoot: string,
@@ -28,16 +27,27 @@ const waitForAvailable = Effect.fn("ProjectEnrichmentServiceTest.waitForAvailabl
 ) {
   return yield* Effect.scoped(
     Effect.gen(function* () {
-      for (let attempt = 0; attempt < 1000; attempt += 1) {
-        const available = yield* service.peek(workspaceRoot);
-        if (predicate(available)) return available;
-        yield* Effect.yieldNow;
+      const changes = yield* service.subscribeChanges;
+      const available = yield* service.peek(workspaceRoot);
+      if (predicate(available)) return available;
+      for (;;) {
+        const change = yield* PubSub.take(changes);
+        if (change.workspaceRoot === workspaceRoot && predicate(change.enrichment))
+          return change.enrichment;
       }
-      return yield* Effect.die(new Error("Project enrichment did not settle."));
     }),
   );
 });
-
+// These in-memory resolvers settle when the TestClock drains runnable fibers.
+const waitForFavicon = (
+  service: ProjectEnrichment.ProjectEnrichmentService["Service"],
+  workspaceRoot: string,
+  expected: string,
+) =>
+  Effect.gen(function* () {
+    yield* TestClock.adjust(0);
+    assert.equal((yield* service.peek(workspaceRoot)).faviconPath, expected);
+  });
 const layer = (
   metadataLayer: Layer.Layer<
     | ProjectFaviconResolver.ProjectFaviconResolver
@@ -48,7 +58,6 @@ const layer = (
   Layer.effect(ProjectEnrichment.ProjectEnrichmentService, ProjectEnrichment.make(options)).pipe(
     Layer.provide(metadataLayer),
   );
-
 it.effect("publishes repository completion while favicon enrichment is still pending", () =>
   Effect.gen(function* () {
     const releaseFavicon = yield* Deferred.make<void>();
@@ -62,12 +71,10 @@ it.effect("publishes repository completion while favicon enrichment is still pen
           Deferred.await(releaseFavicon).pipe(Effect.as(`${workspaceRoot}/favicon.svg`)),
       }),
     );
-
     yield* Effect.gen(function* () {
       const service = yield* ProjectEnrichment.ProjectEnrichmentService;
       const changes = yield* service.subscribeChanges;
       yield* service.request("/completed");
-
       const change = yield* PubSub.take(changes);
       assert.equal(change.workspaceRoot, "/completed");
       assert.isTrue(change.repositoryIdentityResolved);
@@ -76,7 +83,6 @@ it.effect("publishes repository completion while favicon enrichment is still pen
     }).pipe(Effect.provide(layer(layerMetadata)));
   }),
 );
-
 it.effect("keeps repository workers available when every favicon worker is hung", () =>
   Effect.gen(function* () {
     const faviconWorkersStarted = yield* Deferred.make<void>();
@@ -97,20 +103,17 @@ it.effect("keeps repository workers available when every favicon worker is hung"
           }),
       }),
     );
-
     yield* Effect.gen(function* () {
       const service = yield* ProjectEnrichment.ProjectEnrichmentService;
       yield* service.request("/favicon-hung-a");
       yield* service.request("/favicon-hung-b");
       yield* Deferred.await(faviconWorkersStarted);
-
       yield* service.request("/repository-later");
       const available = yield* waitForAvailable(
         service,
         "/repository-later",
         (value) => value.repositoryIdentity !== null,
       );
-
       assert.equal(available.repositoryIdentity?.canonicalKey, "example.test/v1/repository-later");
       assert.equal(yield* Ref.get(faviconStarts), 2);
     }).pipe(
@@ -124,7 +127,6 @@ it.effect("keeps repository workers available when every favicon worker is hung"
     );
   }),
 );
-
 it.effect(
   "reports successful cached null as resolved while cold and failed lookups stay unresolved",
   () =>
@@ -151,32 +153,26 @@ it.effect(
           resolvePath: () => Effect.succeed(null),
         }),
       );
-
       yield* Effect.gen(function* () {
         const service = yield* ProjectEnrichment.ProjectEnrichmentService;
         const changes = yield* service.subscribeChanges;
-
         const cold = yield* service.peek("/never-requested");
         assert.isNull(cold.repositoryIdentity);
         assert.isFalse(cold.repositoryIdentityResolved);
-
         const inFlight = yield* service.getAvailable("/in-flight");
         assert.isNull(inFlight.repositoryIdentity);
         assert.isFalse(inFlight.repositoryIdentityResolved);
         yield* Deferred.await(repositoryStarted);
         assert.isFalse((yield* service.peek("/in-flight")).repositoryIdentityResolved);
-
         yield* service.request("/no-remote");
         const nullChange = yield* PubSub.take(changes);
         assert.equal(nullChange.workspaceRoot, "/no-remote");
         assert.isTrue(nullChange.repositoryIdentityResolved);
         assert.isNull(nullChange.enrichment.repositoryIdentity);
         assert.isTrue(nullChange.enrichment.repositoryIdentityResolved);
-
         const warmNull = yield* service.getAvailable("/no-remote");
         assert.isNull(warmNull.repositoryIdentity);
         assert.isTrue(warmNull.repositoryIdentityResolved);
-
         yield* service.request("/fails");
         const failChange = yield* PubSub.take(changes);
         assert.equal(failChange.workspaceRoot, "/fails");
@@ -187,7 +183,6 @@ it.effect(
       }).pipe(Effect.provide(layer(layerMetadata)));
     }),
 );
-
 it.effect("deduplicates requests, bounds pending work, and reloads invalidated roots", () =>
   Effect.gen(function* () {
     const firstStarted = yield* Deferred.make<void>();
@@ -211,7 +206,6 @@ it.effect("deduplicates requests, bounds pending work, and reloads invalidated r
         resolvePath: (workspaceRoot) => Effect.succeed(`${workspaceRoot}/favicon.svg`),
       }),
     );
-
     yield* Effect.gen(function* () {
       const service = yield* ProjectEnrichment.ProjectEnrichmentService;
       yield* Effect.forEach(Array.from({ length: 20 }), () => service.request("/first"), {
@@ -222,15 +216,12 @@ it.effect("deduplicates requests, bounds pending work, and reloads invalidated r
       yield* service.request("/second");
       yield* service.request("/dropped");
       assert.deepEqual(yield* Ref.get(repositoryCalls), ["/first"]);
-
       yield* Deferred.succeed(releaseFirst, undefined);
       yield* waitForAvailable(service, "/second", (value) => value.repositoryIdentity !== null);
       assert.deepEqual(yield* Ref.get(repositoryCalls), ["/first", "/second"]);
-
       yield* service.request("/dropped");
       yield* waitForAvailable(service, "/dropped", (value) => value.repositoryIdentity !== null);
       assert.deepEqual(yield* Ref.get(repositoryCalls), ["/first", "/second", "/dropped"]);
-
       yield* Ref.set(version, 2);
       yield* service.invalidate(["/first"]);
       const invalidated = yield* service.getAvailable("/first");
@@ -258,7 +249,6 @@ it.effect("deduplicates requests, bounds pending work, and reloads invalidated r
     );
   }),
 );
-
 it.effect("rescans a favicon only after 15 minutes", () =>
   Effect.gen(function* () {
     const faviconScans = yield* Ref.make(0);
@@ -274,34 +264,22 @@ it.effect("rescans a favicon only after 15 minutes", () =>
           ),
       }),
     );
-
     yield* Effect.gen(function* () {
       const service = yield* ProjectEnrichment.ProjectEnrichmentService;
       yield* service.getAvailable("/repo");
-      yield* waitForAvailable(
-        service,
-        "/repo",
-        (value) => value.faviconPath === "/repo/favicon-1.svg",
-      );
-
+      yield* waitForFavicon(service, "/repo", "/repo/favicon-1.svg");
       for (let minute = 1; minute < 15; minute += 1) {
         yield* TestClock.adjust("1 minute");
         yield* service.getAvailable("/repo");
       }
       assert.equal(yield* Ref.get(faviconScans), 1);
-
       yield* TestClock.adjust("1 minute");
       yield* service.getAvailable("/repo");
-      yield* waitForAvailable(
-        service,
-        "/repo",
-        (value) => value.faviconPath === "/repo/favicon-2.svg",
-      );
+      yield* waitForFavicon(service, "/repo", "/repo/favicon-2.svg");
       assert.equal(yield* Ref.get(faviconScans), 2);
     }).pipe(Effect.provide(layer(layerMetadata)));
   }),
 );
-
 it.effect(
   "follows repository identity changes within a minute without rescanning the favicon",
   () =>
@@ -320,13 +298,11 @@ it.effect(
           resolvePath: () => Ref.update(faviconScans, (count) => count + 1).pipe(Effect.as(null)),
         }),
       );
-
       yield* Effect.gen(function* () {
         const service = yield* ProjectEnrichment.ProjectEnrichmentService;
         yield* service.getAvailable("/folder");
         yield* waitForAvailable(service, "/folder", (value) => value.repositoryIdentityResolved);
         assert.equal((yield* service.peek("/folder")).repositoryIdentity, null);
-
         for (const version of [1, 2]) {
           yield* Ref.set(remoteVersion, version);
           yield* TestClock.adjust("1 minute");
@@ -345,7 +321,6 @@ it.effect(
       }).pipe(Effect.provide(layer(layerMetadata)));
     }),
 );
-
 it.effect(
   "keeps identity readable during an expired refresh and clears it after confirmed removal",
   () =>
@@ -393,7 +368,6 @@ it.effect(
       }).pipe(Effect.provide(layer(metadata)));
     }),
 );
-
 it.effect(
   "retains resolved identity after a failed refresh and retries after the failure TTL",
   () =>
@@ -431,4 +405,121 @@ it.effect(
         assert.deepEqual(retried.enrichment.repositoryIdentity, identity("/repo", 3));
       }).pipe(Effect.provide(layer(metadata)));
     }),
+);
+
+it.effect(
+  "keeps the last resolved repository identity after it expires and while it refreshes",
+  () =>
+    Effect.gen(function* () {
+      const refreshStarted = yield* Deferred.make<void>();
+      const releaseRefresh = yield* Deferred.make<void>();
+      const resolveCalls = yield* Ref.make(0);
+      const layerMetadata = Layer.merge(
+        Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+          resolve: (workspaceRoot) =>
+            Effect.gen(function* () {
+              if ((yield* Ref.updateAndGet(resolveCalls, (count) => count + 1)) > 1) {
+                yield* Deferred.succeed(refreshStarted, undefined);
+                yield* Deferred.await(releaseRefresh);
+              }
+              return identity(workspaceRoot);
+            }),
+        }),
+        Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
+          invalidate: () => Effect.void,
+          resolvePath: () => Effect.succeed(null),
+        }),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* ProjectEnrichment.ProjectEnrichmentService;
+        const changes = yield* service.subscribeChanges;
+        yield* service.request("/widgets");
+        const resolved = yield* PubSub.take(changes);
+        assert.equal(
+          resolved.enrichment.repositoryIdentity?.canonicalKey,
+          "example.test/v1/widgets",
+        );
+        yield* TestClock.adjust(Duration.seconds(61));
+        const expired = yield* service.getAvailable("/widgets");
+        assert.equal(
+          expired.repositoryIdentity?.canonicalKey,
+          "example.test/v1/widgets",
+          "an expired repository identity should still be returned until a refresh replaces it",
+        );
+        yield* Deferred.await(refreshStarted);
+        const refreshing = yield* service.peek("/widgets");
+        assert.equal(
+          refreshing.repositoryIdentity?.canonicalKey,
+          "example.test/v1/widgets",
+          "a repository identity should still be returned while its refresh is pending",
+        );
+      }).pipe(Effect.provide(layer(layerMetadata)));
+    }),
+);
+it.effect("does not let a lookup invalidated mid-flight replace a newer last identity", () =>
+  Effect.gen(function* () {
+    const firstStarted = yield* Deferred.make<void>();
+    const releaseFirst = yield* Deferred.make<void>();
+    const resolveCalls = yield* Ref.make(0);
+    const layerMetadata = Layer.merge(
+      Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+        resolve: (workspaceRoot) =>
+          Effect.gen(function* () {
+            const call = yield* Ref.updateAndGet(resolveCalls, (count) => count + 1);
+            if (call === 1) {
+              yield* Deferred.succeed(firstStarted, undefined);
+              yield* Deferred.await(releaseFirst);
+            }
+            return identity(workspaceRoot, call);
+          }),
+      }),
+      Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
+        invalidate: () => Effect.void,
+        resolvePath: () => Effect.succeed(null),
+      }),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ProjectEnrichment.ProjectEnrichmentService;
+      const firstLookup = yield* Effect.forkChild(service.readRepositoryIdentity("/widgets"));
+      yield* Deferred.await(firstStarted);
+      yield* service.invalidate(["/widgets"]);
+      const newer = yield* service.readRepositoryIdentity("/widgets");
+      assert.equal(newer?.canonicalKey, "example.test/v2/widgets");
+      yield* Deferred.succeed(releaseFirst, undefined);
+      yield* Fiber.join(firstLookup);
+      yield* TestClock.adjust(Duration.seconds(61));
+      const expired = yield* service.peek("/widgets");
+      assert.equal(expired.repositoryIdentity?.canonicalKey, "example.test/v2/widgets");
+    }).pipe(Effect.provide(layer(layerMetadata)));
+  }),
+);
+it.effect("keeps a lookup's identity when another root is invalidated mid-flight", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const layerMetadata = Layer.merge(
+      Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+        resolve: (workspaceRoot) =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as(identity(workspaceRoot)),
+          ),
+      }),
+      Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
+        invalidate: () => Effect.void,
+        resolvePath: () => Effect.succeed(null),
+      }),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ProjectEnrichment.ProjectEnrichmentService;
+      const lookup = yield* Effect.forkChild(service.readRepositoryIdentity("/widgets"));
+      yield* Deferred.await(started);
+      yield* service.invalidate(["/other"]);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(lookup);
+      yield* TestClock.adjust(Duration.seconds(61));
+      const expired = yield* service.peek("/widgets");
+      assert.equal(expired.repositoryIdentity?.canonicalKey, "example.test/v1/widgets");
+    }).pipe(Effect.provide(layer(layerMetadata)));
+  }),
 );

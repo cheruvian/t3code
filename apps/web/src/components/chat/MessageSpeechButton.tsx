@@ -36,13 +36,9 @@ export function MessageSpeechButton({
         render={
           <Button
             type="button"
-            size="icon-xs"
-            variant={latest ? "secondary" : "ghost"}
-            className={
-              latest
-                ? "size-9 rounded-full text-secondary-foreground sm:size-7"
-                : "size-9 text-muted-foreground hover:text-foreground sm:size-6"
-            }
+            size={latest ? "icon-sm-pill" : "icon-xs"}
+            variant={latest ? "secondary" : "ghost-muted"}
+            className={latest ? "size-9 sm:size-7" : "size-9 sm:size-6"}
             aria-label={label}
             aria-pressed={speaking}
             onClick={() => {

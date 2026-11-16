@@ -52,6 +52,7 @@ describe("ElectronMenu", () => {
       const electronMenu = yield* ElectronMenu.ElectronMenu;
       for (const moveUnavailableLabel of ["Checking destinations…", "No eligible destinations"]) {
         yield* electronMenu.showContextMenu({
+          source: Option.none(),
           window: makeWindow(),
           position: Option.none(),
           items: [{ id: "move-environment", label: moveUnavailableLabel, disabled: true }],
@@ -70,6 +71,7 @@ describe("ElectronMenu", () => {
     Effect.gen(function* () {
       const electronMenu = yield* ElectronMenu.ElectronMenu;
       const selectedItemId = yield* electronMenu.showContextMenu({
+        source: Option.none(),
         window: {} as Electron.BrowserWindow,
         items: [],
         position: Option.none(),
@@ -98,6 +100,7 @@ describe("ElectronMenu", () => {
 
       const electronMenu = yield* ElectronMenu.ElectronMenu;
       const selectedItemId = yield* electronMenu.showContextMenu({
+        source: Option.none(),
         window: makeWindow(),
         items: [{ id: "copy", label: "Copy" }],
         position: Option.none(),
@@ -119,6 +122,7 @@ describe("ElectronMenu", () => {
 
       const electronMenu = yield* ElectronMenu.ElectronMenu;
       const selectedItemId = yield* electronMenu.showContextMenu({
+        source: Option.none(),
         window: makeWindow(2),
         items: [
           { id: "copy", label: "Copy" },
@@ -152,6 +156,7 @@ describe("ElectronMenu", () => {
 
       const electronMenu = yield* ElectronMenu.ElectronMenu;
       yield* electronMenu.showContextMenu({
+        source: Option.none(),
         window: makeWindow(),
         items: [
           { id: "copy", label: "Copy" },
@@ -259,6 +264,7 @@ describe("ElectronMenu", () => {
       const electronMenu = yield* ElectronMenu.ElectronMenu;
       const exit = yield* Effect.exit(
         electronMenu.showContextMenu({
+          source: Option.none(),
           window: { id: 42 } as Electron.BrowserWindow,
           items: [{ id: "copy", label: "Copy" }],
           position: Option.none(),

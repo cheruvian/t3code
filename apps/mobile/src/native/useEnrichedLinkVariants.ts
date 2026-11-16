@@ -1,4 +1,5 @@
 import { resolvedMarkdownFileHref } from "@t3tools/client-runtime/markdown-file-resolution";
+import { modelChipIcon } from "../lib/contextChipIconSource";
 import { useMemo } from "react";
 import { Image } from "react-native";
 import type { LinkPillContent, MarkdownStyle } from "react-native-enriched-markdown";
@@ -19,10 +20,11 @@ import { type EnrichedFileLink } from "../lib/enrichedFileLinks";
 import {
   enrichedContextLinkPresentation,
   enrichedLinkVariantPattern,
-  enrichedSkillDisplayName,
+  enrichedModelReference,
   enrichedSkillReference,
   enrichedThreadLinkPresentation,
 } from "../lib/enrichedLinkPresentation";
+import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
 
 function chipCustomization(
   chip: ReturnType<typeof enrichedContextLinkPresentation>,
@@ -63,7 +65,7 @@ function presentation(
   url: string,
   props: Pick<
     SelectableMarkdownTextProps,
-    "linkCustomization" | "skills" | "textStyle" | "fileResolutions"
+    "linkCustomization" | "skills" | "models" | "textStyle" | "fileResolutions"
   >,
   fileLinks?: ReadonlyMap<string, EnrichedFileLink>,
 ) {
@@ -75,10 +77,22 @@ function presentation(
   const skill = enrichedSkillReference(url, props.skills);
   if (skill)
     return {
-      label: enrichedSkillDisplayName(skill),
+      label: formatProviderSkillDisplayName(skill),
       icon: CONTEXT_CHIP_ICON_SOURCES.skill,
       chip: { accent: contextChipPresentation("skill").accent, tintsIcon: true },
     };
+  const model = enrichedModelReference(url, props.models);
+  if (model) {
+    const icon = modelChipIcon(model);
+    return {
+      label: model.label,
+      icon: icon.source,
+      chip: {
+        accent: icon.accent,
+        tintsIcon: icon.tintsIcon,
+      },
+    };
+  }
   const link = resolveMarkdownLinkPresentation(file?.href ?? url);
   if (link.kind === "file") {
     if (!file && props.fileResolutions && !resolvedMarkdownFileHref(url, props.fileResolutions))
@@ -106,7 +120,7 @@ export function useEnrichedLinkVariants(
   fileHrefs: ReadonlySet<string>,
   fileLinks?: ReadonlyMap<string, EnrichedFileLink>,
 ) {
-  const { linkCustomization, skills, textStyle, fileEmbedLabel, fileResolutions } = props;
+  const { linkCustomization, skills, models, textStyle, fileEmbedLabel, fileResolutions } = props;
   const theme = useUniwindTheme();
   const links = useMemo(() => {
     const byUrl = new Map<string, MarkdownLinkCustomization>();
@@ -119,7 +133,11 @@ export function useEnrichedLinkVariants(
             color: textStyle.fileTextColor,
             icon: markdownFileIconSource(resolveMarkdownFileIcon(label)),
           }
-        : presentation(url, { linkCustomization, skills, textStyle, fileResolutions }, fileLinks);
+        : presentation(
+            url,
+            { linkCustomization, skills, models, textStyle, fileResolutions },
+            fileLinks,
+          );
       if (value) byUrl.set(url, value);
     }
     return byUrl;
@@ -127,6 +145,7 @@ export function useEnrichedLinkVariants(
     urls,
     linkCustomization,
     skills,
+    models,
     textStyle,
     fileHrefs,
     fileEmbedLabel,

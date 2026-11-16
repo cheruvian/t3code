@@ -204,7 +204,9 @@ describe("ThreadPullRequestServiceV2 reads", () => {
             shouldRunOpportunisticWork: Effect.succeed(true),
           }),
           Layer.mock(GitManager.GitManager)({}),
-          Layer.mock(PullRequestService.PullRequestService)({}),
+          Layer.mock(PullRequestService.PullRequestService)({
+            notifyLinkedThreadsChanged: Effect.void,
+          }),
           Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
           Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
           NodeCrypto.layer,
@@ -291,7 +293,9 @@ describe("ThreadPullRequestServiceV2 reads", () => {
             shouldRunOpportunisticWork: Effect.succeed(true),
           }),
           Layer.mock(GitManager.GitManager)({}),
-          Layer.mock(PullRequestService.PullRequestService)({}),
+          Layer.mock(PullRequestService.PullRequestService)({
+            notifyLinkedThreadsChanged: Effect.void,
+          }),
           Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
           Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
           NodeCrypto.layer,
@@ -413,7 +417,9 @@ describe("ThreadPullRequestServiceV2 reads", () => {
                 return null;
               }),
           }),
-          Layer.mock(PullRequestService.PullRequestService)({}),
+          Layer.mock(PullRequestService.PullRequestService)({
+            notifyLinkedThreadsChanged: Effect.void,
+          }),
           Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
             resolve: () => Effect.succeed(identity),
           }),
@@ -467,7 +473,9 @@ describe("ThreadPullRequestServiceV2 reads", () => {
             shouldRunOpportunisticWork: Effect.succeed(true),
           }),
           Layer.mock(GitManager.GitManager)({}),
-          Layer.mock(PullRequestService.PullRequestService)({}),
+          Layer.mock(PullRequestService.PullRequestService)({
+            notifyLinkedThreadsChanged: Effect.void,
+          }),
           Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
           Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
           NodeCrypto.layer,

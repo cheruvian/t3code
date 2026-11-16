@@ -14,11 +14,8 @@ import {
 const CHUNK_SIZE = 500;
 
 /**
- * Fills the slim payload column for rows that predate it, so existing threads
- * open as cheaply as new ones instead of waiting to be rewritten. Purely an
- * optimization: reads fall back to `payload_json` for anything this leaves
- * unstamped, so an interrupted or partial run is correct, just slower. Resumes
- * from where it stopped because it only visits rows with no version stamp.
+ * Backfills unstamped slim payloads in bounded batches, resuming after interruption.
+ * Reads fall back to payload_json for rows without a version stamp.
  */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

@@ -19,6 +19,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
@@ -42,6 +43,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ProcessRunner from "../processRunner.ts";
 
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as ProjectEnrichmentService from "./ProjectEnrichmentService.ts";
@@ -220,8 +222,8 @@ const layerProjectServiceDependencies = Layer.mergeAll(
   Layer.provideMerge(layerMetadata),
   Layer.provideMerge(SqlitePersistence.layerMemory),
   Layer.provideMerge(ServerSettings.layerTest()),
-  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "project-service-race-" })),
-  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "project-service-race-" })),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 const waitForProject = Effect.fn("ProjectServiceTest.waitForProject")(function* (
@@ -315,7 +317,14 @@ it.layer(layerTest)("ProjectService", (it) => {
       });
       assert.isFalse(reset.autoPull);
       assert.isNull(reset.projectIcon);
-      assert.equal(reset.faviconPath, hydratedCreated.faviconPath);
+      assert.equal(
+        (yield* waitForProject(
+          service,
+          projectId,
+          (project) => project.faviconPath === hydratedCreated.faviconPath,
+        )).faviconPath,
+        hydratedCreated.faviconPath,
+      );
       assert.isNull(reset.defaultThreadEnvMode);
       assert.deepEqual(
         (yield* service.snapshot).projects.map((project) => project.id),
@@ -467,15 +476,12 @@ it.layer(layerTest)("ProjectService", (it) => {
         ],
       };
       const first = yield* service.update(invalid).pipe(Effect.flip);
-      assert.equal(first._tag, "ProjectOperationError");
+      assert.equal(first._tag, "ProjectInvalidError");
+      assert.include(first.message, "Script IDs must be 1-24 lowercase letters");
       const replayed = yield* service
         .update({ ...invalid, scripts: [{ ...invalid.scripts[0]!, id: "valid" }] })
         .pipe(Effect.flip);
-      assert.equal(replayed._tag, "ProjectOperationError");
-      assert.include(
-        String(replayed._tag === "ProjectOperationError" && replayed.cause),
-        "Script ID",
-      );
+      assert.deepEqual(replayed, first);
       const receipts = yield* sql<{ readonly status: string; readonly aggregate_id: string }>`
         SELECT status, aggregate_id FROM orchestration_command_receipts
         WHERE command_id = ${invalid.commandId}
@@ -561,10 +567,11 @@ it.layer(layerTest)("ProjectService", (it) => {
         title: "Delete retry",
         workspaceRoot: "/work/delete-retry",
       });
+      // Enrichment landing between the two deletes would change the project the retry reads.
       yield* waitForProject(
         service,
         projectId,
-        (project) => project.repositoryIdentity !== null && project.faviconPath !== null,
+        (project) => project.faviconPath !== null && project.repositoryIdentity !== null,
       );
       const input = { commandId: CommandId.make("command:delete-retry:delete"), projectId };
       const deleted = yield* service.delete(input);
@@ -746,6 +753,112 @@ it.effect("invalidates workspace-derived metadata when a project moves", () =>
       );
     }).pipe(Effect.provide(layerTestFor(layerVersionedMetadata)));
   }),
+);
+
+it.effect("resolves a restored icon immediately after reselecting its saved path", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "project-icon-reselect-" });
+    const iconPath = `${cwd}/icon.svg`;
+    const metadata = Layer.merge(
+      Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+        resolve: () => Effect.succeed(null),
+      }),
+      ProjectFaviconResolver.layer.pipe(
+        Layer.provide(layerWorkspacePaths),
+        Layer.provide(T3ProjectFileLoader.layer),
+        Layer.provide(NodeServices.layer),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      const resolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
+      const projectId = ProjectId.make("project:icon-reselect");
+      yield* service.create({
+        commandId: CommandId.make("command:icon-reselect:create"),
+        projectId,
+        title: "Icon reselection",
+        workspaceRoot: cwd,
+      });
+      yield* service.update({
+        commandId: CommandId.make("command:icon-reselect:missing"),
+        projectId,
+        faviconPath: "icon.svg",
+      });
+      assert.isNull(yield* resolver.resolvePath(cwd, "icon.svg"));
+      yield* fileSystem.writeFileString(iconPath, '<svg xmlns="http://www.w3.org/2000/svg"/>');
+      assert.isNull(yield* resolver.resolvePath(cwd, "icon.svg"));
+      yield* service.update({
+        commandId: CommandId.make("command:icon-reselect:restored"),
+        projectId,
+        faviconPath: "icon.svg",
+      });
+      assert.equal(yield* resolver.resolvePath(cwd, "icon.svg"), iconPath);
+    }).pipe(Effect.provide(layerTestFor(metadata)));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("refuses a worktree container as a new project and as a new workspace root", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const processRunner = yield* ProcessRunner.ProcessRunner;
+    const fixture = yield* fileSystem.makeTempDirectoryScoped({ prefix: "project-container-" });
+    const git = (cwd: string, ...args: ReadonlyArray<string>) =>
+      processRunner.run({
+        command: "git",
+        args: ["-C", cwd, "-c", "user.email=t@t", "-c", "user.name=t", ...args],
+      });
+    const source = `${fixture}/source`;
+    const container = `${fixture}/container`;
+    yield* fileSystem.makeDirectory(source);
+    yield* fileSystem.makeDirectory(container);
+    yield* git(source, "init", "-b", "develop");
+    yield* fileSystem.writeFileString(`${source}/README.md`, "readme\n");
+    yield* git(source, "add", "README.md");
+    yield* git(source, "commit", "-m", "init");
+    yield* git(fixture, "clone", "--bare", source, `${container}/.bare`);
+    yield* fileSystem.writeFileString(`${container}/.git`, "gitdir: ./.bare\n");
+    yield* git(container, "worktree", "add", "develop", "develop");
+
+    yield* Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      // As cloned the container is bare; Initialize Git or a config edit clears core.bare.
+      for (const coreBare of ["true", "false"]) {
+        yield* git(container, "config", "core.bare", coreBare);
+        const rejected = yield* service
+          .create({
+            commandId: CommandId.make(`command:container:create:${coreBare}`),
+            projectId: ProjectId.make(`project:container:${coreBare}`),
+            title: "Container",
+            workspaceRoot: container,
+          })
+          .pipe(Effect.flip);
+        assert.equal(rejected._tag, "ProjectInvalidError", `core.bare=${coreBare}`);
+        assert.include(rejected.message, "Add one of its worktrees");
+        assert.isTrue(Option.isNone(yield* service.getByWorkspaceRoot(container)));
+      }
+
+      const projectId = ProjectId.make("project:container:worktree");
+      const worktree = yield* service.create({
+        commandId: CommandId.make("command:container:worktree"),
+        projectId,
+        title: "Worktree",
+        workspaceRoot: `${container}/develop`,
+      });
+      const moved = yield* service
+        .update({
+          commandId: CommandId.make("command:container:move"),
+          projectId,
+          workspaceRoot: container,
+        })
+        .pipe(Effect.flip);
+      assert.equal(moved._tag, "ProjectInvalidError");
+      assert.equal(
+        Option.getOrThrow(yield* service.getById(projectId)).workspaceRoot,
+        worktree.workspaceRoot,
+      );
+    }).pipe(Effect.provide(layerTest));
+  }).pipe(Effect.provide(ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
 it.effect("serializes two projects claiming the same workspace root", () =>
@@ -953,7 +1066,7 @@ it.effect("keeps the checkout cleanup snapshot through edits and ignores stale c
     const checkout = (yield* request("checkout")).resourceLocks![0]!;
     assert.instanceOf(
       yield* request("checkout", other).pipe(Effect.flip),
-      ProjectService.ProjectOperationError,
+      ProjectService.ProjectInvalidError,
     );
     yield* service.resourceComplete({
       commandId: nextId(),
@@ -1020,7 +1133,7 @@ it.effect("retains failed ownership and only releases or takes over the confirme
     const checkout = (yield* request("checkout", owner)).resourceLocks![0]!;
     assert.instanceOf(
       yield* request("takeover", other, checkout.operationId).pipe(Effect.flip),
-      ProjectService.ProjectOperationError,
+      ProjectService.ProjectInvalidError,
     );
     yield* service.resourceComplete({
       commandId: nextId(),
@@ -1029,7 +1142,7 @@ it.effect("retains failed ownership and only releases or takes over the confirme
     });
     assert.instanceOf(
       yield* request("takeover", other).pipe(Effect.flip),
-      ProjectService.ProjectOperationError,
+      ProjectService.ProjectInvalidError,
     );
     const takeover = (yield* request("takeover", other, checkout.operationId)).resourceLocks![0]!;
     assert.equal(takeover.threadId, other);
@@ -1054,11 +1167,11 @@ it.effect("retains failed ownership and only releases or takes over the confirme
     assert.equal(failed[0]!.error, "cleanup failed");
     assert.instanceOf(
       yield* request("release", owner).pipe(Effect.flip),
-      ProjectService.ProjectOperationError,
+      ProjectService.ProjectInvalidError,
     );
     assert.instanceOf(
       yield* request("force-release", other, checkout.operationId).pipe(Effect.flip),
-      ProjectService.ProjectOperationError,
+      ProjectService.ProjectInvalidError,
     );
     assert.deepEqual(Option.getOrThrow(yield* service.getById(projectId)).resourceLocks, failed);
     assert.deepEqual(
@@ -1141,7 +1254,7 @@ it.effect(
         yield* request("resource:forged", { ...canonicalResource, command: "forged-shell" }).pipe(
           Effect.flip,
         ),
-        ProjectService.ProjectOperationError,
+        ProjectService.ProjectInvalidError,
       );
       yield* service.update({
         commandId: CommandId.make("resource:disable"),
@@ -1155,13 +1268,13 @@ it.effect(
           name: "Global",
           command: "global-deploy",
         }).pipe(Effect.flip),
-        ProjectService.ProjectOperationError,
+        ProjectService.ProjectInvalidError,
       );
       assert.instanceOf(
         yield* request("resource:missing", { ...canonicalResource, id: "missing" }).pipe(
           Effect.flip,
         ),
-        ProjectService.ProjectOperationError,
+        ProjectService.ProjectInvalidError,
       );
       assert.deepEqual(Option.getOrThrow(yield* service.getById(projectId)).resourceLocks, before);
       // An accepted command retains its original receipt if the definition changes later.
@@ -1222,7 +1335,7 @@ it.effect(
         })
         .pipe(Effect.flip);
       assert.include(
-        String(staleRelease._tag === "ProjectOperationError" && staleRelease.cause),
+        String(staleRelease._tag === "ProjectInvalidError" && staleRelease.detail),
         "Resource ownership changed",
       );
       assert.deepEqual(Option.getOrThrow(yield* service.getById(projectId)).resourceLocks, before);
@@ -1236,7 +1349,7 @@ it.effect(
         })
         .pipe(Effect.flip);
       assert.include(
-        String(rejectedCheckout._tag === "ProjectOperationError" && rejectedCheckout.cause),
+        String(rejectedCheckout._tag === "ProjectInvalidError" && rejectedCheckout.detail),
         "held by thread",
       );
       assert.deepEqual(Option.getOrThrow(yield* service.getById(projectId)).resourceLocks, before);
@@ -1254,7 +1367,7 @@ it.effect(
             expectedOperationId: CommandId.make("stale"),
           })
           .pipe(Effect.flip),
-        ProjectService.ProjectOperationError,
+        ProjectService.ProjectInvalidError,
       );
       assert.deepEqual(Option.getOrThrow(yield* service.getById(projectId)).resourceLocks, before);
       const confirmed = yield* service.resourceRequest({
@@ -1276,7 +1389,7 @@ it.effect(
             expectedOperationId: operationId,
           })
           .pipe(Effect.flip),
-        ProjectService.ProjectOperationError,
+        ProjectService.ProjectInvalidError,
       );
       assert.deepEqual(Option.getOrThrow(yield* service.getById(projectId)).resourceLocks, before);
       yield* sql`UPDATE projection_projects SET deleted_at = '2026-10-03T00:00:00.000Z' WHERE project_id = ${projectId}`;

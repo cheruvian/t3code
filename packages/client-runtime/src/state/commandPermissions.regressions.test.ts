@@ -1,9 +1,3 @@
-import { requestGuarded, runStreamGuarded } from "../rpc/client.ts";
-import { EnvironmentSupervisor } from "../connection/supervisor.ts";
-import * as SubscriptionRef from "effect/SubscriptionRef";
-import * as Option from "effect/Option";
-import * as Stream from "effect/Stream";
-import type { RpcSession } from "../rpc/session.ts";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
@@ -12,14 +6,11 @@ import {
   AuthAccessWriteScope,
   AuthSettingsWriteScope,
   AuthEnvironmentMaintainScope,
-  AuthSourceControlWriteScope,
-  ThreadId,
   EnvironmentId,
-  ScheduledTaskId,
   WS_METHODS,
   type AuthSessionState,
 } from "@t3tools/contracts";
-import * as Cause from "effect/Cause";
+
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -27,7 +18,6 @@ import * as TestClock from "effect/testing/TestClock";
 import { Atom, AtomRegistry, AsyncResult } from "effect/reactivity";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { createCommandPermissions } from "./commandPermissions.ts";
-import { createEnvironmentRpcCommand } from "./runtime.ts";
 
 vi.mock("./session.ts", () => ({
   createEnvironmentSessionAtoms: () => ({ sessionStateAtom: sessions }),

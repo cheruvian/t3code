@@ -1,3 +1,5 @@
+import * as Exit from "effect/Exit";
+import { withCodexReplayConfigReads } from "./CodexAdapterV2.testkit.ts";
 import { makeReplayServerConfig } from "../testkit/ProviderReplayHarness.ts";
 import * as Digest from "effect/crypto/Digest";
 import * as PortScanner from "../../preview/PortScanner.ts";
@@ -701,6 +703,7 @@ describe("CodexAdapterV2 process spawning", () => {
         model: "gpt-5.4",
         config: {
           "tools.update_plan.enabled": true,
+          "features.concurrent_reasoning_summaries": true,
           "shell_environment_policy.set.T3CODE_THREAD_ID": threadId,
           // Codex waits up to 10 s, not 1 s, for MCP servers before the first request.
           mcp_optional_startup_grace_ms: 10_000,
@@ -708,11 +711,11 @@ describe("CodexAdapterV2 process spawning", () => {
             url: "http://127.0.0.1:43123/mcp",
             tool_timeout_sec: 3_900,
             http_headers: { Authorization: "Bearer secret-codex-token" },
-            enabled_tools: ["t3_thread_wait"],
+            enabled_tools: ["t3_thread_wait", "delegate_task"],
             omit_tools_from: ["code_mode", "deferred"],
           },
           "mcp_servers.t3-code": {
-            disabled_tools: ["t3_thread_wait"],
+            disabled_tools: ["t3_thread_wait", "delegate_task"],
             url: "http://127.0.0.1:43123/mcp",
             tool_timeout_sec: 3_900,
             http_headers: {
@@ -828,8 +831,15 @@ describe("CodexAdapterV2 process spawning", () => {
       yield* open({ T3CODE_CODEX_LAUNCH_ARGS: " --enable env-feature " });
 
       assert.deepEqual(spawnedArgs, [
-        ["app-server", "--strict-config", "-c", "model_reasoning_summary=detailed"],
-        ["app-server", "--enable", "env-feature"],
+        [
+          "app-server",
+          "-c",
+          "thread_unload_delay_secs=0",
+          "--strict-config",
+          "-c",
+          "model_reasoning_summary=detailed",
+        ],
+        ["app-server", "-c", "thread_unload_delay_secs=0", "--enable", "env-feature"],
       ]);
     }).pipe(Effect.provideService(HostProcess.Platform, "linux")),
   );
@@ -856,6 +866,7 @@ describe("CodexAdapterV2 process spawning", () => {
             CodexAdapterV2.layerAppServerClientFactory.pipe(
               Layer.provide(Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => {} })),
             ),
+            Layer.mock(PortScanner.PortDiscovery)({ trackAgent: () => () => {} }),
             ServerSettings.layerTest(),
             ServerConfig.layerTest(process.cwd(), { prefix: "t3-codex-binary-home-" }),
           ),
@@ -1149,11 +1160,9 @@ describe("CodexAdapterV2 native protocol logging", () => {
           }),
         close: () => Effect.void,
       };
-      const threadId = ThreadId.make("thread-1");
       const providerSessionId = ProviderSessionId.make("provider-session-1");
       const protocolLogger = CodexAdapterV2.makeCodexAppServerProtocolLogger({
         nativeEventLogger: logger,
-        threadId,
         providerSessionId,
       });
 
@@ -1182,7 +1191,7 @@ describe("CodexAdapterV2 native protocol logging", () => {
       });
 
       assert.equal(writes.length, 1);
-      assert.equal(writes[0]?.threadId, threadId);
+      assert.equal(writes[0]?.threadId, null);
       assert.deepEqual(writes[0]?.event, {
         provider: "codex",
         protocol: "codex.app-server",
@@ -1222,7 +1231,6 @@ describe("CodexAdapterV2 native protocol logging", () => {
             }),
           close: () => Effect.void,
         },
-        threadId: ThreadId.make("thread-1"),
         providerSessionId: ProviderSessionId.make("provider-session-1"),
       });
       assert.exists(protocolLogger);
@@ -1275,7 +1283,6 @@ describe("CodexAdapterV2 native protocol logging", () => {
             }),
           close: () => Effect.void,
         },
-        threadId: ThreadId.make("thread-1"),
         providerSessionId: ProviderSessionId.make("provider-session-1"),
       });
       assert.exists(protocolLogger);
@@ -1747,7 +1754,7 @@ function codexReplayPreamble(input: {
           approvalPolicy: "never",
           approvalsReviewer: "user",
           sandboxPolicy: { type: "dangerFullAccess" },
-          summary: "detailed",
+          summary: "auto",
           collaborationMode: { mode: "default", settings: { model: "gpt-5.4" } },
         },
       },
@@ -1798,6 +1805,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     onRequest: (method: string, params: unknown) => Effect.Effect<void> = () => Effect.void,
     readChildMetadata?: Parameters<typeof withCodexReplayChildMetadata>[2],
     configOverride?: ServerConfig.ServerConfig["Service"],
+    beforeEmitInbound?: CodexReplay.CodexAppServerReplayDriver["beforeEmitInbound"],
   ) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1808,7 +1816,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         [];
       const clientFactory: CodexAdapterV2.CodexAppServerClientFactoryShape = {
         open: (openInput) =>
-          Layer.build(CodexReplay.layerReplay(transcript)).pipe(
+          CodexReplay.makeReplayDriver(
+            withCodexReplayConfigReads(transcript),
+            beforeEmitInbound === undefined ? {} : { beforeEmitInbound },
+          ).pipe(
+            Effect.flatMap((driver) => Layer.build(CodexReplay.layerReplayWithDriver(driver))),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapter.ProviderAdapterOpenSessionError({
@@ -2329,7 +2341,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 cwd: "/workspace",
                 model: "gpt-5.4",
                 ...turnPolicies[turnModes[index]!],
-                summary: "detailed",
+                summary: "auto",
                 collaborationMode: { mode: "default", settings: { model: "gpt-5.4" } },
               },
             },
@@ -2547,6 +2559,17 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               },
             },
             {
+              type: "emit_inbound",
+              label: "done",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                },
+              },
+            },
+            {
               type: "expect_outbound",
               label: "restore context",
               frame: {
@@ -2563,17 +2586,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               },
             },
             { type: "emit_inbound", label: "restored", frame: { id: 4, result: {} } },
-            {
-              type: "emit_inbound",
-              label: "done",
-              frame: {
-                method: "turn/completed",
-                params: {
-                  threadId: nativeThreadId,
-                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
-                },
-              },
-            },
           ],
         });
         const harness = yield* makeCodexReplayHarness(
@@ -2954,7 +2966,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   approvalPolicy: "never",
                   approvalsReviewer: "user",
                   sandboxPolicy: { type: "dangerFullAccess" },
-                  summary: "detailed",
+                  summary: "auto",
                   collaborationMode: { mode: "default", settings: { model: "gpt-5.4" } },
                 },
               },
@@ -4283,7 +4295,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             yield* encodeStringJson(cwd),
           ),
         );
-        const replayDriver = yield* CodexReplay.makeReplayDriver(localTranscript);
+        const replayDriver = yield* CodexReplay.makeReplayDriver(
+          withCodexReplayConfigReads(localTranscript),
+        );
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         assert.equal(
           Number(yield* spawner.exitCode(ChildProcess.make("git", ["init", "--quiet"], { cwd }))),
@@ -4389,7 +4403,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             ProviderReplayHarness.layerWithRegistry(
               { name: "codex-background-stop", runtimePolicyOverride: { cwd } },
               CodexAdapterV2Testkit.layer({
-                transcript: localTranscript,
+                transcript: withCodexReplayConfigReads(localTranscript),
                 driver: replayDriver,
               }),
               { runEffectWorker: true },
@@ -4400,124 +4414,130 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     );
   });
 
-  // The app-server exits after the root turn, before the command's own
-  // item/completed (Codex always sends one, so only a lost notification or a
-  // gone process leaves it running). Nothing tracks the command any more, yet
-  // the thread still shows it, and Stop is the only way to clear it.
-  it.effect("Stop ends a background command no Codex process tracks any more", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-bg-stale-workspace-" });
-        const staleTranscript = makeCodexReplayTranscript({
-          scenario: "codex-bg-stop-untracked",
-          entries: [
-            ...backgroundExecTranscript.entries.slice(0, -1),
-            { type: "runtime_exit", status: "success" },
-          ],
-        });
-        const localTranscript = yield* decodeReplayTranscriptJson(
-          (yield* encodeReplayTranscriptJson(staleTranscript)).replaceAll(
-            yield* encodeStringJson("/workspace"),
-            yield* encodeStringJson(cwd),
-          ),
-        );
-        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        for (const args of [
-          ["init", "--quiet"],
-          [
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "--allow-empty",
-            "--quiet",
-            "-m",
-            "Initial commit",
-          ],
-        ]) {
-          assert.equal(Number(yield* spawner.exitCode(ChildProcess.make("git", args, { cwd }))), 0);
-        }
-        yield* Effect.gen(function* () {
-          const orchestrator = yield* Orchestrator.OrchestratorV2;
-          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-          const threadId = ThreadId.make("thread:background-stop-untracked");
-          yield* orchestrator.dispatch({
-            type: "thread.create",
-            commandId: CommandId.make("create-background-stop-untracked"),
-            threadId,
-            projectId: ProjectId.make("project:background-stop-untracked"),
-            title: "Background stop untracked",
-            modelSelection: CODEX_TEST_MODEL_SELECTION,
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: cwd,
-            createdBy: "user",
-            creationSource: "web",
+  it.effect(
+    "clears orphaned background commands on process exit without leaving Stop enabled",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-bg-stale-workspace-" });
+          const staleTranscript = makeCodexReplayTranscript({
+            scenario: "codex-bg-stop-untracked",
+            entries: [
+              ...backgroundExecTranscript.entries.slice(0, -1),
+              { type: "runtime_exit", status: "success" },
+            ],
           });
-          const settled = yield* orchestrator.streamDomainEvents.pipe(
-            Stream.filter(
-              (event) =>
-                event.type === "run.updated" &&
-                (event.payload.status === "waiting" || event.payload.status === "completed"),
+          const localTranscript = yield* decodeReplayTranscriptJson(
+            (yield* encodeReplayTranscriptJson(staleTranscript)).replaceAll(
+              yield* encodeStringJson("/workspace"),
+              yield* encodeStringJson(cwd),
             ),
-            Stream.runHead,
-            Effect.forkChild({ startImmediately: true }),
           );
-          yield* orchestrator.dispatch({
-            type: "message.dispatch",
-            commandId: CommandId.make("start-background-stop-untracked"),
-            threadId,
-            messageId: MessageId.make("message:background-stop-untracked"),
-            text: BG_PROMPT,
-            attachments: [],
-            createdBy: "user",
-            creationSource: "web",
-            dispatchMode: { type: "start_immediately" },
-          });
-          yield* worker.drain();
-          yield* Fiber.join(settled);
-          yield* worker.drain();
-          const before = yield* orchestrator.getThreadShell(threadId);
-          assert.deepEqual(
-            before?.pendingBackgroundTasks?.map((task) => task.kind),
-            ["command"],
-            "the thread still shows the command the gone process never finished",
-          );
-          const run = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
-          yield* orchestrator.dispatch({
-            type: "run.interrupt",
-            commandId: CommandId.make("stop-background-untracked"),
-            threadId,
-            runId: run.id,
-            holdQueue: true,
-          });
-          yield* worker.drain();
-          const projection = yield* orchestrator.getThreadProjection(threadId);
-          assert.deepEqual(
-            projection.turnItems.flatMap((item) =>
-              item.type === "command_execution" ? [item.status] : [],
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+          for (const args of [
+            ["init", "--quiet"],
+            [
+              "-c",
+              "user.name=Test",
+              "-c",
+              "user.email=test@example.com",
+              "commit",
+              "--allow-empty",
+              "--quiet",
+              "-m",
+              "Initial commit",
+            ],
+          ]) {
+            assert.equal(
+              Number(yield* spawner.exitCode(ChildProcess.make("git", args, { cwd }))),
+              0,
+            );
+          }
+          yield* Effect.gen(function* () {
+            const orchestrator = yield* Orchestrator.OrchestratorV2;
+            const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+            const threadId = ThreadId.make("thread:background-stop-untracked");
+            yield* orchestrator.dispatch({
+              type: "thread.create",
+              commandId: CommandId.make("create-background-stop-untracked"),
+              threadId,
+              projectId: ProjectId.make("project:background-stop-untracked"),
+              title: "Background stop untracked",
+              modelSelection: CODEX_TEST_MODEL_SELECTION,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: cwd,
+              createdBy: "user",
+              creationSource: "web",
+            });
+            const settled = yield* orchestrator.streamDomainEvents.pipe(
+              Stream.filter(
+                (event) =>
+                  event.type === "run.updated" &&
+                  (event.payload.status === "waiting" || event.payload.status === "completed"),
+              ),
+              Stream.runHead,
+              Effect.forkChild({ startImmediately: true }),
+            );
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make("start-background-stop-untracked"),
+              threadId,
+              messageId: MessageId.make("message:background-stop-untracked"),
+              text: BG_PROMPT,
+              attachments: [],
+              createdBy: "user",
+              creationSource: "web",
+              dispatchMode: { type: "start_immediately" },
+            });
+            yield* worker.drain();
+            yield* Fiber.join(settled);
+            yield* worker.drain();
+            const before = yield* orchestrator.getThreadShell(threadId);
+            assert.deepEqual(
+              before?.pendingBackgroundTasks?.map((task) => task.kind),
+              [],
+              "process exit must clear the command the gone process never finished",
+            );
+            const run = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
+            const stopExit = yield* orchestrator
+              .dispatch({
+                type: "run.interrupt",
+                commandId: CommandId.make("stop-background-untracked"),
+                threadId,
+                runId: run.id,
+                holdQueue: true,
+              })
+              .pipe(Effect.exit);
+            assert.isTrue(Exit.isFailure(stopExit));
+            yield* worker.drain();
+            const projection = yield* orchestrator.getThreadProjection(threadId);
+            assert.deepEqual(
+              projection.turnItems.flatMap((item) =>
+                item.type === "command_execution" ? [item.status] : [],
+              ),
+              ["interrupted"],
+            );
+            assert.equal(projection.runs.at(-1)?.status, "completed");
+            assert.deepEqual(
+              (yield* orchestrator.getThreadShell(threadId))?.pendingBackgroundTasks,
+              [],
+            );
+          }).pipe(
+            Effect.provide(
+              ProviderReplayHarness.layerWithRegistry(
+                { name: "codex-background-stop-untracked", runtimePolicyOverride: { cwd } },
+                CodexAdapterV2Testkit.layer({
+                  transcript: withCodexReplayConfigReads(localTranscript),
+                }),
+                { runEffectWorker: true },
+              ),
             ),
-            ["interrupted"],
           );
-          assert.equal(projection.runs.at(-1)?.status, "completed");
-          assert.deepEqual(
-            (yield* orchestrator.getThreadShell(threadId))?.pendingBackgroundTasks,
-            [],
-          );
-        }).pipe(
-          Effect.provide(
-            ProviderReplayHarness.layerWithRegistry(
-              { name: "codex-background-stop-untracked", runtimePolicyOverride: { cwd } },
-              CodexAdapterV2Testkit.layer({ transcript: localTranscript }),
-              { runEffectWorker: true },
-            ),
-          ),
-        );
-      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
-    ),
+        }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+      ),
   );
 
   const PRE_SETTLE_SCENARIO = "codex-bg-exec-pre-settle";
@@ -5290,10 +5310,22 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           },
         },
       },
+      {
+        type: "emit_inbound",
+        label: "turn/completed/confirmed-root",
+        afterMs: 20_000,
+        frame: {
+          method: "turn/completed",
+          params: {
+            threadId: INTERRUPT_NATIVE_THREAD,
+            turn: makeCodexReplayTurn({ id: INTERRUPT_NATIVE_TURN, status: "interrupted" }),
+          },
+        },
+      },
     ],
   });
 
-  it.effect("terminalizes timed-out descendants before the root", () =>
+  it.effect("waits for root confirmation after timeout before finalizing descendants", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeCodexReplayHarness(interruptSubagentTimeoutTranscript);
@@ -5331,7 +5363,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
 
         const interruptFiber = yield* harness.runtime
           .interruptTurn({ providerThread: harness.providerThread, providerTurnId })
-          .pipe(Effect.forkScoped);
+          .pipe(Effect.result, Effect.forkScoped);
         yield* awaitUntil(
           () =>
             harness.events.some(
@@ -5344,7 +5376,17 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           "child timeout boundary item",
         );
         yield* TestClock.adjust("10 seconds");
-        yield* Fiber.join(interruptFiber);
+        const result = yield* Fiber.join(interruptFiber);
+        assert.equal(
+          result._tag === "Failure" ? result.failure._tag : "confirmed",
+          "ProviderAdapterInterruptTimeoutError",
+        );
+        assert.lengthOf(
+          harness.terminalEvents(),
+          0,
+          "an unconfirmed Stop must not settle the root",
+        );
+        yield* TestClock.adjust("20 seconds");
 
         yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted root terminal");
         assertChildProviderTerminalBeforeRoot(harness.events, harness.threadId);
@@ -5499,18 +5541,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         },
       },
       {
-        type: "expect_outbound",
-        label: "turn/interrupt/late-child-1",
-        frame: {
-          id: 7,
-          method: "turn/interrupt",
-          params: {
-            threadId: INTERRUPT_CHILD_NATIVE_THREAD,
-            turnId: INTERRUPT_LATE_CHILD_NATIVE_TURN,
-          },
-        },
-      },
-      {
         type: "emit_inbound",
         label: "turn/started/late-child-2",
         frame: {
@@ -5521,6 +5551,30 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               id: INTERRUPT_LATE_CHILD_2_NATIVE_TURN,
               status: "inProgress",
             }),
+          },
+        },
+      },
+      {
+        type: "emit_inbound",
+        label: "turn/completed/confirmed-root",
+        afterMs: 20_000,
+        frame: {
+          method: "turn/completed",
+          params: {
+            threadId: INTERRUPT_NATIVE_THREAD,
+            turn: makeCodexReplayTurn({ id: INTERRUPT_NATIVE_TURN, status: "interrupted" }),
+          },
+        },
+      },
+      {
+        type: "expect_outbound",
+        label: "turn/interrupt/late-child-1",
+        frame: {
+          id: 7,
+          method: "turn/interrupt",
+          params: {
+            threadId: INTERRUPT_CHILD_NATIVE_THREAD,
+            turnId: INTERRUPT_LATE_CHILD_NATIVE_TURN,
           },
         },
       },
@@ -5550,7 +5604,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ],
   });
 
-  it.effect("interrupts descendants discovered only by the final interrupt rescan", () =>
+  it.effect("settles descendants discovered after Stop began when the root confirms", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeCodexReplayHarness(interruptRescanLateSubagentTurnTranscript);
@@ -5588,7 +5642,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
 
         const interruptFiber = yield* harness.runtime
           .interruptTurn({ providerThread: harness.providerThread, providerTurnId })
-          .pipe(Effect.forkScoped);
+          .pipe(Effect.result, Effect.forkScoped);
         yield* awaitUntil(
           () =>
             harness.events.some(
@@ -5599,7 +5653,17 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           "late child 1 provider turn",
         );
         yield* TestClock.adjust("10 seconds");
-        yield* Fiber.join(interruptFiber);
+        const result = yield* Fiber.join(interruptFiber);
+        assert.equal(
+          result._tag === "Failure" ? result.failure._tag : "confirmed",
+          "ProviderAdapterInterruptTimeoutError",
+        );
+        assert.lengthOf(
+          harness.terminalEvents(),
+          0,
+          "an unconfirmed Stop must not settle the root",
+        );
+        yield* TestClock.adjust("20 seconds");
 
         yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted root terminal");
         assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
@@ -5745,20 +5809,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         },
       },
       {
-        type: "expect_outbound",
-        label: "thread/backgroundTerminals/terminate/two",
-        frame: {
-          id: 6,
-          method: "thread/backgroundTerminals/terminate",
-          params: { threadId: INTERRUPT_NATIVE_THREAD, processId: "57681" },
-        },
-      },
-      {
-        type: "emit_inbound",
-        label: "thread/backgroundTerminals/terminate/two",
-        frame: { id: 6, result: { terminated: true } },
-      },
-      {
         type: "emit_inbound",
         label: "turn/completed/late",
         afterMs: 20_000,
@@ -5772,6 +5822,20 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             }),
           },
         },
+      },
+      {
+        type: "expect_outbound",
+        label: "thread/backgroundTerminals/terminate/two",
+        frame: {
+          id: 6,
+          method: "thread/backgroundTerminals/terminate",
+          params: { threadId: INTERRUPT_NATIVE_THREAD, processId: "57681" },
+        },
+      },
+      {
+        type: "emit_inbound",
+        label: "thread/backgroundTerminals/terminate/two",
+        frame: { id: 6, result: { terminated: true } },
       },
       {
         type: "emit_inbound",
@@ -5809,7 +5873,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ],
   });
 
-  it.effect("bounds interrupt settlement and drops late completion events", () =>
+  it.effect("reports an unconfirmed Stop timeout and settles only after late confirmation", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeCodexReplayHarness(interruptTimeoutTranscript);
@@ -5849,7 +5913,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             providerThread: harness.providerThread,
             providerTurnId,
           })
-          .pipe(Effect.forkScoped);
+          .pipe(Effect.result, Effect.forkScoped);
         yield* awaitUntil(
           () =>
             harness.events.filter(
@@ -5862,8 +5926,18 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
 
         yield* TestClock.adjust("10 seconds");
-        yield* Fiber.join(interruptFiber);
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "timeout terminal");
+        const result = yield* Fiber.join(interruptFiber);
+        assert.equal(
+          result._tag === "Failure" ? result.failure._tag : "confirmed",
+          "ProviderAdapterInterruptTimeoutError",
+        );
+        assert.lengthOf(
+          harness.terminalEvents(),
+          0,
+          "an unconfirmed Stop must not settle the root",
+        );
+        yield* TestClock.adjust("20 seconds");
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "confirmed terminal");
         assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
         const terminalProviderTurnsBeforeLateEvents = harness.events.filter(
           (event) =>
@@ -5912,7 +5986,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               event.type === "turn_item.updated" && event.turnItem.type === "command_execution",
           ),
           commandUpdatesBeforeLateEvents.length,
-          "late starts and completions must not project after timeout",
+          "late starts and completions must not project after confirmed settlement",
         );
       }).pipe(
         Effect.provide(
@@ -6198,7 +6272,21 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 },
               },
             },
-            ...(scenario.name === "late-reset" ? [snapshot] : []),
+            ...(scenario.name === "late-reset"
+              ? [
+                  {
+                    type: "expect_outbound" as const,
+                    label: "account/rateLimits/read",
+                    frame: { id: 4, method: "account/rateLimits/read", params: null },
+                  },
+                  {
+                    type: "emit_inbound" as const,
+                    label: "account/rateLimits/read",
+                    frame: { id: 4, error: { code: -32600, message: "Not signed in." } },
+                  },
+                  { ...snapshot, label: "late reset after terminal" },
+                ]
+              : []),
             ...(scenario.name === "deferred-reset"
               ? [
                   {
@@ -6235,13 +6323,25 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               : []),
           ],
         });
+        const terminalReceipt = yield* Deferred.make<void>();
         const resetReceipt = yield* Deferred.make<void>();
-        const harness = yield* makeCodexReplayHarness(transcript, (event) =>
-          event.type === "turn_item.updated" &&
-          event.turnItem.type === "error" &&
-          event.turnItem.failure.resetAt === resetAt
-            ? Deferred.succeed(resetReceipt, undefined)
-            : Effect.void,
+        const harness = yield* makeCodexReplayHarness(
+          transcript,
+          (event) =>
+            event.type === "turn.terminal"
+              ? Deferred.succeed(terminalReceipt, undefined)
+              : event.type === "turn_item.updated" &&
+                  event.turnItem.type === "error" &&
+                  event.turnItem.failure.resetAt === resetAt
+                ? Deferred.succeed(resetReceipt, undefined)
+                : Effect.void,
+          undefined,
+          undefined,
+          undefined,
+          (entry) =>
+            entry.label === "late reset after terminal"
+              ? Deferred.await(terminalReceipt)
+              : Effect.void,
         );
         yield* harness.runtime.startTurn(
           makeCodexTestTurnInput({
@@ -7904,6 +8004,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               method: "thread/fork",
               params: {
                 threadId: nativeThreadId,
+                excludeTurns: true,
                 lastTurnId: "native-turn-first",
                 config: CodexAdapterV2.CODEX_THREAD_CONFIG,
               },
@@ -8046,8 +8147,34 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               codexReplayPreamble({
                 nativeThreadId,
                 nativeTurnId: "goal-turn-1",
-                prompt: `Start working toward this goal: ${objective}`,
-              }).slice(5),
+                prompt: `This thread's goal is already set. Do not call create_goal. Start working on it now: ${objective}`,
+              })
+                .slice(5)
+                .map((entry) =>
+                  entry.type === "expect_outbound" &&
+                  Predicate.isObject(entry.frame) &&
+                  entry.frame.method === "turn/start" &&
+                  Predicate.isObject(entry.frame.params)
+                    ? {
+                        ...entry,
+                        frame: {
+                          ...entry.frame,
+                          params: {
+                            ...entry.frame.params,
+                            approvalPolicy: {
+                              granular: {
+                                mcp_elicitations: true,
+                                request_permissions: false,
+                                rules: false,
+                                sandbox_approval: false,
+                                skill_approval: false,
+                              },
+                            },
+                          },
+                        },
+                      }
+                    : entry,
+                ),
               5,
             ),
             ...request(

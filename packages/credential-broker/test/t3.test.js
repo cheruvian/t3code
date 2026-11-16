@@ -1,3 +1,4 @@
+/* oxlint-disable t3code/no-test-timeout-or-unreasoned-skip -- These node:test subprocess fixtures need bounded cleanup deadlines; they do not run under the Vitest project timeout. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -337,6 +338,7 @@ test("consumer disappearing after approval selection returns a safe startup fail
   assert.deepEqual(await readdir(join(runtime, "leases")), []);
 });
 test("T3 approval stays pending across a day and credential lifetime starts only after approval", async (t) => {
+  // oxlint-disable-next-line t3code/no-wall-clock-in-tests -- The injected broker clock starts aligned with real worker-process deadlines, then advances explicitly.
   let now = Date.now();
   let reads = 0;
   const provider = new DemoProvider();
@@ -569,6 +571,7 @@ test(
 );
 
 test("denial and an explicitly configured approval deadline never deliver credentials", async (t) => {
+  // oxlint-disable-next-line t3code/no-wall-clock-in-tests -- The injected broker clock starts aligned with real worker-process deadlines, then advances explicitly.
   let now = Date.now();
   const { broker, caller, input, runtime } = await setup(t, {
     now: () => now,
@@ -600,6 +603,7 @@ test(
   "automatic access waits for remote visibility, lasts five full minutes after acknowledgment and command exit; dismiss retains grant",
   { timeout: 10000 },
   async (t) => {
+    // oxlint-disable-next-line t3code/no-wall-clock-in-tests -- The injected broker clock starts aligned with real worker-process deadlines, then advances explicitly.
     let now = Date.now();
     const { broker, caller, input } = await setup(t, { now: () => now });
     const detach = await visible(broker);
@@ -702,6 +706,7 @@ test(
   "tool cancellation, session cancellation and active expiry clean up without output",
   { timeout: 10000 },
   async (t) => {
+    // oxlint-disable-next-line t3code/no-wall-clock-in-tests -- The injected broker clock starts aligned with real worker-process deadlines, then advances explicitly.
     let now = Date.now();
     const { broker, caller, input, marker } = await setup(t, { now: () => now });
     const ready = milestone(broker, (s) => s.requests.some((r) => r.state === "pending"));
@@ -850,6 +855,7 @@ test("a failed host worker does not settle the tool before credential cleanup", 
     candidateId: DEMO_ITEM,
   });
   await cleaning;
+  // oxlint-disable-next-line t3code/no-real-time-wait-in-tests -- Gives promise continuations one event-loop turn while the explicit cleanup gate remains closed.
   await new Promise((resolve) => setImmediate(resolve));
   try {
     assert.equal(settled, false);

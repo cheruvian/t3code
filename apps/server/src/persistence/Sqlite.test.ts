@@ -2,19 +2,37 @@
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-
+import type * as NodeWorkerThreads from "node:worker_threads";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
-import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
+
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
-
+import * as SqlError from "effect/sql/SqlError";
+import { vi } from "vite-plus/test";
+import * as ServerConfig from "../config.ts";
+import * as ProcessRunner from "../processRunner.ts";
+import * as ServerOwnership from "../serverOwnership.ts";
+import { migrationManifest, runMigrations } from "./Migrations.ts";
 import * as SqlitePersistence from "./Sqlite.ts";
-
+const workerData = vi.hoisted((): Array<unknown> => []);
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof NodeWorkerThreads>();
+  class RecordedWorker extends actual.Worker {
+    constructor(...args: ConstructorParameters<typeof actual.Worker>) {
+      super(...args);
+      workerData.push(args[1]?.workerData);
+    }
+  }
+  return { ...actual, Worker: RecordedWorker };
+});
 // Linux names an open, already-deleted file "<path> (deleted)" in /proc/self/fd.
 // SQLite names its temp files "etilqs_*" and, without TMPDIR, puts them in
 // /var/tmp while os.tmpdir() is /tmp, so match the name, not the directory.
@@ -27,7 +45,6 @@ const openDeletedTempFiles = () =>
       return [];
     }
   });
-
 it.effect.skipIf(HostProcess.Platform.defaultValue() !== "linux")(
   "keeps a write transaction's statement journal off the temp directory",
   () => {
@@ -35,7 +52,6 @@ it.effect.skipIf(HostProcess.Platform.defaultValue() !== "linux")(
     const persistence = SqlitePersistence.layerFromPath(
       NodePath.join(tempDir, "state.sqlite"),
     ).pipe(Layer.provide(NodeServices.layer));
-
     return Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql`CREATE TABLE journal_probe(id INTEGER PRIMARY KEY, payload TEXT NOT NULL)`;
@@ -58,13 +74,11 @@ it.effect.skipIf(HostProcess.Platform.defaultValue() !== "linux")(
     );
   },
 );
-
 it.effect("drops planner statistics a database already has", () => {
   const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-sqlite-stats-"));
   const dbPath = NodePath.join(tempDir, "state.sqlite");
   const persistence = () =>
     SqlitePersistence.layerFromPath(dbPath).pipe(Layer.provide(NodeServices.layer));
-
   return Effect.gen(function* () {
     yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -72,15 +86,18 @@ it.effect("drops planner statistics a database already has", () => {
       yield* sql`INSERT INTO walk_probe VALUES ('node-1', NULL), ('node-2', 'node-1')`;
       yield* sql`ANALYZE walk_probe`;
     }).pipe(Effect.provide(persistence()));
-
     yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      const stats = yield* sql<{ readonly count: number }>`
+      const stats = yield* sql<{
+        readonly count: number;
+      }>`
         SELECT COUNT(*) AS count FROM sqlite_stat1
       `;
       assert.equal(stats[0]?.count, 0);
       // A connection still using the old stats scans the table at each step.
-      const plan = yield* sql<{ readonly detail: string }>`
+      const plan = yield* sql<{
+        readonly detail: string;
+      }>`
         EXPLAIN QUERY PLAN
         WITH RECURSIVE retained(node_id) AS (
           SELECT 'node-2'
@@ -99,29 +116,29 @@ it.effect("drops planner statistics a database already has", () => {
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
   );
 });
-
 it.effect("only fsyncs the database file at WAL checkpoints", () => {
   const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-sqlite-sync-"));
   const dbPath = NodePath.join(tempDir, "state.sqlite");
-
   return Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const rows = yield* sql<{ readonly synchronous: number }>`PRAGMA synchronous`;
+    const rows = yield* sql<{
+      readonly synchronous: number;
+    }>`PRAGMA synchronous`;
     assert.equal(rows[0]?.synchronous, 1);
   }).pipe(
     Effect.provide(SqlitePersistence.layerFromPath(dbPath).pipe(Layer.provide(NodeServices.layer))),
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
   );
 });
-
 it.effect("applies busy_timeout in the shared persistence setup", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const rows = yield* sql<{ readonly timeout: number }>`PRAGMA busy_timeout`;
+    const rows = yield* sql<{
+      readonly timeout: number;
+    }>`PRAGMA busy_timeout`;
     assert.equal(rows[0]?.timeout, 5000);
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
-
 it.effect("enables checkpoint_fullfsync in the shared persistence setup", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -131,7 +148,6 @@ it.effect("enables checkpoint_fullfsync in the shared persistence setup", () =>
     assert.equal(rows[0]?.checkpoint_fullfsync, 1);
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
-
 it.live("runs marked projection reads while a writer transaction is open", () => {
   const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-sqlite-live-reader-"));
   const dbPath = NodePath.join(directory, "state.sqlite");
@@ -150,17 +166,135 @@ it.live("runs marked projection reads while a writer transaction is open", () =>
       )
       .pipe(Effect.forkScoped);
     yield* Deferred.await(held);
-    const rows = yield* sql<{ count: number }>`SELECT COUNT(*) AS count FROM reader_probe`.pipe(
+    const rows = yield* sql<{
+      count: number;
+    }>`SELECT COUNT(*) AS count FROM reader_probe`.pipe(
       NodeSqliteClient.readOnly,
       Effect.ensuring(Deferred.succeed(release, undefined)),
     );
     assert.equal(rows[0]?.count, 0);
     yield* Fiber.join(writer);
-    const committed = yield* sql<{ count: number }>`SELECT COUNT(*) AS count FROM reader_probe`;
+    const committed = yield* sql<{
+      count: number;
+    }>`SELECT COUNT(*) AS count FROM reader_probe`;
     assert.equal(committed[0]?.count, 1);
   }).pipe(
     Effect.provide(SqlitePersistence.layerFromPath(dbPath).pipe(Layer.provide(NodeServices.layer))),
     Effect.scoped,
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true }))),
+  );
+});
+
+it.effect("upgrades an existing database on a read-write worker connection", () => {
+  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-sqlite-upgrade-"));
+  const dbPath = NodePath.join(tempDir, "state.sqlite");
+  return Effect.gen(function* () {
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`PRAGMA journal_mode = WAL;`;
+      yield* runMigrations({ toMigrationInclusive: 81 });
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath })));
+    const startedBefore = workerData.length;
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const rows = yield* sql<{
+        readonly migration_id: number;
+        readonly name: string;
+      }>`
+        SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id
+      `;
+      assert.deepStrictEqual(
+        rows.map((row) => [row.migration_id, row.name] as const),
+        migrationManifest,
+      );
+    }).pipe(
+      Effect.provide(
+        SqlitePersistence.layerFromPath(dbPath).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+    assert.deepInclude(workerData.slice(startedBefore), {
+      filename: dbPath,
+      readOnly: false,
+      requireWal: false,
+      allowExtension: false,
+      prepareCacheSize: 200,
+    });
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
+  );
+});
+it.effect("names a database file that is not SQLite", () => {
+  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-sqlite-notadb-"));
+  const dbPath = NodePath.join(tempDir, "state.sqlite");
+  NodeFS.writeFileSync(dbPath, "not a db\n");
+  return Effect.gen(function* () {
+    const opened = yield* Effect.void.pipe(
+      Effect.provide(
+        SqlitePersistence.layerFromPath(dbPath).pipe(Layer.provide(NodeServices.layer)),
+      ),
+      Effect.result,
+    );
+    assert.equal(opened._tag, "Failure");
+    if (opened._tag === "Failure") {
+      assert.isTrue(SqlError.isSqlError(opened.failure));
+      assert.include(opened.failure.message, dbPath);
+    }
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
+  );
+});
+const ownT3Home = Effect.fn(function* () {
+  const { serverRuntimeStatePath } = yield* ServerConfig.ServerConfig;
+  // An empty home, so no boot service installed on this machine is read.
+  const home = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
+  yield* ServerOwnership.acquireServerOwnership(serverRuntimeStatePath).pipe(
+    Effect.provide(ProcessRunner.layer),
+    Effect.provideService(HostProcess.HomeDirectory, home),
+    Effect.provideService(HostProcess.Environment, {}),
+  );
+});
+const migrateTo = (toMigrationInclusive?: number) =>
+  Effect.gen(function* () {
+    const { dbPath } = yield* ServerConfig.ServerConfig;
+    yield* runMigrations({ toMigrationInclusive }).pipe(
+      Effect.provide(NodeSqliteClient.layer({ filename: dbPath })),
+    );
+  });
+const latestRecordedMigrationId = Effect.gen(function* () {
+  const { dbPath } = yield* ServerConfig.ServerConfig;
+  const rows = yield* Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    return yield* sql<{
+      readonly id: number;
+    }>`
+      SELECT MAX(migration_id) AS id FROM effect_sql_migrations
+    `;
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath })));
+  return rows[0]?.id;
+});
+const layerT3Home = ServerConfig.layerTest(process.cwd(), { prefix: "t3-sqlite-cli-" });
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("layerCliConfig", (it) => {
+  it.effect("does not migrate a T3 home a running server owns", () =>
+    Effect.gen(function* () {
+      const recorded = Math.max(...migrationManifest.map(([id]) => id)) - 1;
+      yield* migrateTo(recorded);
+      yield* ownT3Home();
+      const opened = yield* Effect.void.pipe(
+        Effect.provide(SqlitePersistence.layerCliConfig),
+        Effect.result,
+      );
+      assert.equal(yield* latestRecordedMigrationId, recorded);
+      assert.equal(opened._tag, "Failure");
+      if (opened._tag === "Failure") {
+        assert.instanceOf(opened.failure, SqlitePersistence.ServerOwnsDatabaseError);
+      }
+    }).pipe(Effect.scoped, Effect.provide(layerT3Home)),
+  );
+  it.effect("opens a current T3 home while a running server owns it", () =>
+    Effect.gen(function* () {
+      yield* migrateTo();
+      yield* ownT3Home();
+      yield* Effect.void.pipe(Effect.provide(SqlitePersistence.layerCliConfig));
+    }).pipe(Effect.scoped, Effect.provide(layerT3Home)),
   );
 });

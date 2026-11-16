@@ -4,7 +4,7 @@ import {
   OrchestratorMcpFailure,
 } from "@t3tools/contracts";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 import * as CredentialBroker from "../../../secrets/CredentialBroker.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -26,6 +26,7 @@ export const CredentialsToolkit = Toolkit.make(
       ProjectService.ProjectService,
     ],
   })
+    .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients)
     .annotate(Tool.Readonly, false)
     .annotate(Tool.Destructive, true),
 );

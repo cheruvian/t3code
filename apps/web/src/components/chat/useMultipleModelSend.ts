@@ -21,6 +21,7 @@ import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { buildThreadRouteParams } from "../../threadRoutes";
+import { DEFAULT_INTERACTION_MODE } from "../../types";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   boundAttachmentIds,
@@ -37,21 +38,23 @@ import {
   startFanoutThread,
 } from "./chatViewSend";
 import type { useLocalDispatchState } from "./useLocalDispatchState";
-
 interface MultipleModelSendInput {
   readonly environmentId: EnvironmentId;
   readonly routeThreadKey: string;
-  readonly currentRouteThreadKeyRef: { readonly current: string | null };
+  readonly currentRouteThreadKeyRef: {
+    readonly current: string | null;
+  };
   readonly draftId: DraftId | null;
   readonly composerDraftTarget: ComposerThreadTarget;
   readonly composerRef: ComposerHandleRef;
-  readonly promptRef: { current: string };
+  readonly promptRef: {
+    current: string;
+  };
   readonly runtimeMode: RuntimeMode;
   readonly startFromOrigin: boolean;
   readonly resetLocalDispatch: ReturnType<typeof useLocalDispatchState>["resetLocalDispatch"];
   readonly setThreadError: ReturnType<typeof makeThreadErrorSetter>;
 }
-
 /**
  * Starts one background thread per selected model, each in its own worktree. Failed models
  * stay selected and the prompt comes back, either straight into this composer or, when the
@@ -79,7 +82,6 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
   const fanoutSelectionsAtom = draftFanoutSelectionsAtom(routeThreadKey);
   const { sendInFlight: sendInFlightRef, uncertainSubmissions: uncertainSubmissionsRef } =
     draftSendState(routeThreadKey);
-
   return async ({
     threadId,
     project,
@@ -93,6 +95,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     readFileBlockReason,
     buildOutgoingMessageContext,
     isCurrentSend,
+    draftChangedDuringPreparation,
   }: {
     readonly threadId: ThreadId;
     readonly project: EnvironmentProject;
@@ -109,6 +112,7 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     ) => ReturnType<typeof buildMessageContext>;
     /** False once a newer send from this composer started. */
     readonly isCurrentSend: () => boolean;
+    readonly draftChangedDuringPreparation: () => boolean;
   }) => {
     const { attachments: attachmentsSnapshot, messageText } = sendSnapshot;
     const failedSelections: ModelSelection[] = [];
@@ -120,6 +124,8 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
     // fails every selection; the draft restore below still runs.
     const sendResult = await settlePromise(async () => {
       const attachments = await attachmentsPromise;
+      if (draftChangedDuringPreparation())
+        throw new Error("Draft changed while preparing this message. Review it and send again.");
       const fileBlockReason = readFileBlockReason();
       if (fileBlockReason !== null) throw new Error(fileBlockReason);
       const context = buildOutgoingMessageContext(
@@ -184,14 +190,14 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
                       modelSelection: target.selection,
                       titleSeed: title,
                       runtimeMode,
-                      interactionMode: target.interactionMode,
+                      interactionMode: DEFAULT_INTERACTION_MODE,
                       bootstrap: {
                         createThread: {
                           projectId: project.id,
                           title,
                           modelSelection: target.selection,
                           runtimeMode,
-                          interactionMode: target.interactionMode,
+                          interactionMode: DEFAULT_INTERACTION_MODE,
                           branch,
                           worktreePath: null,
                           createdAt: createdAt,
@@ -245,10 +251,13 @@ export function useMultipleModelSend(input: MultipleModelSendInput) {
       if (clearedDraft) {
         restoreComposerDraft(composerDraftTarget, sendSnapshot);
         if (composerRef.current && currentRouteThreadKeyRef.current === routeThreadKey) {
-          promptRef.current = messageText;
+          promptRef.current = sendSnapshot.draftText;
           composerRef.current.resetCursorState({
-            cursor: collapseExpandedComposerCursor(messageText, messageText.length),
-            prompt: messageText,
+            cursor: collapseExpandedComposerCursor(
+              sendSnapshot.draftText,
+              sendSnapshot.draftText.length,
+            ),
+            prompt: sendSnapshot.draftText,
             detectTrigger: true,
           });
         }

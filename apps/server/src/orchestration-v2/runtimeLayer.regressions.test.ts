@@ -341,6 +341,7 @@ const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
   Layer.provide(
     Layer.succeed(ProjectEnrichmentService.ProjectEnrichmentService, {
       readRepositoryIdentity: () => Effect.succeed(null),
+      refreshRepositoryIdentity: () => Effect.succeed(null),
       peek: () =>
         Effect.succeed({
           repositoryIdentity: null,
@@ -662,6 +663,8 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
             providerThreadId: providerThread.id,
             providerTurnId: providerTurn.id,
             messageId: steerMessageId,
+            modelSelection,
+            steerFollowUpAfterRunOrdinal: run.ordinal,
           },
         ],
       );
@@ -1265,6 +1268,8 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
             ),
           ),
         );
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const sweep = reactor.sweep.pipe(Effect.andThen(worker.drain()));
         const summaries = (threadId: ThreadId) =>
           Effect.map(orchestrator.getThreadRecords(threadId, ["messages"]), ({ messages }) =>
             messages.flatMap((message) => message.notification?.summary ?? []),
@@ -1275,7 +1280,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
             (thread) => thread?.pullRequests?.[0]?.watch !== undefined,
           );
 
-        for (let pass = 0; pass < 20; pass += 1) yield* reactor.sweep;
+        for (let pass = 0; pass < 20; pass += 1) yield* sweep;
         assert.equal(reads, 20);
         for (const threadId of threadIds) {
           assert.isTrue(yield* watching(threadId));
@@ -1283,35 +1288,32 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         }
 
         host = "open";
-        yield* reactor.sweep;
+        yield* sweep;
         assert.equal(reads, 21);
         for (const threadId of threadIds) {
-          assert.deepEqual(yield* summaries(threadId), ["#9: checks passed"]);
+          assert.deepEqual(yield* summaries(threadId), []);
         }
 
-        yield* reactor.sweep;
+        yield* sweep;
         assert.equal(reads, 21);
 
         const late = ThreadId.make("runtime-pull-request-watch-shared-late");
         yield* watchFrom(late);
-        yield* reactor.sweep;
+        yield* sweep;
         assert.equal(reads, 22);
-        assert.deepEqual(yield* summaries(late), ["#9: checks passed"]);
+        assert.deepEqual(yield* summaries(late), []);
         for (const threadId of threadIds) {
-          assert.deepEqual(yield* summaries(threadId), ["#9: checks passed"]);
+          assert.deepEqual(yield* summaries(threadId), []);
         }
         threadIds.push(late);
 
         host = "closed";
         yield* TestClock.adjust("10 minutes");
-        yield* reactor.sweep;
+        yield* sweep;
         assert.equal(reads, 23);
         for (const threadId of threadIds) {
           assert.isFalse(yield* watching(threadId));
-          assert.deepEqual(yield* summaries(threadId), [
-            "#9: checks passed",
-            "#9: closed, stopped watching",
-          ]);
+          assert.deepEqual(yield* summaries(threadId), ["#9: closed, stopped watching"]);
         }
       }).pipe(Effect.provide(Layer.fresh(layerTest))),
   );
@@ -2178,6 +2180,18 @@ it.layer(layerSharedApplicationDataPlaneTest)("thread environment move fence", (
         title: "Usable again",
       });
 
+      const titleEffects = yield* outbox.listByCommandId(
+        CommandId.make("runtime-layer-move-unfenced-mutation"),
+      );
+      assert.deepEqual(
+        titleEffects.map((effect) => effect.request.type),
+        ["provider-session.apply-thread-title"],
+      );
+      yield* outbox.cancelUnsettled({
+        threadId,
+        effectTypes: ["provider-session.apply-thread-title"],
+        reason: "test title synchronization finished",
+      });
       yield* orchestrator.dispatch({
         type: "thread.move.fence",
         commandId: CommandId.make("runtime-layer-move-refence"),
@@ -3120,7 +3134,7 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
       const threadEvents = () => sql<{ event_type: string }>`
         SELECT event_type FROM orchestration_events
         WHERE stream_id = ${threadId}
-          AND event_type IN ('thread.metadata-updated', 'thread.visited')
+          AND event_type IN ('thread.metadata-updated', 'thread.visit-recorded')
         ORDER BY sequence
       `;
       yield* orchestrator.dispatch({
@@ -3143,7 +3157,7 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
       yield* maintenance.compactEventStore();
       assert.deepEqual(
         (yield* threadEvents()).map((row) => row.event_type),
-        ["thread.metadata-updated", "thread.visited"],
+        ["thread.metadata-updated", "thread.visit-recorded"],
       );
       yield* orchestrator.dispatch({
         type: "thread.metadata.update",

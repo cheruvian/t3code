@@ -7,10 +7,13 @@ import { GrantStore, commandScope, approvalScope } from "../src/grants.js";
 import { DemoProvider, DEMO_ITEM, DEMO_PASSWORD } from "../src/providers.js";
 
 async function until(fn) {
+  // oxlint-disable-next-line t3code/no-wall-clock-in-tests -- Bounds asynchronous broker/subprocess probes outside an Effect runtime.
   const deadline = Date.now() + 10000;
+  // oxlint-disable-next-line t3code/no-wall-clock-in-tests, t3code/no-polling-loop-in-tests -- This fixture observes real worker-process transitions with a bounded deadline.
   while (Date.now() < deadline) {
     const result = await fn();
     if (result) return result;
+    // oxlint-disable-next-line t3code/no-real-time-wait-in-tests -- Lets the separately spawned worker publish its real process state.
     await new Promise((r) => setTimeout(r, 20));
   }
   throw new Error("Expected grant behavior did not arrive");
@@ -125,6 +128,7 @@ test("grant survives broker restart and revoked grant does not", async (t) => {
 });
 
 test("toast lasts 300 seconds after command exit; dismissal retains grant; expiry clears notice", async (t) => {
+  // oxlint-disable-next-line t3code/no-wall-clock-in-tests -- The injected broker clock starts aligned with real worker-process deadlines, then advances explicitly.
   let now = Date.now();
   const { broker, input, notifier } = await setup(t, { now: () => now });
   const id = await allow(broker, input);
@@ -141,7 +145,7 @@ test("toast lasts 300 seconds after command exit; dismissal retains grant; expir
   await broker.sweep();
   assert.equal(broker.notices().length, 0);
   assert.ok(notifier.dismissed.includes(notice.notice_id));
-  const second = broker.request(input);
+  broker.request(input);
   await until(() => notifier.shown.length === 2);
   notifier.shown[1].action("dismiss");
   assert.equal(broker.notices().length, 0);
@@ -167,6 +171,7 @@ test("notification failure requires manual approval and presenter crash stops ac
 });
 
 test("presenter startup delay does not reduce the five-minute visible lifetime", async (t) => {
+  // oxlint-disable-next-line t3code/no-wall-clock-in-tests -- The injected broker clock starts aligned with real worker-process deadlines, then advances explicitly.
   let now = Date.now();
   const { broker, input, notifier } = await setup(t, { now: () => now });
   await allow(broker, input);
@@ -190,12 +195,18 @@ test("revocation during provider fetch cancels delivery", async (t) => {
     new Promise((r) => {
       resolve = r;
     });
+  let finishDecision;
+  const finished = new Promise((resolve) => {
+    finishDecision = resolve;
+  });
+  const decide = broker.decide.bind(broker);
+  broker.decide = (...args) => decide(...args).finally(() => finishDecision());
   const request = broker.request(input);
   await until(() => !!resolve);
   notifier.shown[0].action("revoke");
   await until(async () => (await broker.status(request.request_id)).state === "revoked");
   resolve(JSON.stringify({ username: "fake", password: DEMO_PASSWORD }));
-  await new Promise((r) => setTimeout(r, 50));
+  await finished;
   assert.deepEqual(await readdir(broker.leaseDir), []);
 });
 

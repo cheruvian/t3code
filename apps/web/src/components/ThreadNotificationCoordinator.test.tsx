@@ -178,6 +178,7 @@ async function render() {
   for (const listener of settingsListeners) listener();
   stopNotifications ??= startThreadNotifications(registry, {
     navigate: state.navigate,
+    subscribe: () => () => {},
     get state() {
       return { matches: [{ params: state.active }] };
     },

@@ -1,3 +1,4 @@
+/* oxlint-disable t3code/no-test-timeout-or-unreasoned-skip -- These node:test subprocess fixtures need bounded cleanup deadlines; they do not run under the Vitest project timeout. */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
@@ -15,9 +16,12 @@ const base = {
   ttl_seconds: 5,
   file_env: "CB_CREDENTIAL_FILE",
 };
+// oxlint-disable-next-line t3code/no-real-time-wait-in-tests -- Waits between OS process/file probes; child processes run on the real clock.
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(fn, timeout = 8000) {
+  // oxlint-disable-next-line t3code/no-wall-clock-in-tests -- Bounds polling of real subprocess state, not a performance assertion.
   const end = Date.now() + timeout;
+  // oxlint-disable-next-line t3code/no-wall-clock-in-tests -- Uses the same real deadline as the child-process probe.
   while (Date.now() < end) {
     const value = await fn();
     if (value) return value;

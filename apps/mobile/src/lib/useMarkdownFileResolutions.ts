@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { EnvironmentId, ProjectResolvedFilePath } from "@t3tools/contracts";
 import {
   collectMarkdownFilePaths,
@@ -16,10 +16,11 @@ export function useMarkdownFileResolutions(
   cwd?: string,
   baseDir?: string,
 ) {
-  const pathsKey = JSON.stringify(useMemo(() => collectMarkdownFilePaths(text), [text]));
+  const pathsKey = JSON.stringify(collectMarkdownFilePaths(text));
   const key = JSON.stringify([environmentId, cwd, baseDir, pathsKey]);
   const resolve = useAtomQueryRunner(projectEnvironment.resolveFilePaths, { reportFailure: false });
   const [state, setState] = useState<{ key: string; paths: MarkdownFileResolutions } | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- resolves paths through the environment RPC and ignores stale responses after workspace changes or unmount
   useEffect(() => {
     if (!environmentId || !cwd) return;
     const paths: string[] = JSON.parse(pathsKey);

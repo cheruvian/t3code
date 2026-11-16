@@ -4,7 +4,7 @@ import { realpath } from "node:fs/promises";
 import { executeInT3 } from "./t3-client.js";
 import { BrokerError } from "./common.js";
 
-const help = `Credential Broker — T3-approved temporary credential files
+const help = `Credential Broker: T3-approved temporary credential files
 
   credential-broker exec --site HOST --reason REASON
       [--field password|username|login|sshKey|ssh] [--label LABEL] [--ttl 60] [--cwd DIR]

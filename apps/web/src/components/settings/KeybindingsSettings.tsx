@@ -141,9 +141,10 @@ function KeybindingsSearchInput({
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             event.preventDefault();
-            event.stopPropagation();
-            onChange("");
-            event.currentTarget.blur();
+            if (query.length > 0) {
+              event.stopPropagation();
+              onChange("");
+            } else event.currentTarget.blur();
             return;
           }
           if (event.key === "Tab") return;

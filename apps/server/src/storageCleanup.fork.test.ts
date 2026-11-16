@@ -1,3 +1,5 @@
+import * as GitWorkflowService from "./git/GitWorkflowService.ts";
+import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Stream from "effect/Stream";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
@@ -310,6 +312,7 @@ describe.each(["confirmed", "settled"] as const)("%s worktree removal", (mode) =
           const project = {
             id: thread.projectId,
             title: "Fixture",
+            hasCustomTitle: false,
             workspaceRoot: repo,
             defaultModelSelection: null,
             scripts: [],
@@ -388,6 +391,27 @@ describe.each(["confirmed", "settled"] as const)("%s worktree removal", (mode) =
             }),
             Layer.mock(Orchestrator.OrchestratorV2)({ streamDomainEvents: Stream.never }),
             Layer.mock(GitManager.GitManager)({ invalidateStatus: () => Effect.void }),
+            Layer.mock(GitWorkflowService.GitWorkflowService)({
+              currentBranch: (cwd) =>
+                Effect.sync(
+                  () =>
+                    NodeChildProcess.execFileSync("git", ["branch", "--show-current"], {
+                      cwd,
+                      stdio: "pipe",
+                    })
+                      .toString()
+                      .trim() || null,
+                ),
+            }),
+            Layer.mock(ThreadManagement.ThreadManagementService)({
+              getShellSnapshot: () =>
+                Effect.succeed({
+                  schemaVersion: 2,
+                  snapshotSequence: 0,
+                  threads: fixtureThreads(),
+                  archivedThreads: [],
+                }),
+            }),
             Layer.mock(TerminalManager.TerminalManager)({
               subscribeMetadata: () => Effect.succeed(() => {}),
             }),

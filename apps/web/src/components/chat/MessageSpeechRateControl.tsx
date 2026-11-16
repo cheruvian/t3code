@@ -26,14 +26,14 @@ export function MessageSpeechRateControl() {
         render={
           <Button
             type="button"
-            size="sm"
+            size="sm-pill"
             variant="ghost"
-            className="h-9 shrink-0 gap-1 whitespace-nowrap rounded-full px-2 text-xs tabular-nums"
+            className="h-9 shrink-0 whitespace-nowrap"
             aria-label={`Speech speed ${rate} times. Set to ${nextRate} times`}
             onClick={() => player.setRate(nextRate)}
           >
             <GaugeIcon className="size-3.5" aria-hidden />
-            {rate}×
+            <span className="text-xs tabular-nums">{rate}×</span>
           </Button>
         }
       />

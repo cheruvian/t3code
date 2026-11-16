@@ -1,4 +1,4 @@
-import { useNavigation } from "@react-navigation/native";
+import { StackActions, useNavigation } from "@react-navigation/native";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
@@ -63,7 +63,9 @@ function Notice({ environmentId }: { environmentId: EnvironmentId }) {
               label={thread.title}
               description="Open blocking thread"
               onPress={() =>
-                navigation.navigate("Thread", { environmentId, threadId: thread.threadId })
+                navigation.dispatch(
+                  StackActions.push("Thread", { environmentId, threadId: thread.threadId }),
+                )
               }
             />
           ))

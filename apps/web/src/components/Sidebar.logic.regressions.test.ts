@@ -1,3 +1,4 @@
+import { isListedThreadLineage } from "@t3tools/contracts";
 import { isThreadWorking as isSidebarThreadWorking } from "@t3tools/client-runtime/state/thread-inbox";
 import { resolveServerBackedAppStageLabel as resolveSidebarStageBadgeLabel } from "../branding.logic";
 import { formatWorkingDurationLabel } from "@t3tools/client-runtime/state/models";
@@ -24,7 +25,6 @@ import {
   hasUnreadAssistantMessage,
   resolveSidebarV2UnreadState,
   isContextMenuPointerDown,
-  isSidebarHiddenThread,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
@@ -315,8 +315,8 @@ describe("sidebar thread lineage helpers", () => {
       },
     });
 
-    expect(isSidebarHiddenThread(subagent)).toBe(true);
-    expect(isSidebarHiddenThread(makeThreadFixture())).toBe(false);
+    expect(!isListedThreadLineage(subagent.lineage)).toBe(true);
+    expect(!isListedThreadLineage(makeThreadFixture().lineage)).toBe(false);
   });
 
   it("resolves the parent thread for fork sidebar affordances", () => {
@@ -2055,6 +2055,7 @@ function makeThread(overrides: ThreadFixtureOverrides = {}): Thread {
 describe("getFallbackThreadIdAfterDelete", () => {
   it("returns the top remaining thread in the deleted thread's project sidebar order", () => {
     const fallbackThreadId = getFallbackThreadIdAfterDelete({
+      delegatedUnderParent: new Set(),
       now: "2026-06-20T12:00:00.000Z",
       threads: [
         makeThread({

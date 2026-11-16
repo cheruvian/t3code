@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { BackHandler, FlatList, Pressable, ScrollView, View } from "react-native";
+import { BackHandler, Pressable, ScrollView, View } from "react-native";
+import { LegendList } from "@legendapp/list/react-native";
+import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -60,6 +62,7 @@ export function ComposerQuickCommandPicker(props: {
       ),
     [props.items, activeGroup?.id, prefix],
   );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Registers the native hardware-back listener while the picker is mounted.
   useEffect(() => {
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
       onDismiss();
@@ -138,12 +141,13 @@ export function ComposerQuickCommandPicker(props: {
           ))}
         </View>
       ) : null}
-      <FlatList
+      <LegendList
         data={matches}
         keyExtractor={(item) => item.id}
         style={{ height: Math.max(64, Math.min(matches.length, 3) * 64) }}
-        initialNumToRender={4}
-        windowSize={3}
+        estimatedItemSize={64}
+        renderScrollComponent={NativeScrollView}
+        extraData={{ disabled: props.disabled, canSend: props.canSend, onSelect: props.onSelect }}
         keyboardShouldPersistTaps="always"
         ListEmptyComponent={
           <Text className="py-4 text-xs text-foreground-muted">No matching commands.</Text>

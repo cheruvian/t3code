@@ -12,8 +12,9 @@ import {
   pendingThreadOrderAtom,
 } from "./thread-order";
 import { environmentServerConfigsAtom } from "./server";
-import { environmentThreadShells } from "./threads";
+
 import { allowUnpinnedReorderAtom } from "./preferences";
+import { steadyNavigationThreadShellsAtom } from "./threads";
 
 vi.mock("./atom-registry", async () => {
   const { AtomRegistry } = await import("effect/reactivity");
@@ -26,7 +27,7 @@ vi.mock("./preferences", async () => {
 vi.mock("./threads", async () => {
   const { Atom } = await import("effect/reactivity");
   return {
-    environmentThreadShells: { navigationThreadShellsAtom: Atom.make([]).pipe(Atom.keepAlive) },
+    steadyNavigationThreadShellsAtom: Atom.make([]).pipe(Atom.keepAlive),
   };
 });
 vi.mock("./server", async () => {
@@ -41,7 +42,7 @@ vi.mock("./use-thread-outbox", async () => {
 type ServerConfigs = Atom.Type<typeof environmentServerConfigsAtom>;
 type ServerConfig = ServerConfigs extends ReadonlyMap<EnvironmentId, infer Config> ? Config : never;
 const configsAtom = environmentServerConfigsAtom as Atom.Writable<ServerConfigs, ServerConfigs>;
-const shellsAtom = environmentThreadShells.navigationThreadShellsAtom as Atom.Writable<
+const shellsAtom = steadyNavigationThreadShellsAtom as Atom.Writable<
   readonly EnvironmentThreadShell[],
   readonly EnvironmentThreadShell[]
 >;

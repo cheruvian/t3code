@@ -16,6 +16,7 @@ export function useBrowserDictation(input: {
   const [preview, setPreview] = useState("");
   const [error, setError] = useState<string | null>(null);
   const latest = useRef(input);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- The speech-recognition callback reads the last committed composer identity and draft.
   useLayoutEffect(() => {
     latest.current = input;
   });
@@ -28,6 +29,7 @@ export function useBrowserDictation(input: {
     session.current = null;
   };
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Owns the recognition session and visibility listener; each dependency change invalidates the captured draft through cleanup.
   useEffect(() => {
     const onVisibilityChange = () => {
       if (document.hidden) {
@@ -43,6 +45,7 @@ export function useBrowserDictation(input: {
       session.current?.cancel();
       session.current = null;
     };
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A changed owner, prompt, or permission cancels recognition of the captured draft.
   }, [input.owner, input.prompt, input.enabled]);
 
   return {

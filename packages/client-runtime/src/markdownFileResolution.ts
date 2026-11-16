@@ -55,7 +55,7 @@ export function collectMarkdownFilePaths(markdown: string): string[] {
     }
     let href =
       node.url ??
-      (node.type === "inlineCode" && !inLink
+      (node.type === "inlineCode" && !inLink && !node.value?.startsWith("@")
         ? inlineCodeFilePathCandidate(node.value ?? "")
         : null);
     const start = node.position?.start.offset;

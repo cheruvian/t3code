@@ -13,6 +13,7 @@ export function SidebarProviderOutageIcon() {
   );
   const [open, setOpen] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Cancels the hover-dismiss timer when its popover unmounts.
   useEffect(() => () => clearTimeout(closeTimer.current), []);
   const show = () => {
     clearTimeout(closeTimer.current);
@@ -30,7 +31,7 @@ export function SidebarProviderOutageIcon() {
         <PopoverTrigger
           aria-label={`${incidents.length} active provider service incidents`}
           render={
-            <button className="flex size-7 items-center justify-center rounded-md text-warning outline-hidden hover:bg-warning/10 focus-visible:ring-2 focus-visible:ring-ring" />
+            <button className="flex size-7 items-center justify-center rounded-md text-warning outline-hidden hover:bg-warning/10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" />
           }
           onMouseEnter={show}
           onMouseLeave={hide}

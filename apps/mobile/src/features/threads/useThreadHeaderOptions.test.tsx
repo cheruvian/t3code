@@ -1,4 +1,10 @@
-import type { VcsStatusResult } from "@t3tools/contracts";
+import {
+  CommandId,
+  EnvironmentId,
+  ProjectId,
+  ThreadId,
+  type VcsStatusResult,
+} from "@t3tools/contracts";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -14,6 +20,7 @@ const harness = vi.hoisted(() => ({
 vi.mock("@react-navigation/native", async () => {
   const { createContext } = await import("react");
   const navigation = {
+    getState: () => ({ routes: [{ key: "thread-route", name: "Thread" }] }),
     canGoBack: () => true,
     dispatch: () => {},
     goBack: () => {},
@@ -29,6 +36,7 @@ vi.mock("@react-navigation/native", async () => {
   return {
     StackActions: { replace: () => ({}) },
     useNavigation: () => navigation,
+    useRoute: () => ({ key: "thread-route", name: "Thread" }),
     NavigationContext: createContext(navigation),
     NavigationRouteContext: createContext({ key: "thread-route" }),
   };
@@ -39,26 +47,26 @@ vi.mock("../../native/native-layout-metrics", () => ({ useDeviceType: () => "pho
 vi.mock("../../native/useOpenPullRequest", () => ({ useOpenPullRequest: () => () => {} }));
 
 vi.mock("../../state/session", () => ({ useEnvironmentScope: () => true }));
-vi.mock("../../components/ui/AppBar", async () => {
-  const { NativeStackScreenOptions } = await import("../../native/StackHeader");
-  return {
-    AppBar: (props: import("../../components/ui/AppBar.types").AppBarProps) => (
-      <NativeStackScreenOptions options={props.options} optionsVersion={props.optionsVersion} />
-    ),
-  };
-});
-vi.mock("../../components/ui/Toolbar", () => ({
-  Toolbar: { Button: "Button", Menu: "Menu", MenuAction: "MenuAction" },
+vi.mock("expo-glass-effect", () => ({ GlassContainer: "div" }));
+vi.mock("../../native/NativeWorkspaceColumns", () => ({
+  useNativeWorkspaceColumnsSupported: () => false,
 }));
+vi.mock("../../native/use-native-mail-search-toolbar", () => ({
+  useNativeMailSearchToolbar: () => false,
+}));
+vi.mock("../../components/ui/useControlTheme", () => ({ useControlTheme: () => ({ colors: {} }) }));
+vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
 vi.mock("../../components/ui/Dialog", () => ({ confirm: () => {} }));
 vi.mock("../../components/ui/ScreenHeaderButton", () => ({ ScreenHeaderButton: () => null }));
 vi.mock("react-native", () => ({ Alert: { alert: () => {} }, Linking: {}, Platform: {} }));
 vi.mock("../layout/AdaptiveWorkspaceLayout", () => ({
+  useWorkspacePaneState: () => ({ panes: { auxiliaryPaneVisible: false } }),
   useAdaptiveWorkspaceLayout: () => ({
     layout: { usesSplitView: false },
     panes: { primarySidebarVisible: false, auxiliaryPaneVisible: false },
     togglePrimarySidebar: () => {},
     toggleAuxiliaryPane: () => {},
+    startNewTask: () => {},
   }),
 }));
 vi.mock("../layout/native-mail-search-toolbar", () => ({
@@ -70,6 +78,8 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
 }));
 
 import { ThreadHeader } from "./ThreadHeader";
+import { threadTerminalMenu, type ThreadGitControlsProps } from "./ThreadGitControls";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
 
 const projectScripts: never[] = [];
 
@@ -101,8 +111,6 @@ function Header(props: { readonly gitStatus: VcsStatusResult | null; readonly ti
     <ThreadHeader
       title={props.title ?? "Thread"}
       subtitle=""
-      headerColor="#000"
-      usesNativeHeaderGlass
       gitControls={{
         environmentId: "environment-1",
         threadId: "thread-1",
@@ -122,11 +130,7 @@ function Header(props: { readonly gitStatus: VcsStatusResult | null; readonly ti
         onRunProjectScript: async () => {},
       }}
       hasThreadCwd
-      hasWorkspaceRoot
-      fileInspectorSupported={false}
       inspectorMode={null}
-      onToggleInspector={() => {}}
-      onOpenGitInspector={() => {}}
       onOpenFilesInspector={() => {}}
     />
   );
@@ -138,7 +142,7 @@ function renderedGitMenuItems(): Array<{
   onPress?: () => void;
 }> {
   const items = harness.renderedRightItems.at(-1) ?? [];
-  const git = items.find((item) => item.identifier === "thread-right-git") as
+  const git = items.find((item) => item.label === "Git controls") as
     | { menu: { items: Array<{ description?: unknown; label?: unknown; onPress?: () => void }> } }
     | undefined;
   return git?.menu.items ?? [];
@@ -202,4 +206,55 @@ describe("ThreadHeader", () => {
     await act(async () => renderedGitMenuItems()[1]?.onPress?.());
     expect(harness.navigatedRoutes).toEqual(["GitConfirm"]);
   });
+});
+
+it("keeps resource checkout ownership and actions in the terminal menu", () => {
+  const script = {
+    id: "sandbox",
+    name: "SANDBOX",
+    command: "deploy",
+    icon: "play" as const,
+    runOnWorktreeCreate: false,
+    resource: { color: "#3b82f6", checkoutPrompt: "", releaseCommand: "", releasePrompt: "" },
+  };
+  const onRunProjectScript = vi.fn(async () => {});
+  const props: ThreadGitControlsProps = {
+    environmentId: "local",
+    threadId: "thread-1",
+    currentBranch: "main",
+    gitCwd: "/workspace",
+    gitStatus: null,
+    gitOperationLabel: null,
+    onPull: async () => {},
+    onRunAction: async () => null,
+    canOpenTerminal: true,
+    canOperateTerminal: true,
+    canOpenFiles: true,
+    projectScripts: [script],
+    terminalSessions: [],
+    onOpenTerminal: () => {},
+    onOpenNewTerminal: () => {},
+    onRunProjectScript,
+  };
+  const project = {
+    environmentId: EnvironmentId.make("local"),
+    id: ProjectId.make("project-1"),
+  } as EnvironmentProject;
+  const lock = {
+    script,
+    threadId: ThreadId.make("thread-1"),
+    operationId: CommandId.make("op"),
+    phase: "held" as const,
+  };
+  const checkout = threadTerminalMenu(props)?.items[0];
+  expect(checkout?.title).toBe("Check out SANDBOX");
+  if (checkout && "onPress" in checkout) checkout.onPress?.();
+  expect(onRunProjectScript).toHaveBeenCalledWith(script);
+  expect(
+    threadTerminalMenu({ ...props, resourceLocks: [{ project, lock }] })?.items[0]?.title,
+  ).toBe("Release SANDBOX");
+  expect(
+    threadTerminalMenu({ ...props, threadId: "thread-2", resourceLocks: [{ project, lock }] })
+      ?.items[0]?.title,
+  ).toBe("Take over SANDBOX");
 });

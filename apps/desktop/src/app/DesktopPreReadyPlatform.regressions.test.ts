@@ -13,7 +13,7 @@ const {
   setDesktopNameMock,
   mkdirSyncMock,
   writeFileSyncMock,
-  copyFileSyncMock,
+  readFileSyncMock,
   execFileSyncMock,
 } = vi.hoisted(() => ({
   appendSwitchMock: vi.fn(),
@@ -23,7 +23,7 @@ const {
   setDesktopNameMock: vi.fn(),
   mkdirSyncMock: vi.fn(),
   writeFileSyncMock: vi.fn(),
-  copyFileSyncMock: vi.fn(),
+  readFileSyncMock: vi.fn(() => "{}"),
   execFileSyncMock: vi.fn(),
 }));
 
@@ -45,10 +45,9 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("node:fs", () => ({
-  readFileSync: () => "{}",
+  readFileSync: readFileSyncMock,
   mkdirSync: mkdirSyncMock,
   writeFileSync: writeFileSyncMock,
-  copyFileSync: copyFileSyncMock,
 }));
 
 vi.mock("node:child_process", () => ({
@@ -67,7 +66,7 @@ describe("DesktopPreReadyPlatform", () => {
     setDesktopNameMock.mockReset();
     mkdirSyncMock.mockReset();
     writeFileSyncMock.mockReset();
-    copyFileSyncMock.mockReset();
+    readFileSyncMock.mockReset().mockReturnValue("{}");
     execFileSyncMock.mockReset();
   });
 
@@ -171,14 +170,12 @@ describe("DesktopPreReadyPlatform", () => {
     let desktopName = "t3code.desktop";
     let desktopEntry = previousEntry;
     let iconInstalled = false;
-    copyFileSyncMock.mockImplementation((_source: string, destination: string) => {
-      iconInstalled = destination === "/xdg/icons/com.t3tools.T3Code.desktop.png";
-    });
     setDesktopNameMock.mockImplementation((name: string) => {
       desktopName = name;
     });
     writeFileSyncMock.mockImplementation((path: string, contents: string) => {
       if (path === "/xdg/applications/com.t3tools.T3Code.desktop") desktopEntry = contents;
+      if (path === "/xdg/icons/com.t3tools.T3Code.desktop.png") iconInstalled = true;
     });
 
     return Effect.scoped(
@@ -228,12 +225,14 @@ describe("DesktopPreReadyPlatform", () => {
 
   it.effect("still prepares the portal entry when the bundled icon cannot be copied", () => {
     getSwitchValueMock.mockReturnValue("");
-    copyFileSyncMock.mockImplementation(() => {
+    readFileSyncMock.mockImplementation(() => {
       throw new Error("missing bundled icon");
     });
     return Effect.gen(function* () {
       yield* DesktopPreReadyPlatform.make;
-      const contents = writeFileSyncMock.mock.calls[0]?.[1];
+      const contents = writeFileSyncMock.mock.calls.find(([path]) =>
+        String(path).endsWith("/com.t3tools.T3Code.desktop"),
+      )?.[1];
       assert.include(contents, "MimeType=x-scheme-handler/t3code;");
       assert.include(contents, "Icon=");
       assert.equal(setDesktopNameMock.mock.calls.length, 1);

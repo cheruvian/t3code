@@ -20,6 +20,9 @@ vi.mock("react-native", () => ({
   ActionSheetIOS: {},
   Share: {},
 }));
+vi.mock("./MermaidCodeBlock", () => ({ MermaidCodeBlock: "NativeMermaidCodeBlock" }));
+vi.mock("./HighlightedCodeBlock", () => ({ HighlightedCodeBlock: "NativeHighlightedCodeBlock" }));
+vi.mock("../components/ui/Dialog", () => ({ alert: () => {} }));
 vi.mock("react-native-webview", () => ({ WebView: "WebView" }));
 vi.mock("@t3tools/mobile-mermaid", () => ({ default: "/* Mermaid runtime supplied by Metro */" }));
 vi.mock("./useEnrichedLinkVariants", () => ({ useEnrichedLinkVariants: () => ({}) }));

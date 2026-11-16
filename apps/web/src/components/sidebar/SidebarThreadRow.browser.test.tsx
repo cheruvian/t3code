@@ -40,7 +40,7 @@ function setup() {
     wokeAt: null,
     isActive: false,
     isRouteThread: false,
-    openPullRequestsInRightPanel: false,
+    readOpensPullRequestsInRightPanel: () => false,
     jumpLabel: null,
     currentEnvironmentId: null,
     environmentLabel: null,

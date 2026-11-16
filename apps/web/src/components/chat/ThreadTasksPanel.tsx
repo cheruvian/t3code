@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import type { TurnPlanEntry } from "../../session-logic";
 import { cn } from "../../lib/utils";
 import { useChatCanvas } from "./ChatCanvasContext";
@@ -41,10 +41,7 @@ export function ThreadTasksPanel({
   activeRunId: TurnPlanEntry["runId"];
 }) {
   const canvas = useChatCanvas();
-  const { active, history } = useMemo(
-    () => partitionThreadTasks(plans, activeRunId),
-    [plans, activeRunId],
-  );
+  const { active, history } = partitionThreadTasks(plans, activeRunId);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyLimit, setHistoryLimit] = useState(20);
   const availableGutter = canvas
@@ -66,7 +63,7 @@ export function ThreadTasksPanel({
       aria-label="Thread tasks"
       data-thread-tasks-placement={gutter ? "gutter" : "inline"}
       className={cn(
-        "z-20 min-w-0 shrink-0",
+        "z-20 min-w-0 shrink-0 scrollbar-gutter-both",
         gutter
           ? "absolute top-3 overflow-y-auto overscroll-contain"
           : "chat-composer-lane max-h-64 overflow-y-auto overscroll-contain py-2",
@@ -104,7 +101,7 @@ export function ThreadTasksPanel({
                 {history.length > historyLimit ? (
                   <button
                     type="button"
-                    className="w-full rounded-md px-2 py-1 text-muted-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="w-full rounded-md px-2 py-1 text-muted-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     onClick={() => setHistoryLimit((limit) => limit + 20)}
                   >
                     Show older tasks

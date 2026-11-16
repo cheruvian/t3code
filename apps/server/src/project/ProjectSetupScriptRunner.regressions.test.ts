@@ -49,6 +49,7 @@ const makeProject = (
 
 const makeProjectionSnapshotQueryLayer = (project: Project) =>
   Layer.succeed(ProjectService.ProjectService, {
+    workspaceScanDirectory: () => Effect.die("unused"),
     resourceRequest: () => Effect.die("unused"),
     resourceComplete: () => Effect.die("unused"),
     create: () => Effect.die("unused"),
@@ -101,6 +102,7 @@ const makeTerminalManagerLayer = (overrides: TerminalOverrides) =>
         clear: () => Effect.void,
         close: () => Effect.void,
         closeIdle: () => Effect.void,
+        closeOnSettle: () => Effect.void,
         subscribeMetadata: () => Effect.succeed(() => undefined),
         ...overrides,
         subscribe: (listener) =>
@@ -194,6 +196,7 @@ describe("ProjectSetupScriptRunner", () => {
 
       expect(result).toMatchObject({ status: "started", scriptId: "default-setup" });
       expect(open).toHaveBeenCalledWith({
+        stopOnSettle: false,
         threadId: "thread-1",
         terminalId: "setup-default-setup",
         cwd: "/repo/worktrees/a",
@@ -298,6 +301,7 @@ describe("ProjectSetupScriptRunner", () => {
           async: true,
         });
         expect(open).toHaveBeenCalledWith({
+          stopOnSettle: false,
           threadId: "thread-1",
           terminalId: "setup-setup",
           cwd: "/repo/worktrees/a",
@@ -618,11 +622,13 @@ describe("ProjectSetupScriptRunner", () => {
         const written = writes[0] ?? "";
         const sentinel = /__T3_SETUP_DONE___[0-9a-f]{32}:/.exec(written)?.[0];
         expect(sentinel).toBeDefined();
-        expect(written).toBe(` ( bun install\r); printf '\\n${sentinel}%s\\n' "$?"\r`);
+        expect(written).toBe(
+          ` ( __t3_command=$(printf '%b_' 'bun install'); eval "\${__t3_command%_}" ); printf '\\n${sentinel}%s\\n' "$?"\r`,
+        );
 
         // Output arrives in chunks; partial lines are buffered until a newline,
         // control sequences are stripped, and the echoed wrapper is hidden.
-        yield* emit(`( bun install\r\n> ); printf '\\n${sentinel}%s\\n' "$?"\r\n`);
+        yield* emit(`${written.trimEnd()}\r\n`);
         yield* emit("\u001b[32mResolving");
         yield* emit(" deps\u001b[0m\r\n");
         // Progress redraws separated by bare carriage returns are their own lines.
@@ -786,7 +792,8 @@ describe("ProjectSetupScriptRunner", () => {
     },
     {
       shell: "/bin/bash",
-      expected: /^ \( bun install\r\); printf '\\n__T3_SETUP_DONE___[0-9a-f]{32}:%s\\n' "\$\?"\r$/,
+      expected:
+        /^ \( __t3_command=\$\(printf '%b_' 'bun install'\); eval "\$\{__t3_command%_\}" \); printf '\\n__T3_SETUP_DONE___[0-9a-f]{32}:%s\\n' "\$\?"\r$/,
     },
   ])("wraps the command for the $shell syntax", ({ shell, expected }) => {
     const open = vi.fn(() =>

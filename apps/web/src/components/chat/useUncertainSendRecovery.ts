@@ -29,7 +29,7 @@ export function useUncertainSendRecovery(input: {
   const atom = uncertainSendAtom(input.routeKey);
   const send = useAtomValue(atom);
   const onClear = useStableCallback(input.onClear);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Reconcile server acknowledgements with the external persisted composer store.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Reconcile server acknowledgements with the external persisted composer store.
   useEffect(() => {
     if (!send || send.threadId !== input.threadId) return;
     const store = useComposerDraftStore.getState();

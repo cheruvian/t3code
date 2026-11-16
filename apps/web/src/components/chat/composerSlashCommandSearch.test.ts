@@ -13,11 +13,11 @@ describe("searchSlashCommandItems", () => {
   it("moves exact provider command matches ahead of broader description matches", () => {
     const items = [
       {
-        id: "slash:default",
+        id: "slash:clear",
         type: "slash-command",
-        command: "default",
-        label: "/default",
-        description: "Switch this thread back to normal build mode",
+        command: "clear",
+        label: "/clear",
+        description: "Start fresh to continue building",
       },
       {
         id: "provider-slash-command:claudeAgent:ui",
@@ -41,7 +41,7 @@ describe("searchSlashCommandItems", () => {
 
     expect(searchSlashCommandItems(items, "ui").map((item) => item.id)).toEqual([
       "provider-slash-command:claudeAgent:ui",
-      "slash:default",
+      "slash:clear",
     ]);
   });
 
@@ -191,7 +191,7 @@ describe("searchSlashCommandItems", () => {
         type: "provider-slash-command",
         provider: claudeDriver,
         command: { name: "compact" },
-        label: "/compact",
+        label: "/clear",
         description: "Compact the conversation",
       },
       {

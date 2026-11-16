@@ -1,16 +1,5 @@
 import { SourceControlProviderKind, GitCommandError } from "@t3tools/contracts";
-/**
- * Pins `./GitCafeSourceControlProvider.ts`, which pass 2 creates:
- *
- * - `discovery: SourceControlCliDiscoverySpec` — kind `"gitcafe"`, executable `"cafe"`,
- *   `authArgs` ending in `["auth", "status", "--json"]` against `https://git.cafe/api`, and a
- *   `parseAuth` that reads cafe's `{ schemaVersion: 1, data: { host, username } }` answer and its
- *   `{ schemaVersion: 1, error: { code, status, message } }` failure envelope.
- * - `make: Effect<SourceControlProvider["Service"], never, GitCafeApi | SourceControlHost>` with
- *   kind `"gitcafe"`, resolving the repository and host from the checkout's remote.
- *
- * Uses `./GitCafeApi.ts` and `./GitCafeCredentials.ts` as pinned in the sibling tests.
- */
+/** Verifies cafe discovery, authentication envelopes, and repository resolution. */
 import { assert, describe, it } from "@effect/vitest";
 
 import * as Effect from "effect/Effect";

@@ -84,6 +84,7 @@ describe("QueuedRunsControl automatic completion delivery", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        onImageExpand={() => {}}
         timestampFormat="locale"
         onOpenThread={() => {}}
         editBlockedReason={null}
@@ -128,6 +129,7 @@ describe("QueuedRunsControl attachments and edit mode", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        onImageExpand={() => {}}
         timestampFormat="locale"
         onOpenThread={() => {}}
         editBlockedReason={null}
@@ -160,6 +162,7 @@ describe("QueuedRunsControl attachments and edit mode", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        onImageExpand={() => {}}
         timestampFormat="locale"
         onOpenThread={() => {}}
         editBlockedReason={null}
@@ -188,6 +191,7 @@ describe("QueuedRunsControl attachments and edit mode", () => {
 
     const html = renderToStaticMarkup(
       <QueuedRunsControl
+        onImageExpand={() => {}}
         timestampFormat="locale"
         onOpenThread={() => {}}
         editBlockedReason={null}

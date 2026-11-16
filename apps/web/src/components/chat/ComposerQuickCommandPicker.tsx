@@ -43,8 +43,10 @@ export function ComposerQuickCommandPicker(props: {
     prefix,
     nameOf,
   );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Resets the imperative virtual-list viewport when its command group changes.
   useEffect(() => {
     listRef.current?.scrollToOffset({ offset: 0, animated: false });
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Group and prefix changes invalidate the virtual list scroll position.
   }, [group, prefix]);
   return (
     <Sheet

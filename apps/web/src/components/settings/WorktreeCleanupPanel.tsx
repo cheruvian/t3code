@@ -6,7 +6,7 @@ import {
 } from "@t3tools/client-runtime/state/models";
 import { getWorktreeCleanupOwners } from "@t3tools/shared/worktreeOwnership";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
@@ -33,6 +33,7 @@ function WorktreeRow({ group, removed }: { group: WorktreeGroup; removed: boolea
   const [nearViewport, setNearViewport] = useState(
     () => typeof IntersectionObserver === "undefined",
   );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Observes the row DOM intersection to mount worktree queries only near the viewport.
   useEffect(() => {
     const row = rowRef.current;
     if (!row) return;
@@ -57,7 +58,7 @@ function WorktreeRow({ group, removed }: { group: WorktreeGroup; removed: boolea
           input: { cwd: group.path },
         }),
   );
-  const owners = useMemo(() => {
+  const owners = (() => {
     for (const thread of group.threads) {
       const owners = getWorktreeCleanupOwners(
         group.threads,
@@ -67,7 +68,7 @@ function WorktreeRow({ group, removed }: { group: WorktreeGroup; removed: boolea
       if (owners.length === 1) return owners;
     }
     return group.threads;
-  }, [group.threads]);
+  })();
   const primary = owners[0]!;
   const files = status.data?.workingTree.files ?? [];
   const dirty = status.data?.hasWorkingTreeChanges === true;
@@ -142,10 +143,7 @@ export function WorktreeCleanupPanel() {
   const { scope, connectedEnvironments } = useSettingsScope();
   const projects = useProjects();
   const threads = useThreadShells();
-  const environmentIds = useMemo(
-    () => connectedEnvironments.map((entry) => entry.environmentId),
-    [connectedEnvironments],
-  );
+  const environmentIds = connectedEnvironments.map((entry) => entry.environmentId);
   const archived = useArchivedThreadSnapshots(environmentIds);
   const removeWorktrees = useAtomCommand(vcsEnvironment.removeSettledWorktrees, {
     reportFailure: false,
@@ -154,7 +152,7 @@ export function WorktreeCleanupPanel() {
   const [message, setMessage] = useState<string | null>(null);
   const [removedPaths, setRemovedPaths] = useState<ReadonlySet<string>>(new Set());
   const projectScoped = scope.kind === "project" || scope.kind === "checkout";
-  const groups = useMemo(() => {
+  const groups = (() => {
     const allowedEnvironments = new Set(connectedEnvironments.map((entry) => entry.environmentId));
     const selectedProjects = projectScoped
       ? new Set(scope.members.map((member) => `${member.environmentId}:${member.id}`))
@@ -194,7 +192,7 @@ export function WorktreeCleanupPanel() {
         });
     }
     return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
-  }, [projects, threads, archived.snapshots, scope, connectedEnvironments, projectScoped]);
+  })();
 
   const removeAll = async (criterion: "default" | "pushed") => {
     setRunning(criterion);

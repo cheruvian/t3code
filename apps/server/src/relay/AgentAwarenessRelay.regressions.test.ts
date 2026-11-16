@@ -139,6 +139,9 @@ const makeTestRelay = Effect.fnUntraced(function* (
   const catchUp = { shellSnapshotReads: 0 };
   const threads = ThreadManagementService.ThreadManagementService.of({
     getThreadShellForEvent: unused,
+    getMessagesById: unused,
+    getThreadLinkMetadata: unused,
+    cancelDelegatedTask: unused,
     listAppOwnedChildThreadIds: unused,
     countThreads: unused,
     listActiveShellIndex: () => Effect.succeed([]),
@@ -241,6 +244,7 @@ const makeTestRelay = Effect.fnUntraced(function* (
       getDescriptor: unused(),
     }),
     Effect.provideService(ProjectService.ProjectService, {
+      workspaceScanDirectory: unused,
       resourceRequest: unused,
       resourceComplete: unused,
       create: unused,

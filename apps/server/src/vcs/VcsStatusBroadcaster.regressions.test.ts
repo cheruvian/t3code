@@ -102,6 +102,10 @@ function layerTestFor(
     Layer.provide(layerBackgroundPolicy(() => state.backgroundWorkEnabled !== false)),
     Layer.provide(
       Layer.mock(GitWorkflowService.GitWorkflowService)({
+        currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
+        headPath: () => Effect.succeed(null),
+        repositoryRoot: () => Effect.sync(() => (state.currentLocalStatus.isRepo ? "/repo" : null)),
+        upstreamDivergence: () => Effect.succeed(null),
         localStatus: () =>
           Effect.suspend(() => state.beforeLocalStatus ?? Effect.void).pipe(
             Effect.andThen(
@@ -546,6 +550,10 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          currentBranch: () => Effect.sync(() => baseLocalStatus.refName),
+          headPath: () => Effect.succeed(null),
+          repositoryRoot: () => Effect.sync(() => (baseLocalStatus.isRepo ? "/repo" : null)),
+          upstreamDivergence: () => Effect.succeed(null),
           localStatus: () => Effect.succeed(baseLocalStatus),
           remoteStatus: () =>
             Effect.gen(function* () {
@@ -679,7 +687,8 @@ describe("VcsStatusBroadcaster", () => {
       assert.equal(state.localStatusCalls, 5);
       assert.equal(state.remoteStatusCalls, 2);
       assert.equal(state.localInvalidationCalls, 3);
-      assert.equal(state.remoteInvalidationCalls, 0);
+      // A changed branch invalidates the cwd-keyed remote cache before reading its PR.
+      assert.equal(state.remoteInvalidationCalls, 1);
     }).pipe(Effect.provide(layerTestFor(state)));
   });
 
@@ -700,6 +709,11 @@ describe("VcsStatusBroadcaster", () => {
         Layer.provide(layerBackgroundPolicy(() => true)),
         Layer.provide(
           Layer.mock(GitWorkflowService.GitWorkflowService)({
+            currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
+            headPath: () => Effect.succeed(null),
+            repositoryRoot: () =>
+              Effect.sync(() => (state.currentLocalStatus.isRepo ? "/repo" : null)),
+            upstreamDivergence: () => Effect.succeed(null),
             localStatus: (input) =>
               Effect.sync(() => {
                 seenCwds.push(input.cwd);
@@ -907,6 +921,11 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
+          headPath: () => Effect.succeed(null),
+          repositoryRoot: () =>
+            Effect.sync(() => (state.currentLocalStatus.isRepo ? "/repo" : null)),
+          upstreamDivergence: () => Effect.succeed(null),
           localStatus: () =>
             Effect.sync(() => {
               state.localStatusCalls += 1;
@@ -1007,6 +1026,11 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
+          headPath: () => Effect.succeed(null),
+          repositoryRoot: () =>
+            Effect.sync(() => (state.currentLocalStatus.isRepo ? "/repo" : null)),
+          upstreamDivergence: () => Effect.succeed(null),
           localStatus: () =>
             Effect.sync(() => {
               state.localStatusCalls += 1;
@@ -1100,6 +1124,10 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          currentBranch: () => Effect.sync(() => baseLocalStatus.refName),
+          headPath: () => Effect.succeed(null),
+          repositoryRoot: () => Effect.sync(() => (baseLocalStatus.isRepo ? "/repo" : null)),
+          upstreamDivergence: () => Effect.succeed(null),
           localStatus: () =>
             Effect.sync(() => {
               state.localStatusCalls += 1;
@@ -1241,6 +1269,11 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
+          headPath: () => Effect.succeed(null),
+          repositoryRoot: () =>
+            Effect.sync(() => (state.currentLocalStatus.isRepo ? "/repo" : null)),
+          upstreamDivergence: () => Effect.succeed(null),
           localStatus: () => Effect.succeed(state.currentLocalStatus),
           remoteStatus: () =>
             Effect.suspend(() => {
@@ -1411,6 +1444,11 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
+          headPath: () => Effect.succeed(null),
+          repositoryRoot: () =>
+            Effect.sync(() => (state.currentLocalStatus.isRepo ? "/repo" : null)),
+          upstreamDivergence: () => Effect.succeed(null),
           localStatus: () =>
             Effect.sync(() => {
               cachedLocalStatus ??= state.currentLocalStatus;
@@ -1520,6 +1558,11 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
+          headPath: () => Effect.succeed(null),
+          repositoryRoot: () =>
+            Effect.sync(() => (state.currentLocalStatus.isRepo ? "/repo" : null)),
+          upstreamDivergence: () => Effect.succeed(null),
           localStatus: () =>
             Effect.gen(function* () {
               state.localStatusCalls += 1;
@@ -1630,6 +1673,11 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
+          headPath: () => Effect.succeed(null),
+          repositoryRoot: () =>
+            Effect.sync(() => (state.currentLocalStatus.isRepo ? "/repo" : null)),
+          upstreamDivergence: () => Effect.succeed(null),
           localStatus: () =>
             Effect.sync(() => {
               cachedLocalStatus ??= state.currentLocalStatus;
@@ -1830,6 +1878,11 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
+          headPath: () => Effect.succeed(null),
+          repositoryRoot: () =>
+            Effect.sync(() => (state.currentLocalStatus.isRepo ? "/repo" : null)),
+          upstreamDivergence: () => Effect.succeed(null),
           localStatus: () =>
             Effect.sync(() => {
               state.localStatusCalls += 1;
@@ -2082,6 +2135,11 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => false)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
+          headPath: () => Effect.succeed(null),
+          repositoryRoot: () =>
+            Effect.sync(() => (state.currentLocalStatus.isRepo ? "/repo" : null)),
+          upstreamDivergence: () => Effect.succeed(null),
           localStatus: () =>
             Effect.sync(() => {
               state.localStatusCalls += 1;
@@ -2127,6 +2185,10 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          currentBranch: () => Effect.sync(() => baseLocalStatus.refName),
+          headPath: () => Effect.succeed(null),
+          repositoryRoot: () => Effect.sync(() => (baseLocalStatus.isRepo ? "/repo" : null)),
+          upstreamDivergence: () => Effect.succeed(null),
           localStatus: () => Effect.succeed(baseLocalStatus),
           remoteStatus: () =>
             (remoteStarted
@@ -2181,6 +2243,11 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
+          headPath: () => Effect.succeed(null),
+          repositoryRoot: () =>
+            Effect.sync(() => (state.currentLocalStatus.isRepo ? "/repo" : null)),
+          upstreamDivergence: () => Effect.succeed(null),
           localStatus: () =>
             Effect.sync(() => {
               state.localStatusCalls += 1;
@@ -2283,6 +2350,11 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
+          headPath: () => Effect.succeed(null),
+          repositoryRoot: () =>
+            Effect.sync(() => (state.currentLocalStatus.isRepo ? "/repo" : null)),
+          upstreamDivergence: () => Effect.succeed(null),
           localStatus: () => Effect.succeed(state.currentLocalStatus),
           remoteStatus: () =>
             Effect.sync(() => {
@@ -2374,6 +2446,10 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          currentBranch: () => Effect.sync(() => baseLocalStatus.refName),
+          headPath: () => Effect.succeed(null),
+          repositoryRoot: () => Effect.sync(() => (baseLocalStatus.isRepo ? "/repo" : null)),
+          upstreamDivergence: () => Effect.succeed(null),
           localStatus: () =>
             Effect.sync(() => {
               state.localStatusCalls += 1;
@@ -2481,6 +2557,10 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          currentBranch: () => Effect.sync(() => baseLocalStatus.refName),
+          headPath: () => Effect.succeed(null),
+          repositoryRoot: () => Effect.sync(() => (baseLocalStatus.isRepo ? "/repo" : null)),
+          upstreamDivergence: () => Effect.succeed(null),
           localStatus: () => Effect.succeed(baseLocalStatus),
           remoteStatus: (input) =>
             Effect.gen(function* () {
@@ -2589,6 +2669,10 @@ describe("VcsStatusBroadcaster", () => {
       Layer.provide(layerBackgroundPolicy(() => true)),
       Layer.provide(
         Layer.mock(GitWorkflowService.GitWorkflowService)({
+          currentBranch: () => Effect.sync(() => baseLocalStatus.refName),
+          headPath: () => Effect.succeed(null),
+          repositoryRoot: () => Effect.sync(() => (baseLocalStatus.isRepo ? "/repo" : null)),
+          upstreamDivergence: () => Effect.succeed(null),
           localStatus: () => Effect.succeed(baseLocalStatus),
           remoteStatus: () =>
             Effect.gen(function* () {

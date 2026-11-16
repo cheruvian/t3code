@@ -54,7 +54,7 @@ describe("V2 preview upgrade", () => {
       assert.deepStrictEqual(yield* runMigrations(), expectedPreviewUpgrade);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(
-        yield* sql`SELECT * FROM orchestration_v2_legacy_imports`,
+        yield* sql`SELECT * FROM orchestration_v2_legacy_imports`.unprepared,
         imports.map((row) => ({ ...row, activity_imported_at: null })),
       );
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`

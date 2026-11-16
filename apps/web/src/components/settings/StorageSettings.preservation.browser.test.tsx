@@ -23,6 +23,7 @@ vi.mock("../../state/server", async (original) => {
   return {
     ...actual,
     serverEnvironment: {
+      ...actual.serverEnvironment,
       storageCleanupReport: () => report,
       databaseCompactionRecommendations: () => Atom.make([]),
       hiddenThreadTagsAtom: () => Atom.make([]),

@@ -20,6 +20,7 @@ export function showOptionsDialog(request: ConfirmDialogRequest): void {
 export function OptionsDialogHost() {
   const [presented, setPresented] = useState<DialogRequest | null>(null);
   const [options, setOptions] = useState<Record<string, boolean>>({});
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Installs the imperative options-dialog presenter and unregisters it on unmount.
   useEffect(() => {
     presentRequest = (request) => {
       setOptions(

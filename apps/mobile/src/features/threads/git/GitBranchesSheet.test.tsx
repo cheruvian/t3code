@@ -1,21 +1,26 @@
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
-
 type InputProps = {
   accessibilityLabel: string;
   value: string;
   onChangeText: (value: string) => void;
 };
-type ActionProps = { label: string; disabled: boolean; onPress: () => void };
+type ActionProps = {
+  label: string;
+  disabled: boolean;
+  onPress: () => void;
+};
 const state = vi.hoisted(() => ({
   refName: null as string | null,
   branch: null as string | null,
   inputs: new Map<string, InputProps>(),
   actions: new Map<string, ActionProps>(),
-  worktrees: [] as Array<{ baseBranch: string; newBranch: string }>,
+  worktrees: [] as Array<{
+    baseBranch: string;
+    newBranch: string;
+  }>,
 }));
-
 vi.mock("@react-navigation/native", () => ({
   useIsFocused: () => true,
   useNavigation: () => ({ goBack() {} }),
@@ -32,17 +37,19 @@ vi.mock("react-native-safe-area-context", () => ({
 }));
 vi.mock("../../../components/ui/AppBar", () => ({ AppBar: () => null }));
 vi.mock("../../../components/ui/SheetHeader", () => ({ SheetHeader: () => null }));
-vi.mock("../../../components/ui/ScreenContent", () => ({
-  ScreenContent: ({ children }: { children: ReactNode }) => children,
+vi.mock("../../../components/ui/FitSheet", () => ({
+  FitSheet: ({ children }: { children: ReactNode }) => children,
 }));
 vi.mock("../../../native/StackHeader", () => ({ NativeStackScreenOptions: () => null }));
-vi.mock("../../../components/ui/AppText", () => ({
-  AppText: ({ children }: { children: ReactNode }) => children,
-  AppTextInput: (props: InputProps) => {
+vi.mock("../../../components/ui/FormSection", () => ({
+  FormSection: ({ children }: { children: ReactNode }) => children,
+  FormField: (props: InputProps) => {
     state.inputs.set(props.accessibilityLabel, props);
     return null;
   },
 }));
+vi.mock("../../../components/ui/ListSection", () => ({ ListSection: () => null }));
+vi.mock("../../../components/ui/ListChoiceRow", () => ({ ListChoiceRow: () => null }));
 vi.mock("../../../state/queries", () => ({
   useMobileGitStatus: () => ({
     target: { input: { cwd: "/repo" } },
@@ -76,18 +83,20 @@ vi.mock("../../../state/use-selected-thread-git-actions", () => ({
     },
   }),
 }));
-vi.mock("../../../state/vcs", () => ({ vcsEnvironment: { status: () => null } }));
+vi.mock("../../../state/vcs", () => ({ vcsEnvironment: { branch: () => null } }));
 vi.mock("./gitSheetComponents", () => ({
   SheetActionButton: (props: ActionProps) => {
     state.actions.set(props.label, props);
     return null;
   },
 }));
-
 import { GitBranchesSheet } from "./GitBranchesSheet";
-
 function setup(branch: string | null = null) {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  (
+    globalThis as {
+      IS_REACT_ACT_ENVIRONMENT?: boolean;
+    }
+  ).IS_REACT_ACT_ENVIRONMENT = true;
   state.refName = null;
   state.branch = branch;
   state.inputs.clear();
@@ -116,7 +125,6 @@ function setup(branch: string | null = null) {
     },
   };
 }
-
 it.each([null, "stale-branch"])(
   "uses the loaded checkout branch when thread metadata is %s",
   (branch) => {
@@ -130,7 +138,6 @@ it.each([null, "stale-branch"])(
     ]);
   },
 );
-
 it.each(["custom-base", ""])("preserves an edited base %j when status arrives", (base) => {
   using screen = setup();
   screen.edit("Worktree base branch", base);
@@ -144,7 +151,6 @@ it.each(["custom-base", ""])("preserves an edited base %j when status arrives", 
     base === "" ? [] : [{ baseBranch: base, newBranch: "feature/new-worktree" }],
   );
 });
-
 vi.mock("../../../components/MaterialScreenContent", () => ({
   MaterialScreenContent: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));

@@ -65,6 +65,14 @@ vi.mock("./MessagesTimeline.logic", async (importOriginal) => {
   };
 });
 
+async function renderMeasuredMessage(ui: ReactNode) {
+  await using screen = await render(<div style={{ width: 600 }}>{ui}</div>);
+  await expect
+    .poll(() => screen.container.querySelector('[data-user-message-collapsed="true"]'))
+    .not.toBeNull();
+  return screen.container.innerHTML;
+}
+
 function setup() {
   vi.unstubAllGlobals();
   activityTestState.subagentTooltips = false;
@@ -81,7 +89,7 @@ const legendListTestState = vi.hoisted(() => ({
 }));
 
 vi.mock("@legendapp/list/react", async () => {
-  const { useLayoutEffect } = await import("react");
+  const { useLayoutEffect, useRef } = await import("react");
   const legendListTestId = "legend-list";
 
   const LegendList = (props: {
@@ -121,12 +129,15 @@ vi.mock("@legendapp/list/react", async () => {
     onItemSizeChanged?: () => void;
     ref?: Ref<LegendListRef>;
   }) => {
+    const measuredAnchor = useRef<number | undefined>(undefined);
     // Model the virtual list's measurement callbacks after a DOM commit.
     useLayoutEffect(() => {
       legendListTestState.data = props.data;
       legendListTestState.onScroll = props.onScroll;
       legendListTestState.onItemSizeChanged = props.onItemSizeChanged;
-      if (props.anchoredEndSpace) {
+      if (props.anchoredEndSpace && measuredAnchor.current !== props.anchoredEndSpace.anchorIndex) {
+        // oxlint-disable-next-line react/immutability -- This mocked virtual-list ref records committed measurement callbacks; it is never read during rendering.
+        measuredAnchor.current = props.anchoredEndSpace.anchorIndex;
         props.anchoredEndSpace.onSizeChanged?.(240);
         props.anchoredEndSpace.onReady?.({ anchorIndex: props.anchoredEndSpace.anchorIndex });
       }
@@ -512,6 +523,8 @@ describe("MessagesTimeline", () => {
       const runId = RunId.make("tool-output-run");
       let timelineIsAtEnd = isAtEnd;
       props.listRef.current = {
+        cancelScroll: () => {},
+        anchorVisibleContent: () => {},
         getState: () => ({ isAtEnd: timelineIsAtEnd }),
         getScrollableNode: () => null,
       } as unknown as LegendListRef;
@@ -725,7 +738,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-maintain-visible-content-position="object"');
     expect(markup).toContain('data-maintain-visible-content-position-data="true"');
     expect(markup).toContain('data-maintain-visible-content-position-size="true"');
-    expect(markup).toContain('data-maintain-visible-content-position-restore="true"');
+    expect(markup).toContain('data-maintain-visible-content-position-data="true"');
     expect(markup).toContain("Terminal");
     expect(markup).toContain("t3code — Tests");
     expect(markup).toContain('src="data:image/png;base64,aWNvbg=="');
@@ -1035,9 +1048,9 @@ describe("MessagesTimeline", () => {
     ).not.toContain('data-maintain-scroll-at-end="enabled"');
   });
 
-  it("renders collapse controls for long user messages", () => {
+  it("renders collapse controls for long user messages", async () => {
     setup();
-    const markup = renderToStaticMarkup(
+    const markup = await renderMeasuredMessage(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[buildUserTimelineEntry(buildLongUserMessageText())]}
@@ -1367,7 +1380,9 @@ describe("MessagesTimeline", () => {
     expect(resolveTimelineIsAtEnd({ isNearEnd: true, isAtEnd: false })).toBe(false);
     expect(resolveTimelineIsAtEnd({ isAtEnd: false })).toBe(false);
 
-    expect(resolveTimelineMinimapHeightStyle(5)).toBe("min(32px, calc(100vh - 18rem))");
+    expect(resolveTimelineMinimapHeightStyle(5)).toBe(
+      "min(32px, max(4rem, calc(100% - 14.75rem)))",
+    );
     expect(resolveTimelineMinimapTopPercent(2, 5)).toBe(50);
     expect(
       resolveTimelineMinimapIndexFromPointer({
@@ -1475,7 +1490,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-maintain-visible-content-position="object"');
     expect(markup).toContain('data-maintain-visible-content-position-data="true"');
     expect(markup).toContain('data-maintain-visible-content-position-size="true"');
-    expect(markup).toContain('data-maintain-visible-content-position-restore="true"');
+    expect(markup).toContain('data-maintain-visible-content-position-data="true"');
     expect(onAnchorReady).toHaveBeenCalledOnce();
     expect(onAnchorReady).toHaveBeenCalledWith(secondEntry.message.id, 1);
     expect(onAnchorSizeChanged).toHaveBeenCalledWith(secondEntry.message.id, 240);
@@ -1642,9 +1657,9 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-maintain-scroll-at-end="enabled"');
   });
 
-  it("renders collapse controls for long user messages", () => {
+  it("renders collapse controls for long user messages", async () => {
     setup();
-    const markup = renderToStaticMarkup(
+    const markup = await renderMeasuredMessage(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[buildUserTimelineEntry(buildLongUserMessageText())]}
@@ -1903,7 +1918,7 @@ describe("MessagesTimeline", () => {
   it("renders inline terminal labels with the composer chip UI", async () => {
     setup();
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
+    const markup = await renderMeasuredMessage(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
@@ -1924,7 +1939,7 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Terminal 1 lines 1-5");
     expect(markup).toContain("lucide-terminal");
-    expect(markup).toContain("yoo what&#x27;s");
+    expect(markup).toContain("yoo what's");
     expect(markup).not.toContain("terminal_context");
     expect(markup).toContain("Show full message");
   });
@@ -1956,9 +1971,9 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("<element_context");
   });
 
-  it("keeps the copy button for collapsed long user messages", () => {
+  it("keeps the copy button for collapsed long user messages", async () => {
     setup();
-    const markup = renderToStaticMarkup(
+    const markup = await renderMeasuredMessage(
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[buildUserTimelineEntry(buildLongUserMessageText())]}
@@ -3041,6 +3056,8 @@ describe("MessagesTimeline", () => {
       const viewport = { scrollTop: 400, scrollHeight: 1000 };
       const props = buildProps();
       props.listRef.current = {
+        cancelScroll: () => {},
+        anchorVisibleContent: () => {},
         getState: () => ({ isAtEnd }),
         getScrollableNode: () => viewport,
       } as unknown as LegendListRef;

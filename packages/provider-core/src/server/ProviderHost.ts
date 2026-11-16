@@ -1,14 +1,4 @@
-/**
- * ProviderHost — what a provider package may ask of the server it runs in.
- *
- * Drivers and adapters run inside a T3 server but must not import it. The
- * server provides this one service; everything a provider needs from its
- * environment (directories, server settings, background demand, attachment
- * files) goes through it, so a provider package depends only on
- * `@t3tools/provider-core` and its own protocol code.
- *
- * @module provider-core/server/host
- */
+/** Server services available to provider packages without importing server modules. */
 import type {
   BackgroundScope,
   ChatAttachment,
@@ -63,6 +53,8 @@ export class ProviderHost extends Context.Service<
     };
     /** Whether background work for `scope` should run now (client demand and host power). */
     readonly shouldRunBackgroundWork: (scope: BackgroundScope) => Effect.Effect<boolean>;
+    /** Completes once server startup finishes; first provider checks wait for it. */
+    readonly awaitServerReady?: Effect.Effect<void>;
     /** Absolute attachment path, or null if the ID does not resolve inside attachmentsDir. */
     readonly resolveAttachmentPath: (attachment: ChatAttachment) => string | null;
     readonly resolveExtractedTextPath?: (path: string) => Effect.Effect<string | undefined>;

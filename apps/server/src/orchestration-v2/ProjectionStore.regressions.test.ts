@@ -1319,7 +1319,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       );
       assert.include(
         nodePlan.map((row) => row.detail),
-        "SEARCH orchestration_v2_projection_nodes USING INDEX orchestration_v2_projection_nodes_live_idx (thread_id=?)",
+        "SEARCH live USING INDEX orchestration_v2_projection_nodes_live_idx (thread_id=?)",
       );
       // Decode a bounded row window, including cursor lookahead.
       assert.isAtMost(initial.projection.turnItems.length, 502);
@@ -2699,7 +2699,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             value == null ? null : DateTime.toEpochMillis(value);
           assert.equal(timestamp(sqlShell.activityRunStartedAt), expected);
           assert.equal(timestamp(memoryShell.activityRunStartedAt), expected);
-          assert.equal(sqlShell.latestRunId, "run:clock:newer");
+          // A queued cancellation that the active run outlives presents that active run.
+          assert.equal(sqlShell.latestRunId, status === "cancelled" ? runId : "run:clock:newer");
         }
       }
 
@@ -3002,7 +3003,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         ["settledOverride", "settled"],
       ]) {
         yield* sql`UPDATE orchestration_v2_projection_threads
-          SET payload_json = json_set(payload_json, ${`$.${field}`}, ${value})
+          SET payload_json = json_set(payload_json, ${`$.${field}`}, ${value}),
+            archived_at = CASE WHEN ${field} = 'archivedAt' THEN ${value} ELSE NULL END
           WHERE thread_id = ${threadId}`;
         assert.isUndefined(
           (yield* store.getLimitRecoveryCandidates({ now, autoResume: true, snooze: false })).find(
@@ -5044,17 +5046,32 @@ it.effect("shells count retained items without scanning transcript or idle run h
       .pipe(Effect.provideService(Statement.CurrentTransformer, record));
     assert.equal(snapshot.threads.find((thread) => thread.id === threadId)?.itemCount, 257);
     assert.equal((yield* store.getThreadShell(threadId))?.itemCount, 257);
-    assert.isFalse(
-      queries.some(
-        ([text]) =>
-          text.includes("COUNT(*)") && text.includes("orchestration_v2_projection_turn_items"),
-      ),
-    );
+    // Totals use per-run counters; the only transcript counts are sparse queued-input probes.
+    for (const [text, params] of queries.filter(
+      ([text]) =>
+        text.includes("COUNT(*)") && text.includes("orchestration_v2_projection_turn_items"),
+    )) {
+      const countPlan = yield* sql.unsafe<{ detail: string }>(`EXPLAIN QUERY PLAN ${text}`, params);
+      assert.isFalse(
+        countPlan.some((row) =>
+          /SCAN (?:held|orchestration_v2_projection_turn_items)\b/.test(row.detail),
+        ),
+      );
+      assert.isTrue(
+        countPlan.some((row) =>
+          row.detail.includes("orchestration_v2_projection_turn_items_queued_input_idx"),
+        ),
+      );
+    }
     const query = queries.find(([text]) => text.includes("AS active_run_id"))!;
     const plan = yield* sql.unsafe<{ detail: string }>(`EXPLAIN QUERY PLAN ${query[0]}`, query[1]);
     assert.equal(
-      plan.filter((row) => row.detail.includes("orchestration_v2_runs_current_idx")).length,
-      2,
+      plan.filter(
+        (row) =>
+          row.detail.startsWith("SEARCH r ") &&
+          row.detail.includes("orchestration_v2_projection_runs_thread_status_idx"),
+      ).length,
+      4,
     );
     assert.isTrue(
       plan.some((row) => row.detail.includes("orchestration_v2_messages_latest_authored_idx")),

@@ -43,7 +43,86 @@ const upstreamNames = [
   "RepairBooleanSettledOverride",
   "DropOrchestrationEventCorrelationIndex",
   "DelegatedRecoveryIndexes",
+  "ScheduledTaskThreadMode",
+  "ProjectionMessageSearchText",
+  "TurnItemConversationIndex",
+  "CommandReadIndexes",
+  "LastExecutedRunIndex",
+  "TurnItemCounts",
+  "QueuedTurnInputIndex",
+  "ProjectionProjectsCustomTitle",
+  "TurnItemTypeStatusIndex",
+  "ShellThreadReadIndexes",
+  "AuthConnectDevices",
+  "AuthConnectDeniedRequests",
+  "QueuedTurnInputIndexJsonValid",
+  "ProviderTurnAttemptIndex",
+  "TurnItemMessageOrdinalIndex",
+  "TurnItemInlineWorkOutput",
+  "RepairStaleTitleRegeneration",
 ];
+
+type MigrationRow = { readonly id: number; readonly name: string };
+
+// Previews used V2 ids 53/54; preserve their schema and import progress while reserving main's ids.
+function v2PreviewId(history: ReadonlyArray<MigrationRow>): number | "invalid" | undefined {
+  const later = history.filter((row) => row.id >= 53);
+  const legacy = later.find(
+    (row) => row.name === "OrchestrationV2" && (row.id === 53 || row.id === 54),
+  );
+  if (!legacy) return undefined;
+  const valid = later.every(
+    (row) =>
+      row === legacy ||
+      (legacy.id === 54 &&
+        ((row.id === 53 && row.name === "PullRequestFilesViewed") ||
+          (row.id === 55 && row.name === "RemoveRedundantProjectionIndexes"))),
+  );
+  return valid ? legacy.id : "invalid";
+}
+
+/** The history as startup's preview reconciliation leaves it, or null when startup rejects it. */
+export function reconciledV2PreviewHistory(
+  history: ReadonlyArray<MigrationRow>,
+): ReadonlyArray<MigrationRow> | null {
+  const previewId = v2PreviewId(history);
+  if (previewId === undefined) return history;
+  if (previewId === "invalid") return null;
+  return [
+    ...history.filter((row) => row.id < 53),
+    { id: 53, name: "PullRequestFilesViewed" },
+    { id: 54, name: "ProjectionThreadsAutoSettleDisabledAt" },
+    { id: 55, name: "OrchestrationV2" },
+    ...(history.some((row) => row.id === 55)
+      ? [{ id: 56, name: "RemoveRedundantProjectionIndexes" }]
+      : []),
+  ];
+}
+
+/** History startup can reconcile to this fork, without opening or modifying a database. */
+export function reconciledForkMigrationHistory(
+  history: ReadonlyArray<MigrationRow>,
+  manifest: ReadonlyArray<readonly [number, string]>,
+): ReadonlyArray<MigrationRow> | null {
+  const forkNames = new Map(manifest);
+  const matches = (names: ReadonlyMap<number, string>) =>
+    history.every((row, index) => row.id === index + 1 && names.get(row.id) === row.name);
+  if (matches(forkNames) || history.some((row) => row.id === 41 && row.name === forkNames.get(41)))
+    return history;
+  const upstream = new Map(manifest.filter(([id]) => id <= 40));
+  upstreamNames.forEach((name, index) => upstream.set(index + 41, name));
+  const preview53 = new Map([...upstream].filter(([id]) => id <= 52));
+  preview53.set(53, "OrchestrationV2");
+  const preview54 = new Map([...upstream].filter(([id]) => id <= 53));
+  preview54.set(54, "OrchestrationV2");
+  preview54.set(55, "RemoveRedundantProjectionIndexes");
+  const earlyFork = new Map(manifest.filter(([id]) => id <= 38));
+  earlyFork.set(39, "ProviderSessionGenerations");
+  earlyFork.set(40, "ServerDrainState");
+  return [upstream, preview53, preview54, earlyFork].some(matches)
+    ? manifest.map(([id, name]) => ({ id, name }))
+    : null;
+}
 
 /** Reconcile known upstream ledgers atomically; never renumber a published fork ledger. */
 export const reconcileV2PreviewMigration = Effect.fn("reconcileV2PreviewMigration")(function* <
@@ -74,17 +153,12 @@ export const reconcileV2PreviewMigration = Effect.fn("reconcileV2PreviewMigratio
       // later builds. The runner validates required fork IDs before migrating.
       if (history.some((row) => row.migration_id === 41 && row.name === forkNames.get(41)))
         return [];
-      const upstream = new Map(entries.filter(([id]) => id <= 40).map(([id, name]) => [id, name]));
-      upstreamNames.forEach((name, index) => upstream.set(index + 41, name));
-      const preview53 = new Map([...upstream].filter(([id]) => id <= 52));
-      preview53.set(53, "OrchestrationV2");
-      const preview54 = new Map([...upstream].filter(([id]) => id <= 53));
-      preview54.set(54, "OrchestrationV2");
-      preview54.set(55, "RemoveRedundantProjectionIndexes");
-      const earlyFork = new Map(entries.filter(([id]) => id <= 38).map(([id, name]) => [id, name]));
-      earlyFork.set(39, "ProviderSessionGenerations");
-      earlyFork.set(40, "ServerDrainState");
-      if (![upstream, preview53, preview54, earlyFork].some(matches)) {
+      if (
+        reconciledForkMigrationHistory(
+          history.map((row) => ({ id: row.migration_id, name: row.name })),
+          entries.map(([id, name]) => [id, name] as const),
+        ) === null
+      ) {
         return yield* new Migrator.MigrationError({
           kind: "BadState",
           message:

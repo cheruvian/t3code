@@ -1,3 +1,5 @@
+import * as DateTime from "effect/DateTime";
+import { threadHasStarted } from "../lib/chatThreadActions";
 import { resolveDraftPromotionNavigationTarget } from "../composerDraftStore";
 import {
   resolveUncertainSendRecovery,
@@ -6,11 +8,9 @@ import {
   resolveVisibleWorktreeSetup,
   recallCheckoutIsRepo,
   rememberCheckoutIsRepo,
-  threadShellHasStarted,
   agentControlledBrowserCloseConfirmation,
   getAntigravitySendBlockReason,
   resolveBackgroundDraftWorkspaceOptions,
-  resolveComposerInteractionMode,
   resolveComposerProviderSelection,
   resolveProactiveTurnDiffAction,
   resolveDraftHeroState,
@@ -43,7 +43,6 @@ import {
   resolveSendEnvMode,
   startNewThreadForProject,
   shouldShowBranchMismatchBanner,
-  shouldShowPlanFollowUpPrompt,
   makeThreadErrorSetter,
   waitForRevertedMessage,
 } from "./ChatView.logic";
@@ -205,28 +204,6 @@ describe("resolveDraftPromotionNavigationTarget", () => {
         backgroundSubmissionPending: true,
       }),
     ).toBeNull();
-  });
-});
-
-describe("resolveEffectiveInteractionMode", () => {
-  it("forces build mode when legacy plan mode is disabled", () => {
-    expect(
-      resolveComposerInteractionMode({
-        planModeEnabled: false,
-        provider: { showInteractionModeToggle: true },
-        interactionMode: "plan",
-      }).interactionMode,
-    ).toBe("default");
-  });
-
-  it("uses the saved mode while legacy plan mode is enabled", () => {
-    expect(
-      resolveComposerInteractionMode({
-        planModeEnabled: true,
-        provider: { showInteractionModeToggle: true },
-        interactionMode: "plan",
-      }).interactionMode,
-    ).toBe("plan");
   });
 });
 
@@ -437,31 +414,6 @@ describe("shouldShowBranchMismatchBanner", () => {
     expect(
       shouldShowBranchMismatchBanner({ ...base, composerHasContent: true, hasMismatch: false }),
     ).toBe(false);
-  });
-});
-
-describe("shouldShowPlanFollowUpPrompt", () => {
-  const base = {
-    pendingUserInputCount: 0,
-    interactionMode: "plan" as const,
-    latestTurnSettled: true,
-    hasActionableProposedPlan: true,
-    hasComposerAttachments: false,
-  };
-
-  it("shows plan actions for a settled actionable plan without attachments", () => {
-    expect(shouldShowPlanFollowUpPrompt(base)).toBe(true);
-  });
-
-  it("hides plan actions while the composer has staged attachments", () => {
-    expect(shouldShowPlanFollowUpPrompt({ ...base, hasComposerAttachments: true })).toBe(false);
-  });
-
-  it("preserves the existing plan follow-up gates", () => {
-    expect(shouldShowPlanFollowUpPrompt({ ...base, pendingUserInputCount: 1 })).toBe(false);
-    expect(shouldShowPlanFollowUpPrompt({ ...base, interactionMode: "default" })).toBe(false);
-    expect(shouldShowPlanFollowUpPrompt({ ...base, latestTurnSettled: false })).toBe(false);
-    expect(shouldShowPlanFollowUpPrompt({ ...base, hasActionableProposedPlan: false })).toBe(false);
   });
 });
 
@@ -1020,7 +972,7 @@ describe("resolveComposerProviderSelection", () => {
     ).toBeNull();
   });
 
-  it("uses the custom instance's capability instead of the default instance", () => {
+  it("selects the custom instance instead of the default instance", () => {
     const defaultEntry = entry("antigravity", "antigravity", {
       showInteractionModeToggle: true,
     });
@@ -1035,16 +987,9 @@ describe("resolveComposerProviderSelection", () => {
     });
 
     expect(selection.selectedProviderEntry?.instanceId).toBe(customEntry.instanceId);
-    expect(
-      resolveComposerInteractionMode({
-        provider: selection.selectedProviderEntry?.snapshot,
-        planModeEnabled: true,
-        interactionMode: "plan",
-      }),
-    ).toEqual({ enabled: false, interactionMode: "default" });
   });
 
-  it("uses the fallback provider's plan capability after the draft's instance is disabled", () => {
+  it("selects the fallback provider after the draft's instance is disabled", () => {
     const disabledEntry = entry("antigravity", "antigravity", {
       enabled: false,
       showInteractionModeToggle: false,
@@ -1058,13 +1003,6 @@ describe("resolveComposerProviderSelection", () => {
     });
 
     expect(selection.selectedProviderEntry?.instanceId).toBe(fallbackEntry.instanceId);
-    expect(
-      resolveComposerInteractionMode({
-        provider: selection.selectedProviderEntry?.snapshot,
-        planModeEnabled: true,
-        interactionMode: "plan",
-      }),
-    ).toEqual({ enabled: true, interactionMode: "plan" });
   });
 
   it("blocks sends until the selected Antigravity profile is installed", () => {
@@ -1129,48 +1067,6 @@ describe("resolveComposerProviderSelection", () => {
 
     expect(selection.selectedProviderEntry).toBeUndefined();
     expect(selection.unavailableProviderInstanceId).toBeUndefined();
-  });
-});
-
-describe("resolveComposerInteractionMode", () => {
-  it("resets a restored plan draft when the selected instance does not support plan mode", () => {
-    expect(
-      resolveComposerInteractionMode({
-        planModeEnabled: true,
-        provider: { showInteractionModeToggle: false },
-        interactionMode: "plan",
-      }),
-    ).toEqual({ enabled: false, interactionMode: "default" });
-  });
-
-  it("keeps legacy plan behavior for providers that omit the capability", () => {
-    expect(
-      resolveComposerInteractionMode({
-        planModeEnabled: true,
-        provider: {},
-        interactionMode: "plan",
-      }),
-    ).toEqual({ enabled: true, interactionMode: "plan" });
-  });
-
-  it("resets a restored plan draft when the beta setting is off", () => {
-    expect(
-      resolveComposerInteractionMode({
-        planModeEnabled: false,
-        provider: { showInteractionModeToggle: true },
-        interactionMode: "plan",
-      }),
-    ).toEqual({ enabled: false, interactionMode: "default" });
-  });
-
-  it("disables plan mode until the selected provider is available", () => {
-    expect(
-      resolveComposerInteractionMode({
-        planModeEnabled: true,
-        provider: null,
-        interactionMode: "plan",
-      }),
-    ).toEqual({ enabled: false, interactionMode: "default" });
   });
 });
 
@@ -1334,18 +1230,16 @@ describe("checkout Git memory", () => {
   });
 });
 
-describe("threadShellHasStarted", () => {
+describe("threadHasStarted", () => {
   it("counts a thread that has a user message but no latest turn", () => {
-    expect(
-      threadShellHasStarted({ latestRun: null, latestUserMessageAt: now, runtime: null }),
-    ).toBe(true);
+    expect(threadHasStarted({ latestRun: null, itemCount: 1, runtime: null })).toBe(true);
   });
 
   it("counts a thread with a live runtime and nothing else", () => {
     expect(
-      threadShellHasStarted({
+      threadHasStarted({
         latestRun: null,
-        latestUserMessageAt: null,
+        itemCount: 0,
         runtime: {
           providerInstanceId: ProviderInstanceId.make("codex"),
           status: "starting",
@@ -1359,10 +1253,8 @@ describe("threadShellHasStarted", () => {
   });
 
   it("does not count a thread that never sent anything", () => {
-    expect(
-      threadShellHasStarted({ latestRun: null, latestUserMessageAt: null, runtime: null }),
-    ).toBe(false);
-    expect(threadShellHasStarted(null)).toBe(false);
+    expect(threadHasStarted({ latestRun: null, itemCount: 0, runtime: null })).toBe(false);
+    expect(threadHasStarted(null)).toBe(false);
   });
 });
 
@@ -1478,14 +1370,14 @@ describe("worktree setup visibility", () => {
       resolveVisibleWorktreeSetup({
         live: null,
         recorded: snapshot,
-        turnStarted,
+        runs: turnStarted ? [{ startedAt: DateTime.makeUnsafe(now) }] : [],
         followUpSent: false,
       });
     expect(
       resolveVisibleWorktreeSetup({
         live: base,
         recorded: null,
-        turnStarted: false,
+        runs: [],
         followUpSent: false,
       }),
     ).toEqual(base);
@@ -1503,7 +1395,7 @@ describe("worktree setup visibility", () => {
       resolveVisibleWorktreeSetup({
         live: null,
         recorded: snapshot,
-        turnStarted: true,
+        runs: [{ startedAt: DateTime.makeUnsafe(now) }],
         followUpSent,
       });
     expect(visible(scriptFailed)).toEqual(scriptFailed);
@@ -1525,7 +1417,7 @@ describe("worktree setup visibility", () => {
 
   it("prefers whichever snapshot is newer by sequence", () => {
     const pick = (live: WorktreeSetupSnapshot | null, recorded: WorktreeSetupSnapshot | null) =>
-      resolveVisibleWorktreeSetup({ live, recorded, turnStarted: false, followUpSent: false });
+      resolveVisibleWorktreeSetup({ live, recorded, runs: [], followUpSent: false });
     expect(pick({ ...base, sequence: 3 }, { ...settledDone, sequence: 7 })).toEqual({
       ...settledDone,
       sequence: 7,

@@ -10,6 +10,7 @@ import {
 } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../test/render";
 import { useRightPanelStore } from "../rightPanelStore";
@@ -84,7 +85,9 @@ vi.mock(import("../state/server"), async (original) => {
 vi.mock(import("../state/entities"), async (original) => ({
   ...(await original()),
   readThreadShell: (() => ({ pullRequests: state.pullRequests })) as never,
-  useProjects: (() => [{ id: projectId, environmentId: threadRef.environmentId }]) as never,
+  useProjects: (() => [
+    { id: projectId, environmentId: threadRef.environmentId, workspaceRoot: "/work" },
+  ]) as never,
 }));
 vi.mock(import("../remoteOpen"), async (original) => ({
   ...(await original()),
@@ -110,6 +113,7 @@ vi.mock(import("@t3tools/client-runtime/change-request-links"), async (original)
 }));
 
 import ChatMarkdown from "./ChatMarkdown";
+import { MarkdownFileLink } from "./chat/MarkdownFileLink";
 
 const threadRef = {
   environmentId: EnvironmentId.make("selected"),
@@ -209,6 +213,29 @@ it("removes host actions after revocation while keeping file preview and copying
   expect(state.openEditor).not.toHaveBeenCalled();
 });
 
+it.each(["[Docs](https://example.com/docs)", "[Readme](docs/readme.md)"])(
+  "tells the native menu for %s whether the keyboard opened it",
+  async (text) => {
+    using _setup = setup();
+    await using screen = await renderMarkdown(text);
+    screen.anchor().focus();
+    // Chromium's keyboard context-menu event has button -1. The host OS
+    // decides whether Shift+F10 emits it, so exercise the event contract here.
+    await act(() =>
+      screen.anchor().dispatchEvent(
+        new PointerEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          button: -1,
+        }),
+      ),
+    );
+    await vi.waitFor(() => expect(state.choose.mock.lastCall?.[2]).toBe("keyboard"));
+    await userEvent.click(screen.anchor(), { button: "right" });
+    await vi.waitFor(() => expect(state.choose.mock.lastCall?.[2]).toBe("mouse"));
+  },
+);
+
 it("does not launch an editor after revocation during a native context menu", async () => {
   using _setup = setup();
   let choose: (action: string) => void = () => {
@@ -289,5 +316,50 @@ it.each(["link-to-thread", "unlink-from-thread"])(
         }),
       }),
     );
+  },
+);
+
+it("preserves keyboard activation of a file-options button", async () => {
+  using _setup = setup();
+  await using screen = await render(
+    <MarkdownFileLink
+      environmentId={null}
+      href="readme.md"
+      targetPath="readme.md"
+      iconPath="readme.md"
+      workspaceRelativePath="readme.md"
+      panelPath={null}
+      label="Readme"
+      copyMarkdown="[Readme](readme.md)"
+      theme="dark"
+      onOpenInPanel={vi.fn()}
+      resolveCopyPaths={async () => ({ relativePath: "readme.md", fullPath: "/work/readme.md" })}
+      openInEditorMenuLabel="Open in editor"
+    />,
+  );
+  const button = screen.container.querySelector("button")!;
+  button.focus();
+  for (const key of ["{Enter}", " "]) {
+    await userEvent.keyboard(key);
+    await vi.waitFor(() => expect(state.choose.mock.lastCall?.[2]).toBe("keyboard"));
+    state.choose.mockClear();
+  }
+  await userEvent.click(button);
+  await vi.waitFor(() => expect(state.choose.mock.lastCall?.[2]).toBe("mouse"));
+});
+
+it.each([false, true])(
+  "keeps PR links usable without offering metadata edits (linked=%s)",
+  async (linked) => {
+    using _setup = setup();
+    state.allowed = false;
+    state.pullRequests = linked ? [linkedPullRequest] : [];
+    state.choose.mockResolvedValue("open-external");
+    await using screen = await renderMarkdown(`[Review](${linkedPullRequest.url})`);
+    await screen.openContextMenu();
+    expect(offeredActions()).toEqual(["open-external", "copy-link"]);
+    expect(state.openExternal).toHaveBeenCalledWith(linkedPullRequest.url);
+    expect(state.link).not.toHaveBeenCalled();
+    expect(state.unlink).not.toHaveBeenCalled();
   },
 );

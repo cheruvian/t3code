@@ -151,6 +151,8 @@ export const runIsolatedThreadStart = Effect.fn("cli.thread.runIsolatedThreadSta
             "x-t3-orchestration-protocol": "2" as const,
           };
           const snapshot = yield* client.orchestration.shellSnapshot({ headers, query: {} });
+          if ("resumable" in snapshot)
+            return yield* new ThreadCliError({ detail: "Expected a full thread snapshot." });
           const matches = snapshot.projects.filter(
             (project) =>
               project.id === flags.project ||
@@ -272,6 +274,8 @@ export const runThreadMessageFile = (
         query: {},
         headers: { authorization: `Bearer ${token}`, "x-t3-orchestration-protocol": "2" },
       });
+      if ("resumable" in snapshot)
+        return yield* new ThreadCliError({ detail: "Expected a full thread snapshot." });
       const thread = snapshot.threads.find((item) => item.id === flags.threadId);
       if (!thread) {
         return yield* new ThreadCliError({ detail: `Thread ${flags.threadId} was not found.` });
@@ -393,6 +397,10 @@ export const runThreadList = (flags: Command.Command.Config.Infer<typeof threadL
         query: {},
         headers: { authorization: `Bearer ${token}`, "x-t3-orchestration-protocol": "2" },
       });
+      if ("resumable" in snapshot)
+        return yield* new ThreadCliError({
+          detail: "The server returned a resume marker instead of the requested thread snapshot.",
+        });
       const threads = snapshot.threads
         .filter((thread) => thread.deletedAt === null)
         .toSorted(
@@ -417,6 +425,10 @@ export const threadStatus = Command.make("status", {
           query: {},
           headers: { authorization: `Bearer ${token}`, "x-t3-orchestration-protocol": "2" },
         });
+        if ("resumable" in snapshot)
+          return yield* new ThreadCliError({
+            detail: "The server returned a resume marker instead of the requested thread snapshot.",
+          });
         const thread = snapshot.threads.find(
           (entry) => entry.id === flags.threadId && entry.deletedAt === null,
         );

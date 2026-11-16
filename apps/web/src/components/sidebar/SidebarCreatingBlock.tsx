@@ -12,7 +12,7 @@ export function SidebarCreatingBlock(props: {
   onNavigate: (ref: ScopedThreadRef) => void;
 }) {
   const entries = useOptimisticThreadListStore((state) => state.entriesByKey);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Retire external store entries when server shells acknowledge creation.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Retire external store entries when server shells acknowledge creation.
   useEffect(() => {
     for (const entry of Object.values(entries)) {
       if (props.canonicalThreadKeys.has(scopedThreadKey(entry.threadRef))) {

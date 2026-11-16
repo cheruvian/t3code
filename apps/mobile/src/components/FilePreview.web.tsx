@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Image, Linking, Modal, Pressable, View } from "react-native";
 import { AppText as Text } from "./ui/AppText";
-import type { ResolvedFilePreviewSource } from "./FilePreviewModal.types";
+import type { ResolvedFilePreviewSource } from "./ui/FilePreviewModal.types";
 
 export function FilePreview(props: {
   readonly source: ResolvedFilePreviewSource;

@@ -1,7 +1,7 @@
 import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { createElement } from "react";
+import { createElement, useLayoutEffect } from "react";
 import { create, act } from "react-test-renderer";
 
 const state = vi.hoisted(() => ({
@@ -42,7 +42,10 @@ import { useSettingsRestore } from "./useSettingsRestore";
 function renderRestore() {
   let result: ReturnType<typeof useSettingsRestore> | undefined;
   function Hook() {
-    result = useSettingsRestore();
+    const current = useSettingsRestore();
+    useLayoutEffect(() => {
+      result = current;
+    });
     return null;
   }
   let root: ReturnType<typeof create>;

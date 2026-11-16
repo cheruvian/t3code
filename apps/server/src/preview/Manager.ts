@@ -55,6 +55,10 @@ export class PreviewManager extends Context.Service<
     readonly markHeadless: (
       input: PreviewCloseInput & { readonly tabId: string },
     ) => Effect.Effect<void, PreviewError>;
+    /** Publishes the tab's unchanged snapshot again, for clients that dropped the tab. */
+    readonly announce: (
+      input: PreviewCloseInput & { readonly tabId: string },
+    ) => Effect.Effect<void, PreviewError>;
     readonly requestReveal: (
       input: PreviewCloseInput & { readonly tabId: string; readonly force: boolean },
     ) => Effect.Effect<void, PreviewError>;
@@ -65,6 +69,10 @@ export class PreviewManager extends Context.Service<
       input: PreviewAdjustInput,
     ) => Effect.Effect<PreviewSessionSnapshot, PreviewError>;
     readonly close: (input: PreviewCloseInput) => Effect.Effect<void, PreviewError>;
+    /** Runs before closed events publish, while clients still own their page surfaces. */
+    readonly registerBeforeClose: (
+      handler: (snapshots: ReadonlyArray<PreviewSessionSnapshot>) => Effect.Effect<void>,
+    ) => Effect.Effect<void, never, Scope.Scope>;
     readonly list: (input: PreviewListInput) => Effect.Effect<PreviewListResult>;
     readonly events: Stream.Stream<PreviewEvent>;
     readonly subscribeEvents: Effect.Effect<PubSub.Subscription<PreviewEvent>, never, Scope.Scope>;
@@ -185,6 +193,14 @@ export const make = Effect.gen(function* PreviewManagerMake() {
       );
     }),
   );
+  const beforeClose = new Set<
+    (snapshots: ReadonlyArray<PreviewSessionSnapshot>) => Effect.Effect<void>
+  >();
+  const registerBeforeClose: PreviewManager["Service"]["registerBeforeClose"] = (handler) =>
+    Effect.acquireRelease(
+      Effect.sync(() => beforeClose.add(handler)),
+      () => Effect.sync(() => beforeClose.delete(handler)),
+    ).pipe(Effect.asVoid);
 
   /** Publish inside the lock to preserve state-transition order. */
   const mutateExistingSession = <R, E>(
@@ -250,6 +266,8 @@ export const make = Effect.gen(function* PreviewManagerMake() {
         viewport: input.viewport ?? FILL_PREVIEW_VIEWPORT,
         ...(input.profileId === undefined ? {} : { profileId: input.profileId }),
         ...(runtime === undefined ? {} : { runtime }),
+        ...(input.colorScheme === undefined ? {} : { colorScheme: input.colorScheme }),
+        ...(input.zoomFactor === undefined ? {} : { zoomFactor: input.zoomFactor }),
         ...(runtime === "server" && input.automationOwner !== undefined
           ? { automationOwner: input.automationOwner }
           : {}),
@@ -364,6 +382,28 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     );
   });
 
+  const announce: PreviewManager["Service"]["announce"] = Effect.fn("PreviewManager.announce")(
+    function* (input) {
+      return yield* mutateExistingSession(
+        input.threadId,
+        input.tabId,
+        Effect.fn("PreviewManager.announceSession")(function* (session) {
+          return {
+            next: session,
+            emit: {
+              type: "resized",
+              threadId: session.threadId,
+              tabId: session.tabId,
+              createdAt: yield* currentIsoTimestamp,
+              snapshot: session.snapshot,
+            },
+            result: undefined,
+          };
+        }),
+      );
+    },
+  );
+
   const resize: PreviewManager["Service"]["resize"] = Effect.fn("PreviewManager.resize")(
     function* (input) {
       return yield* mutateExistingSession(
@@ -433,19 +473,26 @@ export const make = Effect.gen(function* PreviewManagerMake() {
 
   const close: PreviewManager["Service"]["close"] = Effect.fn("PreviewManager.close")(
     function* (input) {
+      // Unload runs outside the state lock; tabs opened meanwhile belong to a later close.
+      const current = yield* SynchronizedRef.get(stateRef);
+      const targets = input.tabId
+        ? [current.sessions.get(compositeKey(input.threadId, input.tabId))].filter(
+            (entry): entry is PreviewSessionState => entry !== undefined,
+          )
+        : sessionsForThread(current, input.threadId);
+      yield* Effect.forEach(
+        [...beforeClose],
+        (handler) => handler(targets.map((target) => target.snapshot)),
+        { discard: true },
+      );
       const createdAt = yield* currentIsoTimestamp;
       yield* SynchronizedRef.modifyEffect(stateRef, (state) => {
         const eventsToEmit: PreviewEvent[] = [];
         const sessions = new Map(state.sessions);
-        const targets = input.tabId
-          ? [state.sessions.get(compositeKey(input.threadId, input.tabId))].filter(
-              (entry): entry is PreviewSessionState => entry !== undefined,
-            )
-          : sessionsForThread(state, input.threadId);
         let revision = state.revision;
         for (const target of targets) {
+          if (!sessions.delete(compositeKey(target.threadId, target.tabId))) continue;
           revision += 1;
-          sessions.delete(compositeKey(target.threadId, target.tabId));
           eventsToEmit.push({
             type: "closed",
             threadId: target.threadId,
@@ -470,7 +517,9 @@ export const make = Effect.gen(function* PreviewManagerMake() {
 
   const list: PreviewManager["Service"]["list"] = Effect.fn("PreviewManager.list")(
     function* (input) {
-      return yield* SynchronizedRef.get(stateRef).pipe(
+      // Events publish under the mutation lock. A consumer that immediately
+      // lists tabs must wait for the corresponding state to commit.
+      return yield* SynchronizedRef.modify(stateRef, (state) => [state, state] as const).pipe(
         Effect.map((state): PreviewListResult => ({
           sessions: (input.threadId === undefined
             ? [...state.sessions.values()]
@@ -521,9 +570,11 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     requestReveal,
     reportStatus,
     markHeadless,
+    announce,
     resize,
     adjust,
     close,
+    registerBeforeClose,
     list,
     events,
     subscribeEvents: PubSub.subscribe(eventsPubSub),

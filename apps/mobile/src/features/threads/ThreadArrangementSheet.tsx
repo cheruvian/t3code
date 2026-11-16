@@ -1,4 +1,5 @@
 import { allowUnpinnedReorderAtom } from "../../state/preferences";
+import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import { SheetHeader } from "../../components/ui/SheetHeader";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useAtomValue } from "@effect/atom-react";
@@ -6,7 +7,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import { sortInboxThreadsByReturn } from "@t3tools/client-runtime/state/thread-inbox";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { Animated, FlatList, Modal, Pressable, useWindowDimensions, View } from "react-native";
+import { Animated, Modal, Pressable, useWindowDimensions, View } from "react-native";
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import Reanimated, { ReduceMotion, useAnimatedStyle, withTiming } from "react-native-reanimated";
 import { threadDragGapOffset } from "./threadDragGap";
@@ -18,7 +19,7 @@ import { scopedThreadKey } from "../../lib/scopedEntities";
 import { deriveThreadArrangementSizing } from "../../lib/layout";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { threadListEnvironmentsAtom } from "../../state/presentation";
-import { environmentThreadShells } from "../../state/threads";
+import { steadyNavigationThreadShellsAtom, steadyShellsHoldingAtom } from "../../state/threads";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../../state/olderSettledShelf";
 import {
@@ -167,13 +168,14 @@ function ThreadArrangementSheet(props: { onClose: () => void }) {
     baseFontSize: appearance.baseFontSize,
     fontScale,
   });
-  const threads = useAtomValue(environmentThreadShells.navigationThreadShellsAtom);
+  const threads = useAtomValue(steadyNavigationThreadShellsAtom);
   const configs = useAtomValue(environmentServerConfigsAtom);
   const allowUnpinnedReorder = useAtomValue(allowUnpinnedReorderAtom);
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
   const queuedThreadKeys = useAtomValue(queuedThreadKeysAtom);
   const pendingOrder = useAtomValue(pendingThreadOrderAtom);
   const dropBusy = useAtomValue(threadDropBusyAtom);
+  const holdingRows = useAtomValue(steadyShellsHoldingAtom);
   const { moveThread } = useThreadListActions();
   const { workingShelfEnabled } = useThreadListV2ShelfPreferences();
   const now = useThreadListNow(threads);
@@ -258,7 +260,7 @@ function ThreadArrangementSheet(props: { onClose: () => void }) {
     }
     return result;
   }, [sections, expanded, visibleSettled, settledCount, rowHeight, headerHeight]);
-  const list = useRef<FlatList<Row>>(null);
+  const list = useRef<LegendListRef>(null);
   const geometry = useRef({ height: 0, offset: 0 });
   const drag = useRef<Drag | null>(null);
   const frame = useRef<number | null>(null);
@@ -419,21 +421,28 @@ function ThreadArrangementSheet(props: { onClose: () => void }) {
                 className="flex-1"
                 style={{ overflow: "hidden" }}
               >
-                <FlatList
+                {/* oxlint-disable-next-line t3code/require-registered-list-scroll -- A full-screen Modal with an inline header; there is no navigation header to register with. */}
+                <LegendList
                   ref={list}
                   data={rows}
                   keyExtractor={(row) => row.key}
+                  extraData={{
+                    visiblePreview,
+                    insertionOffset,
+                    dropBusy,
+                    pendingOrder,
+                    listEnvironments,
+                    planners,
+                    configs,
+                  }}
+                  // Rows hold their drag gesture, so each keeps its own view.
+                  recycleItems={false}
                   scrollEnabled={visiblePreview === null}
-                  removeClippedSubviews={false}
                   onScroll={(event) => {
                     geometry.current.offset = event.nativeEvent.contentOffset.y;
                   }}
                   scrollEventThrottle={16}
-                  getItemLayout={(_, index) => ({
-                    length: rows[index]!.height,
-                    offset: rows[index]!.offset,
-                    index,
-                  })}
+                  getFixedItemSize={(row) => row.height}
                   renderItem={({ item }) => {
                     const thread = item.thread;
                     const planner =
@@ -500,6 +509,7 @@ function ThreadArrangementSheet(props: { onClose: () => void }) {
                                 (!allowUnpinnedReorder && item.section !== "pinned") ||
                                 dropBusy ||
                                 pendingOrder !== null ||
+                                holdingRows ||
                                 (!listEnvironments.pinReorderEnvironmentIds.has(
                                   thread.environmentId,
                                 ) &&

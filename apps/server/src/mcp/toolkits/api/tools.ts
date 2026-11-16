@@ -2,7 +2,7 @@ import { AgentApiCallError, OrchestratorMcpFailure } from "@t3tools/contracts";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 
 import * as EnvironmentAuth from "../../../auth/EnvironmentAuth.ts";
 import * as CheckpointDiffQuery from "../../../checkpointing/CheckpointDiffQuery.ts";
@@ -50,6 +50,7 @@ const ApiCallTool = Tool.make("api_call", {
   dependencies,
 })
   .annotate(Tool.Title, "Call T3 Code typed API")
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients)
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, false)

@@ -9,6 +9,7 @@ import {
 import {
   AlertDialog,
   AlertDialogClose,
+  AlertDialogAction,
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
@@ -71,6 +72,7 @@ export function ConfirmDialogHost() {
     readConfirmDialogState,
   );
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Registers the imperative worktree dialog presenter for this mounted host.
   useEffect(() => registerSettleWorktreeDialog(), []);
   const settlePrompt = useSyncExternalStore(
     subscribeSettleWorktreeDialog,
@@ -80,6 +82,7 @@ export function ConfirmDialogHost() {
 
   const copy = resolveConfirmDialogCopy(state.status === "idle" ? "" : state.message);
   const confirmVariant = state.status === "idle" ? "default" : state.variant;
+  const focusConfirm = state.status !== "idle" && state.initialFocus === "confirm";
   const onCancel = () => respondToConfirmDialog(false);
   const onConfirm = () => respondToConfirmDialog(true);
 
@@ -105,9 +108,13 @@ export function ConfirmDialogHost() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
-            <Button variant={confirmVariant} onClick={onConfirm}>
-              Confirm
-            </Button>
+            {focusConfirm && confirmVariant === "default" ? (
+              <AlertDialogAction onClick={onConfirm}>Confirm</AlertDialogAction>
+            ) : (
+              <Button variant={confirmVariant} onClick={onConfirm}>
+                Confirm
+              </Button>
+            )}
           </AlertDialogFooter>
         </AlertDialogPopup>
       </AlertDialog>

@@ -100,11 +100,6 @@ export function startTimelinePositionRestore({
   });
   const finish = () => {
     stop();
-    console.log(
-      "restore-finish",
-      list.getScrollableNode()?.scrollTop,
-      list.getScrollableNode()?.scrollHeight,
-    );
     onPositioned(listIdentityKey);
   };
   const scrolling =

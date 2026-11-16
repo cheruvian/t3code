@@ -2,7 +2,7 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { fileURLToPath } from "node:url";
+import * as NodeURL from "node:url";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
 import { afterEach, expect, it } from "vite-plus/test";
@@ -29,7 +29,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
-import * as Option from "effect/Option";
+
 import * as Stream from "effect/Stream";
 import * as Config from "../config.ts";
 import * as Settings from "../serverSettings.ts";
@@ -443,7 +443,7 @@ async function fixture(options?: {
                     nativeThreadId: input.providerThread.nativeThreadRef!.nativeId!,
                     cwd: input.thread.worktreePath!,
                     environment: { ...process.env, CLAUDE_CONFIG_DIR: home },
-                    entryPath: fileURLToPath(new URL("../bin.ts", import.meta.url)),
+                    entryPath: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
                   }),
                 ),
                 Effect.map(() => ({
@@ -732,93 +732,83 @@ it("updates the existing destination thread on return without replacing its prio
     await f.source.dispose();
     await f.destination.dispose();
   }
-}, 30_000);
+});
 
 it.each([
   ["conflict", false],
   ["active or pending work", true],
-] as const)(
-  "rejects an existing destination with %s",
-  async (expected, sourceHasTerminal) => {
-    const f = await fixture({ sourceHasTerminal });
-    try {
-      const sourceTransfer = await f.source.runPromise(Transfer.ThreadMoveTransferService);
-      const destinationTransfer = await f.destination.runPromise(
-        Transfer.ThreadMoveTransferService,
-      );
-      await completeMove({
-        moveId: `rejection-out-${sourceHasTerminal}`,
-        from: f.source,
-        to: f.destination,
-        source: sourceTransfer,
-        destination: destinationTransfer,
-        destinationEnvironmentId: EnvironmentId.make("destination"),
-        branch: `moved/rejection-out-${sourceHasTerminal}`,
-      });
-      if (!sourceHasTerminal) {
-        const changedAt = DateTime.makeUnsafe("2026-10-05T12:10:00.000Z");
-        await f.source.runPromise(
-          Effect.flatMap(Sink.EventSinkV2, (sink) =>
-            sink.write({
-              events: [
-                {
-                  id: EventId.make("return-conflict-message-event"),
+] as const)("rejects an existing destination with %s", async (expected, sourceHasTerminal) => {
+  const f = await fixture({ sourceHasTerminal });
+  try {
+    const sourceTransfer = await f.source.runPromise(Transfer.ThreadMoveTransferService);
+    const destinationTransfer = await f.destination.runPromise(Transfer.ThreadMoveTransferService);
+    await completeMove({
+      moveId: `rejection-out-${sourceHasTerminal}`,
+      from: f.source,
+      to: f.destination,
+      source: sourceTransfer,
+      destination: destinationTransfer,
+      destinationEnvironmentId: EnvironmentId.make("destination"),
+      branch: `moved/rejection-out-${sourceHasTerminal}`,
+    });
+    if (!sourceHasTerminal) {
+      const changedAt = DateTime.makeUnsafe("2026-10-05T12:10:00.000Z");
+      await f.source.runPromise(
+        Effect.flatMap(Sink.EventSinkV2, (sink) =>
+          sink.write({
+            events: [
+              {
+                id: EventId.make("return-conflict-message-event"),
+                threadId,
+                occurredAt: changedAt,
+                type: "message.updated",
+                payload: {
+                  id: MessageId.make("return-conflict-message"),
                   threadId,
-                  occurredAt: changedAt,
-                  type: "message.updated",
-                  payload: {
-                    id: MessageId.make("return-conflict-message"),
-                    threadId,
-                    runId: null,
-                    nodeId: null,
-                    role: "user",
-                    text: "divergent work on A",
-                    attachments: [],
-                    streaming: false,
-                    createdBy: "user",
-                    creationSource: "web",
-                    createdAt: changedAt,
-                    updatedAt: changedAt,
-                  },
+                  runId: null,
+                  nodeId: null,
+                  role: "user",
+                  text: "divergent work on A",
+                  attachments: [],
+                  streaming: false,
+                  createdBy: "user",
+                  creationSource: "web",
+                  createdAt: changedAt,
+                  updatedAt: changedAt,
                 },
-              ],
-            }),
-          ),
-        );
-      }
-      const previous = await f.source.runPromise(
-        Effect.flatMap(Projections.ProjectionStoreV2, (store) =>
-          store.getThreadProjection(threadId),
+              },
+            ],
+          }),
         ),
       );
-      const identity = await uploadMove({
-        moveId: `rejection-return-${sourceHasTerminal}`,
-        from: f.destination,
-        to: f.source,
-        source: destinationTransfer,
-        destination: sourceTransfer,
-        destinationEnvironmentId: EnvironmentId.make("source"),
-        branch: `moved/rejection-return-${sourceHasTerminal}`,
-      });
-      await expect(
-        f.source.runPromise(sourceTransfer.execute({ ...identity, action: "commit" })),
-      ).rejects.toThrow(expected);
-      const retained = await f.source.runPromise(
-        Effect.flatMap(Projections.ProjectionStoreV2, (store) =>
-          store.getThreadProjection(threadId),
-        ),
-      );
-      expect(retained.thread.worktreePath).toBe(previous.thread.worktreePath);
-      expect(retained.messages.map((message) => message.id)).toEqual(
-        previous.messages.map((message) => message.id),
-      );
-    } finally {
-      await f.source.dispose();
-      await f.destination.dispose();
     }
-  },
-  30_000,
-);
+    const previous = await f.source.runPromise(
+      Effect.flatMap(Projections.ProjectionStoreV2, (store) => store.getThreadProjection(threadId)),
+    );
+    const identity = await uploadMove({
+      moveId: `rejection-return-${sourceHasTerminal}`,
+      from: f.destination,
+      to: f.source,
+      source: destinationTransfer,
+      destination: sourceTransfer,
+      destinationEnvironmentId: EnvironmentId.make("source"),
+      branch: `moved/rejection-return-${sourceHasTerminal}`,
+    });
+    await expect(
+      f.source.runPromise(sourceTransfer.execute({ ...identity, action: "commit" })),
+    ).rejects.toThrow(expected);
+    const retained = await f.source.runPromise(
+      Effect.flatMap(Projections.ProjectionStoreV2, (store) => store.getThreadProjection(threadId)),
+    );
+    expect(retained.thread.worktreePath).toBe(previous.thread.worktreePath);
+    expect(retained.messages.map((message) => message.id)).toEqual(
+      previous.messages.map((message) => message.id),
+    );
+  } finally {
+    await f.source.dispose();
+    await f.destination.dispose();
+  }
+});
 
 it("moves full history and staged worktree with a real Claude native load, then recovers a lost commit acknowledgement", async () => {
   const f = await fixture();
@@ -969,7 +959,7 @@ it("moves full history and staged worktree with a real Claude native load, then 
     await f.source.dispose();
     await f.destination.dispose();
   }
-}, 30_000);
+});
 
 it("a failed native resume rolls back the import and allows the source to recover", async () => {
   const f = await fixture({ failDestinationProbe: true });
@@ -1042,7 +1032,7 @@ it("a failed native resume rolls back the import and allows the source to recove
     await f.source.dispose();
     await f.destination.dispose();
   }
-}, 30_000);
+});
 
 it("keeps project deletion behind an import blocked at the native probe", async () => {
   const entered = Deferred.makeUnsafe<void>();
@@ -1120,7 +1110,7 @@ it("keeps project deletion behind an import blocked at the native probe", async 
     await f.source.dispose();
     await f.destination.dispose();
   }
-}, 30_000);
+});
 
 it("uses the durable move fence when the source journal is missing", async () => {
   const f = await fixture();
@@ -1179,7 +1169,7 @@ it("uses the durable move fence when the source journal is missing", async () =>
     await f.source.dispose();
     await f.destination.dispose();
   }
-}, 30_000);
+});
 
 it("returns idle when destination status has no thread or move journal", async () => {
   const f = await fixture();
@@ -1198,7 +1188,7 @@ it("returns idle when destination status has no thread or move journal", async (
     await f.source.dispose();
     await f.destination.dispose();
   }
-}, 30_000);
+});
 
 it.each([false, true])(
   "runs destination setup once after import and retains the moved thread when setup fails=%s",

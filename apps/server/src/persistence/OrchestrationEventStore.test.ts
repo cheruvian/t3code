@@ -19,7 +19,6 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
-
 import {
   LIVE_STREAM_MAX_ITEMS,
   LiveStreamBufferError,
@@ -30,83 +29,78 @@ import * as OrchestrationEventStore from "./OrchestrationEventStore.ts";
 import * as SqlitePersistence from "./Sqlite.ts";
 const isPersistenceDecodeError = Schema.is(PersistenceDecodeError);
 const isLiveStreamBufferError = Schema.is(LiveStreamBufferError);
-
 const layerTest = OrchestrationEventStore.layer.pipe(
   Layer.provideMerge(SqlitePersistence.layerMemory),
 );
 const layer = it.layer(layerTest);
-
 layer("OrchestrationEventStore", (it) => {
   it.effect("retains only shell metadata from oversized replay and live application events", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const store = yield* OrchestrationEventStore.OrchestrationEventStore;
-        const afterSequence = yield* store.latestApplicationSequence;
-        const now = yield* DateTime.now;
-        const threadId = ThreadId.make("thread:large-shell-body");
-        const input = "x".repeat(9 * 1024 * 1024);
-        const event: OrchestrationV2DomainEvent = {
-          id: EventId.make("event:large-shell-body:replay"),
-          type: "turn-item.updated",
+    Effect.gen(function* () {
+      const store = yield* OrchestrationEventStore.OrchestrationEventStore;
+      const afterSequence = yield* store.latestApplicationSequence;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:large-shell-body");
+      const input = "x".repeat(9 * 1024 * 1024);
+      const event: OrchestrationV2DomainEvent = {
+        id: EventId.make("event:large-shell-body:replay"),
+        type: "turn-item.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: TurnItemId.make("tool:large-shell-body"),
+          type: "command_execution",
           threadId,
-          occurredAt: now,
-          payload: {
-            id: TurnItemId.make("tool:large-shell-body"),
-            type: "command_execution",
-            threadId,
-            runId: null,
-            nodeId: null,
-            providerThreadId: null,
-            providerTurnId: null,
-            nativeItemRef: null,
-            parentItemId: null,
-            ordinal: 1,
-            status: "running",
-            title: "Large command",
-            input,
-            startedAt: now,
-            completedAt: null,
-            updatedAt: now,
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          status: "running",
+          title: "Large command",
+          input,
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+        },
+      };
+      const [replayed] = yield* store.appendAgentEvents({ events: [event] });
+      const pull = yield* Stream.toPull(
+        store.streamProjectedApplicationEvents({
+          afterSequence,
+          project: toShellApplicationEvent,
+        }),
+      );
+      assert.deepEqual(yield* pull, [
+        { sequence: replayed!.sequence, event: { threadId }, transcriptOnly: false },
+      ]);
+      const [live] = yield* store.appendAgentEvents({
+        events: [
+          {
+            ...event,
+            id: EventId.make("event:large-shell-body:live"),
+            payload: { ...event.payload, status: "completed", completedAt: now },
           },
-        };
-        const [replayed] = yield* store.appendAgentEvents({ events: [event] });
-        const pull = yield* Stream.toPull(
-          store.streamProjectedApplicationEvents({
-            afterSequence,
-            project: toShellApplicationEvent,
-          }),
-        );
-        assert.deepEqual(yield* pull, [
-          { sequence: replayed!.sequence, event: { threadId }, transcriptOnly: false },
-        ]);
-        const [live] = yield* store.appendAgentEvents({
-          events: [
-            {
-              ...event,
-              id: EventId.make("event:large-shell-body:live"),
-              payload: { ...event.payload, status: "completed", completedAt: now },
-            },
-          ],
-        });
-        yield* store.publishCommitted([live!]);
-        assert.deepEqual(yield* pull, [
-          { sequence: live!.sequence, event: { threadId }, transcriptOnly: false },
-        ]);
-        const durable = yield* store
-          .readAgentEvents({ threadId, afterSequence })
-          .pipe(Stream.runCollect);
-        assert.lengthOf(durable, 2);
-        for (const stored of durable) {
-          assert.equal(stored.event.type, "turn-item.updated");
-          if (stored.event.type !== "turn-item.updated") return;
-          assert.equal(stored.event.payload.type, "command_execution");
-          if (stored.event.payload.type !== "command_execution") return;
-          assert.equal(stored.event.payload.input, input);
-        }
-      }),
-    ),
+        ],
+      });
+      yield* store.publishCommitted([live!]);
+      assert.deepEqual(yield* pull, [
+        { sequence: live!.sequence, event: { threadId }, transcriptOnly: false },
+      ]);
+      const durable = yield* store
+        .readAgentEvents({ threadId, afterSequence })
+        .pipe(Stream.runCollect);
+      assert.lengthOf(durable, 2);
+      for (const stored of durable) {
+        assert.equal(stored.event.type, "turn-item.updated");
+        if (stored.event.type !== "turn-item.updated") return;
+        assert.equal(stored.event.payload.type, "command_execution");
+        if (stored.event.payload.type !== "command_execution") return;
+        assert.equal(stored.event.payload.input, input);
+      }
+    }),
   );
-
   it.effect("stores an unchanged subagent prompt once and replays it on every update", () =>
     Effect.gen(function* () {
       const store = yield* OrchestrationEventStore.OrchestrationEventStore;
@@ -190,8 +184,9 @@ layer("OrchestrationEventStore", (it) => {
         item(3, "Retrying", "Audit again."),
       ];
       yield* store.appendAgentEvents({ events });
-
-      const stored = yield* sql<{ readonly payload_json: string }>`
+      const stored = yield* sql<{
+        readonly payload_json: string;
+      }>`
         SELECT payload_json FROM orchestration_events
         WHERE stream_id = ${threadId} ORDER BY sequence ASC
       `;
@@ -220,7 +215,6 @@ layer("OrchestrationEventStore", (it) => {
       assert.isAbove(applicationStats.rawPayloadBytes, prompt.length * 6);
     }),
   );
-
   it.effect("stores the full subagent prompt when its hint row was rolled back", () =>
     Effect.gen(function* () {
       const store = yield* OrchestrationEventStore.OrchestrationEventStore;
@@ -268,7 +262,6 @@ layer("OrchestrationEventStore", (it) => {
         SELECT sequence FROM orchestration_events WHERE stream_id = ${threadId}
       `;
       assert.deepEqual(rowsAfterRollback, []);
-
       const events = [event, { ...event, id: EventId.make("event:subagent-after-rollback") }];
       const appended = yield* store.appendAgentEvents({ events });
       assert.deepEqual(
@@ -298,7 +291,6 @@ layer("OrchestrationEventStore", (it) => {
       assert.deepEqual(applicationEvents, [...appended]);
     }),
   );
-
   it.effect("orders project and V2 agent events in the retained application event source", () =>
     Effect.gen(function* () {
       const eventStore = yield* OrchestrationEventStore.OrchestrationEventStore;
@@ -308,7 +300,6 @@ layer("OrchestrationEventStore", (it) => {
       const occurredAt = DateTime.makeUnsafe("2026-01-02T00:00:00.000Z");
       const now = DateTime.formatIso(occurredAt);
       const baselineSequence = yield* eventStore.latestApplicationSequence;
-
       const projectEvent = yield* eventStore.appendProjectEvent({
         type: "project.created",
         eventId: EventId.make("event-project-shared-stream"),
@@ -368,7 +359,6 @@ layer("OrchestrationEventStore", (it) => {
           },
         ],
       });
-
       const applicationEvents = yield* eventStore
         .streamApplicationEvents({ afterSequence: baselineSequence })
         .pipe(
@@ -382,7 +372,6 @@ layer("OrchestrationEventStore", (it) => {
       );
       assert.isTrue("aggregateKind" in applicationEvents[0]!);
       assert.isTrue("event" in applicationEvents[1]!);
-
       const finiteReplay = yield* eventStore
         .readApplicationEvents({
           afterSequence: baselineSequence,
@@ -405,7 +394,7 @@ layer("OrchestrationEventStore", (it) => {
       const threadId = ThreadId.make("measured-replay-thread");
       const baseline = yield* store.latestApplicationSequence;
       const unicodePayload = '{"text":"🦊"}';
-      const oversizedPayload = "{" + "x".repeat(1_048_576);
+      const oversizedPayload = "{" + "x".repeat(1048576);
       let streamVersion = 0;
       const insert = Effect.fn(function* (input: {
         readonly id: string;
@@ -414,7 +403,9 @@ layer("OrchestrationEventStore", (it) => {
         readonly threadId?: string;
         readonly version?: number;
       }) {
-        const rows = yield* sql<{ readonly sequence: number }>`
+        const rows = yield* sql<{
+          readonly sequence: number;
+        }>`
           INSERT INTO orchestration_events (
             event_id, aggregate_kind, stream_id, stream_version, event_type,
             occurred_at, actor_kind, payload_json, metadata_json, application_event_version
@@ -470,7 +461,6 @@ layer("OrchestrationEventStore", (it) => {
       );
     }),
   );
-
   it.effect.each([
     ["agent", "thread"],
     ["application", "thread"],
@@ -488,7 +478,9 @@ layer("OrchestrationEventStore", (it) => {
           eventType: string,
           payload: string,
         ) {
-          const [row] = yield* sql<{ sequence: number }>`
+          const [row] = yield* sql<{
+            sequence: number;
+          }>`
           INSERT INTO orchestration_events (
             event_id, aggregate_kind, stream_id, stream_version, event_type,
             occurred_at, actor_kind, payload_json, metadata_json, application_event_version
@@ -532,18 +524,18 @@ layer("OrchestrationEventStore", (it) => {
         const baseline = yield* store.latestApplicationSequence;
         const before = yield* insertRow(0, knownType, knownPayload);
         yield* Effect.forEach(
-          Array.from({ length: 1_000 }, (_, i) => i + 1),
+          Array.from({ length: 1000 }, (_, i) => i + 1),
           (version) => insertRow(version, "future.event", "not JSON"),
           { discard: true },
         );
         yield* insertRow(
-          1_001,
+          1001,
           aggregateKind === "thread" ? "project.meta-updated" : "provider-session.detached",
           "{}",
         );
-        const after = yield* insertRow(1_002, knownType, knownPayload);
-        const highWater = yield* insertRow(1_003, "future.trailing", "{}");
-        yield* insertRow(1_004, knownType, knownPayload);
+        const after = yield* insertRow(1002, knownType, knownPayload);
+        const highWater = yield* insertRow(1003, "future.trailing", "{}");
+        yield* insertRow(1004, knownType, knownPayload);
         assert.deepEqual(yield* read(baseline, highWater, true), [before, after]);
         assert.isTrue(isPersistenceDecodeError(yield* read(baseline, highWater).pipe(Effect.flip)));
         if (reader === "agent") {
@@ -551,7 +543,7 @@ layer("OrchestrationEventStore", (it) => {
         }
         const beforeBroken = yield* store.latestApplicationSequence;
         const broken = yield* insertRow(
-          1_005,
+          1005,
           aggregateKind === "thread" ? "thread.metadata-updated" : "project.created",
           "{}",
         );
@@ -561,7 +553,6 @@ layer("OrchestrationEventStore", (it) => {
       }),
   );
 });
-
 it.effect.each(["high-water", "replay"] as const)(
   "bounds application live events while the %s query is blocked",
   (phase) =>

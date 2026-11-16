@@ -3,9 +3,11 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Logger from "effect/Logger";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Sink from "effect/Sink";
@@ -13,23 +15,17 @@ import * as Stdio from "effect/Stdio";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
 import * as TestClock from "effect/testing/TestClock";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-
 import * as CodexRpc from "./rpc.ts";
 import * as CodexSchema from "./schema.ts";
 import * as CodexError from "./errors.ts";
 import * as CodexProtocol from "./protocol.ts";
 import { makeInMemoryStdio } from "./_internal/stdio.ts";
 const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
-
 const encoder = new TextEncoder();
-
 const encodeJsonl = (value: unknown) => encoder.encode(`${encodeUnknownJsonString(value)}\n`);
-
 const decodeJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
-
 const decodeAccountTokenUsageResponse = Schema.decodeUnknownEffect(
   CodexRpc.CLIENT_REQUEST_RESPONSES["account/usage/read"],
 );
@@ -51,7 +47,6 @@ const decodeServerSubAgentActivityKind = Schema.decodeUnknownEffect(
 const decodeThreadResumeSubAgentActivityKind = Schema.decodeUnknownEffect(
   CodexSchema.V2ThreadResumeResponse__SubAgentActivityKind,
 );
-
 it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
   it.effect("decodes completed sub-agent activity in thread resume history", () =>
     Effect.gen(function* () {
@@ -92,13 +87,11 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
           updatedAt: 2,
         },
       } as const;
-
       assert.deepEqual(yield* decodeThreadResumeResponse(response), response);
       assert.equal(yield* decodeServerSubAgentActivityKind("completed"), "completed");
       assert.equal(yield* decodeThreadResumeSubAgentActivityKind("completed"), "completed");
     }),
   );
-
   it.effect("maps account usage responses to the upstream token usage schema", () =>
     Effect.gen(function* () {
       assert.strictEqual(
@@ -115,14 +108,12 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       });
     }),
   );
-
   it.effect("maps earned rate-limit reset credits from account rate-limit snapshots", () =>
     Effect.gen(function* () {
       assert.strictEqual(
         CodexRpc.CLIENT_REQUEST_RESPONSES["account/rateLimits/read"],
         CodexSchema.V2GetAccountRateLimitsResponse,
       );
-
       const response = {
         rateLimits: {},
         rateLimitResetCredits: {
@@ -132,8 +123,8 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
               id: "RateLimitResetCredit_1",
               resetType: "codexRateLimits",
               status: "available",
-              grantedAt: 1_781_654_400,
-              expiresAt: 1_784_246_400,
+              grantedAt: 1781654400,
+              expiresAt: 1784246400,
               title: "Full reset",
               description: "Ready to redeem",
             },
@@ -141,13 +132,12 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
               id: "RateLimitResetCredit_2",
               resetType: "unknown",
               status: "unknown",
-              grantedAt: 1_781_654_401,
+              grantedAt: 1781654401,
               expiresAt: null,
             },
           ],
         },
       } as const;
-
       assert.deepEqual(yield* decodeAccountRateLimitsResponse(response), response);
       assert.deepEqual(
         yield* decodeAccountRateLimitsResponse({
@@ -161,7 +151,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       );
     }),
   );
-
   it.effect("maps the earned rate-limit reset consume request and response", () =>
     Effect.gen(function* () {
       assert.equal(
@@ -176,7 +165,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         CodexRpc.CLIENT_REQUEST_RESPONSES["account/rateLimitResetCredit/consume"],
         CodexSchema.V2ConsumeAccountRateLimitResetCreditResponse,
       );
-
       assert.deepEqual(
         yield* decodeConsumeRateLimitResetCreditParams({
           idempotencyKey: "8ae96ff3-3425-4f4c-8772-b6fd61502868",
@@ -192,36 +180,30 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       });
     }),
   );
-
   it.effect(
     "encodes requests without a jsonrpc field and routes inbound requests and notifications",
     () =>
       Effect.gen(function* () {
         const { stdio, input, output } = yield* makeInMemoryStdio();
         const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({ stdio });
-
         const notificationDeferred =
           yield* Deferred.make<ReadonlyArray<CodexProtocol.CodexAppServerIncomingNotification>>();
         const requestDeferred =
           yield* Deferred.make<ReadonlyArray<CodexProtocol.CodexAppServerIncomingRequest>>();
-
         yield* transport.incomingNotifications.pipe(
           Stream.take(1),
           Stream.runCollect,
           Effect.flatMap((notifications) => Deferred.succeed(notificationDeferred, notifications)),
           Effect.forkScoped,
         );
-
         yield* transport.incomingRequests.pipe(
           Stream.take(1),
           Stream.runCollect,
           Effect.flatMap((requests) => Deferred.succeed(requestDeferred, requests)),
           Effect.forkScoped,
         );
-
         yield* transport.notify("initialized");
         assert.equal(yield* Queue.take(output), '{"method":"initialized"}\n');
-
         const initializeParams = {
           clientInfo: {
             name: "effect-codex-app-server-test",
@@ -233,7 +215,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
             optOutNotificationMethods: null,
           },
         };
-
         const pendingInitialize = yield* transport
           .request("initialize", initializeParams)
           .pipe(Effect.forkScoped);
@@ -242,7 +223,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
           method: "initialize",
           params: initializeParams,
         });
-
         yield* Queue.offer(
           input,
           encodeJsonl({
@@ -286,7 +266,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
             },
           }),
         );
-
         assert.deepEqual(yield* Fiber.join(pendingInitialize), {
           userAgent: "mock-codex-app-server",
           codexHome: "/tmp/codex-home",
@@ -322,7 +301,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
             },
           },
         ]);
-
         yield* transport.respond(77, {
           answers: {
             approved: {
@@ -340,7 +318,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
             },
           },
         });
-
         yield* transport.respondError(
           78,
           CodexError.CodexAppServerRequestError.methodNotFound("x/test"),
@@ -354,7 +331,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         });
       }),
   );
-
   it.effect(
     "correlates concurrent request spans through responses, failures and interruption",
     () => {
@@ -443,7 +419,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       }).pipe(Effect.withTracer(tracer));
     },
   );
-
   it.effect.each([1, 7, 1024])(
     "preserves JSONL framing and UTF-8 across %i-byte input chunks",
     (chunkSize) =>
@@ -467,7 +442,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
             }),
           onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
         });
-
         const firstLine = '{"method":"x/first",\r"params":{"text":"hé🙂"}}';
         const secondLine = '{"method":"x/second","params":{"value":2}}';
         const finalLine = '{"method":"x/final","params":{"text":"最後"}}\r';
@@ -476,7 +450,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
           yield* Queue.offer(input, bytes.subarray(offset, offset + chunkSize));
         }
         yield* Queue.end(input);
-
         assert.instanceOf(
           yield* Deferred.await(termination),
           CodexError.CodexAppServerInputStreamEndedError,
@@ -489,7 +462,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         assert.deepEqual(rawLines, [firstLine, secondLine, finalLine]);
       }),
   );
-
   it.effect.each(["newline-terminated", "unfinished"])(
     "rejects an oversized %s message using UTF-8 bytes before logging or parsing",
     (framing) =>
@@ -527,7 +499,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
           transport.request(method, {}).pipe(Effect.forkScoped),
         );
         yield* Effect.forEach(pending, () => Queue.take(output));
-
         // Two 16-byte lines must survive; the 17-byte line is only 15 UTF-16 code units.
         const firstLine = '{"method":"xé"}';
         const secondLine = '{"method":"x/a"}';
@@ -545,7 +516,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
           yield* Queue.offer(input, bytes.subarray(firstSplit));
         }
         yield* Queue.end(input);
-
         const error = yield* Deferred.await(termination);
         assert.instanceOf(error, CodexError.CodexAppServerTransportError);
         assert.equal(error.operation, "read-input-stream");
@@ -563,7 +533,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         assert.deepEqual(logged, [firstLine, { method: "xé" }, secondLine, { method: "x/a" }]);
       }),
   );
-
   it.effect("reports a malformed fragmented final line before input stream termination", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
@@ -574,11 +543,9 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       });
       const response = yield* transport.request("thread/read", {}).pipe(Effect.forkScoped);
       yield* Queue.take(output);
-
       yield* Queue.offer(input, encoder.encode('{"id":1,'));
       yield* Queue.offer(input, encoder.encode('"result":'));
       yield* Queue.end(input);
-
       const error = yield* Deferred.await(termination);
       assert.instanceOf(error, CodexError.CodexAppServerProtocolParseError);
       assert.equal(error.operation, "decode-wire-message");
@@ -591,12 +558,13 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       assert.strictEqual(responseError, error);
     }),
   );
-
   it.effect("keeps processing protocol messages while an approval is pending", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
       const approvalStarted = yield* Deferred.make<void>();
-      const approvalDecision = yield* Deferred.make<{ readonly decision: string }>();
+      const approvalDecision = yield* Deferred.make<{
+        readonly decision: string;
+      }>();
       const notificationReceived = yield* Deferred.make<void>();
       const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
         stdio,
@@ -606,7 +574,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
           ),
         onNotification: () => Deferred.succeed(notificationReceived, undefined).pipe(Effect.asVoid),
       });
-
       const pendingRequest = yield* transport.request("thread/read", {}).pipe(Effect.forkScoped);
       yield* Queue.take(output);
       yield* Queue.offer(
@@ -619,11 +586,9 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
           ].join("\n")}\n`,
         ),
       );
-
       yield* Deferred.await(approvalStarted);
       yield* Deferred.await(notificationReceived);
       assert.deepEqual(yield* Fiber.join(pendingRequest), { threadId: "thread-1" });
-
       yield* Deferred.succeed(approvalDecision, { decision: "accept" });
       assert.deepEqual(yield* decodeJson(yield* Queue.take(output)), {
         id: 7,
@@ -631,7 +596,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       });
     }),
   );
-
   it.effect("rejects incoming requests after the active handler limit is reached", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
@@ -651,7 +615,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
             Effect.as({ decision: "accept" }),
           ),
       });
-
       const requests = Array.from({ length: 33 }, (_, index) =>
         encodeUnknownJsonString({
           id: index + 1,
@@ -661,7 +624,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       );
       yield* Queue.offer(input, encoder.encode(`${requests.join("\n")}\n`));
       yield* Deferred.await(handlersStarted);
-
       assert.deepEqual(yield* decodeJson(yield* Queue.take(output)), {
         id: 33,
         error: {
@@ -670,14 +632,58 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         },
       });
       assert.equal(activeHandlers, 32);
-
       yield* Deferred.succeed(releaseHandlers, undefined);
       yield* Effect.forEach(Array.from({ length: 32 }), () => Queue.take(output), {
         discard: true,
       });
     }),
   );
-
+  it.effect.each([
+    { outcome: "dies", method: "item/tool/requestUserInput", logged: "item/tool/requestUserInput" },
+    { outcome: "throws", method: "codex-handler-secret-sentinel", logged: "unknown" },
+  ] as const)(
+    "answers an incoming request whose handler $outcome, keeping its text out of logs",
+    ({ outcome, method, logged: loggedMethod }) =>
+      Effect.gen(function* () {
+        const secret = "codex-handler-secret-sentinel";
+        const defect = Object.assign(new Error(secret), { name: secret });
+        const { stdio, input, output } = yield* makeInMemoryStdio();
+        const logged: Array<string> = [];
+        yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+          stdio,
+          onRequest: () => {
+            if (outcome === "throws") throw defect;
+            return Effect.die(defect);
+          },
+        }).pipe(
+          Effect.provide(
+            Logger.layer([
+              Logger.make(({ logLevel, message, fiber }) => {
+                if (logLevel === "Error") {
+                  logged.push(
+                    String([message].flat()),
+                    JSON.stringify(fiber.getRef(References.CurrentLogAnnotations)),
+                  );
+                }
+              }),
+            ]),
+          ),
+        );
+        const request = encodeUnknownJsonString({ id: 1, method, params: {} });
+        yield* Queue.offer(
+          input,
+          encoder.encode(`${request}
+`),
+        );
+        assert.deepEqual(yield* decodeJson(yield* Queue.take(output)), {
+          id: 1,
+          error: { code: -32603, message: "Internal error" },
+        });
+        assert.lengthOf(logged, 2);
+        assert.notInclude(logged.join(), secret);
+        assert.include(logged.join(), loggedMethod);
+      }),
+  );
   it.effect("releases a waiting request handler when Codex resolves its request", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
@@ -686,7 +692,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         onRequest: (request) =>
           request.id === 33 ? Effect.succeed({ decision: "accept" }) : Effect.never,
       });
-
       const messages = Array.from({ length: 32 }, (_, index) =>
         encodeUnknownJsonString({
           id: index + 1,
@@ -710,14 +715,12 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         }),
       );
       yield* Queue.offer(input, encoder.encode(`${messages.join("\n")}\n`));
-
       assert.deepEqual(yield* decodeJson(yield* Queue.take(output)), {
         id: 33,
         result: { decision: "accept" },
       });
     }),
   );
-
   it.effect("keeps numeric and string request ids apart when Codex resolves one", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
@@ -731,7 +734,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
                 Effect.onInterrupt(() => Effect.sync(() => interrupted.push(request.id))),
               ),
       });
-
       const messages = [
         { id: 1, method: "item/commandExecution/requestApproval", params: {} },
         { id: "1", method: "item/commandExecution/requestApproval", params: {} },
@@ -739,14 +741,12 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         { id: 2, method: "item/commandExecution/requestApproval", params: {} },
       ].map((message) => encodeUnknownJsonString(message));
       yield* Queue.offer(input, encoder.encode(`${messages.join("\n")}\n`));
-
       assert.deepEqual(yield* decodeJson(yield* Queue.take(output)), {
         id: 2,
         result: { interrupted: ["1"] },
       });
     }),
   );
-
   it.effect("interrupts pending request handlers when the protocol terminates", () =>
     Effect.gen(function* () {
       const { stdio, input } = yield* makeInMemoryStdio();
@@ -764,19 +764,16 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
           ),
         onTermination: () => Deferred.succeed(terminated, undefined).pipe(Effect.asVoid),
       });
-
       yield* Queue.offer(
         input,
         encodeJsonl({ id: 7, method: "item/tool/requestUserInput", params: {} }),
       );
       yield* Deferred.await(approvalStarted);
       yield* Queue.end(input);
-
       yield* Deferred.await(approvalInterrupted);
       yield* Deferred.await(terminated);
     }),
   );
-
   it.effect("rejects outgoing messages after an approval response cannot be encoded", () =>
     Effect.gen(function* () {
       const { stdio: baseStdio, input } = yield* makeInMemoryStdio();
@@ -801,12 +798,10 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         onNotification: () => Effect.sync(() => notificationCount++).pipe(Effect.asVoid),
         onTermination: (error) => Deferred.succeed(terminated, error).pipe(Effect.asVoid),
       });
-
       yield* Queue.offer(
         input,
         encodeJsonl({ id: 7, method: "item/tool/requestUserInput", params: {} }),
       );
-
       const failure = yield* Deferred.await(terminated);
       assert.instanceOf(failure, CodexError.CodexAppServerProtocolParseError);
       const requestFailure = yield* transport.request("thread/read", {}).pipe(
@@ -819,7 +814,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       assert.strictEqual(requestFailure, failure);
       assert.strictEqual(notificationFailure, failure);
       yield* Deferred.await(readerStopped);
-
       yield* Queue.offer(
         input,
         encoder.encode(
@@ -829,13 +823,11 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
           ].join("\n")}\n`,
         ),
       );
-
       assert.equal(notificationCount, 0);
       assert.equal(requestCount, 1);
       assert.equal(yield* Queue.size(input), 1);
     }),
   );
-
   it.effect("fails pending requests before interrupted handler cleanup completes", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
@@ -861,7 +853,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       yield* Queue.offer(input, encodeJsonl({ id: 7, method: "x/approval" }));
       yield* Deferred.await(handlerStarted);
       yield* Queue.end(input);
-
       const failure = yield* Deferred.await(terminated);
       yield* Deferred.await(finalizerStarted);
       const pendingFailure = yield* Fiber.join(pending).pipe(
@@ -871,17 +862,14 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         }),
       );
       assert.strictEqual(pendingFailure, failure);
-
       yield* Deferred.succeed(releaseFinalizer, undefined);
     }),
   );
-
   it.effect("delivers raw messages only to live subscribers and releases them on close", () =>
     Effect.gen(function* () {
       const { stdio, input } = yield* makeInMemoryStdio();
       const protocolScope = yield* Scope.make();
       yield* Effect.addFinalizer(() => Scope.close(protocolScope, Exit.void));
-
       const historicalMessagesRouted = yield* Deferred.make<void>();
       const terminationError = new CodexError.CodexAppServerProcessExitedError({ code: 19 });
       const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
@@ -892,7 +880,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
             ? Deferred.succeed(historicalMessagesRouted, undefined).pipe(Effect.asVoid)
             : Effect.void,
       }).pipe(Effect.provideService(Scope.Scope, protocolScope));
-
       yield* Queue.offer(
         input,
         encodeJsonl({ method: "test/historical-notification", params: { phase: "historical" } }),
@@ -907,7 +894,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       );
       yield* Queue.offer(input, encodeJsonl({ method: "test/historical-barrier" }));
       yield* Deferred.await(historicalMessagesRouted);
-
       const liveNotification = {
         method: "test/live-notification",
         params: { phase: "live" },
@@ -923,7 +909,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       const seenRequests = yield* Ref.make<Array<CodexProtocol.CodexAppServerIncomingRequest>>([]);
       const liveNotificationObserved = yield* Deferred.make<void>();
       const liveRequestObserved = yield* Deferred.make<void>();
-
       const notificationsFiber = yield* transport.incomingNotifications.pipe(
         Stream.runForEach((notification) =>
           Ref.update(seenNotifications, (current) => [...current, notification]).pipe(
@@ -948,21 +933,17 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         ),
         Effect.forkScoped({ startImmediately: true }),
       );
-
       yield* Queue.offer(input, encodeJsonl(liveNotification));
       yield* Queue.offer(input, encodeJsonl(liveRequest));
       yield* Deferred.await(liveNotificationObserved);
       yield* Deferred.await(liveRequestObserved);
-
       assert.deepEqual(yield* Ref.get(seenNotifications), [liveNotification]);
       assert.deepEqual(yield* Ref.get(seenRequests), [liveRequest]);
-
       yield* Scope.close(protocolScope, Exit.void);
       yield* Fiber.join(notificationsFiber);
       yield* Fiber.join(requestsFiber);
     }),
   );
-
   it.effect("settles pending requests on scope close without awaiting a live process exit", () =>
     Effect.gen(function* () {
       const { stdio, output } = yield* makeInMemoryStdio();
@@ -985,11 +966,9 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         .request("test/pending-on-close")
         .pipe(Effect.forkScoped({ startImmediately: true }));
       yield* Queue.take(output);
-
       yield* Scope.close(protocolScope, Exit.void);
       yield* Fiber.join(notifications);
       yield* Fiber.join(requests);
-
       const exit = yield* Fiber.await(pending);
       assert.isTrue(Exit.isFailure(exit));
       if (Exit.isFailure(exit)) {
@@ -998,13 +977,11 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       assert.isFalse(yield* Deferred.isDone(processExit));
     }),
   );
-
   it.effect("finishes in-flight termination when the protocol scope closes", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
       const protocolScope = yield* Scope.make();
       yield* Effect.addFinalizer(() => Scope.close(protocolScope, Exit.void));
-
       const terminationStarted = yield* Deferred.make<void>();
       const finishTermination = yield* Deferred.make<void>();
       yield* Effect.addFinalizer(() => Deferred.succeed(finishTermination, undefined));
@@ -1018,7 +995,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         ),
         onTermination: () => Ref.update(terminationCalls, (current) => current + 1),
       }).pipe(Effect.provideService(Scope.Scope, protocolScope));
-
       const pendingRequest = yield* transport
         .request("test/pending-during-termination")
         .pipe(Effect.forkScoped({ startImmediately: true }));
@@ -1026,7 +1002,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         id: 1,
         method: "test/pending-during-termination",
       });
-
       yield* Queue.end(input);
       yield* Deferred.await(terminationStarted);
       const lateSend = yield* Effect.exit(transport.notify("test/late-notification"));
@@ -1036,7 +1011,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       );
       yield* Deferred.succeed(finishTermination, undefined);
       yield* Fiber.join(closeFiber);
-
       const pendingExit = pendingRequest.pollUnsafe();
       assert.exists(pendingExit);
       assert.isTrue(Exit.isFailure(pendingExit));
@@ -1046,12 +1020,10 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       assert.equal(yield* Ref.get(terminationCalls), 1);
     }),
   );
-
   it.effect("surfaces JSON encoding failures as protocol parse errors", () =>
     Effect.gen(function* () {
       const { stdio } = yield* makeInMemoryStdio();
       const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({ stdio });
-
       const bigintError = yield* transport.notify("x/test", 1n).pipe(Effect.flip);
       assert.instanceOf(bigintError, CodexError.CodexAppServerProtocolParseError);
       assert.equal(bigintError.operation, "encode-wire-message");
@@ -1061,7 +1033,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         bigintError.message,
         "Codex App Server protocol operation 'encode-wire-message' failed for method 'x/test'.",
       );
-
       const circular: Record<string, unknown> = {};
       circular.self = circular;
       const circularError = yield* transport.notify("x/test", circular).pipe(Effect.flip);
@@ -1069,7 +1040,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       assert.equal(circularError.operation, "encode-wire-message");
       assert.equal(circularError.method, "x/test");
       assert.exists(circularError.cause);
-
       const requestError = yield* transport.request("x/request", 1n).pipe(
         Effect.match({
           onFailure: (error) => error,
@@ -1084,12 +1054,10 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       });
     }),
   );
-
   it.effect("correlates response errors with the originating request", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
       const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({ stdio });
-
       const response = yield* transport.request("thread/start", {}).pipe(Effect.forkScoped);
       yield* Queue.take(output);
       yield* Queue.offer(
@@ -1103,7 +1071,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
           },
         }),
       );
-
       const error = yield* Fiber.join(response).pipe(
         Effect.match({
           onFailure: (error) => error,
@@ -1120,7 +1087,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       });
     }),
   );
-
   it.effect("logs decode failures without copying the cause or wire payload", () =>
     Effect.gen(function* () {
       const secret = "codex-wire-secret-sentinel";
@@ -1136,10 +1102,8 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
           }),
         onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
       });
-
       yield* Queue.offer(input, encoder.encode(`{"secret":"${secret}"\n`));
       yield* Deferred.await(termination);
-
       const event = events.find(({ stage }) => stage === "decode_failed");
       assert.exists(event);
       assert.equal(event.direction, "incoming");
@@ -1153,7 +1117,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       assert.notInclude(encodeUnknownJsonString(event), secret);
     }),
   );
-
   it.effect("describes unroutable messages with safe structural diagnostics", () =>
     Effect.gen(function* () {
       const secret = "codex-unroutable-secret-sentinel";
@@ -1163,12 +1126,10 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         stdio,
         onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
       });
-
       yield* Queue.offer(
         input,
         encodeJsonl({ id: true, method: "thread/start", params: { token: secret } }),
       );
-
       const error = yield* Deferred.await(termination);
       assert.instanceOf(error, CodexError.CodexAppServerProtocolParseError);
       assert.deepInclude(error, {
@@ -1183,7 +1144,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       assert.notInclude(error.message, secret);
     }),
   );
-
   it.effect("fails pending requests when input ends while the process is still running", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
@@ -1193,12 +1153,10 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       });
       const pending = yield* transport.request("thread/read", {}).pipe(Effect.forkScoped);
       yield* Queue.take(output);
-
       yield* Queue.end(input);
       yield* TestClock.adjust("249 millis");
       assert.isUndefined(pending.pollUnsafe());
       yield* TestClock.adjust("1 millis");
-
       const failure = yield* Fiber.join(pending).pipe(
         Effect.match({
           onFailure: (error) => error,
@@ -1208,7 +1166,72 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       assert.instanceOf(failure, CodexError.CodexAppServerInputStreamEndedError);
     }),
   );
-
+  it.effect("fails pending requests when the exit status lookup dies", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const defect = new Error("Injected exit status defect");
+      const terminated = yield* Deferred.make<CodexError.CodexAppServerError>();
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        terminationError: Effect.die(defect),
+        onTermination: (error) => Deferred.succeed(terminated, error).pipe(Effect.asVoid),
+      });
+      const pending = yield* transport.request("thread/read", {}).pipe(Effect.forkScoped);
+      yield* Queue.take(output);
+      yield* Queue.end(input);
+      const failure = yield* Fiber.join(pending).pipe(
+        Effect.match({
+          onFailure: (error) => error,
+          onSuccess: () => assert.fail("Expected the pending request to fail"),
+        }),
+      );
+      assert.instanceOf(failure, CodexError.CodexAppServerTransportError);
+      assert.strictEqual(failure.cause, defect);
+      assert.strictEqual(yield* Deferred.await(terminated), failure);
+    }),
+  );
+  it.effect("retires the transport after a defect in the writer", () =>
+    Effect.gen(function* () {
+      const { stdio: baseStdio } = yield* makeInMemoryStdio();
+      const defect = new Error("Injected transport defect");
+      const terminated = yield* Deferred.make<CodexError.CodexAppServerError>();
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio: Stdio.make({
+          ...baseStdio,
+          stdout: () => Sink.forEach(() => Effect.die(defect)),
+        }),
+        onTermination: (error) => Deferred.succeed(terminated, error).pipe(Effect.asVoid),
+      });
+      const failure = yield* transport.request("thread/read", {}).pipe(
+        Effect.match({
+          onFailure: (error) => error,
+          onSuccess: () => assert.fail("Expected the dead writer to fail the request"),
+        }),
+      );
+      assert.instanceOf(failure, CodexError.CodexAppServerTransportError);
+      assert.equal(failure.operation, "write-output-stream");
+      assert.strictEqual(failure.cause, defect);
+      assert.strictEqual(yield* Deferred.await(terminated), failure);
+    }),
+  );
+  it.effect("does not report normal scope shutdown as a transport failure", () =>
+    Effect.gen(function* () {
+      let terminations = 0;
+      yield* Effect.gen(function* () {
+        const { stdio, output } = yield* makeInMemoryStdio();
+        const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+          stdio,
+          onTermination: () =>
+            Effect.sync(() => {
+              terminations++;
+            }),
+        });
+        yield* transport.request("thread/read", {}).pipe(Effect.forkScoped);
+        yield* Queue.take(output);
+      }).pipe(Effect.scoped);
+      assert.equal(terminations, 0);
+    }),
+  );
   it.effect.each(["none", "exited", "running"] as const)(
     "settles failed writes with %s process status",
     (status) =>
@@ -1239,7 +1262,6 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
           onTermination: (error) => Deferred.succeed(terminated, error).pipe(Effect.asVoid),
         });
         const pending = yield* transport.request("thread/read", {}).pipe(Effect.forkScoped);
-
         if (status === "running") yield* TestClock.adjust("250 millis");
         const failure = yield* Deferred.await(terminated);
         if (status === "exited") {
@@ -1260,7 +1282,36 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         }
       }),
   );
-
+  it.effect("reports the process exit when a write fails because the process exited", () =>
+    Effect.gen(function* () {
+      const { stdio: baseStdio } = yield* makeInMemoryStdio();
+      const exitError = new CodexError.CodexAppServerProcessExitedError({ code: 1, pid: 123 });
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio: Stdio.make({
+          ...baseStdio,
+          stdout: () =>
+            Sink.forEach(() =>
+              Effect.fail(
+                PlatformError.systemError({
+                  _tag: "Unknown",
+                  module: "Stdio",
+                  method: "stdout",
+                  cause: new Error("EPIPE"),
+                }),
+              ),
+            ),
+        }),
+        terminationError: Effect.succeed(exitError),
+      });
+      const failure = yield* transport.request("initialize", {}).pipe(
+        Effect.match({
+          onFailure: (error) => error,
+          onSuccess: () => assert.fail("Expected the exited process to fail the request"),
+        }),
+      );
+      assert.strictEqual(failure, exitError);
+    }),
+  );
   it.effect("reports a process exit that follows input end", () =>
     Effect.gen(function* () {
       const { stdio, input } = yield* makeInMemoryStdio();
@@ -1272,11 +1323,9 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
         terminationError: Deferred.await(exited),
         onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
       });
-
       yield* Queue.end(input);
       yield* TestClock.adjust("100 millis");
       yield* Deferred.succeed(exited, exitError);
-
       assert.strictEqual(yield* Deferred.await(termination), exitError);
     }),
   );

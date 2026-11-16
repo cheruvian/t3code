@@ -19,6 +19,7 @@ const report = (error: unknown) =>
 export function OfflineMessageCoordinator() {
   const { environments } = useEnvironments();
   const messages = useOfflineMessages();
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Hydrates the external persisted outbox when its coordinator mounts.
   useEffect(() => {
     void offlineMessages.load().catch(report);
   }, []);
@@ -27,9 +28,11 @@ export function OfflineMessageCoordinator() {
     .filter((x) => x.entry.enabled && x.connection.phase === "connected")
     .map((x) => x.environmentId)
     .join(",");
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Reconciles the durable outbound queue with currently connected transports.
   useEffect(() => {
     for (const id of connectedIds.split(",").filter(Boolean))
       void drainOfflineMessages(EnvironmentId.make(id)).catch(report);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Newly enqueued messages must drain even when the connection set is unchanged.
   }, [connectedIds, messages.length]);
   return null;
 }

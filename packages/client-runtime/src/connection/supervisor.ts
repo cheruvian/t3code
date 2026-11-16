@@ -44,21 +44,21 @@ import { ConnectionTiming, type ConnectionTimingSettings } from "./timing.ts";
 
 const RETRY_BASE_DELAY_MS = 1_000;
 const RETRY_MAX_DELAY_MS = 300_000;
-// Allow synchronization its own budget after route authorization and socket setup.
-// Large cold databases must not time out merely because setup completed first.
-
+const SESSION_LOSS_RETRY_DELAY_MS = 250;
+// Someone is approving this device on the host; check back soon rather than climbing the ladder.
+const APPROVAL_PENDING_RETRY_DELAY_MS = 4_000;
+// A request lives 10 minutes; past that nobody is approving, so a forgotten device backs off.
+const APPROVAL_PENDING_FAST_RETRIES = 150;
 const synchronizationTimeout = Duration.fromInputUnsafe("75 seconds");
-
-// Mobile resumes, explicit retries, and offline events want a fast answer:
-// the user is waiting, or the network may be gone.
-
+const QUICK_CONNECTION_PROBE_TIMEOUT = "3 seconds";
 // A probe still unanswered this long checks the host with a fresh request. If
 // the host answers while the socket stays silent, the socket is dead.
 const SILENT_SOCKET_CHECK_AFTER = "500 millis";
 const SILENT_SOCKET_RECHECK_EVERY = "1 second";
+const FRAME_CHECK_EVERY = "100 millis";
 // Off the LAN one lost packet can stall a live socket for a second, so a remote
-// socket must stay silent this long. It must end before
-// QUICK_CONNECTION_PROBE_TIMEOUT so a long resume replaces a silent socket
+// socket must stay silent this long, except after a long resume. It must end
+// before QUICK_CONNECTION_PROBE_TIMEOUT so a resume replaces a silent socket
 // instead of timing out.
 const REMOTE_SILENT_SOCKET_AFTER = "2500 millis";
 const BACKOFF_RESET_AFTER_MS = 30_000;
@@ -546,8 +546,9 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     let attemptSpan = Option.none<Tracer.Span>();
     const traced = Effect.gen(function* () {
       attemptSpan = Option.some(yield* Effect.currentSpan.pipe(Effect.orDie));
-      yield* annotateTarget(target);
       yield* Effect.annotateCurrentSpan({
+        "environment.id": target.environmentId,
+        "environment.target.kind": target._tag,
         "connection.attempt": attempt,
         "connection.generation": generation,
         "connection.retry.failure_count": Option.match(pendingRetry, {
@@ -601,7 +602,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     );
   });
 
-  const waitForEstablishmentInterrupt = Effect.fnUntraced(function* () {
+  const waitForEstablishmentInterrupt = Effect.fnUntraced(function* (ignoreOffline: boolean) {
     // A primary attempt keeps running through an offline report, so the
     // network returning restarts it in case it stalled meanwhile.
     let deviceOffline = (yield* connectivity.status) === "offline";
@@ -611,10 +612,15 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         case "DisconnectRequested":
           return false;
         case "RetryRequested":
-          return true;
+          // Once the loop has taken this retry's flag, the running attempt is
+          // the one the retry asked for.
+          if (yield* Ref.get(resetRetryState)) {
+            return false;
+          }
+          break;
         case "NetworkChanged":
           if (target._tag !== "PrimaryConnectionTarget") {
-            if (next.network === "offline") {
+            if (next.network === "offline" && !ignoreOffline) {
               return false;
             }
           } else if (next.network === "offline") {
@@ -719,6 +725,9 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     }
   };
 
+  const isForegroundProbe = (next: SupervisorSignal) =>
+    next._tag === "Wakeup" && next.reason === "application-active";
+
   // Ends "silent" when the host answers a fresh request while the socket
   // delivers nothing, as when iOS kills a suspended socket without a close
   // event, and "alive" once the socket delivers a frame. A slow or
@@ -726,6 +735,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   const awaitSilentSocket = Effect.fn("EnvironmentSupervisor.awaitSilentSocket")(function* (
     lease: ConnectedLease,
     routeKind: ConnectionRouteKind | undefined,
+    longResume: boolean,
   ) {
     const startedAt = yield* Clock.monotonicTimeNanos;
     yield* Effect.sleep(SILENT_SOCKET_CHECK_AFTER);
@@ -741,17 +751,26 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     const socketSilent = lease.session.inboundFrames.pipe(
       Effect.map((frames) => frames === framesBefore),
     );
-    // A radio still waking up or a stale pooled connection can fail one check.
-    while ((yield* driver.checkHost(lease.prepared)) !== "answered") {
-      if (!(yield* socketSilent)) return "alive" as const;
-      yield* Effect.sleep(SILENT_SOCKET_RECHECK_EVERY);
-    }
-    if (!answersQuickly(routeKind)) {
-      const silentFor = (yield* Clock.monotonicTimeNanos) - startedAt;
-      const remaining = Duration.toNanosUnsafe(REMOTE_SILENT_SOCKET_AFTER) - silentFor;
-      if (remaining > 0n) yield* Effect.sleep(Duration.nanos(remaining));
-    }
-    return (yield* socketSilent) ? ("silent" as const) : ("alive" as const);
+    // The session only counts frames, so a host check slower than the probe
+    // deadline would otherwise hide a frame until after the socket is replaced.
+    const frameArrives = Effect.sleep(FRAME_CHECK_EVERY).pipe(
+      Effect.andThen(socketSilent),
+      Effect.repeat({ while: (silent) => silent }),
+      Effect.as("alive" as const),
+    );
+    const hostAnswersWhileSilent = Effect.gen(function* () {
+      // A radio still waking up or a stale pooled connection can fail one check.
+      while ((yield* driver.checkHost(lease.prepared)) !== "answered") {
+        yield* Effect.sleep(SILENT_SOCKET_RECHECK_EVERY);
+      }
+      if (!answersQuickly(routeKind) && !longResume) {
+        const silentFor = (yield* Clock.monotonicTimeNanos) - startedAt;
+        const remaining = Duration.toNanosUnsafe(REMOTE_SILENT_SOCKET_AFTER) - silentFor;
+        if (remaining > 0n) yield* Effect.sleep(Duration.nanos(remaining));
+      }
+      return (yield* socketSilent) ? ("silent" as const) : ("alive" as const);
+    });
+    return yield* Effect.race(hostAnswersWhileSilent, frameArrives);
   });
 
   // Returning to the app, an explicit retry, and the network reporting offline
@@ -792,20 +811,24 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         continue;
       }
       yield* Ref.set(probeUnanswered, true);
-      const probe = yield* Effect.forkChild(lease.session.probe);
+      let probe = yield* Effect.forkChild(lease.session.probe);
+      // A busy server can miss one foreground probe while the socket is still
+      // healthy, so the first miss asks again and only the follow-up's miss
+      // replaces the session.
+      let toleratesMiss = isForegroundProbe(next);
       let silentSocket: Fiber.Fiber<"silent" | "alive"> | undefined;
       // A signal during a running check, such as a network change that kills
       // the socket, needs a fresh check only if the running one sees a frame.
       let recheck = false;
       let longResume = isLongResume(next);
       const startSilentSocketCheck = Effect.gen(function* () {
-        silentSocket = yield* Effect.forkChild(awaitSilentSocket(lease, routeKind));
+        silentSocket = yield* Effect.forkChild(awaitSilentSocket(lease, routeKind, longResume));
         recheck = false;
       });
       // The web and desktop foreground probe allows a busy host 15 seconds,
       // and a busy host can answer a fresh request before a queued probe.
       const armSilentSocketCheck = Effect.fnUntraced(function* (signal: SupervisorSignal) {
-        if (signal._tag === "Wakeup" && signal.reason === "application-active") return;
+        if (isForegroundProbe(signal)) return;
         if (silentSocket !== undefined) {
           recheck = true;
           return;
@@ -819,7 +842,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           { discard: true },
         ),
       );
-      let deadline = (yield* Clock.monotonicTimeNanos) + Duration.toNanosUnsafe(probeTimeout);
+      let longResumeStartedAt = yield* Clock.monotonicTimeNanos;
+      let deadline = longResumeStartedAt + Duration.toNanosUnsafe(probeTimeout);
       for (;;) {
         const remaining = deadline - (yield* Clock.monotonicTimeNanos);
         const probeEvent = yield* Effect.raceAllFirst([
@@ -840,6 +864,12 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         ]);
         if (probeEvent._tag === "SocketAlive") {
           silentSocket = undefined;
+          // A frame shows the socket still works, so its probe gets the usual resume time.
+          if (longResume) {
+            const aliveDeadline =
+              longResumeStartedAt + Duration.toNanosUnsafe(QUICK_CONNECTION_PROBE_TIMEOUT);
+            if (aliveDeadline > deadline) deadline = aliveDeadline;
+          }
           if (recheck) yield* startSilentSocketCheck;
           continue;
         }
@@ -850,6 +880,13 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           return true;
         }
         if (probeEvent._tag === "TimedOut") {
+          if (toleratesMiss) {
+            toleratesMiss = false;
+            yield* Fiber.interrupt(probe);
+            probe = yield* Effect.forkChild(lease.session.probe);
+            deadline = (yield* Clock.monotonicTimeNanos) + Duration.toNanosUnsafe(probeTimeout);
+            continue;
+          }
           yield* stopProbe;
           // A long suspension leaves the socket suspect even when the network
           // reports offline, so it is replaced like a silent one.
@@ -878,8 +915,14 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           yield* timingSettings.get,
         );
         if (signalTimeout !== undefined) {
+          // A retry or network signal wants a definite answer, even when its
+          // own deadline lands after the foreground one.
+          if (!isForegroundProbe(probeEvent.signal)) toleratesMiss = false;
+          if (isLongResume(probeEvent.signal) && !longResume) {
+            longResume = true;
+            longResumeStartedAt = yield* Clock.monotonicTimeNanos;
+          }
           yield* armSilentSocketCheck(probeEvent.signal);
-          longResume ||= isLongResume(probeEvent.signal);
           const signalDeadline =
             (yield* Clock.monotonicTimeNanos) + Duration.toNanosUnsafe(signalTimeout);
           if (signalDeadline < deadline) deadline = signalDeadline;
@@ -914,7 +957,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           exit,
         })),
       ),
-      waitForEstablishmentInterrupt().pipe(
+      waitForEstablishmentInterrupt(ignoreOffline).pipe(
         Effect.map((resetRetry): EstablishmentEvent => ({
           _tag: "Interrupted",
           resetRetry,
@@ -924,20 +967,31 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       // each route that reaches synchronizing adds its own snapshot budget, so
       // a route that fails late does not eat the next route's time.
       Effect.gen(function* () {
-        const routeCount = connectionRoutes(yield* Ref.get(currentEntry)).length;
-        const startedAt = yield* Clock.monotonicTimeNanos;
+        const routes = connectionRoutes(yield* Ref.get(currentEntry));
         const setup = Duration.toNanosUnsafe(
-          Duration.times(Duration.seconds(timing.setupSeconds), routeCount),
+          Duration.times(Duration.seconds(timing.setupSeconds), routes.length),
         );
+        // The desktop bounds SSH preparation, which may download a server
+        // release, so for SSH-only entries the clock stops while preparing.
+        const pausesWhilePreparing = routes.every((route) => connectionRouteKind(route) === "ssh");
+        const preparing = (expected: boolean) =>
+          SubscriptionRef.changes(state).pipe(
+            Stream.filter((current) => (current.stage === "preparing") === expected),
+            Stream.runHead,
+          );
+        let spent = 0n;
         while (true) {
+          if (pausesWhilePreparing) yield* preparing(false);
           const synchronized = BigInt(yield* Ref.get(synchronizedRoutes));
-          const deadline =
-            startedAt + setup + synchronized * Duration.toNanosUnsafe(synchronizationTimeout);
-          const remaining = deadline - (yield* Clock.monotonicTimeNanos);
+          const remaining =
+            setup + synchronized * Duration.toNanosUnsafe(synchronizationTimeout) - spent;
           if (remaining <= 0n) {
             return { _tag: "TimedOut" } as const satisfies EstablishmentEvent;
           }
-          yield* Effect.sleep(Duration.nanos(remaining));
+          const resumedAt = yield* Clock.monotonicTimeNanos;
+          const sleep = Effect.sleep(Duration.nanos(remaining));
+          yield* pausesWhilePreparing ? Effect.raceFirst(sleep, preparing(true)) : sleep;
+          spent += (yield* Clock.monotonicTimeNanos) - resumedAt;
         }
       }),
     ]);
@@ -1110,11 +1164,16 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
 
   const run = Effect.fnUntraced(function* () {
     let failureCount = 0;
+    // Approval waits count as attempts but not toward backoff, so a later outage starts low.
+    let backoffFailures = 0;
+    let approvalWaits = 0;
     let generation = 0;
     let latestFailure: ConnectionAttemptError | null = null;
     let pendingRetry = Option.none<PendingRetryTrace>();
     const resetRetryLadder = () => {
       failureCount = 0;
+      backoffFailures = 0;
+      approvalWaits = 0;
       pendingRetry = Option.none();
     };
     // Set after a long resume ends an attempt or a session. The fresh attempt
@@ -1123,8 +1182,11 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     let replacing = false;
 
     for (;;) {
-      if (yield* Ref.getAndSet(resetRetryState, false)) {
+      const retryRequested = yield* Ref.getAndSet(resetRetryState, false);
+      if (retryRequested) {
         failureCount = 0;
+        backoffFailures = 0;
+        approvalWaits = 0;
         latestFailure = null;
         pendingRetry = Option.none();
       }
@@ -1137,7 +1199,10 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         yield* waitForSignal;
         continue;
       }
-      if (currentIntent.network === "offline" && !replacing) {
+      // The platform's offline report can stay wrong after the network is back,
+      // so an explicit retry still tries instead of waiting for it to change.
+      const ignoreOffline = replacing || retryRequested;
+      if (currentIntent.network === "offline" && !ignoreOffline) {
         yield* clearLease;
         yield* setState(offlineState(currentIntent, generation, failureCount + 1, latestFailure));
         const applicationActivated = yield* waitForSignal;
@@ -1150,7 +1215,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       const attempt = failureCount + 1;
       const nextGeneration = generation + 1;
       const outcome: AttemptOutcome = yield* Effect.scoped(
-        runAttempt(attempt, nextGeneration, latestFailure, pendingRetry, replacing),
+        runAttempt(attempt, nextGeneration, latestFailure, pendingRetry, ignoreOffline),
       );
       replacing = false;
       // Consumed on every iteration so a stale marker can never leak into a
@@ -1207,12 +1272,32 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         continue;
       }
 
+      // The first loss of a live session retries almost at once; the ladder
+      // still counts it, so a host that keeps dropping sessions backs off.
+      const firstLoss = outcome.established && failureCount === 0;
       failureCount += 1;
-      const delayMs = retryDelayMs(
-        failureCount - 1,
-        yield* Random.next,
-        (yield* timingSettings.get).retryMaxSeconds * 1_000,
-      );
+      if (error.reason === "approval-pending") approvalWaits += 1;
+      const awaitingApproval =
+        error.reason === "approval-pending" && approvalWaits <= APPROVAL_PENDING_FAST_RETRIES;
+      if (!awaitingApproval) backoffFailures += 1;
+      const delayMs = awaitingApproval
+        ? APPROVAL_PENDING_RETRY_DELAY_MS
+        : firstLoss
+          ? Math.round(SESSION_LOSS_RETRY_DELAY_MS * (0.5 + (yield* Random.next) / 2))
+          : error.reason === "approval-pending"
+            ? Math.max(
+                APPROVAL_PENDING_RETRY_DELAY_MS,
+                retryDelayMs(
+                  backoffFailures - 1,
+                  yield* Random.next,
+                  (yield* timingSettings.get).retryMaxSeconds * 1_000,
+                ),
+              )
+            : retryDelayMs(
+                backoffFailures - 1,
+                yield* Random.next,
+                (yield* timingSettings.get).retryMaxSeconds * 1_000,
+              );
       pendingRetry = Option.map(attemptSpan, (previousAttempt) => ({
         previousAttempt,
         failureCount,
@@ -1257,6 +1342,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     Effect.forkScoped,
   );
   yield* wakeups.changes.pipe(
+    Stream.filter(ConnectionWakeups.reachesConnectionSupervisor),
     Stream.runForEach((reason) =>
       // A long suspension can hide a network change the platform never reported.
       (reason === "network-changed" || reason === "application-active-long"

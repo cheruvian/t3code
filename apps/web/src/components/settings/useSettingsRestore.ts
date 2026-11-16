@@ -41,6 +41,35 @@ export function useSettingsRestore(onRestored?: () => void) {
   const isBackgroundActivityDirty = hasChangedBackgroundActivitySettings(settings);
 
   const changedSettingLabels = [
+    ...(!Equal.equals(settings.language, DEFAULT_UNIFIED_SETTINGS.language) ? ["language"] : []),
+    ...(!Equal.equals(settings.toolCallVisibility, DEFAULT_UNIFIED_SETTINGS.toolCallVisibility)
+      ? ["toolCallVisibility"]
+      : []),
+    ...(!Equal.equals(
+      settings.screenReaderAnnouncements,
+      DEFAULT_UNIFIED_SETTINGS.screenReaderAnnouncements,
+    )
+      ? ["screenReaderAnnouncements"]
+      : []),
+    ...(!Equal.equals(
+      settings.screenReaderWindowTitle,
+      DEFAULT_UNIFIED_SETTINGS.screenReaderWindowTitle,
+    )
+      ? ["screenReaderWindowTitle"]
+      : []),
+    ...(!Equal.equals(settings.snoozePresets, DEFAULT_UNIFIED_SETTINGS.snoozePresets)
+      ? ["snoozePresets"]
+      : []),
+    ...(!Equal.equals(
+      settings.keepAwakeWhileAgentsWork,
+      DEFAULT_UNIFIED_SETTINGS.keepAwakeWhileAgentsWork,
+    )
+      ? ["keepAwakeWhileAgentsWork"]
+      : []),
+    ...(!Equal.equals(settings.ghqCloneLayout, DEFAULT_UNIFIED_SETTINGS.ghqCloneLayout)
+      ? ["ghqCloneLayout"]
+      : []),
+
     ...(settings.effortDisplay !== DEFAULT_UNIFIED_SETTINGS.effortDisplay
       ? ["Effort display"]
       : []),
@@ -141,9 +170,6 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.followUpBehavior !== DEFAULT_UNIFIED_SETTINGS.followUpBehavior
       ? ["Follow-up behavior"]
       : []),
-    ...(settings.contextWindowMeterEnabled !== DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled
-      ? ["Context window indicator"]
-      : []),
     ...(settings.responseStreamingMode !== DEFAULT_UNIFIED_SETTINGS.responseStreamingMode
       ? ["Response streaming"]
       : []),
@@ -237,6 +263,14 @@ export function useSettingsRestore(onRestored?: () => void) {
       return;
     }
     updateSettings({
+      language: DEFAULT_UNIFIED_SETTINGS.language,
+      toolCallVisibility: DEFAULT_UNIFIED_SETTINGS.toolCallVisibility,
+      screenReaderAnnouncements: DEFAULT_UNIFIED_SETTINGS.screenReaderAnnouncements,
+      screenReaderWindowTitle: DEFAULT_UNIFIED_SETTINGS.screenReaderWindowTitle,
+      snoozePresets: DEFAULT_UNIFIED_SETTINGS.snoozePresets,
+      keepAwakeWhileAgentsWork: DEFAULT_UNIFIED_SETTINGS.keepAwakeWhileAgentsWork,
+      ghqCloneLayout: DEFAULT_UNIFIED_SETTINGS.ghqCloneLayout,
+
       effortDisplay: DEFAULT_UNIFIED_SETTINGS.effortDisplay,
       htmlPreviewDefaultMode: DEFAULT_UNIFIED_SETTINGS.htmlPreviewDefaultMode,
       sidebarCompactMode: DEFAULT_UNIFIED_SETTINGS.sidebarCompactMode,
@@ -260,7 +294,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       composerRichTextEnabled: DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled,
       sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
       followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
-      contextWindowMeterEnabled: DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled,
       environmentIdentificationMode: DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
       panelAnimationDurationMs: DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs,

@@ -1,3 +1,4 @@
+import upstreamLedger from "./fixtures/upstream-migration-ledger.json" with { type: "json" };
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
@@ -11,7 +12,9 @@ import { migrationEntries, migrationManifest, runMigrations } from "./Migrations
 const upstreamForkIds = [
   45, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 60, 61, 62, 64, 65, 66, 69, 70, 71,
 ];
-const seedUpstream = (variant: "main" | "preview53" | "preview54" | "preview54Indexes") =>
+const seedUpstream = (
+  variant: "currentMain" | "main" | "preview53" | "preview54" | "preview54Indexes",
+) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const entries = [
@@ -22,10 +25,15 @@ const seedUpstream = (variant: "main" | "preview53" | "preview54" | "preview54In
       }),
     ];
     const selected =
-      variant === "main"
-        ? entries
-        : entries.filter(([id]) => id <= (variant === "preview53" ? 52 : 53));
-    if (variant !== "main") {
+      variant === "currentMain"
+        ? upstreamLedger.map(([id, name]) => {
+            const entry = migrationEntries.find(([, candidate]) => candidate === name)!;
+            return [Number(id), String(name), entry[2]] as const;
+          })
+        : variant === "main"
+          ? entries
+          : entries.filter(([id]) => id <= (variant === "preview53" ? 52 : 53));
+    if (variant !== "main" && variant !== "currentMain") {
       selected.push([
         variant === "preview53" ? 53 : 54,
         "OrchestrationV2",
@@ -46,7 +54,7 @@ const seedUpstream = (variant: "main" | "preview53" | "preview54" | "preview54In
   });
 
 describe("upstream ledger upgrades", () => {
-  it.effect.each(["main", "preview53", "preview54", "preview54Indexes"] as const)(
+  it.effect.each(["currentMain", "main", "preview53", "preview54", "preview54Indexes"] as const)(
     "preserves V2 schema and import progress from %s",
     (variant) =>
       Effect.gen(function* () {
@@ -58,7 +66,7 @@ describe("upstream ledger upgrades", () => {
         assert.ok(!executed.some(([id]) => id === 61));
         assert.deepStrictEqual(yield* runMigrations(), []);
         assert.deepStrictEqual(
-          yield* sql`SELECT * FROM orchestration_v2_legacy_imports`,
+          yield* sql`SELECT * FROM orchestration_v2_legacy_imports`.unprepared,
           imports.map((row) => ({ ...row, activity_imported_at: null })),
         );
         const history = yield* sql<{

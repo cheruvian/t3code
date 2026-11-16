@@ -4,6 +4,7 @@ import type {
   ThreadId,
   ThreadPullRequestKey,
 } from "@t3tools/contracts";
+import type { EnvironmentThreadShell } from "./state/models.ts";
 import { normalizeThreadPullRequestKey } from "./threadPullRequests.ts";
 
 type LinkingCapabilities = Pick<
@@ -17,6 +18,18 @@ export function threadPullRequestLinkMode(capabilities: LinkingCapabilities | nu
     : capabilities?.threadPullRequestLinking === true
       ? "single"
       : "unsupported";
+}
+
+/** The server refuses new watches on settled, archived, and subagent threads. */
+export function canStartThreadPullRequestWatch(
+  thread: Pick<EnvironmentThreadShell, "archivedAt" | "settledAt" | "settledOverride" | "lineage">,
+): boolean {
+  return (
+    thread.archivedAt === null &&
+    thread.settledAt === null &&
+    thread.settledOverride !== "settled" &&
+    thread.lineage.relationshipToParent !== "subagent"
+  );
 }
 
 export function planThreadPullRequestMutation({

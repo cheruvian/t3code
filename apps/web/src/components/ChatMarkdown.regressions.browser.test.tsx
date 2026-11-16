@@ -545,7 +545,7 @@ describe("ChatMarkdown streaming", () => {
       await act(() => detailsButton.click());
       const details = mounted.container.querySelector<HTMLElement>("[data-markdown-details]")!;
       expect(details.getAttribute("data-markdown-details-open")).toBe("true");
-      expect(writeText).toHaveBeenCalledWith("First code block\n");
+      expect(writeText).toHaveBeenCalledWith("First code block");
       expect(highlight).toHaveBeenCalledTimes(1);
 
       for (let index = 0; index < 10; index += 1) {
@@ -578,7 +578,7 @@ describe("ChatMarkdown streaming", () => {
       await act(async () => {
         copyUpdated.click();
       });
-      expect(writeText).toHaveBeenLastCalledWith("Updated code block\n");
+      expect(writeText).toHaveBeenLastCalledWith("Updated code block");
       expect(highlight).toHaveBeenCalledTimes(1);
       expect(tokenizer).toHaveBeenCalledTimes(2);
     } finally {

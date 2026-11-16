@@ -53,10 +53,13 @@ const LIVE_SHELL_SNAPSHOT: OrchestrationV2ShellSnapshot = {
   snapshotSequence: 1,
 };
 
-function session(client: WsRpcProtocolClient): RpcSession.RpcSession {
+function session(client: WsRpcProtocolClient, serverVersion = "1.0.0"): RpcSession.RpcSession {
   return {
     client,
-    initialConfig: Effect.succeed({ shellResumeCompletionMarker: true } as never),
+    initialConfig: Effect.succeed({
+      shellResumeCompletionMarker: true,
+      environment: { serverVersion },
+    } as never),
     subscribeServerConfig: (input) => client.subscribeServerConfig(input ?? {}),
     ready: Effect.void,
     probe: Effect.void,
@@ -549,7 +552,14 @@ describe("environment shell synchronization", () => {
         Stream.filter((values) => values.length >= 4),
         Stream.runHead,
       );
-      expect(yield* SubscriptionRef.get(capturedAfterSequences)).toEqual([10, 40, 40, 20]);
+      expect(yield* SubscriptionRef.get(capturedAfterSequences)).toEqual([10, 40, 40, 40]);
+      expect(yield* Ref.get(loaderCalls)).toBe(1);
+      yield* SubscriptionRef.set(activeSession, Option.some(session(client, "2.0.0")));
+      yield* SubscriptionRef.changes(capturedAfterSequences).pipe(
+        Stream.filter((values) => values.length >= 5),
+        Stream.runHead,
+      );
+      expect(yield* SubscriptionRef.get(capturedAfterSequences)).toEqual([10, 40, 40, 40, 20]);
       expect(yield* Ref.get(loaderCalls)).toBe(2);
     }),
   );
