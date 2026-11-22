@@ -125,6 +125,7 @@ function EnvironmentBroker({
       if (input.type === "unlock" || input.type === "lock") setAddingAccount(false);
     }
   };
+  // Each new subscription snapshot must restore presenter visibility after reconnect.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Publish presenter visibility to the credential broker.
   useEffect(() => {
     if (!state?.status || !canAct) return;
@@ -139,7 +140,7 @@ function EnvironmentBroker({
     return () => {
       document.removeEventListener("visibilitychange", visible);
     };
-  }, [state?.status, canAct, environmentId, run, viewId]);
+  }, [state, canAct, environmentId, run, viewId]);
   const pending =
     state?.requests.filter((r) => ["pending", "awaiting_unlock", "searching"].includes(r.state)) ??
     [];

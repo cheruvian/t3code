@@ -123,6 +123,7 @@ function EnvironmentBroker({
         : undefined,
     );
   };
+  // Each new subscription snapshot must restore presenter visibility after reconnect.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Publish native app visibility to the broker presenter registry.
   useEffect(() => {
     if (!state?.status || !canAct) return;
@@ -135,7 +136,7 @@ function EnvironmentBroker({
     publish(AppState.currentState ?? "unknown");
     const subscription = AppState.addEventListener("change", publish);
     return () => subscription.remove();
-  }, [state?.status, canAct, environmentId, run, viewId]);
+  }, [state, canAct, environmentId, run, viewId]);
   const pending =
     state?.requests.filter((r) => ["pending", "awaiting_unlock", "searching"].includes(r.state)) ??
     [];
