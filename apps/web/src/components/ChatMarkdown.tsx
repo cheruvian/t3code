@@ -2132,7 +2132,7 @@ const MarkdownSource = memo(function MarkdownSource({
   cache: boolean;
 }) {
   const render = markdownRenderer(markdown);
-  const entry = render.parse(text);
+  const entry = React.useMemo(() => render.parse(text), [render, text]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Caching during render would make React Compiler rebuild the element when `cache` flips.
   useEffect(() => {
     if (cache) render.remember(text, entry);
