@@ -1102,12 +1102,12 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("&lt;global-agent-instructions scope=&quot;workspace&quot;&gt;");
-    expect(markup).toContain(
-      "Before &lt;nested data-value=&quot;a&amp;b&quot;&gt;inside&lt;/nested&gt; after",
-    );
-    expect(markup).toContain("&lt;/global-agent-instructions&gt; in your context?");
-    expect(markup).toContain("Comparison: 2 &lt; 3 and 5 &gt; 4.");
+    const body = new DOMParser().parseFromString(markup, "text/html").querySelector(".user-message-markdown");
+    expect(body?.querySelector("global-agent-instructions, nested")).toBeNull();
+    expect(body?.textContent).toContain('<global-agent-instructions scope="workspace">');
+    expect(body?.textContent).toContain('Before <nested data-value="a&b">inside</nested> after');
+    expect(body?.textContent).toContain("</global-agent-instructions> in your context?");
+    expect(body?.textContent).toContain("Comparison: 2 < 3 and 5 > 4.");
   });
 
   it("preserves XML-like source inside user code spans and fences", async () => {
@@ -1130,10 +1130,9 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toMatch(
-      /<code[^>]*data-inline-code[^>]*>&lt;tag attr=&quot;x&quot;&gt;<\/code>/,
-    );
-    expect(markup).toContain("&lt;root&gt;&lt;child enabled=&quot;true&quot; /&gt;&lt;/root&gt;");
+    const doc = new DOMParser().parseFromString(markup, "text/html");
+    expect(doc.querySelector("code[data-inline-code]")?.textContent).toBe('<tag attr="x">');
+    expect(doc.querySelector("pre code")?.textContent?.trimEnd()).toBe('<root><child enabled="true" /></root>');
   });
 
   it("does not render markdown title attributes in user messages", async () => {
@@ -1152,8 +1151,7 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain('href="https://example.com"');
     expect(markup).toContain('src="https://example.com/image.png"');
-    expect(markup).not.toContain('title="link tip"');
-    expect(markup).not.toContain('title="image tip"');
+    expect(new DOMParser().parseFromString(markup, "text/html").querySelector(".user-message-markdown [title]")).toBeNull();
   });
 
   it("renders unsafe user HTML as inert source text", async () => {

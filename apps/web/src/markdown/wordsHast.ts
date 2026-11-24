@@ -155,9 +155,22 @@ function tokenize(html: string, offsetOf: (byte: number) => number): Tokenized {
     if (previous?.type === "text") previous.value += value;
     else parent.children.push({ type: "text", value } as Text);
   };
-  for (const match of html.matchAll(TAG)) {
+  // Words applies GFM tag filtering to raw scripts, escaping only their opening
+  // angle bracket. Literal Markdown text and code escape the closing bracket too.
+  const tokens = new RegExp(
+    TAG.source + String.raw`|&lt;script(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*>`,
+    "gi",
+  );
+  for (let match; (match = tokens.exec(html));) {
     text(match.index);
     last = match.index + match[0].length;
+    if (match[0].startsWith("&lt;")) {
+      const closing = /&lt;\/script\s*>/gi;
+      closing.lastIndex = last;
+      last = closing.exec(html) ? closing.lastIndex : html.length;
+      tokens.lastIndex = last;
+      continue;
+    }
     const tagName = match[2]?.toLowerCase();
     if (!tagName) continue;
     if (match[1]) {
@@ -574,7 +587,14 @@ const link = (href: string, label: string, properties: Element["properties"] = {
 function linkText(value: string, walk: Walk): ElementContent[] | null {
   let parts: ElementContent[] = [];
   let offset = 0;
+  const literals = [
+    ...value.matchAll(
+      /:codex-file-citation[\w-]*(?:\[[^\]\n]*\])?\{(?:[^}"'\n]|"[^"\n]*(?:"|$)|'[^'\n]*(?:'|$))*(?:\}|$)/gm,
+    ),
+  ];
   for (const { index, path } of absoluteFilePathMatches(value)) {
+    if (literals.some((match) => index >= match.index && index < match.index + match[0].length))
+      continue;
     if (index > offset) parts.push({ type: "text", value: value.slice(offset, index) });
     parts.push(link(path, path));
     offset = index + path.length;
@@ -623,7 +643,14 @@ function transform(node: Root | Element, walk: Walk, inLink: boolean, inCode: bo
     if (child.type !== "element") continue;
     // Words gives what it generates a source position; raw HTML that copies its attributes has none.
     if (child.properties.dataDirective !== undefined && child.position) {
-      children[index] = codexDirective(child, walk, inLink);
+      const directive = codexDirective(child, walk, inLink);
+      const next = children[index + 1];
+      // Words can parse only the directive name while its attributes are still streaming.
+      if (directive.type === "text" && next?.type === "text") {
+        directive.value += next.value;
+        children.splice(index + 1, 1);
+      }
+      children[index] = directive;
       index--;
       continue;
     }

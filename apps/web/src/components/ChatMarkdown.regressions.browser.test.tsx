@@ -769,7 +769,7 @@ describe("ChatMarkdown file option chips", () => {
     ]) {
       const html = renderToStaticMarkup(<ChatMarkdown cwd="/tmp/project" text={text} />);
 
-      expect(html).toContain(text.replaceAll('"', "&quot;"));
+      expect(new DOMParser().parseFromString(html, "text/html").body.textContent).toBe(text);
       expect(html).not.toContain("chat-markdown-file-link");
     }
   });
@@ -859,14 +859,13 @@ describe("ChatMarkdown file option chips", () => {
         }
       />,
     );
-    const nestedLinkText = nestedLinkHtml.replace(/<[^>]+>/g, "");
-
-    expect(malformedHtml).toContain(
-      "<li>Bad :codex-file-citation{purpose=&quot;output&quot;}</li>",
-    );
-    expect(nestedLinkText).toContain(
-      "Bad :codex-file-citation{path=&quot;/tmp/project/report.xlsx&quot;}",
-    );
+    const parser = new DOMParser();
+    expect(
+      parser.parseFromString(malformedHtml, "text/html").querySelector("li")?.textContent,
+    ).toBe('Bad :codex-file-citation{purpose="output"}');
+    expect(
+      parser.parseFromString(nestedLinkHtml, "text/html").querySelector("li a")?.textContent,
+    ).toBe('Bad :codex-file-citation{path="/tmp/project/report.xlsx"}');
   });
 });
 
