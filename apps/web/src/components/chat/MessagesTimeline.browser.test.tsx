@@ -496,6 +496,18 @@ describe("MessagesTimeline work rows", () => {
 });
 
 describe("MessagesTimeline messages", () => {
+  it("mounts speech controls only for nearby sections of a tall reply", async () => {
+    const paragraphs = 6000;
+    await using screen = await renderTimeline([
+      message("a\n\n".repeat(paragraphs), { role: "assistant" }, "tall"),
+    ]);
+    await vi.waitFor(() => {
+      const controls = screen.buttons(/^Play only this section:/);
+      expect(controls.length).toBeGreaterThan(0);
+      expect(controls.length).toBeLessThan(paragraphs);
+    });
+  });
+
   it("settles when equally long messages have very different rendered heights", async () => {
     const props = baseProps();
     const tall = message("a\n\n".repeat(6000), { role: "assistant" }, "tall");
@@ -521,13 +533,6 @@ describe("MessagesTimeline messages", () => {
     await vi.waitFor(() =>
       expect(props.listRef.current?.getState().sizeAtIndex(0)).toBeGreaterThan(100_000),
     );
-    await vi.waitFor(() => {
-      const sectionControls = screen.container.querySelectorAll(
-        '[aria-label^="Play only this section:"]',
-      );
-      expect(sectionControls.length).toBeGreaterThan(0);
-      expect(sectionControls.length).toBeLessThan(6000);
-    });
     const viewport = props.listRef.current!.getScrollableNode()!;
     await act(() => {
       viewport.scrollTop = 0;

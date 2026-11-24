@@ -1394,11 +1394,27 @@ const ConversationTimeline = memo(function ConversationTimeline({
       !citationPositioning &&
       !restoringThreadPosition,
   );
+  // LegendList can synchronously measure more rows while delivering the first scroll
+  // of a reused list. Align against the resulting layout before the browser paints.
+  const alignOpeningEnd = useStableCallback(() => {
+    if (
+      !restoringThreadPosition ||
+      listOpenedOn === listIdentityKey ||
+      syncing ||
+      rememberedPosition?.atEnd === false ||
+      findOpen ||
+      citationRequest
+    )
+      return;
+    const node = listRef.current?.getScrollableNode();
+    if (node) node.scrollTop = node.scrollHeight - node.clientHeight;
+  });
   // Stable so the list attaches once per mount, not on every render.
   const setTimelineList = useStableCallback((list: LegendListRef | null) => {
     listRef.current = list;
     const scrollNode: HTMLElement | null = list?.getScrollableNode() ?? null;
     registerTimeline?.(scrollNode);
+    scrollNode?.addEventListener("scroll", alignOpeningEnd);
     const viewport = scrollNode
       ? attachTimelineViewport(scrollNode, (frame) => {
           const rowId = frame.closest<HTMLElement>("[data-timeline-row-id]")?.dataset.timelineRowId;
@@ -1439,6 +1455,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       .listen("totalSize", () => scheduleContentSizeChanged());
     scheduleContentSizeChanged();
     return () => {
+      scrollNode?.removeEventListener("scroll", alignOpeningEnd);
       stopListeningToContentSize?.();
       stopPreservingReadingPosition?.();
       stopRememberingRelease?.();
