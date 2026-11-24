@@ -42,7 +42,6 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
     text || (row.message.streaming || row.suppressEmptyResponse ? "" : gt("(empty response)"));
   const speechSections = (() =>
     !row.message.streaming && getMessageSpeechPlayer() ? messageSpeechSections(messageText) : [])();
-  const speechOffsets = (() => speechSections.map((section) => section.startOffset))();
   const owner = `${ctx.routeThreadKey}:${row.message.id}`;
   const isLatest = ctx.latestSpokenReplyId === row.message.id;
   const renderSpeechSectionActions = (index: number) => (
@@ -78,7 +77,7 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
               onUseArtifactTemplate={ctx.onUseArtifactTemplate}
               onRunShellCommand={ctx.onRunShellCommand}
               onImageExpand={ctx.onImageExpand}
-              speechSectionOffsets={speechOffsets}
+              speechSections={speechSections}
               renderSpeechSectionActions={renderSpeechSectionActions}
             />
           </AssistantCitationSource>

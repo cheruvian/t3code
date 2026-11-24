@@ -28,6 +28,7 @@ export function messageSpeechText(markdown: string): string {
 export type MessageSpeechSection = {
   readonly text: string;
   readonly label: string;
+  readonly tagName: string;
   readonly startOffset: number;
 };
 
@@ -43,6 +44,18 @@ export function messageSpeechSections(markdown: string): MessageSpeechSection[] 
       {
         text,
         label: label.length > 64 ? `${label.slice(0, 61)}…` : label,
+        tagName:
+          node.type === "paragraph"
+            ? "p"
+            : node.type === "heading"
+              ? `h${node.depth}`
+              : node.type === "list"
+                ? node.ordered
+                  ? "ol"
+                  : "ul"
+                : node.type === "code"
+                  ? "pre"
+                  : node.type,
         startOffset: node.position?.start.offset ?? -1,
       },
     ];

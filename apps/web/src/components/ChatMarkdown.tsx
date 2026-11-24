@@ -202,6 +202,7 @@ import { isStandaloneWebApp, resolveLinkTarget } from "../browser/browserLinkTar
 import { PullRequestLinkPreview } from "./pullRequest/PullRequestLinkPreview";
 import { IssueLinkPreview, IssueLinkPreviewFallback } from "./issue/IssueLinkPreview";
 import { MarkdownCodeBlock, SuspenseShikiCodeBlock } from "./chat/MarkdownCodeBlock";
+import type { MessageSpeechSection } from "~/lib/messageSpeech";
 import { createMarkdownRenderer } from "./chat/markdownRenderer";
 import type { MarkdownExtensions, WordsHastOptions } from "../markdown/wordsHast";
 import {
@@ -281,7 +282,7 @@ interface ChatMarkdownProps {
   sourceControlMediaRepository?: string | undefined;
   headingLevelOffset?: number | undefined;
   /** Optional controls beside top-level rendered blocks in a completed reply. */
-  speechSectionOffsets?: ReadonlyArray<number> | undefined;
+  speechSections?: ReadonlyArray<MessageSpeechSection> | undefined;
   renderSpeechSectionActions?: ((index: number) => ReactNode) | undefined;
 }
 
@@ -2121,12 +2122,12 @@ function markdownIslandOptions(state: ChatMarkdownComponentState): MarkdownIslan
 const MarkdownSource = memo(function MarkdownSource({
   text,
   markdown,
-  speechSectionOffsets,
+  speechSections,
   cache,
 }: {
   text: string;
   markdown: WordsHastOptions;
-  speechSectionOffsets?: ReadonlyArray<number> | undefined;
+  speechSections?: ReadonlyArray<MessageSpeechSection> | undefined;
   /** The text will not change again; streamed text would only fill the cache with prefixes. */
   cache: boolean;
 }) {
@@ -2137,22 +2138,39 @@ const MarkdownSource = memo(function MarkdownSource({
     if (cache) render.remember(text, entry);
   }, [render, text, entry, cache]);
   const islandState = use(ChatMarkdownRendererContext);
-  const tree = speechSectionOffsets?.length
-    ? {
-        ...entry.tree,
-        children: entry.tree.children.map((node) => {
-          const offset = node.position?.start.offset;
-          const index = offset == null ? -1 : speechSectionOffsets.indexOf(offset);
-          if (index < 0 || node.type !== "element") return node;
-          return {
-            type: "element",
-            tagName: "div",
-            properties: { dataSpeechSectionIndex: index },
-            children: [node],
-          } satisfies HastElement;
-        }),
-      }
-    : entry.tree;
+  const tree = (() => {
+    if (!speechSections?.length) return entry.tree;
+    const byOffset = new Map(speechSections.map((section, index) => [section.startOffset, index]));
+    // Words omits positions on paragraphs and headings. Match those by block order
+    // only when the rendered sequence agrees with the speech parser.
+    const tags = new Set(speechSections.map((section) => section.tagName));
+    const blocks = entry.tree.children.filter(
+      (node): node is HastElement => node.type === "element" && tags.has(node.tagName),
+    );
+    const aligned =
+      blocks.length === speechSections.length &&
+      blocks.every(
+        (node, index) =>
+          node.tagName === speechSections[index]!.tagName &&
+          (node.position?.start.offset == null ||
+            node.position.start.offset === speechSections[index]!.startOffset),
+      );
+    let ordinal = 0;
+    return {
+      ...entry.tree,
+      children: entry.tree.children.map((node) => {
+        if (node.type !== "element" || !tags.has(node.tagName)) return node;
+        const index = aligned ? ordinal++ : byOffset.get(node.position?.start.offset ?? NaN);
+        if (index === undefined) return node;
+        return {
+          type: "element",
+          tagName: "div",
+          properties: { dataSpeechSectionIndex: index },
+          children: [node],
+        } satisfies HastElement;
+      }),
+    };
+  })();
   return (
     <ChatMarkdownTextContext value={text}>
       {islandState
@@ -2169,7 +2187,7 @@ function ChatMarkdown({
   lineBreaks = false,
   parseRawHtml = true,
   extensions = NO_EXTENSIONS,
-  speechSectionOffsets,
+  speechSections,
   renderSpeechSectionActions,
   renderInsights = false,
   ...props
@@ -2178,7 +2196,7 @@ function ChatMarkdown({
   // the whole message, need the whole text.
   const streamingBlocks =
     props.isStreaming === true &&
-    !speechSectionOffsets?.length &&
+    !speechSections?.length &&
     !inline &&
     extensions === NO_EXTENSIONS &&
     !props.onTaskListChange
@@ -2223,7 +2241,7 @@ function ChatMarkdown({
                 key={index}
                 text={source}
                 markdown={markdown}
-                speechSectionOffsets={speechSectionOffsets}
+                speechSections={speechSections}
                 // Every block before the last is finished, so its parse can be reused.
                 cache={!props.isStreaming || index < blocks.length - 1}
               />
