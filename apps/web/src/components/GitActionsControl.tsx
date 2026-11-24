@@ -1257,6 +1257,23 @@ function CheckoutGitActionsControl({
       return false;
     }
     const actionResult = result.value;
+    const cta = actionResult.toast.cta;
+    if (cta.kind === "run_action") {
+      const timing = resolveGitActionResultToastTiming("success");
+      toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title: actionResult.toast.title,
+          description: actionResult.toast.description,
+          timeout: timing.timeout,
+          data: { ...scopedToastData, dismissAfterVisibleMs: GIT_ACTION_SUCCESS_VISIBLE_MS },
+          actionProps: {
+            children: cta.label,
+            onClick: () => void runGitActionWithToast({ action: cta.action.kind }),
+          },
+        }),
+      );
+    }
     const branchUpdate = resolveThreadBranchUpdate(actionResult);
     if (branchUpdate) branchFollower?.follow(branchUpdate.branch);
     const createdPullRequest = actionResult.pr.status === "created";
