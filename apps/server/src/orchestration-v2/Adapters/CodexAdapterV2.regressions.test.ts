@@ -1950,7 +1950,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       );
       assert.isDefined(harness.runtime.unloadThread);
       yield* harness.runtime.unloadThread!({ providerThread: harness.providerThread });
-      assert.deepEqual(requests, ["initialize", "thread/start", "thread/unsubscribe"]);
+      assert.deepEqual(requests, [
+        "initialize",
+        "config/read",
+        "thread/start",
+        "thread/unsubscribe",
+      ]);
     }).pipe(
       Effect.scoped,
       Effect.provide(
@@ -2838,7 +2843,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             "cause.method",
             failAt === 4 ? "thread/unarchive" : "thread/resume",
           );
-          assert.nestedPropertyVal(error, "cause.requestId", String(failAt));
+          assert.nestedPropertyVal(error, "cause.requestId", String(failAt + 2));
           return;
         }
         const resumed = yield* resume;
@@ -4239,7 +4244,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           ),
         );
         const replayDriver = yield* CodexReplay.makeReplayDriver(
-          withCodexReplayConfigReads(localTranscript),
+          withCodexReplayConfigReads(localTranscript, "Background stop"),
         );
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         assert.equal(
@@ -4346,7 +4351,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             ProviderReplayHarness.layerWithRegistry(
               { name: "codex-background-stop", runtimePolicyOverride: { cwd } },
               CodexAdapterV2Testkit.layer({
-                transcript: withCodexReplayConfigReads(localTranscript),
+                transcript: withCodexReplayConfigReads(localTranscript, "Background stop"),
                 driver: replayDriver,
               }),
               { runEffectWorker: true },
@@ -4473,7 +4478,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               ProviderReplayHarness.layerWithRegistry(
                 { name: "codex-background-stop-untracked", runtimePolicyOverride: { cwd } },
                 CodexAdapterV2Testkit.layer({
-                  transcript: withCodexReplayConfigReads(localTranscript),
+                  transcript: withCodexReplayConfigReads(
+                    localTranscript,
+                    "Background stop untracked",
+                  ),
                 }),
                 { runEffectWorker: true },
               ),

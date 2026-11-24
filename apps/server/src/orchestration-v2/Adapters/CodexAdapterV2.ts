@@ -8689,6 +8689,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   codexThreadRuntimeParams({
                     threadId: turnInput.threadId,
                     mcpSession,
+                    stdioMcpServers: yield* readStdioMcpServers(turnInput.runtimePolicy.cwd),
                     modelSelection: turnInput.modelSelection,
                     runtimePolicy: turnInput.runtimePolicy,
                   }),

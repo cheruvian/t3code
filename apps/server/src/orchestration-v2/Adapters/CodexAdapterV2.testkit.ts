@@ -226,13 +226,23 @@ export const CodexOrchestratorReplayHarness: OrchestratorV2ProviderReplayHarness
   },
 };
 
-/** Every turn/start follows a config/read; inserts that exchange and shifts later client ids. */
+/**
+ * Every turn/start follows a config/read, and a thread's first turn on a connection names it
+ * unless the transcript names it itself. A thread start, resume or fork follows a config/read
+ * unless it retries a failed request or the transcript reads config itself. Inserts those
+ * exchanges and shifts later client ids.
+ */
 export function withConfigReadBeforeTurnStart(
   entries: ReadonlyArray<CodexReplay.CodexAppServerReplayEntry>,
+  threadName = "Codex continuation test",
 ): Array<CodexReplay.CodexAppServerReplayEntry> {
   const result: Array<CodexReplay.CodexAppServerReplayEntry> = [];
   let offset = 0;
   let clientIds = new Map<number, number>();
+  let namedThreads = new Set<unknown>();
+  let transcriptReads = 0;
+  let previousOutbound: { readonly method: string; readonly id: number } | undefined;
+  let failedMethod: string | undefined;
   for (const entry of entries) {
     const frame = entry.type === "runtime_exit" ? undefined : entry.frame;
     if (!Predicate.isObject(frame) || typeof frame.id !== "number") {
@@ -240,30 +250,62 @@ export function withConfigReadBeforeTurnStart(
       continue;
     }
     if (entry.type === "expect_outbound" && typeof frame.method === "string") {
+      const params = Predicate.isObject(frame.params) ? frame.params : {};
       if (frame.method === "initialize") {
         offset = 0;
         clientIds = new Map();
+        namedThreads = new Set();
+      }
+      if (frame.method === "thread/name/set") namedThreads.add(params.threadId);
+      const exchanges: Array<readonly [string, unknown, unknown]> = [];
+      const isThreadRequest =
+        frame.method === "thread/start" ||
+        frame.method === "thread/resume" ||
+        frame.method === "thread/fork";
+      if (frame.method === "config/read") transcriptReads += 1;
+      else if (isThreadRequest && transcriptReads > 0) transcriptReads -= 1;
+      else if (
+        isThreadRequest &&
+        failedMethod !== frame.method &&
+        previousOutbound?.method !== "thread/unarchive"
+      ) {
+        exchanges.push([
+          "config/read",
+          { ...(params.cwd === undefined ? {} : { cwd: params.cwd }), includeLayers: false },
+          { config: {}, origins: {} },
+        ]);
       }
       if (frame.method === "turn/start") {
+        if (!namedThreads.has(params.threadId)) {
+          namedThreads.add(params.threadId);
+          exchanges.push(["thread/name/set", { threadId: params.threadId, name: threadName }, {}]);
+        }
+        exchanges.push([
+          "config/read",
+          { cwd: params.cwd, includeLayers: false },
+          { config: {}, origins: {} },
+        ]);
+      }
+      for (const [method, requestParams, response] of exchanges) {
         const id = frame.id + offset;
-        const params = Predicate.isObject(frame.params) ? frame.params : {};
         result.push(
           {
             type: "expect_outbound",
-            label: "config/read",
-            frame: { id, method: "config/read", params: { cwd: params.cwd, includeLayers: false } },
+            label: method,
+            frame: { id, method, params: requestParams },
           },
-          {
-            type: "emit_inbound",
-            label: "config/read",
-            frame: { id, result: { config: {}, origins: {} } },
-          },
+          { type: "emit_inbound", label: method, frame: { id, result: response } },
         );
         offset += 1;
       }
+      previousOutbound = { method: frame.method, id: frame.id };
+      failedMethod = undefined;
       clientIds.set(frame.id, frame.id + offset);
       result.push(withConfigReplayRequestId(entry, frame.id + offset));
       continue;
+    }
+    if (entry.type === "emit_inbound" && frame.id === previousOutbound?.id && "error" in frame) {
+      failedMethod = previousOutbound.method;
     }
     const mapped = clientIds.get(frame.id);
     result.push(
@@ -274,10 +316,12 @@ export function withConfigReadBeforeTurnStart(
   }
   return result;
 }
+
 export function withCodexReplayConfigReads(
   transcript: CodexReplay.CodexAppServerReplayTranscript,
+  threadName?: string,
 ): CodexReplay.CodexAppServerReplayTranscript {
-  return { ...transcript, entries: withConfigReadBeforeTurnStart(transcript.entries) };
+  return { ...transcript, entries: withConfigReadBeforeTurnStart(transcript.entries, threadName) };
 }
 
 function withConfigReplayRequestId(
