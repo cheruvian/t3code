@@ -9,6 +9,10 @@ export class AccountProvider {
   get accounts() {
     return [...this.#providers.keys()];
   }
+  errorFor(directory) {
+    const account = [...this.#identities].find(([, identity]) => identity === directory)?.[0];
+    return this.#providers.get(account)?.error;
+  }
   async initialize() {}
   async add(account, provider, identity = account) {
     if (this.#providers.has(account)) throw new BrokerError("Account is already unlocked.");

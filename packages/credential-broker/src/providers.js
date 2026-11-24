@@ -221,6 +221,16 @@ function run(executable, args, env, timeout = 30_000, input) {
             "Credential provider operation failed. Check vault login/unlock in the human terminal.";
           if (error.code === "ENOENT") {
             message = "Bitwarden CLI executable was not found.";
+          } else if (
+            /unexpected (?:token|end)|(?:invalid|malformed).*json|json.*(?:parse|corrupt)/i.test(
+              stderr,
+            )
+          ) {
+            message =
+              "Bitwarden could not read its local profile. Preserve the profile directory, then sign in using a new CLI profile.";
+          } else if (/not logged in|unauthenticated|invalid_grant|session.*expired/i.test(stderr)) {
+            message =
+              "Bitwarden login has expired. Sign in again to this CLI profile, then unlock it in T3.";
           } else if (args[0] === "unlock") {
             message = error.killed
               ? "Bitwarden vault unlock timed out."
@@ -260,16 +270,25 @@ export class BitwardenProvider {
   #index;
   #loading;
   #generation = 0;
+  #operations = Promise.resolve();
+  error;
   constructor({
     executable = "bw",
     runner = run,
     env = process.env,
     passwordPrompt,
     now = Date.now,
+    onChange = () => {},
   } = {}) {
     this.now = now;
     this.executable = executable;
-    this.runner = runner;
+    this.onChange = onChange;
+    // The CLI rewrites its profile file even for some reads; never overlap commands within a vault.
+    this.runner = (...args) => {
+      const task = this.#operations.then(() => runner(...args));
+      this.#operations = task.catch(() => {});
+      return task;
+    };
     this.env = { ...env };
     delete this.env.BW_SESSION;
     delete this.env.BW_PASSWORD;
@@ -332,9 +351,23 @@ export class BitwardenProvider {
       this.#index = items;
       this.#syncedAt = this.now();
       return items;
-    })().finally(() => {
-      if (generation === this.#generation) this.#loading = undefined;
-    });
+    })()
+      .then((items) => {
+        this.error = undefined;
+        return items;
+      })
+      .catch((error) => {
+        if (generation === this.#generation)
+          this.error =
+            error instanceof BrokerError
+              ? error.message
+              : "Bitwarden returned invalid vault data. Refresh this vault; if it still fails, preserve the profile and sign in using a new CLI profile.";
+        throw error;
+      })
+      .finally(() => {
+        if (generation === this.#generation) this.#loading = undefined;
+        this.onChange();
+      });
     return this.#loading;
   }
   async search(site, progress = () => {}, field = "password", query) {

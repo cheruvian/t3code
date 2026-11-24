@@ -29,7 +29,11 @@ export class ProfileRegistry {
             typeof entry.directory === "string" &&
             isAbsolute(entry.directory),
         )
-        .map(({ name, directory }) => ({ name, directory }));
+        .map(({ name, directory, executable }) => ({
+          name,
+          directory,
+          ...(typeof executable === "string" ? { executable } : {}),
+        }));
     } catch (error) {
       if (error.code === "ENOENT") return [];
       throw error;
@@ -46,10 +50,10 @@ export class ProfileRegistry {
     this.#writes = task.catch(() => {});
     return task;
   }
-  remember(name, directory) {
+  remember(name, directory, executable) {
     return this.update((entries) => [
       ...entries.filter((entry) => entry.directory !== directory),
-      { name, directory },
+      { name, directory, ...(executable && executable !== "bw" ? { executable } : {}) },
     ]);
   }
   forget(directory) {

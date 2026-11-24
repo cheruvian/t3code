@@ -1,6 +1,13 @@
+import { useCredentialAccess } from "../CredentialBrokerCoordinator";
 import { SidebarDeploymentNotices } from "./SidebarDeploymentNotice";
 import { SidebarProviderOutageIcon } from "./SidebarProviderOutageIcon";
-import { ArrowLeftIcon, ArrowRightIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  ChartNoAxesColumnIcon,
+  LockKeyholeIcon,
+  SettingsIcon,
+} from "lucide-react";
 import { type ReactNode, memo } from "react";
 import { T, useGT } from "gt-react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
@@ -235,6 +242,37 @@ function SidebarUtilityItem({
   );
 }
 
+function CredentialAccessItem() {
+  const access = useCredentialAccess();
+  const gt = useGT();
+  const { isMobile, setOpenMobile } = useSidebar();
+  if (!access?.available) return null;
+  const label =
+    access.pendingCount > 0
+      ? gt("Credential access · {count} pending", { count: access.pendingCount })
+      : gt("Credential access");
+  return (
+    <SidebarUtilityItem
+      label={label}
+      icon={
+        <span className="relative">
+          <LockKeyholeIcon className="size-4" />
+          {access.pendingCount > 0 && (
+            <span
+              aria-hidden
+              className="absolute -top-0.5 -right-1 size-1.5 rounded-full bg-warning"
+            />
+          )}
+        </span>
+      }
+      onClick={() => {
+        if (isMobile) setOpenMobile(false);
+        access.open();
+      }}
+    />
+  );
+}
+
 const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
   const navigateToMainApp = useNavigateToMainApp();
@@ -317,6 +355,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           />
         </>
       )}
+      <CredentialAccessItem />
       <SidebarThreadUndoNotice />
       <SidebarUpdatePill />
     </SidebarMenu>

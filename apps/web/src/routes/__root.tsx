@@ -194,7 +194,6 @@ function RootRouteBranch() {
       {primaryEnvironmentAuthenticated ? <DesktopSafeShutdownCoordinator /> : null}
       <ServerDrainBanner />
       <BackgroundPushCoordinator />
-      <CredentialBrokerCoordinator />
       <OfflineMessageCoordinator />
       {primaryEnvironmentAuthenticated || localEnvironmentDisabled ? (
         <>
@@ -228,7 +227,7 @@ function RootRouteBranch() {
   );
 
   return (
-    <>
+    <CredentialBrokerCoordinator>
       <ChatGptWelcomeCoordinator />
       {isWelcome ? (
         <>
@@ -249,7 +248,7 @@ function RootRouteBranch() {
       )}
       {/* Above both shells and the router, so drafts survive navigation, including to /welcome. */}
       <ThemeEditorHost />
-    </>
+    </CredentialBrokerCoordinator>
   );
 }
 

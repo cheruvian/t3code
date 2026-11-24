@@ -1260,6 +1260,83 @@ for (const field of ["password", "sshKey"]) {
   });
 }
 
+test("human account-filter overrides are visible, reversible, and still require approval", async (t) => {
+  let reads = 0;
+  const record = {
+    id: DEMO_ITEM,
+    type: 1,
+    name: "GitHub",
+    login: {
+      username: "team@example.test",
+      password: "synthetic-password",
+      uris: [{ uri: "https://github.com" }],
+    },
+  };
+  const provider = new BitwardenProvider({
+    passwordPrompt: async () => "synthetic-master",
+    runner: async (_, args) => {
+      if (args[0] === "unlock") return "synthetic-session";
+      if (args[0] === "list") return JSON.stringify([record]);
+      if (args[0] === "get") {
+        reads++;
+        return JSON.stringify(record);
+      }
+      return "";
+    },
+  });
+  const { broker, caller, input, runtime } = await setup(t, { provider });
+  const requestInput = { ...input, site: "github.com" };
+  await allow(broker, caller, requestInput, "always");
+  assert.equal(broker.state().grants.length, 1);
+  const detach = await visible(broker);
+  t.after(detach);
+  const filtered = { ...requestInput, account: "acme", excludeAccounts: ["team@example.test"] };
+  const { request, execution } = await pending(broker, caller, filtered);
+  assert.equal(request.accountFilter, "acme");
+  assert.deepEqual(request.excludedAccounts, ["team@example.test"]);
+  assert.deepEqual(request.candidates, []);
+  await broker.action("human", { type: "search", requestId: request.requestId, query: "git" });
+  const current = () => broker.state().requests.find((r) => r.requestId === request.requestId);
+  assert.deepEqual(current().candidates, []);
+  const toggle = (enabled) =>
+    broker.action("human", {
+      type: "setAccountFilters",
+      requestId: request.requestId,
+      enabled,
+    });
+  await toggle(false);
+  assert.equal(current().accountFiltersCleared, true);
+  assert.equal(current().searchQuery, "git");
+  assert.equal(current().candidates[0].name, "GitHub");
+  assert.equal(current().state, "pending");
+  assert.equal(current().grantId, undefined);
+  assert.deepEqual(broker.state().notices, []);
+  assert.equal(reads, 1);
+  assert.deepEqual(await readdir(join(runtime, "leases")), []);
+  await toggle(true);
+  assert.equal(current().accountFiltersCleared, undefined);
+  assert.deepEqual(current().candidates, []);
+  await toggle(false);
+  await broker.action("human", {
+    type: "decide",
+    requestId: request.requestId,
+    decision: "once",
+    candidateId: DEMO_ITEM,
+  });
+  assert.equal((await execution).state, "completed");
+  assert.equal(reads, 2);
+  await assert.rejects(toggle(true), /no longer available/);
+  const next = await pending(broker, caller, filtered);
+  assert.deepEqual(next.request.candidates, []);
+  assert.equal(next.request.accountFiltersCleared, undefined);
+  await broker.action("human", {
+    type: "decide",
+    requestId: next.request.requestId,
+    decision: "deny",
+  });
+  assert.equal((await next.execution).state, "denied");
+});
+
 test("latest manual search wins, hostname reset restores matching, and denial cancels late results", async (t) => {
   const completions = new Map();
   const started = new Map();
@@ -1789,3 +1866,96 @@ test("exec forwards account exclusions without falling back to another credentia
   assert.equal(result.state, "failed");
   assert.equal(result.failureCode, "no_matching_login");
 });
+
+test("vault unlocks queue independently and saved vaults retain their executable", async (t) => {
+  const runtime = await realpath(await mkdtemp("/tmp/t3-vault-queue-"));
+  const executable = join(runtime, "bw-fixture");
+  const first = join(runtime, "first");
+  const second = join(runtime, "second");
+  await mkdir(first);
+  await mkdir(second);
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+import fs from "node:fs";
+if(process.argv[2] === "unlock") {
+ const dir = process.env.BITWARDENCLI_APPDATA_DIR;
+ if(dir.endsWith("/first")) {
+  await new Promise(resolve => {
+   const watcher = fs.watch(dir, () => {
+    if(fs.existsSync(dir + "/release")) { watcher.close(); resolve(); }
+   });
+   fs.writeFileSync(dir + "/started", "");
+  });
+ }
+ process.stdout.write("synthetic-session");
+} else if(process.argv[2] === "list") process.stdout.write("[]");
+`,
+    { mode: 0o700 },
+  );
+  const broker = new T3CredentialBroker({ runtime, watchdog: false });
+  t.after(async () => {
+    await broker.close();
+    await rm(runtime, { recursive: true, force: true });
+  });
+  const started = new Promise((resolve) => {
+    const watcher = watch(first, () => {
+      stat(join(first, "started")).then(
+        () => {
+          watcher.close();
+          resolve();
+        },
+        () => {},
+      );
+    });
+  });
+  const one = broker.unlock("fixture", executable, "First", first);
+  await started;
+  const two = broker.unlock("fixture", executable, "Second", second);
+  two.catch(() => {});
+  try {
+    await milestone(broker, (state) =>
+      state.profiles.some((p) => p.directory === second && p.status === "queued"),
+    );
+    assert.equal(broker.state().profiles.find((p) => p.directory === first).status, "unlocking");
+  } finally {
+    await writeFile(join(first, "release"), "");
+  }
+  await Promise.all([one, two]);
+  assert.deepEqual(broker.state().accounts, ["First", "Second"]);
+  assert.ok(
+    broker
+      .state()
+      .profiles.filter((p) => [first, second].includes(p.directory))
+      .every((p) => p.status === "ready" && p.executable === executable),
+  );
+  await broker.lock();
+  await broker.action("human", { type: "unlock", password: "fixture", profileDirectory: second });
+  assert.deepEqual(broker.state().accounts, ["Second"]);
+});
+
+for (const locked of [false, true]) {
+  test(`human denial feedback reaches the agent while vault is ${locked ? "locked" : "ready"}`, async (t) => {
+    const { broker, caller, input, marker } = await setup(t);
+    if (locked) await broker.lock();
+    const ready = milestone(broker, (s) =>
+      s.requests.some((r) => r.state === (locked ? "awaiting_unlock" : "pending")),
+    );
+    const execution = broker.execute(caller, input);
+    const request = (await ready).requests.find(
+      (r) => r.state === (locked ? "awaiting_unlock" : "pending"),
+    );
+    await broker.action("human", {
+      type: "decide",
+      requestId: request.requestId,
+      decision: "deny",
+      denialReason: "no_saved_password",
+      denialMessage: "Use the existing signed-in browser.",
+    });
+    const result = await execution;
+    assert.equal(result.state, "denied");
+    assert.equal(result.denialReason, "no_saved_password");
+    assert.equal(result.denialMessage, "Use the existing signed-in browser.");
+    await assert.rejects(stat(marker), { code: "ENOENT" });
+  });
+}

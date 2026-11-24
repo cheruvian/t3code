@@ -90,6 +90,8 @@ export const CredentialExecutionFailureCode = Schema.Literals([
   "credential_cleanup_failed",
 ]);
 export const CredentialExecution = Schema.Struct({
+  denialReason: Schema.optional(Schema.Literal("no_saved_password")),
+  denialMessage: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
   requestId: Schema.String,
   state: Schema.String,
   expiresAt: Schema.optional(Schema.Number),
@@ -109,6 +111,9 @@ export const CredentialSearchDiagnostics = Schema.Struct({
   durationMs: Schema.Number,
 });
 export const CredentialApproval = Schema.Struct({
+  accountFilter: Schema.optional(Schema.String),
+  excludedAccounts: Schema.optional(Schema.Array(Schema.String)),
+  accountFiltersCleared: Schema.optional(Schema.Boolean),
   searchDiagnostics: Schema.optional(CredentialSearchDiagnostics),
   searchPhase: Schema.optional(Schema.Literals(["syncing", "matching"])),
   canSave: Schema.optional(Schema.Boolean),
@@ -164,6 +169,9 @@ export const CredentialBrokerState = Schema.Struct({
         name: Schema.String,
         directory: Schema.String,
         saved: Schema.Boolean,
+        executable: Schema.optional(Schema.String),
+        status: Schema.optional(Schema.Literals(["locked", "queued", "unlocking", "ready"])),
+        error: Schema.optional(Schema.String),
       }),
     ),
   ),
@@ -188,6 +196,11 @@ export const CredentialBrokerState = Schema.Struct({
 export type CredentialBrokerState = typeof CredentialBrokerState.Type;
 export const CredentialBrokerAction = Schema.Union([
   Schema.Struct({ type: Schema.Literal("discoverProfiles") }),
+  Schema.Struct({
+    type: Schema.Literal("setAccountFilters"),
+    requestId: Schema.String,
+    enabled: Schema.Boolean,
+  }),
   Schema.Struct({ type: Schema.Literal("forgetProfile"), directory: Schema.String }),
   Schema.Struct({
     type: Schema.Literal("search"),
@@ -206,6 +219,8 @@ export const CredentialBrokerAction = Schema.Union([
     type: Schema.Literal("decide"),
     requestId: Schema.String,
     decision: Schema.Literals(["deny", "once", "always"]),
+    denialReason: Schema.optional(Schema.Literal("no_saved_password")),
+    denialMessage: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
     approvalScope: Schema.optional(Schema.Literals(["thread", "project", "t3"])),
     durationSeconds: Schema.optional(Schema.Literal(3600)),
     saveHost: Schema.optional(Schema.Boolean),

@@ -28,6 +28,20 @@ async function resolveExecutable(program, searchPath) {
   throw new Error("Executable unavailable.");
 }
 
+function denialFeedback(input) {
+  if (input.type !== "decide" || input.decision !== "deny") return {};
+  if (
+    (input.denialReason !== undefined && input.denialReason !== "no_saved_password") ||
+    (input.denialMessage !== undefined &&
+      (typeof input.denialMessage !== "string" || input.denialMessage.length > 500))
+  )
+    throw new BrokerError("Invalid denial feedback.");
+  return {
+    ...(input.denialReason ? { denialReason: input.denialReason } : {}),
+    ...(input.denialMessage?.trim() ? { denialMessage: input.denialMessage.trim() } : {}),
+  };
+}
+
 const terminal = new Set(["denied", "expired", "released", "failed", "completed", "revoked"]);
 
 /** Host adapter. Operator methods are never exposed on the agent socket. */
@@ -41,6 +55,7 @@ export class T3CredentialBroker {
   #addingAccount = false;
   #refreshing = false;
   #unlockTask;
+  #unlocks = new Map();
   #status;
   #listeners = new Set();
   #views = new Map();
@@ -80,7 +95,36 @@ export class T3CredentialBroker {
       status: this.#status,
       mode: this.#broker?.provider.mode ?? "bitwarden",
       accounts: this.#accounts?.accounts ?? [],
-      profiles: this.#profiles,
+      profiles: [
+        ...new Map([
+          ...this.#profiles.map((profile) => [profile.directory, profile]),
+          ...[...this.#unlocks].map(([directory, entry]) => [
+            directory,
+            {
+              ...this.#profiles.find((profile) => profile.directory === directory),
+              saved: this.#profiles.some(
+                (profile) => profile.directory === directory && profile.saved,
+              ),
+              name: entry.name,
+              directory,
+              executable: entry.executable,
+            },
+          ]),
+        ]).values(),
+      ].map((profile) => ({
+        ...profile,
+        status:
+          this.#unlocks.get(profile.directory)?.status ??
+          (this.#profileDirectories.has(profile.directory) ? "ready" : "locked"),
+        ...((this.#unlocks.get(profile.directory)?.error ??
+        this.#accounts?.errorFor(profile.directory))
+          ? {
+              error:
+                this.#unlocks.get(profile.directory)?.error ??
+                this.#accounts?.errorFor(profile.directory),
+            }
+          : {}),
+      })),
       addingAccount: this.#addingAccount,
       refreshing: this.#refreshing,
       ...(this.#error ? { error: this.#error } : {}),
@@ -90,6 +134,9 @@ export class T3CredentialBroker {
         ...snapshot.requests.filter((r) => r.kind === "exec" && terminal.has(r.state)).slice(0, 20),
       ].map((r) => ({
         requestId: r.request_id,
+        ...(r.account !== undefined ? { accountFilter: r.account } : {}),
+        ...(r.excludeAccounts?.length ? { excludedAccounts: r.excludeAccounts } : {}),
+        ...(r.account_filters_cleared ? { accountFiltersCleared: true } : {}),
         state: r.state,
         ...(r.search_phase ? { searchPhase: r.search_phase } : {}),
         site: r.site ?? "Direct item (CLI)",
@@ -193,12 +240,63 @@ export class T3CredentialBroker {
     }
     this.#publish();
   }
-  unlock(...args) {
-    if (this.#unlockTask) return Promise.reject(new BrokerError("Unlock is in progress."));
-    const task = this.#unlock(...args);
+  async unlock(password, executable, account, profileDirectory) {
+    if (this.#closing || this.#status === "unsupported")
+      throw new BrokerError("Broker unavailable.");
+    if (!this.provider && (typeof password !== "string" || !password || password.length > 4096))
+      throw new BrokerError("Invalid unlock.");
+    const expanded = profileDirectory
+      ? this.#profileRegistry.expand(profileDirectory)
+      : (process.env.BITWARDENCLI_APPDATA_DIR ??
+        join(
+          process.env.HOME ?? "",
+          process.platform === "darwin"
+            ? "Library/Application Support/Bitwarden CLI"
+            : ".config/Bitwarden CLI",
+        ));
+    if (!isAbsolute(expanded)) throw new BrokerError("Provide an absolute CLI profile directory.");
+    const directory = await realpath(expanded).catch(() => expanded);
+    const existing = this.#unlocks.get(directory);
+    if (existing && existing.status !== "locked")
+      throw new BrokerError("This vault is already queued for unlock.");
+    if (this.#profileDirectories.has(directory))
+      throw new BrokerError("This CLI profile is already unlocked.");
+    if ([...this.#unlocks.values()].filter((entry) => entry.status !== "locked").length >= 16)
+      throw new BrokerError("Too many vault unlocks are queued.");
+    const saved = (await this.#profileRegistry.saved().catch(() => [])).find(
+      (profile) => profile.directory === directory,
+    );
+    // Recheck after loading saved configuration so duplicate concurrent submissions cannot queue.
+    if (this.#unlocks.get(directory)?.status && this.#unlocks.get(directory).status !== "locked")
+      throw new BrokerError("This vault is already queued for unlock.");
+    const entry = {
+      name: account ?? saved?.name ?? "Default",
+      executable: executable ?? saved?.executable ?? "bw",
+      status: "queued",
+    };
+    this.#unlocks.set(directory, entry);
+    this.#publish();
+    const task = (this.#unlockTask ?? Promise.resolve())
+      .catch(() => {})
+      .then(async () => {
+        entry.status = "unlocking";
+        this.#publish();
+        try {
+          await this.#unlock(password, entry.executable, entry.name, directory);
+          this.#unlocks.delete(directory);
+        } catch (error) {
+          entry.status = "locked";
+          entry.error =
+            this.#error ?? "Vault unlock failed. Check the saved vault settings and try again.";
+          throw error;
+        } finally {
+          password = undefined;
+          this.#publish();
+        }
+      });
     this.#unlockTask = task;
     return task.finally(() => {
-      this.#unlockTask = undefined;
+      if (this.#unlockTask === task) this.#unlockTask = undefined;
     });
   }
   async #unlock(password, executable = "bw", account = "Default", profileDirectory) {
@@ -252,6 +350,7 @@ export class T3CredentialBroker {
       this.provider ??
       new BitwardenProvider({
         executable,
+        onChange: () => this.#publish(),
         env: {
           ...process.env,
           ...(profileDirectory ? { BITWARDENCLI_APPDATA_DIR: profileDirectory } : {}),
@@ -270,15 +369,17 @@ export class T3CredentialBroker {
         throw new BrokerError("Broker unavailable.");
       }
       if (wasReady) {
-        await this.#rememberProfile(account, directory);
+        await this.#rememberProfile(account, directory, executable);
         this.#profileDirectories.add(directory);
         return;
       }
-    } catch {
+    } catch (error) {
       this.#addingAccount = false;
       if (!wasReady) this.#status = "locked";
       this.#error =
-        "Account unlock failed. Check that this CLI profile is signed in and the account is not already unlocked.";
+        error instanceof BrokerError
+          ? error.message
+          : "Vault unlock failed. Check CLI login and the saved vault settings.";
       this.#publish();
       throw new BrokerError("Account unlock failed.");
     } finally {
@@ -321,7 +422,7 @@ export class T3CredentialBroker {
       this.#profileDirectories.add(directory);
       this.#broker = broker;
       if (!this.provider) this.#accounts = accounts;
-      await this.#rememberProfile(account, directory);
+      await this.#rememberProfile(account, directory, executable);
       this.#status = "ready";
       for (const entry of this.#waitingForUnlock.values()) entry.finish();
     } catch {
@@ -363,9 +464,9 @@ export class T3CredentialBroker {
       this.#publish();
     });
   }
-  async #rememberProfile(account, directory) {
+  async #rememberProfile(account, directory, executable) {
     try {
-      await this.#profileRegistry.remember(account, directory);
+      await this.#profileRegistry.remember(account, directory, executable);
       this.#profiles = await this.#profileRegistry.list();
     } catch {
       this.#error = "Vault unlocked, but its CLI profile location could not be saved.";
@@ -373,7 +474,11 @@ export class T3CredentialBroker {
   }
   async action(sessionId, input) {
     if (input.type === "discoverProfiles" || input.type === "forgetProfile") {
-      if (this.#addingAccount) throw new BrokerError("Unlock is in progress.");
+      if (input.type === "forgetProfile") {
+        const entry = this.#unlocks.get(input.directory);
+        if (entry && entry.status !== "locked") throw new BrokerError("This vault is unlocking.");
+        this.#unlocks.delete(input.directory);
+      }
       if (input.type === "forgetProfile") await this.#profileRegistry.forget(input.directory);
       this.#profiles = await this.#profileRegistry.list();
       this.#publish();
@@ -414,7 +519,7 @@ export class T3CredentialBroker {
     const waiting = this.#waitingForUnlock.get(input.requestId);
     if (waiting) {
       if (input.type === "stop" || (input.type === "decide" && input.decision === "deny")) {
-        waiting.finish(input.type === "stop" ? "released" : "denied");
+        waiting.finish(input.type === "stop" ? "released" : "denied", denialFeedback(input));
         this.#publish();
         return;
       }
@@ -433,8 +538,11 @@ export class T3CredentialBroker {
           approvalScope: input.approvalScope,
           durationSeconds: input.durationSeconds,
           saveHost: input.saveHost,
+          ...denialFeedback(input),
         },
       );
+    else if (input.type === "setAccountFilters")
+      await broker.setAccountFilters(input.requestId, input.enabled);
     else if (input.type === "search") await broker.searchVault(input.requestId, input.query);
     else if (input.type === "saveLogin")
       await broker.saveLogin(input.requestId, {
@@ -510,10 +618,10 @@ export class T3CredentialBroker {
       const requestId = randomUUID();
       const result = await new Promise((resolve) => {
         const abort = () => finish("released");
-        const finish = (state) => {
+        const finish = (state, feedback = {}) => {
           this.#waitingForUnlock.delete(requestId);
           signal?.removeEventListener("abort", abort);
-          resolve(state ? { requestId, state } : undefined);
+          resolve(state ? { requestId, state, ...feedback } : undefined);
         };
         this.#waitingForUnlock.set(requestId, {
           origin,
@@ -558,6 +666,8 @@ export class T3CredentialBroker {
           ...(r.exit_code !== undefined ? { exitCode: r.exit_code } : {}),
           ...(r.signal !== undefined ? { signal: r.signal } : {}),
           ...(r.failure_code ? { failureCode: r.failure_code } : {}),
+          ...(r.denialReason ? { denialReason: r.denialReason } : {}),
+          ...(r.denialMessage ? { denialMessage: r.denialMessage } : {}),
         });
       };
       const abort = () => {
@@ -596,7 +706,7 @@ export class T3CredentialBroker {
   }
   async lock() {
     const broker = this.#broker;
-    if (this.#status === "unlocking" || this.#addingAccount)
+    if (this.#status === "unlocking" || this.#addingAccount || this.#unlockTask)
       throw new BrokerError("Unlock is in progress.");
     for (const entry of this.#waitingForUnlock.values()) entry.finish("released");
     if (broker) {
@@ -613,7 +723,12 @@ export class T3CredentialBroker {
     this.#closing = true;
     for (const entry of this.#waitingForUnlock.values()) entry.finish("released");
     if (this.#unlockTask) {
-      void this.#unlockTask.finally(() => this.lock()).catch(() => {});
+      void this.#unlockTask
+        .finally(() => {
+          this.#unlockTask = undefined;
+          return this.lock();
+        })
+        .catch(() => {});
       return;
     }
     await this.lock();

@@ -2,9 +2,14 @@
 
 Credential Broker lets an agent use a saved Bitwarden login without putting its
 username or password in chat. Install and sign in to the Bitwarden CLI on the
-machine running your T3 server. Open **Credential access** in T3 and unlock the
-vault privately. If needed, expand **Bitwarden CLI location** to choose its
-executable.
+machine running your T3 server. In web and desktop, select the lock icon at the
+bottom of the sidebar to open **Credential access**. Choose the environment in
+the dialog, then open **Vaults**. Choose **Add vault**, enter its name, CLI profile
+location, and master password, and select **Add and unlock**. Saved vaults ask
+only for the master password. You can submit another vault’s password while an
+unlock runs; T3 queues the unlocks and shows their progress separately. Passwords
+are never saved with vault settings. The sidebar lock shows a dot when requests
+need attention.
 
 T3 keeps unlocked sessions and searchable names, usernames, and hosts in memory.
 Searches use that cache immediately and refresh it in the background when it is
@@ -15,7 +20,10 @@ approval. Locking clears the cache.
 An agent requests a site hostname and a prepared program. T3 shows the verified
 thread, agent, workspace, program, arguments, fields, and access lifetime. Purpose
 and labels come from the caller. Choose the matching login, then deny access,
-allow it once, or always allow its exact scope.
+allow it once, or always allow its exact scope. Choose **No password exists** to
+tell the agent that no saved password is available. You can add an optional denial
+reason, such as “Use Google sign-in.” This reason is sent to the agent, so do not
+include secrets. Neither denial option runs the program or creates a new account.
 
 If the expected credential is missing, use **Search Bitwarden**. Search
 by saved name, username, or domain/URL, or leave the search blank to browse up to
@@ -28,6 +36,13 @@ suggest subdomains, including nested subdomains, but not `example.com` itself.
 These are labeled suggestions and require confirmation; they do not grant
 automatic access to aliases or wildcard hosts.
 **Use suggested credentials** returns to the original results. Search results stay private to your connected T3 client.
+
+If the agent restricts the request to an account or excludes accounts, **Account
+filters** shows those restrictions. They match exact, case-sensitive saved
+usernames or credential IDs and also apply to manual searches. Choose **Clear
+account filters** to search without them, or **Restore account filters** to apply
+them again. Your search text stays in place. Clearing filters affects only this
+request and still requires you to choose a credential and approve access.
 
 You can select a credential even when its saved host differs from the requested
 host or is missing. **Allow once** uses it without changing Bitwarden.
@@ -137,9 +152,9 @@ server. For example, sign in to a second account from a human terminal with:
 BITWARDENCLI_APPDATA_DIR="$HOME/.config/bitwarden-work" bw login
 ```
 
-In **Credential access**, enter a unique account email or name, the absolute path
-of that profile directory on the server, and its master password. Repeat for each
-account. Leave the directory blank to use the server's default CLI profile.
+In **Credential access → Vaults → Add vault**, enter a unique vault name, the absolute
+path of that profile directory on the server, and its master password. Repeat for
+each account. Leave the directory blank to use the server's default CLI profile.
 Account names are labels; the CLI profile determines which email is signed in.
 
 Unlocked accounts are searched together, and each credential choice includes its
@@ -162,3 +177,23 @@ The password is never returned to the agent. Existing logins are preserved.
 Saving the login does not create an account on the destination website; the
 approved script performs that operation. If the script fails, the saved login
 remains in Bitwarden. Check it before requesting another new login.
+
+## Troubleshoot vault access
+
+A missing search result does not by itself mean a vault is corrupted. Check the
+selected environment, unlocked vaults, and account filters first. Use **Refresh
+accounts** to retry sync. Vault errors identify the affected profile; an expired
+CLI login requires signing in again on the server before unlocking in T3.
+
+If Bitwarden cannot read its local profile, preserve a private copy of the entire
+profile directory before changing anything. Do not delete it or log out until you
+have confirmed that the expected items are present in the Bitwarden web vault.
+To recover without overwriting the original, sign in using a new, empty CLI
+profile directory with `BITWARDENCLI_APPDATA_DIR`, then add that directory as a new
+vault in T3. Verify the recovered entries before forgetting the old profile in T3.
+**Forget** removes T3’s saved settings; it does not delete Bitwarden’s files.
+
+Keep regular password-protected encrypted exports from Bitwarden in a secure
+backup location. A CLI profile copy preserves local recovery evidence but is not
+a substitute for a portable vault backup. See Bitwarden’s [CLI guide](https://bitwarden.com/help/cli/)
+and [encrypted export guide](https://bitwarden.com/help/encrypted-export/).

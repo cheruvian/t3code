@@ -390,3 +390,58 @@ test("excluded accounts cannot reach remembered approval matching", async (t) =>
     [secondId],
   );
 });
+
+test("malformed vault data is reported without its contents and a successful refresh recovers", async () => {
+  let malformed = true;
+  let changes = 0;
+  const provider = new BitwardenProvider({
+    passwordPrompt: async () => "synthetic-password",
+    onChange: () => {
+      changes++;
+    },
+    runner: async (_executable, args) => {
+      if (args[0] === "unlock") return "synthetic-session";
+      if (args[0] === "list") return malformed ? "sensitive invalid JSON fixture" : "[]";
+      return "";
+    },
+  });
+  await provider.initialize();
+  await assert.rejects(provider.refresh());
+  assert.match(provider.error, /invalid vault data/);
+  assert.equal(provider.error.includes("sensitive"), false);
+  malformed = false;
+  assert.deepEqual(await provider.refresh(), []);
+  assert.equal(provider.error, undefined);
+  assert.equal(changes, 2);
+  await provider.close();
+});
+
+test("commands sharing a vault cannot overlap profile writes", async () => {
+  const sync = Promise.withResolvers();
+  const started = Promise.withResolvers();
+  const commands = [];
+  const provider = new BitwardenProvider({
+    passwordPrompt: async () => "synthetic-password",
+    runner: async (_executable, args) => {
+      commands.push(args[0]);
+      if (args[0] === "unlock") return "synthetic-session";
+      if (args[0] === "sync") {
+        started.resolve();
+        await sync.promise;
+      }
+      if (args[0] === "list") return "[]";
+      if (args[0] === "get")
+        return JSON.stringify({ id: args[2], type: 1, login: { password: "synthetic-value" } });
+      return "";
+    },
+  });
+  await provider.initialize();
+  const refreshing = provider.refresh();
+  await started.promise;
+  const reading = provider.get("11111111-1111-4111-8111-111111111111", "password");
+  assert.deepEqual(commands, ["unlock", "sync"]);
+  sync.resolve();
+  await refreshing;
+  assert.equal(await reading, "synthetic-value");
+  await provider.close();
+});

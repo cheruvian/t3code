@@ -218,6 +218,7 @@ export class Broker {
     return this.public(request);
   }
   matchesAccount(request, candidate) {
+    if (request.account_filters_cleared) return true;
     const matches = (account) => account === candidate.item_id || account === candidate.username;
     return (
       (request.account === undefined || matches(request.account)) &&
@@ -285,7 +286,11 @@ export class Broker {
       }
     }
   }
-  async searchVault(id, query) {
+  setAccountFilters(id, enabled) {
+    if (typeof enabled !== "boolean") throw new BrokerError("Invalid account filter setting.", 400);
+    return this.searchVault(id, this.find(id).search_query, { accountFiltersEnabled: enabled });
+  }
+  async searchVault(id, query, { accountFiltersEnabled } = {}) {
     await this.sweep();
     const request = this.find(id);
     if (
@@ -297,6 +302,8 @@ export class Broker {
       throw new BrokerError("Request is no longer available for vault search.", 409);
     if (query !== undefined && (typeof query !== "string" || query.length > 200))
       throw new BrokerError("Search must be at most 200 characters.");
+    if (accountFiltersEnabled !== undefined)
+      request.account_filters_cleared = !accountFiltersEnabled;
     request.manual_search_started = true;
     request.search_query = query?.trim();
     request.candidates = [];
@@ -397,6 +404,8 @@ export class Broker {
       approval_deadline,
       guidance: GUIDANCE,
     };
+    if (request.denialReason) result.denialReason = request.denialReason;
+    if (request.denialMessage) result.denialMessage = request.denialMessage;
     if (expires_at) result.expires_at = expires_at;
     if (request.grant_id) result.grant_id = request.grant_id;
     if (request.auto_approved) result.auto_approved = true;
@@ -408,6 +417,9 @@ export class Broker {
     if (operator) result.settled = !request.cleanup_pending;
     if (operator && request.origin) result.origin = request.origin;
     if (operator) {
+      if (request.account !== undefined) result.account = request.account;
+      if (request.excludeAccounts?.length) result.excludeAccounts = request.excludeAccounts;
+      if (request.account_filters_cleared) result.account_filters_cleared = true;
       result.allow_save = request.allow_save === true;
       result.allow_search = request.allow_search === true;
       result.allow_save_host = request.allow_save_host === true;
@@ -519,6 +531,8 @@ export class Broker {
       throw new BrokerError("Request is no longer awaiting approval.", 409);
     if (!approve) {
       request.state = "denied";
+      request.denialReason = options.denialReason;
+      request.denialMessage = options.denialMessage;
       return this.public(request);
     }
     if (request.generateUsername !== undefined) {

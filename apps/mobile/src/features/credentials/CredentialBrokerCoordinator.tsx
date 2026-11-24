@@ -4,11 +4,13 @@ import {
   type CredentialDialogPresentation,
 } from "@t3tools/client-runtime/state/credentialBroker";
 import type { ViewInstance, TextInputInstance } from "react-native";
+import { useGT } from "gt-react-native";
 import { useAtomValue } from "@effect/atom-react";
 import {
   AuthAccessReadScope,
   resolveEnvironmentMachineKind,
   type CredentialApproval,
+  type CredentialBrokerState,
   type CredentialBrokerAction,
   type EnvironmentId,
 } from "@t3tools/contracts";
@@ -88,6 +90,7 @@ function EnvironmentBroker({
   select,
   report,
 }: BrokerProps) {
+  const gt = useGT();
   const [viewId] = useState(() => Crypto.randomUUID());
   const result = useAtomValue(credentialBroker.state({ environmentId, input: { viewId } }));
   const run = useAtomCommand(credentialBroker.action, {
@@ -106,21 +109,14 @@ function EnvironmentBroker({
   const nativeVisible = useRef(false);
   const noticeViews = useRef(new Map<string, ViewInstance>());
   const { height } = useWindowDimensions();
-  const [account, setAccount] = useState("");
-  const [profileDirectory, setProfileDirectory] = useState("");
-  const [password, setPassword] = useState("");
-  const [executable, setExecutable] = useState("bw");
-  const [advancedUnlock, setAdvancedUnlock] = useState(false);
   const [error, setError] = useState<string>();
-  const [addingAccount, setAddingAccount] = useState(false);
-  const [selectedTab, setSelectedTab] = useState("requests");
-  const tab = state?.accounts?.length ? selectedTab : "accounts";
+  const [selectedTab, setSelectedTab] = useState<string | null>(null);
+  const tab = selectedTab ?? (state?.status === "ready" ? "requests" : "accounts");
   const act = async (input: CredentialBrokerAction) => {
+    if (input.type === "unlock") setSelectedTab("accounts");
     const outcome = await run({ environmentId, input });
     if (outcome._tag !== "Failure" && input.type === "revoke")
       setPresentation((current) => ({ ...current, open: false }));
-    if (outcome._tag !== "Failure" && (input.type === "unlock" || input.type === "lock"))
-      setAddingAccount(false);
     setError(
       outcome._tag === "Failure"
         ? "Could not complete the action. Check connection, permissions, and vault status."
@@ -250,7 +246,7 @@ function EnvironmentBroker({
                   value === "requests"
                     ? "Requests"
                     : value === "accounts"
-                      ? "Accounts"
+                      ? gt("Vaults")
                       : "Saved approvals"
                 }
                 onPress={() => setSelectedTab(value)}
@@ -264,125 +260,9 @@ function EnvironmentBroker({
                   Unlocked accounts: {state.accounts.join(", ")}
                 </Text>
               )}
-              {state?.status === "ready" && (
-                <Button
-                  label={addingAccount ? "Cancel adding account" : "Add account"}
-                  disabled={!canAct || state.addingAccount === true}
-                  onPress={() => {
-                    setAddingAccount(!addingAccount);
-                    setPassword("");
-                  }}
-                />
+              {state && state.status !== "unsupported" && (
+                <VaultManager profiles={state.profiles ?? []} disabled={!canAct} act={act} />
               )}
-              {state &&
-                state.status !== "unsupported" &&
-                (state.status !== "ready" || addingAccount) && (
-                  <View className="gap-3">
-                    <Text className="text-foreground">
-                      Choose a CLI profile or enter its directory. Successful unlocks save its name
-                      and location. Your CLI login stays in the profile; unlock the vault after a
-                      restart.
-                    </Text>
-                    <Text className="text-sm text-foreground">
-                      Unlocked accounts: {state.accounts?.join(", ") || "None"}
-                    </Text>
-                    <Button
-                      label="Discover CLI profiles"
-                      disabled={
-                        !canAct || state.status === "unlocking" || state.addingAccount === true
-                      }
-                      onPress={() => void act({ type: "discoverProfiles" })}
-                    />
-                    {(state.profiles ?? []).map((entry) => (
-                      <View key={entry.directory} className="gap-1">
-                        <Button
-                          label={entry.name}
-                          disabled={
-                            !canAct || state.status === "unlocking" || state.addingAccount === true
-                          }
-                          onPress={() => {
-                            setAccount(entry.name);
-                            setProfileDirectory(entry.directory);
-                          }}
-                        />
-                        <Text className="text-sm text-foreground-muted">{entry.directory}</Text>
-                        {entry.saved && (
-                          <Button
-                            label="Forget"
-                            disabled={
-                              !canAct ||
-                              state.status === "unlocking" ||
-                              state.addingAccount === true
-                            }
-                            onPress={() =>
-                              void act({ type: "forgetProfile", directory: entry.directory })
-                            }
-                          />
-                        )}
-                      </View>
-                    ))}
-                    <TextInput
-                      value={account}
-                      onChangeText={setAccount}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      accessibilityLabel="Bitwarden account email or name"
-                      placeholder="Account email or name"
-                      className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
-                    />
-                    <TextInput
-                      value={profileDirectory}
-                      onChangeText={setProfileDirectory}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      accessibilityLabel="Bitwarden CLI profile directory"
-                      placeholder="CLI profile directory (blank for default)"
-                      className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
-                    />
-                    <Text className="text-sm text-foreground">Bitwarden master password</Text>
-                    <TextInput
-                      secureTextEntry
-                      autoComplete="off"
-                      value={password}
-                      onChangeText={setPassword}
-                      accessibilityLabel="Bitwarden master password"
-                      maxLength={4096}
-                      className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
-                    />
-                    <Button
-                      label={advancedUnlock ? "Hide advanced setup" : "Advanced setup"}
-                      tone="text"
-                      onPress={() => setAdvancedUnlock(!advancedUnlock)}
-                    />
-                    {advancedUnlock && (
-                      <TextInput
-                        value={executable}
-                        onChangeText={setExecutable}
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        accessibilityLabel="Bitwarden CLI executable"
-                        className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
-                      />
-                    )}
-                    <Button
-                      label="Unlock vault"
-                      disabled={
-                        !canAct || state.status === "unlocking" || state.addingAccount === true
-                      }
-                      onPress={() => {
-                        const value = password;
-                        setPassword("");
-                        void act({
-                          type: "unlock",
-                          password: value,
-                          executable,
-                          account: account || "Default",
-                          profileDirectory: profileDirectory || undefined,
-                        });
-                      }}
-                    />
-                  </View>
-                )}
               {state?.status === "ready" && (
                 <Button
                   label={state.refreshing ? "Refreshing accounts…" : "Refresh accounts"}
@@ -426,23 +306,22 @@ function EnvironmentBroker({
                   />
                 </View>
               ))}
-              {!locked &&
-                [...pending, ...active]
-                  .sort(
-                    (a, b) =>
-                      Number(b.origin?.threadId === viewedThread?.threadId) -
-                      Number(a.origin?.threadId === viewedThread?.threadId),
-                  )
-                  .map((request) => (
-                    <Approval
-                      key={request.requestId}
-                      request={request}
-                      environmentId={environmentId}
-                      environmentLabel={environmentLabel}
-                      disabled={!canAct}
-                      act={act}
-                    />
-                  ))}
+              {[...pending, ...active]
+                .sort(
+                  (a, b) =>
+                    Number(b.origin?.threadId === viewedThread?.threadId) -
+                    Number(a.origin?.threadId === viewedThread?.threadId),
+                )
+                .map((request) => (
+                  <Approval
+                    key={request.requestId}
+                    request={request}
+                    environmentId={environmentId}
+                    environmentLabel={environmentLabel}
+                    disabled={!canAct}
+                    act={act}
+                  />
+                ))}
               {state?.requests
                 .filter((r) =>
                   ["expired", "failed", "denied", "completed", "released", "revoked"].includes(
@@ -517,6 +396,192 @@ function EnvironmentBroker({
     </>
   );
 }
+function VaultManager({
+  profiles,
+  disabled,
+  act,
+}: {
+  profiles: NonNullable<CredentialBrokerState["profiles"]>;
+  disabled: boolean;
+  act: (input: CredentialBrokerAction) => Promise<void>;
+}) {
+  const gt = useGT();
+  const [selected, setSelected] = useState<string | null>(null);
+  const [pending, setPending] = useState<string[]>([]);
+  const entry = profiles.find((profile) => profile.directory === selected);
+  return (
+    <View className="gap-3">
+      <View className="flex-row gap-2">
+        <Button label={gt("Add vault")} disabled={disabled} onPress={() => setSelected("add")} />
+        <Button
+          label={gt("Find vaults")}
+          tone="text"
+          disabled={disabled}
+          onPress={() => void act({ type: "discoverProfiles" })}
+        />
+      </View>
+      {profiles.map((profile) => {
+        const busy =
+          pending.includes(profile.directory) ||
+          profile.status === "queued" ||
+          profile.status === "unlocking";
+        return (
+          <View key={profile.directory} className="gap-2 rounded-xl border border-border p-3">
+            <Text className="text-sm font-t3-semibold text-foreground">{profile.name}</Text>
+            <View className="flex-row flex-wrap gap-2">
+              {profile.status === "ready" ? (
+                <Text className="text-sm text-foreground-muted">{gt("Unlocked")}</Text>
+              ) : (
+                <Button
+                  label={
+                    profile.status === "queued"
+                      ? gt("Queued")
+                      : busy
+                        ? gt("Unlocking…")
+                        : gt("Unlock vault")
+                  }
+                  disabled={disabled || busy}
+                  onPress={() => setSelected(profile.directory)}
+                />
+              )}
+              {profile.saved && (
+                <Button
+                  label={gt("Forget")}
+                  tone="text"
+                  disabled={disabled || busy}
+                  onPress={() => void act({ type: "forgetProfile", directory: profile.directory })}
+                />
+              )}
+            </View>
+            {profile.error && (
+              <Text accessibilityRole="alert" className="text-sm text-destructive">
+                {profile.error}
+              </Text>
+            )}
+          </View>
+        );
+      })}
+      {(selected === "add" || entry) && (
+        <VaultPasswordForm
+          key={selected}
+          entry={entry}
+          disabled={disabled}
+          cancel={() => setSelected(null)}
+          submit={(input) => {
+            const key = input.profileDirectory ?? "default";
+            setSelected(null);
+            setPending((current) => [...current, key]);
+            void act(input).finally(() =>
+              setPending((current) => current.filter((value) => value !== key)),
+            );
+          }}
+        />
+      )}
+      <Text className="text-xs text-foreground-muted">
+        {gt(
+          "Vaults unlock one at a time. You can enter another vault’s password while an unlock is running.",
+        )}
+      </Text>
+    </View>
+  );
+}
+function VaultPasswordForm({
+  entry,
+  disabled,
+  cancel,
+  submit,
+}: {
+  entry: NonNullable<CredentialBrokerState["profiles"]>[number] | undefined;
+  disabled: boolean;
+  cancel: () => void;
+  submit: (input: Extract<CredentialBrokerAction, { type: "unlock" }>) => void;
+}) {
+  const gt = useGT();
+  const [name, setName] = useState("");
+  const [directory, setDirectory] = useState("");
+  const [executable, setExecutable] = useState("bw");
+  const [password, setPassword] = useState("");
+  const [advanced, setAdvanced] = useState(false);
+  return (
+    <View className="gap-3 rounded-xl border border-border p-3">
+      <Text className="text-sm font-t3-semibold text-foreground">
+        {entry ? gt("Unlock {vault}", { vault: entry.name }) : gt("Add vault")}
+      </Text>
+      {!entry && (
+        <>
+          <TextInput
+            value={name}
+            onChangeText={setName}
+            editable={!disabled}
+            maxLength={320}
+            accessibilityLabel={gt("Vault name")}
+            placeholder={gt("Vault name")}
+            className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+          />
+          <TextInput
+            value={directory}
+            onChangeText={setDirectory}
+            editable={!disabled}
+            autoCapitalize="none"
+            autoCorrect={false}
+            accessibilityLabel={gt("CLI profile directory (blank for default)")}
+            placeholder={gt("CLI profile directory (blank for default)")}
+            className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+          />
+          <Button
+            label={gt("Bitwarden CLI location")}
+            tone="text"
+            onPress={() => setAdvanced(!advanced)}
+          />
+          {advanced && (
+            <TextInput
+              value={executable}
+              onChangeText={setExecutable}
+              editable={!disabled}
+              autoCapitalize="none"
+              autoCorrect={false}
+              accessibilityLabel={gt("Bitwarden CLI executable")}
+              className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+            />
+          )}
+        </>
+      )}
+      <Text className="text-sm text-foreground">{gt("Bitwarden master password")}</Text>
+      <TextInput
+        secureTextEntry
+        autoComplete="off"
+        value={password}
+        onChangeText={setPassword}
+        editable={!disabled}
+        maxLength={4096}
+        accessibilityLabel={gt("Bitwarden master password")}
+        className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+      />
+      <View className="flex-row gap-2">
+        <Button
+          label={entry ? gt("Unlock vault") : gt("Add and unlock")}
+          disabled={disabled || !password || (!entry && !name.trim())}
+          onPress={() => {
+            const value = password;
+            setPassword("");
+            submit({
+              type: "unlock",
+              password: value,
+              ...(entry
+                ? {
+                    profileDirectory: entry.directory,
+                    ...(!entry.saved ? { account: entry.name, executable: entry.executable } : {}),
+                  }
+                : { account: name, profileDirectory: directory || undefined, executable }),
+            });
+          }}
+        />
+        <Button label={gt("Cancel")} tone="text" onPress={cancel} />
+      </View>
+    </View>
+  );
+}
+
 function Approval({
   request,
   environmentLabel,
@@ -529,6 +594,7 @@ function Approval({
   disabled: boolean;
   act: (input: CredentialBrokerAction) => Promise<void>;
 }) {
+  const gt = useGT();
   const project = useProject(
     request.origin?.projectId
       ? { environmentId: request.origin.environmentId, projectId: request.origin.projectId }
@@ -548,9 +614,12 @@ function Approval({
   const [durationSeconds, setDurationSeconds] = useState<3600 | undefined>();
   const [saveHost, setSaveHost] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [denialMessage, setDenialMessage] = useState("");
+  const [showDenialReason, setShowDenialReason] = useState(false);
   const selection = request.candidates.some((c) => c.id === chosenId)
     ? chosenId
-    : request.searchQuery === undefined &&
+    : !request.accountFiltersCleared &&
+        request.searchQuery === undefined &&
         request.candidates.length === 1 &&
         !request.candidates[0]!.hostMismatch
       ? request.candidates[0]!.id
@@ -559,7 +628,7 @@ function Approval({
   const canAlways = !!request.origin && (!selected?.hostMismatch || request.canSaveHost === true);
   const unavailable = disabled || submitting || request.state !== "pending";
   const processing = ["preparing", "saving", "running"].includes(request.state);
-  const submit = async (choice: "once" | "always" | "deny") => {
+  const submit = async (choice: "once" | "always" | "deny", noPassword = false) => {
     if (disabled || submitting) return;
     setSubmitting(true);
     return await (async () => {
@@ -567,6 +636,9 @@ function Approval({
         type: "decide",
         requestId: request.requestId,
         decision: choice,
+        ...(choice === "deny"
+          ? { denialMessage, ...(noPassword ? { denialReason: "no_saved_password" as const } : {}) }
+          : {}),
         ...(choice === "always" ? { approvalScope } : {}),
         ...(choice === "always" && durationSeconds ? { durationSeconds } : {}),
         ...(choice !== "deny" && saveHost ? { saveHost: true } : {}),
@@ -604,6 +676,61 @@ function Approval({
         <Text className="text-foreground">{request.reason}</Text>
         <Text className="text-xs text-foreground-muted">{request.ttlSeconds}s per use</Text>
       </View>
+      {(request.accountFilter !== undefined || !!request.excludedAccounts?.length) && (
+        <View className="gap-2 rounded-xl border border-border p-3">
+          <Text className="font-t3-medium text-foreground">
+            {request.accountFiltersCleared ? gt("Account filters cleared") : gt("Account filters")}
+          </Text>
+          {!request.accountFiltersCleared && (
+            <>
+              {request.accountFilter !== undefined && (
+                <Text className="text-foreground">
+                  {gt("Only account: {account}", { account: request.accountFilter })}
+                </Text>
+              )}
+              {!!request.excludedAccounts?.length && (
+                <Text className="text-foreground">
+                  {gt("Excluded accounts: {accounts}", {
+                    accounts: request.excludedAccounts.join(", "),
+                  })}
+                </Text>
+              )}
+              <Text className="text-xs text-foreground-muted">
+                {gt(
+                  "Filters match exact, case-sensitive usernames or credential IDs, even when searching Bitwarden.",
+                )}
+              </Text>
+            </>
+          )}
+          {request.accountFiltersCleared && (
+            <Text className="text-xs text-foreground-muted">
+              {gt(
+                "Choose a saved credential, then approve access. This change applies only to this request.",
+              )}
+            </Text>
+          )}
+          {request.canSearch && (
+            <Button
+              tone="secondary"
+              disabled={unavailable || !!request.grantId}
+              label={
+                request.accountFiltersCleared
+                  ? gt("Restore account filters")
+                  : gt("Clear account filters")
+              }
+              onPress={() => {
+                setSelection(undefined);
+                setSaveHost(false);
+                void act({
+                  type: "setAccountFilters",
+                  requestId: request.requestId,
+                  enabled: request.accountFiltersCleared === true,
+                });
+              }}
+            />
+          )}
+        </View>
+      )}
       {processing ? (
         <View className="gap-3 rounded-xl bg-card p-4">
           <Text accessibilityLiveRegion="polite" className="font-t3-medium text-foreground">
@@ -755,12 +882,6 @@ function Approval({
               </Text>
               <View className="flex-row flex-wrap justify-end gap-2">
                 <Button
-                  label="Deny"
-                  tone="text"
-                  disabled={disabled || submitting}
-                  onPress={() => void submit("deny")}
-                />
-                <Button
                   label={`Scope: ${approvalScope}`}
                   onPress={() =>
                     setApprovalScope(
@@ -803,6 +924,41 @@ function Approval({
             </>
           )}
         </>
+      )}
+      {["pending", "searching", "awaiting_unlock"].includes(request.state) && (
+        <View className="gap-3 border-t border-border pt-3">
+          <Button
+            label={gt("Add a denial reason (optional)")}
+            tone="text"
+            onPress={() => setShowDenialReason(!showDenialReason)}
+          />
+          {showDenialReason && (
+            <TextInput
+              value={denialMessage}
+              onChangeText={setDenialMessage}
+              maxLength={500}
+              editable={!disabled && !submitting}
+              accessibilityLabel={gt("Denial reason")}
+              placeholder={gt("Sent to the agent. Do not include passwords.")}
+              className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+            />
+          )}
+          <View className="flex-row flex-wrap gap-2">
+            {!["ssh", "sshKey"].includes(request.field) && (
+              <Button
+                label={gt("No password exists")}
+                disabled={disabled || submitting}
+                onPress={() => void submit("deny", true)}
+              />
+            )}
+            <Button
+              label={gt("Deny")}
+              tone="text"
+              disabled={disabled || submitting}
+              onPress={() => void submit("deny")}
+            />
+          </View>
+        </View>
       )}
       <Text className="text-sm text-foreground">Request details</Text>
       <Text selectable className="text-xs text-foreground-muted">
