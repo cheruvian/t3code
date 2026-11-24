@@ -3,6 +3,7 @@ import type { MFunctionType } from "gt-i18n/types";
 import {
   type EnvironmentId,
   type OrchestrationV2ShellSnapshot,
+  type OrchestrationV2RunStatus,
   type ProjectId,
   type ScopedProjectRef,
   type ScopedThreadRef,
@@ -40,6 +41,33 @@ const EMPTY_THREAD_REFS_BY_PROJECT: ReadonlyMap<
   ProjectId,
   ReadonlyArray<ScopedThreadRef>
 > = new Map();
+
+type ActiveThreadStatus = Extract<
+  OrchestrationV2RunStatus,
+  "preparing" | "queued" | "starting" | "running" | "waiting"
+>;
+
+const ACTIVE_STATUS_PRIORITY: Readonly<Record<ActiveThreadStatus, number>> = {
+  waiting: 0,
+  preparing: 1,
+  queued: 2,
+  starting: 3,
+  running: 4,
+};
+
+function activeThreadStatus(thread: OrchestrationV2ThreadShell): ActiveThreadStatus | null {
+  const status = thread.activityRunStatus ?? thread.status;
+  return status in ACTIVE_STATUS_PRIORITY ? (status as ActiveThreadStatus) : null;
+}
+
+function mostActiveStatus(
+  left: ActiveThreadStatus | null,
+  right: ActiveThreadStatus,
+): ActiveThreadStatus {
+  return left === null || ACTIVE_STATUS_PRIORITY[right] > ACTIVE_STATUS_PRIORITY[left]
+    ? right
+    : left;
+}
 
 // An async question outlives the subagent's run, but once that run ends the
 // parent is no longer waiting on the answer, so it stops counting as input.
@@ -287,6 +315,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     environmentId: EnvironmentId,
     thread: OrchestrationV2ThreadShell,
     subagentRequests: ReadonlyMap<ThreadId, PendingSubagentRequest>,
+    descendantStatus: ActiveThreadStatus | null,
   ) => {
     let byEnvironment = scopedThreads.get(thread);
     if (byEnvironment === undefined) {
@@ -294,10 +323,31 @@ export function createEnvironmentThreadShellAtoms(input: {
       scopedThreads.set(thread, byEnvironment);
     }
     const request = subagentRequests.get(thread.id) ?? null;
-    const key = request === null ? environmentId : `${environmentId}:${request}`;
+    const key = `${environmentId}:${request ?? "none"}:${descendantStatus ?? "none"}`;
     let value = byEnvironment.get(key);
     if (value === undefined) {
       value = presentThreadShell(environmentId, thread, request);
+      if (descendantStatus !== null) {
+        const status = mostActiveStatus(
+          value.runtime === null || !(value.runtime.status in ACTIVE_STATUS_PRIORITY)
+            ? null
+            : (value.runtime.status as ActiveThreadStatus),
+          descendantStatus,
+        );
+        value = {
+          ...value,
+          runtime: {
+            ...(value.runtime ?? {
+              activeRunId: null,
+              providerInstanceId: value.providerInstanceId,
+              providerName: null,
+              lastError: null,
+              updatedAt: value.updatedAt,
+            }),
+            status,
+          },
+        };
+      }
       byEnvironment.set(key, value);
     }
     return value;
@@ -319,6 +369,52 @@ export function createEnvironmentThreadShellAtoms(input: {
       return new Map(threads.map((thread) => [thread.id, thread] as const));
     }).pipe(Atom.withLabel(`environment-thread-index:${environmentId}`)),
   );
+
+  let previousDescendantActivity: ReadonlyMap<string, ActiveThreadStatus> = new Map();
+  const descendantActivityAtom = Atom.make((get) => {
+    const environmentIds = new Set(enabledEnvironmentIds(get(input.catalogValueAtom)));
+    const parents = new Map<string, string>();
+    const active = new Map<string, ActiveThreadStatus>();
+    for (const environmentId of environmentIds) {
+      for (const thread of get(environmentThreadsAtom(environmentId))) {
+        const key = threadKey({ environmentId, threadId: thread.id });
+        const status = activeThreadStatus(thread);
+        if (status !== null) active.set(key, status);
+        const parentId = thread.lineage.parentThreadId;
+        if (!isListedThreadLineage(thread.lineage) && parentId !== null) {
+          parents.set(key, threadKey({ environmentId, threadId: parentId }));
+          continue;
+        }
+        const delegatedFrom = thread.delegatedFrom;
+        if (
+          delegatedFrom !== undefined &&
+          environmentIds.has(delegatedFrom.environmentId) &&
+          get(environmentThreadIndexAtom(delegatedFrom.environmentId)).get(delegatedFrom.threadId)
+            ?.archivedAt === null
+        ) {
+          parents.set(key, threadKey(delegatedFrom));
+        }
+      }
+    }
+    const rolledUp = new Map<string, ActiveThreadStatus>();
+    for (const [child, status] of active) {
+      const seen = new Set([child]);
+      let parent = parents.get(child);
+      while (parent !== undefined && !seen.has(parent)) {
+        seen.add(parent);
+        rolledUp.set(parent, mostActiveStatus(rolledUp.get(parent) ?? null, status));
+        parent = parents.get(parent);
+      }
+    }
+    if (
+      rolledUp.size === previousDescendantActivity.size &&
+      [...rolledUp].every(([key, status]) => previousDescendantActivity.get(key) === status)
+    ) {
+      return previousDescendantActivity;
+    }
+    previousDescendantActivity = rolledUp;
+    return previousDescendantActivity;
+  }).pipe(Atom.withLabel("environment-descendant-activity"));
 
   // Side chats by parent, built once per change for every parent's row. Without side chats
   // it stays the same empty map, so those rows do no work.
@@ -492,6 +588,7 @@ export function createEnvironmentThreadShellAtoms(input: {
             ref.environmentId,
             source,
             get(pendingSubagentRequestsAtom(ref.environmentId)),
+            get(descendantActivityAtom).get(key) ?? null,
           );
     }).pipe(Atom.withLabel(`environment-thread-shell:${key}`));
   });
@@ -565,7 +662,12 @@ export function createEnvironmentThreadShellAtoms(input: {
           pending.push(childKey);
           if (asksParent(thread)) {
             next.push(
-              scopedThread(environmentId, thread, get(pendingSubagentRequestsAtom(environmentId))),
+              scopedThread(
+                environmentId,
+                thread,
+                get(pendingSubagentRequestsAtom(environmentId)),
+                get(descendantActivityAtom).get(childKey) ?? null,
+              ),
             );
           }
         }
@@ -601,8 +703,16 @@ export function createEnvironmentThreadShellAtoms(input: {
         return previous;
       }
       const subagentRequests = get(pendingSubagentRequestsAtom(ref.environmentId));
+      const descendantActivity = get(descendantActivityAtom);
       const next = sideChats.map((thread) =>
-        scopedThread(ref.environmentId, thread, subagentRequests),
+        scopedThread(
+          ref.environmentId,
+          thread,
+          subagentRequests,
+          descendantActivity.get(
+            threadKey({ environmentId: ref.environmentId, threadId: thread.id }),
+          ) ?? null,
+        ),
       );
       if (
         previous.length === next.length &&
@@ -628,6 +738,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     return Atom.make((get) => {
       const next: EnvironmentThreadShell[] = [];
       const seen = new Set<string>();
+      const descendantActivity = get(descendantActivityAtom);
       for (const projectRef of projectRefs) {
         const refs =
           get(environmentThreadRefsByProjectAtom(projectRef.environmentId)).get(
@@ -644,7 +755,14 @@ export function createEnvironmentThreadShellAtoms(input: {
           seen.add(key);
           const thread = threads.get(ref.threadId);
           if (thread !== undefined) {
-            next.push(scopedThread(ref.environmentId, thread, subagentRequests));
+            next.push(
+              scopedThread(
+                ref.environmentId,
+                thread,
+                subagentRequests,
+                descendantActivity.get(key) ?? null,
+              ),
+            );
           }
         }
       }
@@ -672,10 +790,18 @@ export function createEnvironmentThreadShellAtoms(input: {
   let previousThreadShells: ReadonlyArray<EnvironmentThreadShell> = [];
   const threadShellsAtom = Atom.make((get) => {
     const next: EnvironmentThreadShell[] = [];
+    const descendantActivity = get(descendantActivityAtom);
     for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
       const subagentRequests = get(pendingSubagentRequestsAtom(environmentId));
       for (const thread of get(environmentThreadsAtom(environmentId))) {
-        next.push(scopedThread(environmentId, thread, subagentRequests));
+        next.push(
+          scopedThread(
+            environmentId,
+            thread,
+            subagentRequests,
+            descendantActivity.get(threadKey({ environmentId, threadId: thread.id })) ?? null,
+          ),
+        );
       }
     }
     if (arrayElementsEqual(previousThreadShells, next)) {
@@ -787,6 +913,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     const next: EnvironmentThreadShell[] = [];
     const underParent = get(delegatedUnderParentAtom);
     const hidden = get(hiddenThreadKeysAtom);
+    const descendantActivity = get(descendantActivityAtom);
     for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
       const subagentRequests = get(pendingSubagentRequestsAtom(environmentId));
       for (const thread of get(environmentThreadsAtom(environmentId))) {
@@ -797,7 +924,14 @@ export function createEnvironmentThreadShellAtoms(input: {
         ) {
           continue;
         }
-        next.push(scopedThread(environmentId, thread, subagentRequests));
+        next.push(
+          scopedThread(
+            environmentId,
+            thread,
+            subagentRequests,
+            descendantActivity.get(threadKey({ environmentId, threadId: thread.id })) ?? null,
+          ),
+        );
       }
     }
     if (arrayElementsEqual(previousNavigationShells, next)) return previousNavigationShells;

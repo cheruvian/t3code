@@ -211,6 +211,50 @@ describe("v2 thread shell lists", () => {
     registry.dispose();
   });
 
+  it("rolls nested subagent activity up to the listed parent", () => {
+    const { registry, threads, snapshotAtom } = makeHarness();
+    const root = { ...v2ThreadShell, status: "completed" as const, activityRunStatus: null };
+    const child = {
+      ...root,
+      id: ThreadId.make("child"),
+      creationSource: "mcp" as const,
+      lineage: {
+        ...root.lineage,
+        parentThreadId: root.id,
+        relationshipToParent: "subagent" as const,
+      },
+    };
+    const grandchild = {
+      ...child,
+      id: ThreadId.make("grandchild"),
+      status: "running" as const,
+      activityRunStatus: "running" as const,
+      lineage: { ...child.lineage, parentThreadId: child.id },
+    };
+    const parent = threads.threadShellAtom({ environmentId, threadId: root.id });
+    const navigation = threads.navigationThreadShellsAtom;
+    const disposeParent = registry.mount(parent);
+    const disposeNavigation = registry.mount(navigation);
+
+    registry.set(snapshotAtom(environmentId), {
+      ...v2ShellSnapshot,
+      threads: [root, child, grandchild],
+    });
+    expect(registry.get(parent)?.runtime?.status).toBe("running");
+    expect(registry.get(navigation)).toHaveLength(1);
+    expect(registry.get(navigation)[0]?.runtime?.status).toBe("running");
+
+    registry.set(snapshotAtom(environmentId), {
+      ...v2ShellSnapshot,
+      threads: [root, child, { ...grandchild, status: "completed", activityRunStatus: null }],
+    });
+    expect(registry.get(parent)?.runtime?.status).not.toBe("running");
+
+    disposeNavigation();
+    disposeParent();
+    registry.dispose();
+  });
+
   it("flags the parent while a live subagent waits on a secret card", () => {
     const { registry, threads, snapshotAtom } = makeHarness();
     const root = v2ThreadShell;
