@@ -850,6 +850,10 @@ describe("ChatMarkdown inline code selection", () => {
     setup();
     // Desktop on macOS and Windows makes local file chips draggable for native file drags.
     nativeFileDrag.enabled = true;
+    const path = "config/app.yaml.example";
+    resolvedFiles.mockResolvedValue(
+      AsyncResult.success([{ path, relativePath: path, absolutePath: "/tmp/project/" + path }]),
+    );
     filesystemMetadata.mockResolvedValue(AsyncResult.success({ entries: [{ kind: "file" }] }));
     await using screen = await renderText(
       "The template (`config/app.yaml.example`) and two docs still say 5 fps.",
