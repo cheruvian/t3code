@@ -29,6 +29,7 @@ import Migration0119 from "./Migrations/107_DeferredSlashCommandIndex.ts";
 import Migration0120 from "./Migrations/108_AgentFeedback.ts";
 import Migration0121 from "./Migrations/109_IssueTrackerAccounts.ts";
 import Migration0122 from "./Migrations/110_Workflows.ts";
+import Migration0124 from "./Migrations/124_GuardUsageLimitErrorsIndex.ts";
 import Migration0123 from "./Migrations/123_SupersededRunAttemptIndex.ts";
 import Migration0091 from "./Migrations/091_GuardRecoveryPayloadIndexes.ts";
 import Migration0081 from "./Migrations/081_PeerLinks.ts";
@@ -269,6 +270,7 @@ export const migrationEntries = [
   [121, "IssueTrackerAccounts", Migration0121],
   [122, "Workflows", Migration0122],
   [123, "SupersededRunAttemptIndex", Migration0123],
+  [124, "GuardUsageLimitErrorsIndex", Migration0124],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

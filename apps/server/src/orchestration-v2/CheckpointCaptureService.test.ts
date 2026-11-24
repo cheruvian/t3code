@@ -1497,7 +1497,7 @@ it.layer(layerProjectionStoreTest)("CheckpointCaptureServiceV2", (it) => {
         assert.equal(projected.rootNode?.status, runStatus);
         assert.deepEqual(
           [...projected.preservedCheckpointOrdinals].toSorted(),
-          checkpointStatus === "ready" ? [0, 1] : [0],
+          [0, 1],
         );
         // A rewind leaves the run's checkpoint stale; the next capture must rebaseline it.
         yield* projectionStore.apply({

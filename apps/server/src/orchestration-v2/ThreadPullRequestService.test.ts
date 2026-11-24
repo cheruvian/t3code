@@ -566,15 +566,18 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           const lookups: Array<{ readonly cwd: string; readonly branch: string }> = [];
           const dispatched: Array<OrchestrationV2ServerCommand> = [];
           const dependencies = Layer.mergeAll(
-            Layer.mock(Orchestrator.OrchestratorV2)({
-              streamDomainEvents: Stream.fromQueue(domainEvents),
-              getPullRequestSnapshot: () =>
+            ServerSettings.layerTest(),
+            Layer.mock(ProjectionStore.ProjectionStoreV2)({
+              getPullRequestDiscoverySnapshot: () =>
                 Effect.sync(() => ({
                   schemaVersion: 2,
                   snapshotSequence: 1,
                   threads: [thread],
                   archivedThreads: [],
                 })),
+            }),
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              streamDomainEvents: Stream.fromQueue(domainEvents),
               // The thread changed api and web, and a folder the project no longer tracks.
               getCheckpointContext: () =>
                 Effect.succeed({
@@ -854,9 +857,9 @@ describe("ThreadPullRequestServiceV2 reads", () => {
       const sweeps = yield* Queue.unbounded<void>();
       const lookups: Array<{ readonly cwd: string; readonly branch: string }> = [];
       const dependencies = Layer.mergeAll(
-        Layer.mock(Orchestrator.OrchestratorV2)({
-          streamDomainEvents: Stream.never,
-          getPullRequestSnapshot: () =>
+        ServerSettings.layerTest(),
+        Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getPullRequestDiscoverySnapshot: () =>
             Queue.offer(sweeps, undefined).pipe(
               Effect.as({
                 schemaVersion: 2,
@@ -865,6 +868,9 @@ describe("ThreadPullRequestServiceV2 reads", () => {
                 archivedThreads: [],
               }),
             ),
+        }),
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          streamDomainEvents: Stream.never,
         }),
         Layer.mock(ProjectStore.ProjectStoreV2)({
           listShells: () => Effect.succeed([project]),

@@ -3099,7 +3099,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
     }
 
-    if (commonDir && root && repositoryPaths?.worktreeRoot) {
+    if (repositoryPaths?.worktreeRoot) {
       const { gitCommonDir, worktreeRoot } = repositoryPaths;
       const cacheKey = normalizeRepositoryPathsCacheKey(cwd);
       if (!(yield* Cache.has(repositoryPathsCache, cacheKey))) {

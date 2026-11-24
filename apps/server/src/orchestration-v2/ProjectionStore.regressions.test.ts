@@ -2106,7 +2106,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             activeAttemptId: null,
             status: "cancelled",
             requestedAt: nowIso,
-            startedAt: nowIso,
+            startedAt: null,
             completedAt: nowIso,
             checkpointId: null,
             contextHandoffId: null,
@@ -3479,7 +3479,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       `;
         assert.deepEqual(yield* projectionStore.getCheckpointContext(threadId), {
           runs: [{ id: runId, ordinal: 1, status: "completed" }],
-          checkpointScopes: [{ id: scopeId, runId, kind: "root_run", cwd: "/repo/worktree" }],
+          checkpointScopes: [{ id: scopeId, runId, kind: "root_run", cwd: "/repo/worktree", label: null, repositoryPath: null }],
           checkpoints: [
             { scopeId, runId, ordinalWithinScope: 1, appRunOrdinal: 1, status: "ready", ref },
           ],

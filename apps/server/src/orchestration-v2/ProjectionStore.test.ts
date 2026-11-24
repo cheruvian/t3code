@@ -7318,7 +7318,18 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             assert.include(detail, "run_key=?", detail);
           }
           if (detail.includes("orchestration_v2_projection_turn_items")) {
-            // Only held input is read from the sparse index; transcript history stays unread.
+            if (detail.startsWith("SEARCH link ")) {
+              assert.include(detail, "waiting_link_idx (thread_id=?)");
+              continue;
+            }
+            if (detail.startsWith("SEARCH stop_request ")) {
+              assert.include(detail, "stop_request_idx (thread_id=? AND run_id=?)");
+              continue;
+            }
+            if (detail.startsWith("SEARCH compaction ")) {
+              assert.include(detail, "thread_type_idx (thread_id=? AND type=? AND status=?)");
+              continue;
+            }
             assert.include(
               detail,
               "SEARCH held USING INDEX orchestration_v2_projection_turn_items_queued_input_idx (run_id=?)",
