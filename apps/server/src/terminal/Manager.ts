@@ -1691,51 +1691,6 @@ function shouldExcludeTerminalEnvKey(key: string): boolean {
   return TERMINAL_ENV_BLOCKLIST.has(normalizedKey);
 }
 
-// Marker variables the AppImage runtime injects into the process it launches.
-// They describe the AppImage itself, not the user's session, so terminals must
-// not inherit them.
-const APPIMAGE_RUNTIME_ENV_KEYS = ["APPIMAGE", "APPDIR", "ARGV0", "OWD"] as const;
-// Remove AppImage mount segments from search paths; preserve host entries and unset empty paths
-// so tools such as gsettings can discover their host defaults.
-const APPIMAGE_PATH_LIKE_ENV_KEYS = [
-  "PATH",
-  "LD_LIBRARY_PATH",
-  "XDG_DATA_DIRS",
-  "GSETTINGS_SCHEMA_DIR",
-] as const;
-
-function isPathSegmentUnderAppDir(segment: string, appDir: string): boolean {
-  return segment === appDir || segment.startsWith(`${appDir}/`);
-}
-
-// AppImage mount paths would make PTY tools resolve against the mount instead of the user's system.
-function stripAppImageRuntimeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  if (env.APPIMAGE === undefined && env.APPDIR === undefined) return env;
-
-  const scrubbed: NodeJS.ProcessEnv = { ...env };
-  for (const key of APPIMAGE_RUNTIME_ENV_KEYS) {
-    delete scrubbed[key];
-  }
-
-  const appDir = env.APPDIR?.replace(/\/+$/, "");
-  if (appDir) {
-    for (const key of APPIMAGE_PATH_LIKE_ENV_KEYS) {
-      const value = scrubbed[key];
-      if (value === undefined) continue;
-      const kept = value
-        .split(":")
-        .filter((segment) => segment.length > 0 && !isPathSegmentUnderAppDir(segment, appDir));
-      if (kept.length > 0) {
-        scrubbed[key] = kept.join(":");
-      } else {
-        delete scrubbed[key];
-      }
-    }
-  }
-
-  return scrubbed;
-}
-
 function createTerminalSpawnEnv(
   baseEnv: NodeJS.ProcessEnv,
   runtimeEnv: Record<string, string> | null | undefined,
