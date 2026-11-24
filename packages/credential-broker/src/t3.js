@@ -287,7 +287,9 @@ export class T3CredentialBroker {
         } catch (error) {
           entry.status = "locked";
           entry.error =
-            this.#error ?? "Vault unlock failed. Check the saved vault settings and try again.";
+            error instanceof BrokerError
+              ? error.message
+              : "Vault unlock failed. Check the saved vault settings and try again.";
           throw error;
         } finally {
           password = undefined;
@@ -381,7 +383,7 @@ export class T3CredentialBroker {
           ? error.message
           : "Vault unlock failed. Check CLI login and the saved vault settings.";
       this.#publish();
-      throw new BrokerError("Account unlock failed.");
+      throw new BrokerError(this.#error);
     } finally {
       password = undefined;
       if (wasReady) {
@@ -430,7 +432,7 @@ export class T3CredentialBroker {
       this.#status = "locked";
       this.#error =
         "Vault unlock failed. Authenticate the Bitwarden CLI on the server, then unlock privately in T3.";
-      throw new BrokerError("Vault unlock failed.");
+      throw new BrokerError(this.#error);
     } finally {
       password = undefined;
       this.#addingAccount = false;

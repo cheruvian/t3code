@@ -1959,3 +1959,22 @@ for (const locked of [false, true]) {
     await assert.rejects(stat(marker), { code: "ENOENT" });
   });
 }
+
+test("unlock setup errors retain their safe cause on the affected vault", async (t) => {
+  const runtime = await realpath(await mkdtemp("/tmp/t3-vault-setup-error-"));
+  const profile = join(runtime, "not-a-directory");
+  await writeFile(profile, "synthetic fixture");
+  const broker = new T3CredentialBroker({ runtime: join(runtime, "broker"), watchdog: false });
+  t.after(async () => {
+    await broker.close();
+    await rm(runtime, { recursive: true, force: true });
+  });
+  await assert.rejects(
+    broker.unlock("synthetic", "bw", "Work", profile),
+    /Could not create the CLI profile directory/,
+  );
+  assert.equal(
+    broker.state().profiles.find((entry) => entry.directory === profile).error,
+    "Could not create the CLI profile directory.",
+  );
+});
