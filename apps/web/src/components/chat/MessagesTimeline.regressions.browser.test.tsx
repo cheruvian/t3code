@@ -662,7 +662,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Worked for 8s");
   });
 
-  it("keeps assistant changed-files headers sticky below the thread header", () => {
+  it("renders the assistant reply without an inline changed-files card", () => {
     setup();
     const assistantMessageId = MessageId.make("message-assistant-with-files");
     const runId = RunId.make("turn-with-files");
@@ -705,13 +705,10 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("sticky top-2 z-10");
-    expect(markup).not.toContain("self-start");
-    expect(markup).toContain("whitespace-nowrap");
-    expect(markup).toContain("size-3");
-    expect(markup).not.toContain('aria-label="Collapse all folders"');
-    expect(markup).toContain('aria-label="Open diff"');
-    expect(markup).toContain("1 changed file");
+    expect(markup).toContain("Updated the fixture.");
+    expect(markup).not.toContain("1 changed file");
+    expect(markup).not.toContain('aria-label="Open diff"');
+    expect(markup).not.toContain("README.md");
   });
 
   it("anchors the first user message using its measured height", async () => {
@@ -1280,57 +1277,6 @@ describe("MessagesTimeline", () => {
     expect(fadedMarkup).toContain("topbar-scroll-fade");
   });
 
-  it("keeps assistant changed-files headers sticky below the thread header", () => {
-    setup();
-    const assistantMessageId = MessageId.make("message-assistant-with-files");
-    const runId = RunId.make("run-with-files");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...buildProps()}
-        latestRun={{
-          runId,
-          status: "completed",
-          startedAt: MESSAGE_CREATED_AT,
-          completedAt: MESSAGE_CREATED_AT,
-        }}
-        timelineEntries={[
-          {
-            id: "entry-assistant-with-files",
-            kind: "message",
-            createdAt: MESSAGE_CREATED_AT,
-            message: {
-              id: assistantMessageId,
-              role: "assistant",
-              text: "Updated the fixture.",
-              runId,
-              createdAt: MESSAGE_CREATED_AT,
-              updatedAt: MESSAGE_CREATED_AT,
-              streaming: false,
-            },
-          },
-        ]}
-        turnDiffSummaries={[
-          {
-            runId,
-            checkpointTurnCount: 1,
-            checkpointRef: CheckpointRef.make("checkpoint-with-files"),
-            status: "ready",
-            files: [{ path: "README.md", kind: "modified", additions: 2, deletions: 1 }],
-            assistantMessageId,
-            completedAt: MESSAGE_CREATED_AT,
-          },
-        ]}
-      />,
-    );
-
-    expect(markup).toContain("sticky top-2 z-10");
-    expect(markup).not.toContain("self-start");
-    expect(markup).toContain("whitespace-nowrap");
-    expect(markup).toContain("size-3");
-    expect(markup).not.toContain('aria-label="Collapse all folders"');
-    expect(markup).toContain('aria-label="Open diff"');
-    expect(markup).toContain("1 changed file");
-  });
 
   it("treats the follow re-arm band above the content bottom as the live edge", async () => {
     setup();
