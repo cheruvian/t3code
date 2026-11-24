@@ -203,7 +203,10 @@ it.effect("runs background Git in its own lane so user commands never queue behi
     yield* Deferred.succeed(gate, undefined);
     assert.equal((yield* Fiber.join(background)).length, 12);
     assert.equal((yield* Fiber.join(foreground)).length, 4);
-  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  }).pipe(
+    Effect.provideService(HostProcess.Platform, "linux"),
+    Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  ),
 );
 describe("Git output collection", () => {
   // Git writes in arbitrary chunk sizes; one byte per chunk splits every
@@ -452,6 +455,7 @@ it.effect("bounds Git bursts across drivers", () =>
     assert.equal(duration.count, 16);
     assert.equal(duration.sum, 0);
   }).pipe(
+    Effect.provideService(HostProcess.Platform, "linux"),
     Effect.provide(
       layerServerConfig.pipe(
         Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
@@ -494,6 +498,7 @@ it.effect("expires queued Git commands before they spawn and recovers capacity",
     yield* driver.execute({ operation: "test.recovered", cwd: "/repo", args: ["status"] });
     assert.equal(starts, 9);
   }).pipe(
+    Effect.provideService(HostProcess.Platform, "linux"),
     Effect.provide(
       layerServerConfig.pipe(
         Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
@@ -546,6 +551,7 @@ it.effect("charges queue wait against execution deadlines and finalizes timed-ou
       "ok",
     );
   }).pipe(
+    Effect.provideService(HostProcess.Platform, "linux"),
     Effect.provide(
       layerServerConfig.pipe(
         Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
@@ -594,6 +600,7 @@ it.effect("rejects excess Git admission and releases cancelled queue capacity", 
     yield* execute(42);
     assert.equal(starts, 41);
   }).pipe(
+    Effect.provideService(HostProcess.Platform, "linux"),
     Effect.provide(
       layerServerConfig.pipe(
         Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
@@ -649,6 +656,7 @@ it.effect.each([{ timeoutMs: null }, { timeoutMs: 30001 }])(
       assert.equal((yield* Fiber.join(slow)).stdout, "ok");
       assert.equal(active, 0);
     }).pipe(
+      Effect.provideService(HostProcess.Platform, "linux"),
       Effect.provide(
         layerServerConfig.pipe(
           Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
@@ -774,6 +782,7 @@ it.effect.each(["root", "nested", "worktree", "newline"] as const)(
         cwd = path.join(repository, "nested");
         yield* fs.makeDirectory(cwd);
       }
+      yield* git(cwd, ["remote", "add", "origin", repository]);
       const before = yield* driver.statusDetailsLocal(cwd, { includeDivergence: false });
       commands = [];
       assert.deepStrictEqual(
@@ -941,6 +950,8 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
     assert.deepStrictEqual(commands, [
       { args: ["rev-parse", "--git-common-dir", "--git-path", "index"], language: "C" },
       { args: ["rev-parse", "--symbolic-full-name", "HEAD"], language: "C" },
+      { args: ["rev-parse", "--git-common-dir", "--show-toplevel"], language: "C" },
+      { args: ["rev-parse", "--git-common-dir"], language: "C" },
     ]);
   }).pipe(Effect.provide(layer));
 });
@@ -1126,7 +1137,7 @@ it.effect.each(["branch", "detached", "nested", "aliased-root", "aliased-nested"
           originalRefs.refs.filter((ref) => ref.current).map((ref) => ref.name),
           location === "detached" ? [] : [initialBranch],
         );
-        assert.equal(spawnedArgs.filter((args) => args.includes("--git-common-dir")).length, 1);
+        assert.equal(spawnedArgs.filter((args) => args.includes("--git-common-dir")).length, 2);
         const refs = yield* driver.listRefs({ cwd: worktreePath });
         assert.isTrue(refs.refs.find((ref) => ref.name === "feature/cold")?.current);
         assert.equal(
@@ -1515,7 +1526,7 @@ it.effect("keeps a branch's base cached while only other refs' commits move", ()
       // Another worktree's commits and a fetch moving a packed base ref add or remove no name.
       yield* git(other, ["commit", "--allow-empty", "-m", "other"]);
       yield* driver.statusDetailsLocal(cwd);
-      assert.equal(spawnedArgs.length, 6);
+      assert.equal(spawnedArgs.length, 4);
       assert.equal(lookups(), 0);
       yield* git(other, ["commit", "--allow-empty", "-m", "other again"]);
       yield* git(cwd, ["update-ref", `refs/remotes/origin/${initialBranch}`, "other"]);
@@ -1709,7 +1720,7 @@ it.effect.each([
       yield* initRepoWithCommit(brokenConfig);
       yield* writeTextFile(brokenConfig, ".git/config", "[broken");
       const error = yield* driver.getReviewDiffPreview(input(brokenConfig)).pipe(Effect.flip);
-      assert.equal(error.operation, "GitVcsDriver.repositoryMetadata");
+      assert.equal(error.operation, "GitVcsDriver.resolveRepositoryPaths.commonDir");
     }),
   ).pipe(Effect.provide(layerTest)),
 );

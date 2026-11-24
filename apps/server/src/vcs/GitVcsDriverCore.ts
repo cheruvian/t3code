@@ -3137,7 +3137,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           ? readBranchChangeTotals(repositoryPaths?.worktreeRoot ?? cwd, refName, {
               untrackedRoots,
               headOid,
-              ...(index ? { indexPath: index } : {}),
+              indexPath: metadata.indexPath,
             }).pipe(Effect.orElseSucceed(() => undefined))
           : Effect.undefined,
       ],
