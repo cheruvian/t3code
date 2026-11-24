@@ -76,6 +76,6 @@ export function reconcileCredentialDialog(
         open:
           (attentionKey !== null &&
             (previous.attentionKey !== attentionKey || matchesViewedThread)) ||
-          (previous.viewKey === viewKey && previous.open),
+          (previous.viewKey === viewKey && previous.attentionKey === null && previous.open),
       };
 }

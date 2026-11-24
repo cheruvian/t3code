@@ -102,7 +102,7 @@ function EnvironmentBroker({
     attentionKey: null,
     open: false,
   });
-  const [managementOpen, setManagementOpen] = useState(false);
+
   const nativeVisible = useRef(false);
   const noticeViews = useRef(new Map<string, ViewInstance>());
   const { height } = useWindowDimensions();
@@ -113,8 +113,12 @@ function EnvironmentBroker({
   const [advancedUnlock, setAdvancedUnlock] = useState(false);
   const [error, setError] = useState<string>();
   const [addingAccount, setAddingAccount] = useState(false);
+  const [selectedTab, setSelectedTab] = useState("requests");
+  const tab = state?.accounts?.length ? selectedTab : "accounts";
   const act = async (input: CredentialBrokerAction) => {
     const outcome = await run({ environmentId, input });
+    if (outcome._tag !== "Failure" && input.type === "revoke")
+      setPresentation((current) => ({ ...current, open: false }));
     if (outcome._tag !== "Failure" && (input.type === "unlock" || input.type === "lock"))
       setAddingAccount(false);
     setError(
@@ -138,15 +142,16 @@ function EnvironmentBroker({
     return () => subscription.remove();
   }, [state, canAct, environmentId, run, viewId]);
   const pending =
-    state?.requests.filter((r) => ["pending", "awaiting_unlock", "searching"].includes(r.state)) ??
-    [];
+    state?.requests.filter(
+      (r) => !r.grantId && ["pending", "awaiting_unlock", "searching"].includes(r.state),
+    ) ?? [];
   const active =
     state?.requests.filter((r) => ["running", "preparing", "saving"].includes(r.state)) ?? [];
   const hasRequests = pending.length + active.length > 0;
   const locked = state?.status === "locked" || state?.status === "unlocking";
-  const attentionKey =
-    (pending.length ? JSON.stringify(pending.map((request) => request.requestId).sort()) : null) ??
-    (state?.notices.length ? JSON.stringify(state.notices.map((notice) => notice.noticeId)) : null);
+  const attentionKey = pending.length
+    ? JSON.stringify(pending.map((request) => request.requestId).sort())
+    : null;
   const nextPresentation = reconcileCredentialDialog(
     presentation,
     viewKey,
@@ -237,204 +242,233 @@ function EnvironmentBroker({
           {state?.status === "unsupported" && (
             <Text className="text-foreground">Windows security adapters are not supported.</Text>
           )}
-          {state?.status === "ready" && (
-            <Button
-              label={addingAccount ? "Cancel adding account" : "Add account"}
-              disabled={!canAct || state.addingAccount === true}
-              onPress={() => {
-                setAddingAccount(!addingAccount);
-                setPassword("");
-              }}
-            />
-          )}
-          {state &&
-            state.status !== "unsupported" &&
-            (state.status !== "ready" || addingAccount) && (
-              <View className="gap-3">
-                <Text className="text-foreground">
-                  Choose a CLI profile or enter its directory. Successful unlocks save its name and
-                  location. Your CLI login stays in the profile; unlock the vault after a restart.
-                </Text>
+          <View className="flex-row flex-wrap gap-2">
+            {["requests", "accounts", "approvals"].map((value) => (
+              <Button
+                key={value}
+                label={
+                  value === "requests"
+                    ? "Requests"
+                    : value === "accounts"
+                      ? "Accounts"
+                      : "Saved approvals"
+                }
+                onPress={() => setSelectedTab(value)}
+              />
+            ))}
+          </View>
+          {tab === "accounts" && (
+            <View className="gap-3">
+              {!!state?.accounts?.length && (
                 <Text className="text-sm text-foreground">
-                  Unlocked accounts: {state.accounts?.join(", ") || "None"}
+                  Unlocked accounts: {state.accounts.join(", ")}
                 </Text>
+              )}
+              {state?.status === "ready" && (
                 <Button
-                  label="Discover CLI profiles"
-                  disabled={!canAct || state.status === "unlocking" || state.addingAccount === true}
-                  onPress={() => void act({ type: "discoverProfiles" })}
+                  label={addingAccount ? "Cancel adding account" : "Add account"}
+                  disabled={!canAct || state.addingAccount === true}
+                  onPress={() => {
+                    setAddingAccount(!addingAccount);
+                    setPassword("");
+                  }}
                 />
-                {(state.profiles ?? []).map((entry) => (
-                  <View key={entry.directory} className="gap-1">
+              )}
+              {state &&
+                state.status !== "unsupported" &&
+                (state.status !== "ready" || addingAccount) && (
+                  <View className="gap-3">
+                    <Text className="text-foreground">
+                      Choose a CLI profile or enter its directory. Successful unlocks save its name
+                      and location. Your CLI login stays in the profile; unlock the vault after a
+                      restart.
+                    </Text>
+                    <Text className="text-sm text-foreground">
+                      Unlocked accounts: {state.accounts?.join(", ") || "None"}
+                    </Text>
                     <Button
-                      label={entry.name}
+                      label="Discover CLI profiles"
+                      disabled={
+                        !canAct || state.status === "unlocking" || state.addingAccount === true
+                      }
+                      onPress={() => void act({ type: "discoverProfiles" })}
+                    />
+                    {(state.profiles ?? []).map((entry) => (
+                      <View key={entry.directory} className="gap-1">
+                        <Button
+                          label={entry.name}
+                          disabled={
+                            !canAct || state.status === "unlocking" || state.addingAccount === true
+                          }
+                          onPress={() => {
+                            setAccount(entry.name);
+                            setProfileDirectory(entry.directory);
+                          }}
+                        />
+                        <Text className="text-sm text-foreground-muted">{entry.directory}</Text>
+                        {entry.saved && (
+                          <Button
+                            label="Forget"
+                            disabled={
+                              !canAct ||
+                              state.status === "unlocking" ||
+                              state.addingAccount === true
+                            }
+                            onPress={() =>
+                              void act({ type: "forgetProfile", directory: entry.directory })
+                            }
+                          />
+                        )}
+                      </View>
+                    ))}
+                    <TextInput
+                      value={account}
+                      onChangeText={setAccount}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      accessibilityLabel="Bitwarden account email or name"
+                      placeholder="Account email or name"
+                      className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+                    />
+                    <TextInput
+                      value={profileDirectory}
+                      onChangeText={setProfileDirectory}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      accessibilityLabel="Bitwarden CLI profile directory"
+                      placeholder="CLI profile directory (blank for default)"
+                      className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+                    />
+                    <Text className="text-sm text-foreground">Bitwarden master password</Text>
+                    <TextInput
+                      secureTextEntry
+                      autoComplete="off"
+                      value={password}
+                      onChangeText={setPassword}
+                      accessibilityLabel="Bitwarden master password"
+                      maxLength={4096}
+                      className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+                    />
+                    <Button
+                      label={advancedUnlock ? "Hide advanced setup" : "Advanced setup"}
+                      tone="text"
+                      onPress={() => setAdvancedUnlock(!advancedUnlock)}
+                    />
+                    {advancedUnlock && (
+                      <TextInput
+                        value={executable}
+                        onChangeText={setExecutable}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        accessibilityLabel="Bitwarden CLI executable"
+                        className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+                      />
+                    )}
+                    <Button
+                      label="Unlock vault"
                       disabled={
                         !canAct || state.status === "unlocking" || state.addingAccount === true
                       }
                       onPress={() => {
-                        setAccount(entry.name);
-                        setProfileDirectory(entry.directory);
+                        const value = password;
+                        setPassword("");
+                        void act({
+                          type: "unlock",
+                          password: value,
+                          executable,
+                          account: account || "Default",
+                          profileDirectory: profileDirectory || undefined,
+                        });
                       }}
                     />
-                    <Text className="text-sm text-foreground-muted">{entry.directory}</Text>
-                    {entry.saved && (
-                      <Button
-                        label="Forget"
-                        disabled={
-                          !canAct || state.status === "unlocking" || state.addingAccount === true
-                        }
-                        onPress={() =>
-                          void act({ type: "forgetProfile", directory: entry.directory })
-                        }
-                      />
-                    )}
                   </View>
-                ))}
-                <TextInput
-                  value={account}
-                  onChangeText={setAccount}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  accessibilityLabel="Bitwarden account email or name"
-                  placeholder="Account email or name"
-                  className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
-                />
-                <TextInput
-                  value={profileDirectory}
-                  onChangeText={setProfileDirectory}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  accessibilityLabel="Bitwarden CLI profile directory"
-                  placeholder="CLI profile directory (blank for default)"
-                  className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
-                />
-                <Text className="text-sm text-foreground">Bitwarden master password</Text>
-                <TextInput
-                  secureTextEntry
-                  autoComplete="off"
-                  value={password}
-                  onChangeText={setPassword}
-                  accessibilityLabel="Bitwarden master password"
-                  maxLength={4096}
-                  className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
-                />
-                <Button
-                  label={advancedUnlock ? "Hide advanced setup" : "Advanced setup"}
-                  tone="text"
-                  onPress={() => setAdvancedUnlock(!advancedUnlock)}
-                />
-                {advancedUnlock && (
-                  <TextInput
-                    value={executable}
-                    onChangeText={setExecutable}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    accessibilityLabel="Bitwarden CLI executable"
-                    className="rounded-xl border border-border bg-card px-4 py-3 text-foreground"
-                  />
                 )}
+              {state?.status === "ready" && (
                 <Button
-                  label="Unlock vault"
-                  disabled={!canAct || state.status === "unlocking" || state.addingAccount === true}
-                  onPress={() => {
-                    const value = password;
-                    setPassword("");
-                    void act({
-                      type: "unlock",
-                      password: value,
-                      executable,
-                      account: account || "Default",
-                      profileDirectory: profileDirectory || undefined,
-                    });
-                  }}
+                  label={state.refreshing ? "Refreshing accounts…" : "Refresh accounts"}
+                  disabled={!canAct || state.refreshing === true}
+                  onPress={() => void act({ type: "refresh" })}
                 />
-              </View>
-            )}
-          {state?.status === "ready" && (
-            <Button
-              label={state.refreshing ? "Refreshing accounts…" : "Refresh accounts"}
-              disabled={!canAct || state.refreshing === true}
-              onPress={() => void act({ type: "refresh" })}
-            />
-          )}
-          {state?.notices.map((notice) => (
-            <View
-              key={notice.noticeId}
-              ref={(view) => {
-                if (view) noticeViews.current.set(notice.noticeId, view);
-                else noticeViews.current.delete(notice.noticeId);
-              }}
-              className="gap-3 rounded-2xl border border-border p-4"
-              onLayout={acknowledge}
-            >
-              <Text className="font-t3-medium text-foreground">
-                {notice.revoked ? "Permission revoked" : "Saved credential used automatically"}
-              </Text>
-              <Text className="text-foreground-muted">
-                {notice.site} · {notice.command}
-              </Text>
-              <Text className="text-xs text-foreground-muted">
-                Notice available until {new Date(notice.expiresAt).toLocaleTimeString()}
-              </Text>
-              <Button
-                label="Dismiss"
-                disabled={!canAct}
-                onPress={() => void act({ type: "dismiss", noticeId: notice.noticeId })}
-              />
-              <Button
-                label="Revoke & stop"
-                tone="danger"
-                disabled={!canAct || notice.revoked}
-                onPress={() => void act({ type: "revoke", grantId: notice.grantId })}
-              />
+              )}
             </View>
-          ))}
-          {!locked &&
-            [...pending, ...active]
-              .sort(
-                (a, b) =>
-                  Number(b.origin?.threadId === viewedThread?.threadId) -
-                  Number(a.origin?.threadId === viewedThread?.threadId),
-              )
-              .map((request) => (
-                <Approval
-                  key={request.requestId}
-                  request={request}
-                  environmentId={environmentId}
-                  environmentLabel={environmentLabel}
-                  disabled={!canAct}
-                  act={act}
-                />
-              ))}
-          {state?.requests
-            .filter((r) =>
-              ["expired", "failed", "denied", "completed", "released", "revoked"].includes(r.state),
-            )
-            .slice(0, 3)
-            .map((request) => (
-              <Text
-                key={request.requestId}
-                accessibilityLiveRegion="polite"
-                className="text-foreground-muted"
-              >
-                {request.site} ·{" "}
-                {request.state === "expired"
-                  ? "Request expired. Ask the agent for a new request to continue."
-                  : (request.error ?? `Request ${request.state}.`)}
-              </Text>
-            ))}
-          {hasRequests && (
-            <Button
-              label={
-                managementOpen
-                  ? "Hide access management"
-                  : `Manage access · ${state?.grants.length ?? 0} saved permissions`
-              }
-              tone="text"
-              onPress={() => setManagementOpen(!managementOpen)}
-            />
           )}
-          {(managementOpen || (!hasRequests && !locked)) && (
+          {tab === "requests" && (
             <>
+              {state?.notices.map((notice) => (
+                <View
+                  key={notice.noticeId}
+                  ref={(view) => {
+                    if (view) noticeViews.current.set(notice.noticeId, view);
+                    else noticeViews.current.delete(notice.noticeId);
+                  }}
+                  className="gap-3 rounded-2xl border border-border p-4"
+                  onLayout={acknowledge}
+                >
+                  <Text className="font-t3-medium text-foreground">
+                    {notice.revoked ? "Permission revoked" : "Saved credential used automatically"}
+                  </Text>
+                  <Text className="text-foreground-muted">
+                    {notice.site} · {notice.command}
+                  </Text>
+                  <Text className="text-xs text-foreground-muted">
+                    Notice available until {new Date(notice.expiresAt).toLocaleTimeString()}
+                  </Text>
+                  <Button
+                    label="Dismiss"
+                    disabled={!canAct}
+                    onPress={() => void act({ type: "dismiss", noticeId: notice.noticeId })}
+                  />
+                  <Button
+                    label="Revoke & stop"
+                    tone="danger"
+                    disabled={!canAct || notice.revoked}
+                    onPress={() => void act({ type: "revoke", grantId: notice.grantId })}
+                  />
+                </View>
+              ))}
+              {!locked &&
+                [...pending, ...active]
+                  .sort(
+                    (a, b) =>
+                      Number(b.origin?.threadId === viewedThread?.threadId) -
+                      Number(a.origin?.threadId === viewedThread?.threadId),
+                  )
+                  .map((request) => (
+                    <Approval
+                      key={request.requestId}
+                      request={request}
+                      environmentId={environmentId}
+                      environmentLabel={environmentLabel}
+                      disabled={!canAct}
+                      act={act}
+                    />
+                  ))}
+              {state?.requests
+                .filter((r) =>
+                  ["expired", "failed", "denied", "completed", "released", "revoked"].includes(
+                    r.state,
+                  ),
+                )
+                .slice(0, 3)
+                .map((request) => (
+                  <Text
+                    key={request.requestId}
+                    accessibilityLiveRegion="polite"
+                    className="text-foreground-muted"
+                  >
+                    {request.site} ·{" "}
+                    {request.state === "expired"
+                      ? "Request expired. Ask the agent for a new request to continue."
+                      : (request.error ?? `Request ${request.state}.`)}
+                  </Text>
+                ))}
+            </>
+          )}
+          {tab === "approvals" && (
+            <>
+              {!state?.grants.length && (
+                <Text className="text-foreground-muted">No saved approvals.</Text>
+              )}
               {state?.grants.map((grant) => (
                 <View key={grant.grantId} className="gap-2 rounded-xl border border-border p-4">
                   <Text className="text-foreground">
@@ -507,7 +541,7 @@ function Approval({
   const callerLabel = request.origin
     ? [request.origin.projectName, request.origin.threadTitle].filter(Boolean).join(" · ")
     : "Unverified caller";
-  const [detailsOpen, setDetailsOpen] = useState(false);
+
   const [chosenId, setSelection] = useState<string | undefined>();
   const [adding, setAdding] = useState(false);
   const [approvalScope, setApprovalScope] = useState<"thread" | "project" | "t3">("thread");
@@ -717,7 +751,7 @@ function Approval({
               <Text className="text-xs text-foreground-muted">
                 {selected?.hostMismatch
                   ? `Always allow also saves ${request.site} to this credential in Bitwarden. Existing hosts are kept.`
-                  : "Remembered access applies to this credential and command. Revoke anytime in Manage access."}
+                  : "Remembered access applies to this credential and command. Revoke anytime in Saved approvals."}
               </Text>
               <View className="flex-row flex-wrap justify-end gap-2">
                 <Button
@@ -770,28 +804,22 @@ function Approval({
           )}
         </>
       )}
-      <Button
-        label={detailsOpen ? "Hide request details" : "Request details"}
-        tone="text"
-        onPress={() => setDetailsOpen(!detailsOpen)}
-      />
-      {detailsOpen && (
-        <Text selectable className="text-xs text-foreground-muted">
-          {JSON.stringify(
-            {
-              agent: request.origin?.agent,
-              executable: request.argv[0],
-              arguments: request.argv.slice(1),
-              directory: request.cwd,
-              fields: request.field,
-              lifetimeSeconds: request.ttlSeconds,
-              search: request.searchDiagnostics,
-            },
-            null,
-            2,
-          )}
-        </Text>
-      )}
+      <Text className="text-sm text-foreground">Request details</Text>
+      <Text selectable className="text-xs text-foreground-muted">
+        {JSON.stringify(
+          {
+            agent: request.origin?.agent,
+            executable: request.argv[0],
+            arguments: request.argv.slice(1),
+            directory: request.cwd,
+            fields: request.field,
+            lifetimeSeconds: request.ttlSeconds,
+            search: request.searchDiagnostics,
+          },
+          null,
+          2,
+        )}
+      </Text>
     </View>
   );
 }

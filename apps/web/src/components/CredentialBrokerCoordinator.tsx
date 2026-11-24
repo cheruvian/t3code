@@ -114,14 +114,18 @@ function EnvironmentBroker({
   });
   const [error, setError] = useState<string>();
   const [addingAccount, setAddingAccount] = useState(false);
+  const [selectedTab, setSelectedTab] = useState("requests");
+
   const state = AsyncResult.isSuccess(result) ? result.value : undefined;
   const canAct = permission;
+  const tab = state?.accounts?.length ? selectedTab : "accounts";
   const act = async (input: CredentialBrokerAction) => {
     const response = await run({ environmentId, input });
     if (response._tag === "Failure")
       setError("Could not complete the action. Check connection, permissions, and vault status.");
     else {
       setError(undefined);
+      if (input.type === "revoke") setPresentation((current) => ({ ...current, open: false }));
       if (input.type === "unlock" || input.type === "lock") setAddingAccount(false);
     }
   };
@@ -142,8 +146,9 @@ function EnvironmentBroker({
     };
   }, [state, canAct, environmentId, run, viewId]);
   const pending =
-    state?.requests.filter((r) => ["pending", "awaiting_unlock", "searching"].includes(r.state)) ??
-    [];
+    state?.requests.filter(
+      (r) => !r.grantId && ["pending", "awaiting_unlock", "searching"].includes(r.state),
+    ) ?? [];
   const attentionKey = pending.length
     ? JSON.stringify(pending.map((request) => request.requestId).sort())
     : null;
@@ -221,142 +226,184 @@ function EnvironmentBroker({
                   access is unavailable.
                 </p>
               )}
-              {state?.status === "ready" && (
-                <Button
-                  variant="outline"
-                  disabled={!canAct || state.addingAccount === true}
-                  onClick={() => setAddingAccount(!addingAccount)}
-                >
-                  {addingAccount ? "Cancel adding account" : "Add account"}
-                </Button>
-              )}
-              {state &&
-                state.status !== "unsupported" &&
-                (state.status !== "ready" || addingAccount) && (
-                  <VaultUnlock
-                    profiles={state.profiles ?? []}
-                    discover={() => act({ type: "discoverProfiles" })}
-                    forget={(directory) => act({ type: "forgetProfile", directory })}
-                    busy={state.status === "unlocking" || state.addingAccount === true}
-                    disabled={!canAct}
-                    unlock={(password, executable, account, profileDirectory) =>
-                      act({ type: "unlock", password, executable, account, profileDirectory })
-                    }
-                  />
-                )}
-              {(state?.accounts ?? []).length > 0 && (
-                <p className="text-sm">Unlocked accounts: {state?.accounts?.join(", ")}</p>
-              )}
-              {state?.status === "ready" && (
-                <Button
-                  variant="outline"
-                  disabled={!canAct || state.refreshing === true}
-                  onClick={() => void act({ type: "refresh" })}
-                >
-                  {state.refreshing ? "Refreshing accounts…" : "Refresh accounts"}
-                </Button>
-              )}
-              {!locked &&
-                [...pending, ...active]
-                  .toSorted(
-                    (a, b) =>
-                      Number(b.origin?.threadId === viewedThread?.threadId) -
-                      Number(a.origin?.threadId === viewedThread?.threadId),
-                  )
-                  .map((request) => (
-                    <ApprovalCard
-                      key={request.requestId}
-                      request={request}
-                      environmentLabel={environmentLabel}
-                      disabled={!canAct}
-                      act={act}
-                    />
-                  ))}
-              {state?.status === "ready" && !hasRequests && (
-                <p className="text-sm text-muted-foreground">
-                  Your vault is ready. New requests ask for permission here.
-                </p>
-              )}
-              {state?.requests
-                .filter((request) =>
-                  ["expired", "failed", "denied", "completed", "released", "revoked"].includes(
-                    request.state,
-                  ),
-                )
-                .slice(0, 3)
-                .map((request) => (
-                  <p
-                    key={request.requestId}
-                    role="status"
-                    className="text-sm text-muted-foreground"
-                  >
-                    {request.site} ·{" "}
-                    {request.state === "expired"
-                      ? "Request expired. No further access is allowed. Ask the agent for a new request to continue."
-                      : request.state === "failed"
-                        ? (request.error ??
-                          "Request failed. Review the request before trying again.")
-                        : request.state === "completed"
-                          ? "Program finished. Check its result before continuing."
-                          : `Request ${request.state}.`}
-                  </p>
-                ))}
-              <details open={!hasRequests && !locked} className="space-y-3 border-t pt-3">
-                <summary className="cursor-pointer text-sm text-muted-foreground">
-                  Manage access
-                  {state?.grants.length ? ` · ${state.grants.length} saved permissions` : ""}
-                </summary>
-                {!!state?.grants.length && <h3 className="text-sm font-medium">Always allowed</h3>}
-                {state?.grants.map((grant) => (
-                  <div key={grant.grantId} className="space-y-2 rounded-xl border p-3 text-sm">
-                    <div className="flex items-center justify-between gap-3">
-                      <span>
-                        {grant.site} · {grant.field === "sshKey" ? "SSH private key" : grant.field}{" "}
-                        · {grant.maxTtl}s maximum
-                      </span>
-                      <Button
-                        variant="destructive-outline"
-                        size="sm"
-                        disabled={!canAct}
-                        onClick={() => void act({ type: "revoke", grantId: grant.grantId })}
-                      >
-                        Revoke &amp; stop
-                      </Button>
-                    </div>
-                    <details>
-                      <summary className="cursor-pointer text-muted-foreground">
-                        Permission scope
-                      </summary>
-                      <pre className="mt-2 overflow-auto whitespace-pre-wrap break-all text-xs">
-                        {JSON.stringify(
-                          {
-                            thread: grant.threadId,
-                            executable: grant.argv[0],
-                            invocationName: grant.argv0,
-                            arguments: grant.argv.slice(1),
-                            directory: grant.cwd,
-                          },
-                          null,
-                          2,
-                        )}
-                      </pre>
-                    </details>
-                  </div>
-                ))}
-                {state?.status === "ready" && (
+              <div role="tablist" aria-label="Credential access" className="flex gap-2">
+                {["requests", "accounts", "approvals"].map((value) => (
                   <Button
-                    variant="outline"
-                    disabled={!canAct}
-                    onClick={() => void act({ type: "lock" })}
+                    key={value}
+                    role="tab"
+                    aria-selected={tab === value}
+                    id={`credential-tab-${viewId}-${value}`}
+                    aria-controls={`credential-panel-${viewId}-${value}`}
+                    variant={tab === value ? "secondary" : "ghost"}
+                    onClick={() => setSelectedTab(value)}
                   >
-                    Lock vault &amp; stop access
+                    {value === "requests"
+                      ? "Requests"
+                      : value === "accounts"
+                        ? "Accounts"
+                        : "Saved approvals"}
                   </Button>
+                ))}
+              </div>
+              <div
+                role="tabpanel"
+                id={`credential-panel-${viewId}-${tab}`}
+                aria-labelledby={`credential-tab-${viewId}-${tab}`}
+              >
+                {tab === "accounts" && (
+                  <div className="space-y-3">
+                    {state?.status === "ready" && (
+                      <Button
+                        variant="outline"
+                        disabled={!canAct || state.addingAccount === true}
+                        onClick={() => setAddingAccount(!addingAccount)}
+                      >
+                        {addingAccount ? "Cancel adding account" : "Add account"}
+                      </Button>
+                    )}
+                    {state &&
+                      state.status !== "unsupported" &&
+                      (state.status !== "ready" || addingAccount) && (
+                        <VaultUnlock
+                          profiles={state.profiles ?? []}
+                          discover={() => act({ type: "discoverProfiles" })}
+                          forget={(directory) => act({ type: "forgetProfile", directory })}
+                          busy={state.status === "unlocking" || state.addingAccount === true}
+                          disabled={!canAct}
+                          unlock={(password, executable, account, profileDirectory) =>
+                            act({ type: "unlock", password, executable, account, profileDirectory })
+                          }
+                        />
+                      )}
+                    {(state?.accounts ?? []).length > 0 && (
+                      <p className="text-sm">Unlocked accounts: {state?.accounts?.join(", ")}</p>
+                    )}
+                    {state?.status === "ready" && (
+                      <Button
+                        variant="outline"
+                        disabled={!canAct || state.refreshing === true}
+                        onClick={() => void act({ type: "refresh" })}
+                      >
+                        {state.refreshing ? "Refreshing accounts…" : "Refresh accounts"}
+                      </Button>
+                    )}
+                  </div>
                 )}
-                <p className="text-xs text-muted-foreground">
-                  Revocation stops supervised programs and deletes active credential files. It
-                  cannot erase copied secrets or end an established website session.
-                </p>
-              </details>
+                {tab === "requests" && (
+                  <>
+                    {!locked &&
+                      [...pending, ...active]
+                        .toSorted(
+                          (a, b) =>
+                            Number(b.origin?.threadId === viewedThread?.threadId) -
+                            Number(a.origin?.threadId === viewedThread?.threadId),
+                        )
+                        .map((request) => (
+                          <ApprovalCard
+                            key={request.requestId}
+                            request={request}
+                            environmentLabel={environmentLabel}
+                            disabled={!canAct}
+                            act={act}
+                          />
+                        ))}
+                    {state?.status === "ready" && !hasRequests && (
+                      <p className="text-sm text-muted-foreground">
+                        Your vault is ready. New requests ask for permission here.
+                      </p>
+                    )}
+                    {state?.requests
+                      .filter((request) =>
+                        [
+                          "expired",
+                          "failed",
+                          "denied",
+                          "completed",
+                          "released",
+                          "revoked",
+                        ].includes(request.state),
+                      )
+                      .slice(0, 3)
+                      .map((request) => (
+                        <p
+                          key={request.requestId}
+                          role="status"
+                          className="text-sm text-muted-foreground"
+                        >
+                          {request.site} ·{" "}
+                          {request.state === "expired"
+                            ? "Request expired. No further access is allowed. Ask the agent for a new request to continue."
+                            : request.state === "failed"
+                              ? (request.error ??
+                                "Request failed. Review the request before trying again.")
+                              : request.state === "completed"
+                                ? "Program finished. Check its result before continuing."
+                                : `Request ${request.state}.`}
+                        </p>
+                      ))}
+                  </>
+                )}
+                {tab === "approvals" && (
+                  <div className="space-y-3">
+                    {!state?.grants.length && (
+                      <p className="text-sm text-muted-foreground">No saved approvals.</p>
+                    )}
+                    {!!state?.grants.length && (
+                      <h3 className="text-sm font-medium">Always allowed</h3>
+                    )}
+                    {state?.grants.map((grant) => (
+                      <div key={grant.grantId} className="space-y-2 rounded-xl border p-3 text-sm">
+                        <div className="flex items-center justify-between gap-3">
+                          <span>
+                            {grant.site} ·{" "}
+                            {grant.field === "sshKey" ? "SSH private key" : grant.field} ·{" "}
+                            {grant.maxTtl}s maximum
+                          </span>
+                          <Button
+                            variant="destructive-outline"
+                            size="sm"
+                            disabled={!canAct}
+                            onClick={() => void act({ type: "revoke", grantId: grant.grantId })}
+                          >
+                            Revoke &amp; stop
+                          </Button>
+                        </div>
+                        <details>
+                          <summary className="cursor-pointer text-muted-foreground">
+                            Permission scope
+                          </summary>
+                          <pre className="mt-2 overflow-auto whitespace-pre-wrap break-all text-xs">
+                            {JSON.stringify(
+                              {
+                                thread: grant.threadId,
+                                executable: grant.argv[0],
+                                invocationName: grant.argv0,
+                                arguments: grant.argv.slice(1),
+                                directory: grant.cwd,
+                              },
+                              null,
+                              2,
+                            )}
+                          </pre>
+                        </details>
+                      </div>
+                    ))}
+                    {state?.status === "ready" && (
+                      <Button
+                        variant="outline"
+                        disabled={!canAct}
+                        onClick={() => void act({ type: "lock" })}
+                      >
+                        Lock vault &amp; stop access
+                      </Button>
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      Revocation stops supervised programs and deletes active credential files. It
+                      cannot erase copied secrets or end an established website session.
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           </DialogPanel>
         </DialogPopup>
@@ -793,7 +840,7 @@ function ApprovalCard({
               <p className="text-xs text-muted-foreground">
                 {selected?.hostMismatch
                   ? `Always allow also saves ${request.site} to this credential in Bitwarden. Existing hosts are kept.`
-                  : "Remembered access applies to this credential and command. Revoke anytime in Manage access."}
+                  : "Remembered access applies to this credential and command. Revoke anytime in Saved approvals."}
               </p>
               <div className="flex flex-wrap items-center justify-end gap-2 border-t pt-4">
                 <Button
@@ -820,10 +867,8 @@ function ApprovalCard({
           )}
         </>
       )}
-      <details className="text-xs text-muted-foreground">
-        <summary className="cursor-pointer">
-          Request details · {request.argv[0]?.split(/[\\/]/).at(-1)}
-        </summary>
+      <section className="text-xs text-muted-foreground">
+        <h3 className="font-medium">Request details · {request.argv[0]?.split(/[\\/]/).at(-1)}</h3>
         <div className="mt-3 space-y-3">
           <p>
             {request.origin
@@ -850,7 +895,7 @@ function ApprovalCard({
             undo actions already completed or erase copied credentials.
           </p>
         </div>
-      </details>
+      </section>
     </section>
   );
 }

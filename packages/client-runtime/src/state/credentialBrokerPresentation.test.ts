@@ -27,9 +27,9 @@ describe("credential request presentation", () => {
     expect(returned.open).toBe(true);
   });
 
-  it("keeps completion visible when already open, without reopening a hidden dialog", () => {
+  it("closes when approval completes without reopening a hidden dialog", () => {
     const shown = reconcileCredentialDialog(initial, JSON.stringify(thread), keyFor(thread));
-    expect(reconcileCredentialDialog(shown, JSON.stringify(thread), null).open).toBe(true);
+    expect(reconcileCredentialDialog(shown, JSON.stringify(thread), null).open).toBe(false);
     expect(
       reconcileCredentialDialog({ ...shown, open: false }, JSON.stringify(thread), null).open,
     ).toBe(false);
