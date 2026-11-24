@@ -1,5 +1,5 @@
 import type { ExecutionEnvironmentCapabilities } from "@t3tools/contracts";
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import {
   canStartThreadPullRequestWatch,
@@ -18,10 +18,7 @@ const input = {
   reference,
   linked: true,
 };
-const capabilities = {
-  repositoryIdentity: true,
-  threadPullRequests: true,
-} satisfies ExecutionEnvironmentCapabilities;
+const capabilities = { repositoryIdentity: true } satisfies ExecutionEnvironmentCapabilities;
 
 describe("thread pull request capability negotiation", () => {
   it.each([true, false])(
@@ -84,35 +81,5 @@ describe("thread pull request capability negotiation", () => {
         lineage: { ...active.lineage, relationshipToParent: "subagent" },
       }),
     ).toBe(false);
-  });
-});
-
-describe("older-server link routing", () => {
-  it("requires an exact checkout for linking and permits unlinking without one", () => {
-    const legacy = { threadPullRequestLinking: true };
-    expect(threadPullRequestLinkMode(legacy)).toBe("single");
-    expect(threadPullRequestLinkMode({})).toBe("unsupported");
-    expect(planThreadPullRequestMutation({ ...input, capabilities: legacy })).toBeNull();
-    const legacyProjectId = ProjectId.make("checkout");
-    expect(
-      planThreadPullRequestMutation({ ...input, capabilities: legacy, legacyProjectId }),
-    ).toEqual({
-      type: "thread.meta.update",
-      input: {
-        threadId: input.threadId,
-        linkedPullRequest: {
-          projectId: legacyProjectId,
-          repository: reference.repository,
-          number: reference.number,
-          url: reference.url,
-        },
-      },
-    });
-    expect(
-      planThreadPullRequestMutation({ ...input, capabilities: legacy, linked: false }),
-    ).toEqual({
-      type: "thread.meta.update",
-      input: { threadId: input.threadId, linkedPullRequest: null },
-    });
   });
 });

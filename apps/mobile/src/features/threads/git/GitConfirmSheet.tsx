@@ -3,12 +3,8 @@ import { sourceControlClients } from "@t3tools/client-runtime/source-control-cli
 import { resolveAutoFeatureBranchName } from "@t3tools/shared/git";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
-import {
-  StackActions,
-  useIsFocused,
-  useNavigation,
-  type StaticScreenProps,
-} from "@react-navigation/native";
+import { useNavigation, type StaticScreenProps, useIsFocused } from "@react-navigation/native";
+import { useGT, useMessages } from "gt-react-native";
 import { useCallback, useMemo } from "react";
 import { Platform, View } from "react-native";
 
@@ -16,6 +12,11 @@ import { useMobileGitStatus } from "../../../state/queries";
 import { SheetHeader } from "../../../components/ui/SheetHeader";
 import { FitSheet } from "../../../components/ui/FitSheet";
 import { SheetIntro } from "../../../components/ui/SheetIntro";
+import {
+  gitRepositoryTargetFromRoute,
+  type GitRepositoryRouteParams,
+} from "../../../state/thread-git-target";
+import { useReturnToThread } from "../thread-inspector-navigation";
 import { useThreadSelection } from "../../../state/use-thread-selection";
 import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-git-actions";
 
@@ -27,33 +28,35 @@ import {
 } from "./git-confirm-action";
 import { SheetActionButton } from "./gitSheetComponents";
 
-type GitConfirmSheetProps = StaticScreenProps<{
-  readonly environmentId: string;
-  readonly threadId: string;
-  readonly confirmAction?: string;
-  readonly branchName?: string;
-  readonly cwd?: string;
-  readonly includesCommit?: string;
-  readonly commitMessage?: string;
-  readonly filePaths?: string;
-}>;
+type GitConfirmSheetProps = StaticScreenProps<
+  {
+    readonly environmentId: string;
+    readonly threadId: string;
+    readonly confirmAction?: string;
+    readonly branchName?: string;
+    readonly cwd?: string;
+    readonly includesCommit?: string;
+    readonly commitMessage?: string;
+    readonly filePaths?: string;
+  } & GitRepositoryRouteParams
+>;
 
 export function GitConfirmSheet(props: GitConfirmSheetProps) {
+  const gt = useGT();
+  const messages = useMessages();
   const navigation = useNavigation();
   const isFocused = useIsFocused();
-  const { selectedThread } = useThreadSelection();
-  const { selectedThreadCwd } = useSelectedThreadWorktree();
-  const { selectedThreadProject } = useThreadSelection();
-  const terminology = sourceControlClients.get(
-    selectedThreadProject?.repositoryIdentity?.provider,
-  ).changeRequest;
-
+  const returnToThread = useReturnToThread();
+  const repository = gitRepositoryTargetFromRoute(props.route.params);
+  const { selectedThread, selectedThreadProject } = useThreadSelection();
+  const threadWorktree = useSelectedThreadWorktree();
+  const selectedThreadCwd = repository?.cwd ?? threadWorktree.selectedThreadCwd;
   const params = props.route.params;
 
   const confirmAction = parseDefaultBranchConfirmableAction(params.confirmAction);
   const branchName = params.branchName ?? "";
   const expectedCwd = params.cwd ?? "";
-  const includesCommit = params.includesCommit === "true";
+  const includesCommit = confirmAction === "commit_push" || confirmAction === "commit_push_pr";
   const environmentId = params.environmentId ?? "";
   const threadId = params.threadId ?? "";
   const gitStatus = useMobileGitStatus({
@@ -74,8 +77,8 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
           },
     surface: "confirm",
   });
-  const gitActions = useSelectedThreadGitActions({ active: gitStatus.target !== null });
-  const { canWriteSourceControl, canChangeThreadBranch } = gitActions;
+  const gitActions = useSelectedThreadGitActions(repository, { active: gitStatus.target !== null });
+  const { canWriteSourceControl, canCreateFeatureBranch } = gitActions;
   const confirmationReady = canRunConfirmedGitAction({
     confirmAction,
     expectedBranch: branchName,
@@ -84,22 +87,31 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
     status: gitStatus.data,
   });
 
+  const terminology = sourceControlClients.get(
+    repository === undefined
+      ? selectedThreadProject?.repositoryIdentity?.provider
+      : gitStatus.data?.sourceControlProvider?.kind,
+  ).changeRequest;
+
   const copy = useMemo(
     () =>
-      confirmAction
-        ? resolveDefaultBranchActionDialogCopy({
-            action: confirmAction,
-            branchName,
-            includesCommit,
-            terminology,
-          })
+      confirmAction && branchName
+        ? resolveDefaultBranchActionDialogCopy(
+            {
+              action: confirmAction,
+              branchName,
+              includesCommit,
+              terminology,
+            },
+            messages,
+          )
         : null,
-    [branchName, confirmAction, includesCommit, terminology],
+    [branchName, confirmAction, includesCommit, messages, terminology],
   );
 
   const continuePendingAction = useCallback(async () => {
     if (!canWriteSourceControl || !confirmAction || !confirmationReady) return;
-    navigation.dispatch(StackActions.replace("Thread", { environmentId, threadId }));
+    returnToThread({ environmentId, threadId });
     await gitActions.onRunSelectedThreadGitAction({
       action: confirmAction,
       ...(params.commitMessage ? { commitMessage: params.commitMessage } : {}),
@@ -112,21 +124,16 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
     environmentId,
     gitActions,
     params,
-    navigation,
+    returnToThread,
     threadId,
   ]);
 
   const movePendingActionToFeatureBranch = useCallback(async () => {
-    if (!canChangeThreadBranch || !confirmAction || !confirmationReady) return;
-    navigation.dispatch(StackActions.replace("Thread", { environmentId, threadId }));
+    if (!canCreateFeatureBranch || !confirmAction || !confirmationReady) return;
+    returnToThread({ environmentId, threadId });
 
     if (includesCommit) {
-      await gitActions.onRunSelectedThreadGitAction({
-        action: confirmAction,
-        featureBranch: true,
-        ...(params.commitMessage ? { commitMessage: params.commitMessage } : {}),
-        ...(params.filePaths ? { filePaths: params.filePaths.split(",") } : {}),
-      });
+      await gitActions.onRunSelectedThreadGitAction({ action: confirmAction, featureBranch: true });
       return;
     }
 
@@ -138,30 +145,30 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
       ),
     );
     await runAfterSuccessfulBranchCreation({
-      createBranch: () => gitActions.onCreateSelectedThreadBranch(newBranchName),
+      createBranch: async () =>
+        (await gitActions.onCreateSelectedThreadBranch(newBranchName)) !== null,
       runAction: () => gitActions.onRunSelectedThreadGitAction({ action: confirmAction }),
     });
   }, [
-    canChangeThreadBranch,
+    canCreateFeatureBranch,
     confirmAction,
     confirmationReady,
     gitActions,
     includesCommit,
-    params,
-    navigation,
+    returnToThread,
     environmentId,
     threadId,
   ]);
 
   return (
     <FitSheet
-      header={<SheetHeader title="Confirm action" onClose={() => navigation.goBack()} />}
+      header={<SheetHeader title={gt("Confirm action")} onClose={() => navigation.goBack()} />}
       showsVerticalScrollIndicator={false}
     >
       <SheetIntro
-        eyebrow="Confirm"
-        title={copy?.title ?? "Run action on default branch?"}
-        description={copy?.description ?? "Choose how to continue."}
+        eyebrow={gt("Confirm", { $context: "eyebrow label above a confirmation title" })}
+        title={copy?.title ?? gt("Run action on default branch?")}
+        description={copy?.description ?? gt("Choose how to continue.")}
       />
 
       <View className="gap-3">
@@ -174,7 +181,7 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
         <SheetActionButton
           icon="arrow.branch"
           label="Feature branch & continue"
-          disabled={!canChangeThreadBranch || !confirmationReady}
+          disabled={!canCreateFeatureBranch || !confirmationReady}
           tone="primary"
           onPress={() => void movePendingActionToFeatureBranch()}
         />

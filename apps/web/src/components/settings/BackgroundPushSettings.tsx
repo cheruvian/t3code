@@ -16,7 +16,7 @@ import {
 } from "../../webPush";
 import { Button } from "../ui/button";
 import { SettingsRow, SettingsSearchTarget } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
 
 function EnvironmentPushSettings({
@@ -119,6 +119,7 @@ function EnvironmentPushSettings({
 }
 
 export function BackgroundPushSettings() {
+  const searchableSetting = useSearchableSetting();
   const { connectedEnvironments } = useSettingsScope();
   return (
     <SettingsSearchTarget id={searchableSetting("background-push").id}>

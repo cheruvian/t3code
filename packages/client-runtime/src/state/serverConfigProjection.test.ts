@@ -112,7 +112,7 @@ describe("applyServerConfigProjection provider catalogs", () => {
 
     const reconnected = apply(projection([held]), {
       type: "snapshot",
-      config: { providers: [sent({ checkedAt: "b" })] },
+      config: { environment: { capabilities: {} }, providers: [sent({ checkedAt: "b" })] },
     });
     expect(reconnected).toMatchObject({ checkedAt: "b", loadedCatalogDigest: "d1" });
     expect(reconnected.slashCommands).toBe(slashCommands);

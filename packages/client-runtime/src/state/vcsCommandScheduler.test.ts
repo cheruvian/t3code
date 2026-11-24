@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import { describe, expect, it } from "@effect/vitest";
 import { EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult, AtomRegistry } from "effect/reactivity";
@@ -16,22 +17,31 @@ describe("Git refresh scheduling", () => {
     const starts: string[] = [];
     let refreshes = 0;
     const refresh = () =>
-      vcsRefreshCommandScheduler.schedule(registry, vcsCommandConcurrency, target, async () => {
-        const number = ++refreshes;
-        starts.push(`refresh-${number}`);
-        if (number === 1) await gate.promise;
-        return AsyncResult.success(number);
-      });
+      Effect.runPromise(
+        vcsRefreshCommandScheduler.schedule(
+          registry,
+          vcsCommandConcurrency,
+          target,
+          Effect.promise(async () => {
+            const number = ++refreshes;
+            starts.push(`refresh-${number}`);
+            if (number === 1) await gate.promise;
+            return AsyncResult.success(number);
+          }),
+        ),
+      );
     try {
       const first = refresh();
-      const pull = vcsCommandScheduler.schedule(
-        registry,
-        vcsCommandConcurrency,
-        target,
-        async () => {
-          starts.push("pull");
-          return AsyncResult.success(undefined);
-        },
+      const pull = Effect.runPromise(
+        vcsCommandScheduler.schedule(
+          registry,
+          vcsCommandConcurrency,
+          target,
+          Effect.sync(() => {
+            starts.push("pull");
+            return AsyncResult.success(undefined);
+          }),
+        ),
       );
       const pending = Array.from({ length: 19 }, refresh);
       expect(starts).toEqual(["refresh-1"]);

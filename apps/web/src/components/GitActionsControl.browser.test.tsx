@@ -57,6 +57,7 @@ vi.mock(import("~/state/query"), async (original) => ({
   useEnvironmentQuery: (() => ({
     data: {
       sourceControlProviders: [],
+      sources: [],
       isRepo: true,
       refName: state.branch,
       isDefaultRef: state.isDefaultRef,
@@ -109,7 +110,7 @@ vi.mock(import("~/state/use-atom-command"), async (original) => {
 vi.mock(import("~/state/server"), async (original) => {
   const actual = await original();
   const { Atom } = await import("effect/reactivity");
-  const config = Atom.make(() => ({ availableEditors: ["cursor"] }));
+  const config = Atom.make(() => ({ availableEditors: ["cursor"], settings: { offeredSourceControlProviders: [] } }));
   return {
     ...actual,
     serverEnvironment: { ...actual.serverEnvironment, configValueAtom: (() => config) as never },
@@ -170,6 +171,7 @@ const MemoGitActionsControl = memo(GitActionsControl);
 function control(thread = "thread", cwd = "/repo") {
   return (
     <MemoGitActionsControl
+      name="Repository"
       gitCwd={cwd}
       activeThreadRef={{
         environmentId: EnvironmentId.make("environment"),

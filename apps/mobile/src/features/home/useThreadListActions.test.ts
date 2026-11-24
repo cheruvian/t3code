@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 const state = vi.hoisted(() => ({
   connectedEnvironmentIds: [] as EnvironmentId[],
   unsupportedCapabilities: false,
+  allowUnpinnedReorder: true,
   pendingOrder: null as object | null,
   dropBusy: false,
   holdingRows: false,
@@ -111,37 +112,39 @@ vi.mock("../../state/atom-registry", async () => {
       state.dropBusy = value;
     },
     get: (atom: string) =>
-      atom === "project"
-        ? null
-        : atom === "connected-environments"
-          ? state.connectedEnvironmentIds
-          : atom === "thread-drop-busy"
-            ? state.dropBusy
-            : atom === "steady-shells-holding"
-              ? state.holdingRows
-              : atom === "thread-shells"
-                ? state.shells
-                : atom === "queued-thread-keys"
-                  ? new Set<string>()
-                  : new Map(
-                      [...state.scopes.keys()].map((environmentId) => [
-                        environmentId,
-                        {
-                          environment: {
-                            capabilities: state.unsupportedCapabilities
-                              ? {}
-                              : {
-                                  threadSettlement: true,
-                                  threadSnooze: true,
-                                  threadPinning: true,
-                                  threadPinReorder: true,
-                                  threadActiveReorder: true,
-                                  threadTitleRegeneration: true,
-                                },
+      atom === "allow-unpinned-reorder"
+        ? state.allowUnpinnedReorder
+        : atom === "project"
+          ? null
+          : atom === "connected-environments"
+            ? state.connectedEnvironmentIds
+            : atom === "thread-drop-busy"
+              ? state.dropBusy
+              : atom === "steady-shells-holding"
+                ? state.holdingRows
+                : atom === "thread-shells"
+                  ? state.shells
+                  : atom === "queued-thread-keys"
+                    ? new Set<string>()
+                    : new Map(
+                        [...state.scopes.keys()].map((environmentId) => [
+                          environmentId,
+                          {
+                            environment: {
+                              capabilities: state.unsupportedCapabilities
+                                ? {}
+                                : {
+                                    threadSettlement: true,
+                                    threadSnooze: true,
+                                    threadPinning: true,
+                                    threadPinReorder: true,
+                                    threadActiveReorder: true,
+                                    threadTitleRegeneration: true,
+                                  },
+                            },
                           },
-                        },
-                      ]),
-                    ),
+                        ]),
+                      ),
   };
   // Real atoms such as composerDraftsAtom go to a real registry; strings are stubbed state.
   return {
@@ -245,6 +248,7 @@ const mutationCases = [
   ["regenerateThreadTitle", "regenerateTitle"],
 ] as const;
 beforeEach(() => {
+  state.allowUnpinnedReorder = true;
   state.unsupportedCapabilities = false;
   state.connectedEnvironmentIds = [primaryEnvironmentId, otherEnvironmentId];
   state.failedAction = null;
@@ -365,34 +369,54 @@ describe("pinned thread operation permissions", () => {
   });
 });
 describe("thread reorder connection availability", () => {
-  it.each(["active", "pinned"] as const)(
-    "rejects %s materialization involving a cached capable offline neighbor",
-    async (section) => {
-      const moved = makeThread({
-        pinnedAt: section === "pinned" ? "2026-09-02T00:00:00.000Z" : null,
-      });
-      state.shells = [
-        moved,
-        makeThread({
-          id: ThreadId.make("offline-neighbor"),
-          environmentId: otherEnvironmentId,
-          createdAt: "2026-09-02T00:00:00.000Z",
-          pinnedAt: moved.pinnedAt,
-        }),
-      ];
-      state.scopes.get(otherEnvironmentId)?.add(AuthOrchestrationOperateScope);
-      state.connectedEnvironmentIds = [primaryEnvironmentId];
-      const { moveThread } = useThreadListActions();
-      expect(await moveThread(moved, "up")).toBe(false);
-      expect(state.requests).toEqual([]);
-      state.connectedEnvironmentIds = [primaryEnvironmentId, otherEnvironmentId];
-      expect(await moveThread(moved, "up")).toBe(true);
-      expect(state.requests).toHaveLength(2);
-      expect(new Set(state.requests.map(({ environmentId }) => environmentId))).toEqual(
-        new Set([primaryEnvironmentId, otherEnvironmentId]),
-      );
-    },
-  );
+  const offlineNeighborCase = (pinnedAt: string | null) => {
+    const moved = makeThread({ pinnedAt });
+    state.shells = [
+      moved,
+      makeThread({
+        id: ThreadId.make("offline-neighbor"),
+        environmentId: otherEnvironmentId,
+        createdAt: "2026-09-02T00:00:00.000Z",
+        pinnedAt,
+      }),
+    ];
+    state.scopes.get(otherEnvironmentId)?.add(AuthOrchestrationOperateScope);
+    state.connectedEnvironmentIds = [primaryEnvironmentId];
+    return moved;
+  };
+
+  it("rejects pinned materialization involving a cached capable offline neighbor", async () => {
+    const moved = offlineNeighborCase("2026-09-02T00:00:00.000Z");
+
+    const { moveThread } = useThreadListActions();
+    expect(await moveThread(moved, "up")).toBe(false);
+    expect(state.requests).toEqual([]);
+
+    state.connectedEnvironmentIds = [primaryEnvironmentId, otherEnvironmentId];
+
+    expect(await moveThread(moved, "up")).toBe(true);
+    expect(state.requests).toHaveLength(2);
+    expect(new Set(state.requests.map(({ environmentId }) => environmentId))).toEqual(
+      new Set([primaryEnvironmentId, otherEnvironmentId]),
+    );
+  });
+
+  it("rejects manual active reordering when the preference is disabled", async () => {
+    const moved = offlineNeighborCase(null);
+    state.allowUnpinnedReorder = false;
+    expect(await useThreadListActions().moveThread(moved, "up")).toBe(false);
+    expect(state.requests).toEqual([]);
+  });
+
+  it("moves an active thread past a cached offline neighbor by writing only itself", async () => {
+    const moved = offlineNeighborCase(null);
+
+    expect(await useThreadListActions().moveThread(moved, "up")).toBe(true);
+    expect(state.requests).toEqual([
+      expect.objectContaining({ action: "reorderActive", environmentId: primaryEnvironmentId }),
+    ]);
+  });
+
   it.each(["active", "pinned"] as const)(
     "uses the latest connection state in a retained %s move callback",
     async (section) => {
@@ -469,11 +493,9 @@ describe("thread action undo", () => {
     const thread = makeThread();
     const settleResponse = Promise.withResolvers<void>();
     state.heldActions.set("settle", settleResponse.promise);
-    const pending = [
-      actions.settleThread(thread),
-      actions.unsettleThread(thread),
-      actions.settleThread(thread),
-    ];
+    const first = actions.settleThread(thread);
+    await vi.waitFor(() => expect(state.requests).toHaveLength(1));
+    const pending = [first, actions.unsettleThread(thread), actions.settleThread(thread)];
     settleResponse.resolve();
     expect(await Promise.all(pending)).toEqual([true, true, true]);
     expect(state.requests.map(({ action }) => action)).toEqual(["settle", "unsettle", "settle"]);

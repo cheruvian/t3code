@@ -1,5 +1,8 @@
 import { OptionsDialogHost, showOptionsDialog } from "./OptionsDialogHost";
+import { msg } from "gt-react-native";
 import { Alert } from "react-native";
+
+import { m } from "../../i18n/messages";
 import type { ConfirmDialogRequest, TextInputDialogRequest } from "./Dialog.types";
 
 export type { ConfirmDialogRequest, TextInputDialogRequest } from "./Dialog.types";
@@ -14,7 +17,7 @@ export function confirm(request: ConfirmDialogRequest): void {
     return;
   }
   Alert.alert(request.title, request.message, [
-    { text: request.cancelText ?? "Cancel", style: "cancel", onPress: request.onCancel },
+    { text: request.cancelText ?? m(msg("Cancel")), style: "cancel", onPress: request.onCancel },
     {
       text: request.confirmText,
       style: request.destructive ? "destructive" : "default",
@@ -28,7 +31,7 @@ export function prompt(request: TextInputDialogRequest): void {
     request.title,
     request.message,
     [
-      { text: request.cancelText ?? "Cancel", style: "cancel", onPress: request.onCancel },
+      { text: request.cancelText ?? m(msg("Cancel")), style: "cancel", onPress: request.onCancel },
       { text: request.confirmText, onPress: (value) => request.onConfirm(value ?? "") },
     ],
     "plain-text",

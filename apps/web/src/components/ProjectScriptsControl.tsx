@@ -1,3 +1,5 @@
+import { m } from "../i18n/messages";
+import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import {
   type ThreadId,
   AuthSettingsWriteScope,
@@ -19,16 +21,18 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { projectScriptMenuLabel, projectScriptsMatch } from "@t3tools/shared/projectScripts";
+import { projectScriptMenuLabel } from "@t3tools/shared/projectScriptsCopy";
 import {
-  BanIcon,
   ChevronDownIcon,
   DownloadIcon,
   PlusIcon,
   SettingsIcon,
   WrenchIcon,
+  BanIcon,
 } from "lucide-react";
+import { projectScriptsMatch } from "@t3tools/shared/projectScripts";
 import React, { useState } from "react";
+import { T, useGT, useMessages, Var } from "gt-react";
 
 import { commandForProjectScript, primaryProjectScript } from "~/projectScripts";
 import { shortcutLabelForCommand } from "~/keybindings";
@@ -59,6 +63,7 @@ import {
   MenuSubTrigger,
   MenuSubPopup,
 } from "./ui/menu";
+import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { cn } from "~/lib/utils";
 import {
@@ -130,6 +135,8 @@ export default function ProjectScriptsControl({
   onDeleteScript,
   onSetInheritedDisabled,
 }: ProjectScriptsControlProps) {
+  const gt = useGT();
+  const messages = useMessages();
   const isPanel = displayMode === "panel";
   const ActionGroup = isPanel ? "div" : Group;
   const panelAnchorRef = React.useRef<HTMLDivElement | null>(null);
@@ -145,6 +152,7 @@ export default function ProjectScriptsControl({
     setActionsMenuOpen({ presentation, scripts: false, imports: false });
   }
   const [editorRequest, setEditorRequest] = useState<ProjectScriptEditorRequest | null>(null);
+  const editorRequestIdRef = React.useRef(0);
 
   const resourceLabel = (script: ProjectScript, includeOwner = true) => {
     if (!script.resource) return script.name;
@@ -187,10 +195,12 @@ export default function ProjectScriptsControl({
   const importableScripts = (() => importableProjectFileScripts(fileScripts, scripts))();
 
   const openAddDialog = () => {
+    editorRequestIdRef.current += 1;
     setEditorRequest({ scriptId: null, initial: EMPTY_PROJECT_SCRIPT_INPUT });
   };
 
   const openEditDialog = (script: ProjectScript) => {
+    editorRequestIdRef.current += 1;
     onRequestMenuClose?.();
     setActionsMenuOpen({ presentation, scripts: false, imports: false });
     setEditorRequest(editorRequestForScript(script, keybindings));
@@ -206,6 +216,7 @@ export default function ProjectScriptsControl({
     scriptId === null ? onAddScript(input) : onUpdateScript(scriptId, input);
 
   const importFileScript = async (fileScript: T3ProjectFileScript) => {
+    const requestId = ++editorRequestIdRef.current;
     const payload: NewProjectScriptInput = {
       name: fileScript.name,
       command: fileScript.command,
@@ -220,23 +231,35 @@ export default function ProjectScriptsControl({
       autoOpenPreview: fileScript.previewUrl ? (fileScript.autoOpenPreview ?? false) : false,
     };
     const result = await onAddScript(payload);
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      // Surface the failure through the regular add dialog, prefilled so the
-      // user can adjust and retry.
-      const error = squashAtomCommandFailure(result);
-      setEditorRequest({
-        scriptId: null,
-        initial: payload,
-        error: error instanceof Error ? error.message : "Failed to import action.",
-      });
+    if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
+
+    const message = thrownErrorMessage(squashAtomCommandFailure(result), m);
+    if (requestId !== editorRequestIdRef.current) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: gt("Failed to import {name}.", { name: fileScript.name }),
+          ...(message ? { description: message } : {}),
+        }),
+      );
+      return;
     }
+    setEditorRequest({
+      scriptId: null,
+      initial: payload,
+      error: message ?? gt("Failed to import action."),
+    });
   };
 
   const importMenuItems = importableScripts.length > 0 && (
     <>
       {scripts.length > 0 && <MenuSeparator />}
       <MenuGroup>
-        <MenuGroupLabel>From t3.json</MenuGroupLabel>
+        <MenuGroupLabel>
+          <T>
+            From <Var>t3.json</Var>
+          </T>
+        </MenuGroupLabel>
         {importableScripts.map((fileScript) => (
           <MenuItem
             density={presentation === "menu" ? "touch" : "default"}
@@ -246,7 +269,10 @@ export default function ProjectScriptsControl({
             <ScriptIcon icon={fileScript.icon ?? "play"} className="size-4" />
             <MenuItemLabel>{fileScript.name}</MenuItemLabel>
             <MenuShortcut>
-              <DownloadIcon className="size-3.5" aria-label="Import" />
+              <DownloadIcon
+                className="size-3.5"
+                aria-label={gt("Import", { $context: "verb, import an action from t3.json" })}
+              />
             </MenuShortcut>
           </MenuItem>
         ))}
@@ -271,7 +297,7 @@ export default function ProjectScriptsControl({
           >
             <ScriptIcon icon={script.icon} className="size-4" />
             <MenuItemLabel>
-              {script.resource ? resourceLabel(script) : projectScriptMenuLabel(script)}
+              {script.resource ? resourceLabel(script) : projectScriptMenuLabel(script, messages)}
             </MenuItemLabel>
             <span className="relative ms-auto flex h-6 min-w-6 items-center justify-end">
               {shortcutLabel && (
@@ -339,7 +365,7 @@ export default function ProjectScriptsControl({
       {importMenuItems}
       <MenuItem density={presentation === "menu" ? "touch" : "default"} onClick={openAddDialog}>
         <PlusIcon className="size-4" />
-        <MenuItemLabel>{isPanel ? "Add project script" : "Add action"}</MenuItemLabel>
+        <MenuItemLabel>{isPanel ? gt("Add project script") : gt("Add action")}</MenuItemLabel>
       </MenuItem>
     </>
   );
@@ -356,8 +382,9 @@ export default function ProjectScriptsControl({
             >
               <ScriptIcon icon={primaryScript.icon} className="size-4" />
               <MenuItemLabel>
-                {primaryScript.resource ? "" : "Run "}
-                {resourceLabel(primaryScript)}
+                {primaryScript.resource
+                  ? resourceLabel(primaryScript)
+                  : gt("Run {name}", { name: primaryScript.name })}
               </MenuItemLabel>
               <MenuShortcut>
                 {inheritedScriptIds.has(primaryScript.id)
@@ -375,7 +402,9 @@ export default function ProjectScriptsControl({
             >
               <MenuSubTrigger density="touch">
                 <ScriptIcon icon="play" className="size-4" />
-                <MenuItemLabel>Project actions</MenuItemLabel>
+                <MenuItemLabel>
+                  <T>Project actions</T>
+                </MenuItemLabel>
               </MenuSubTrigger>
               <MenuSubPopup>{scriptItems}</MenuSubPopup>
             </MenuSub>
@@ -385,14 +414,16 @@ export default function ProjectScriptsControl({
               onClick={openAddDialog}
             >
               <PlusIcon className="size-4" />
-              <MenuItemLabel>Add project action…</MenuItemLabel>
+              <MenuItemLabel>
+                <T>Add project action…</T>
+              </MenuItemLabel>
             </MenuItem>
           )}
         </>
       ) : primaryScript ? (
         <ActionGroup
           role="group"
-          aria-label="Project scripts"
+          aria-label={gt("Project scripts")}
           {...(isPanel
             ? { className: THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS, ref: panelAnchorRef }
             : {})}
@@ -406,9 +437,12 @@ export default function ProjectScriptsControl({
                   part="primary"
                   panel={isPanel}
                   className={isPanel ? undefined : "w-7 sm:w-6 @3xl/header-actions:w-auto!"}
-                  aria-label={`${primaryScript.resource ? "" : "Run "}${resourceLabel(primaryScript)}`}
-                  // The tooltip wrapper replaces data-slot="button", so themed
-                  // toolbar styling needs its own hook.
+                  aria-label={
+                    primaryScript.resource
+                      ? resourceLabel(primaryScript)
+                      : gt("Run {name}", { name: primaryScript.name })
+                  }
+                  // Tooltip replaces the button data-slot, so toolbar theming needs a separate hook.
                   data-toolbar-control=""
                   disabled={!onRunScript || resourceBusy(primaryScript)}
                   onClick={() => onRunScript?.(primaryScript)}
@@ -430,8 +464,10 @@ export default function ProjectScriptsControl({
             </TooltipTrigger>
             <TooltipPopup side="top">
               {onRunScript
-                ? `${primaryScript.resource ? "" : "Run "}${resourceLabel(primaryScript)}`
-                : "Pair this client again with permission to run terminal commands."}
+                ? primaryScript.resource
+                  ? resourceLabel(primaryScript)
+                  : gt("Run {name}", { name: primaryScript.name })
+                : gt("Pair this client again with permission to run terminal commands.")}
             </TooltipPopup>
           </Tooltip>
           {isPanel ? (
@@ -455,7 +491,7 @@ export default function ProjectScriptsControl({
                         variant={isPanel ? "ghost" : "outline"}
                         part="secondary"
                         panel={isPanel}
-                        aria-label="Script actions"
+                        aria-label={gt("Script actions")}
                         data-toolbar-control=""
                       />
                     }
@@ -466,7 +502,9 @@ export default function ProjectScriptsControl({
                   className={isPanel ? THREAD_DETAILS_PANEL_CHEVRON_CLASS : "size-4"}
                 />
               </TooltipTrigger>
-              <TooltipPopup side="top">Script actions</TooltipPopup>
+              <TooltipPopup side="top">
+                <T>Script actions</T>
+              </TooltipPopup>
             </Tooltip>
             <MenuPopup
               align="end"
@@ -483,7 +521,7 @@ export default function ProjectScriptsControl({
         isPanel ? (
           <div
             role="group"
-            aria-label="Project actions"
+            aria-label={gt("Project actions")}
             className={THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS}
             ref={panelAnchorRef}
           >
@@ -491,12 +529,12 @@ export default function ProjectScriptsControl({
               size="sm"
               variant="ghost"
               part="primary"
-              aria-label="Project actions"
+              aria-label={gt("Project actions")}
               onClick={() => setActionsMenuOpen({ presentation, scripts: false, imports: true })}
             >
               <WrenchIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} />
               <span className={cn("min-w-0 truncate", THREAD_DETAILS_PANEL_LABEL_CLASS)}>
-                Actions
+                <T context="project actions menu">Actions</T>
               </span>
             </ThreadDetailsControl>
             <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
@@ -513,7 +551,7 @@ export default function ProjectScriptsControl({
                     size="sm"
                     variant="ghost"
                     part="secondary"
-                    aria-label="Choose project action"
+                    aria-label={gt("Choose project action")}
                   />
                 }
               >
@@ -533,11 +571,11 @@ export default function ProjectScriptsControl({
             }
           >
             <MenuTrigger
-              render={<Button size="xs" variant="outline" aria-label="Project actions" />}
+              render={<Button size="xs" variant="outline" aria-label={gt("Project actions")} />}
             >
               <WrenchIcon className="size-3.5" />
               <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
-                Actions
+                <T context="project actions menu">Actions</T>
               </span>
               <ChevronDownIcon className="size-3.5" />
             </MenuTrigger>
@@ -554,9 +592,7 @@ export default function ProjectScriptsControl({
                 part="row"
                 panel={isPanel}
                 className={isPanel ? undefined : "w-7 sm:w-6 @3xl/header-actions:w-auto!"}
-                aria-label={isPanel ? "Add project script" : "Add action"}
-                // The tooltip wrapper replaces data-slot="button", so themed
-                // toolbar styling needs its own hook.
+                aria-label={isPanel ? gt("Add project script") : gt("Add action")}
                 data-toolbar-control=""
                 onClick={openAddDialog}
               />
@@ -569,10 +605,12 @@ export default function ProjectScriptsControl({
                 isPanel && cn("not-sr-only ml-0.5", THREAD_DETAILS_PANEL_LABEL_CLASS),
               )}
             >
-              {isPanel ? "Add project script" : "Add action"}
+              {isPanel ? gt("Add project script") : gt("Add action")}
             </span>
           </TooltipTrigger>
-          <TooltipPopup side="top">{isPanel ? "Add project script" : "Add action"}</TooltipPopup>
+          <TooltipPopup side="top">
+            {isPanel ? gt("Add project script") : gt("Add action")}
+          </TooltipPopup>
         </Tooltip>
       )}
 

@@ -64,9 +64,14 @@ import {
   type SourceControlManagedCliDiscoverySpec,
 } from "@t3tools/source-control-core/server/discovery";
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
-import { readSourceControlHostSettings } from "@t3tools/source-control-core/shared/definition";
+import {
+  parseGitRemoteHost,
+  readSourceControlHostSettings,
+  unknownRemoteProvider,
+} from "@t3tools/source-control-core/shared/definition";
 
 import * as GitHubClient from "../shared/definition.ts";
+import { makeGhProcess } from "./gitHubCliProcess.ts";
 import {
   PullRequestByNumber,
   PullRequestNode,
@@ -147,7 +152,8 @@ export function parseGitHubAuth(
       ...providerAuth({
         status: "unauthenticated",
         host: fallback.host,
-        detail: "Every GitHub host gh is signed in to is turned off in Settings → Source Control.",
+        detail:
+          "Every GitHub host gh is signed in to is turned off in Settings → Source control & issues.",
       }),
       ...accounts,
     };
@@ -213,7 +219,7 @@ function environmentTokenVariable(environment: NodeJS.ProcessEnv): string | null
 export const makeDiscovery = Effect.gen(function* () {
   const api = yield* GitHubRest.GitHubRest;
   const sourceControlHost = yield* SourceControlHost.SourceControlHost;
-  const process = sourceControlHost.process;
+  const process = yield* makeGhProcess;
   const environment = yield* HostProcess.Environment;
   const appSignIn = yield* GitHubAppSignIn.GitHubAppSignIn;
   const offerAppSignIn = <A extends SourceControlProviderDiscoveryItem>(item: A): A =>
@@ -298,9 +304,9 @@ export const makeDiscovery = Effect.gen(function* () {
                   status: "unauthenticated",
                   host: "github.com",
                   detail: savedToken
-                    ? "GitHub refused the token saved in Settings. Replace or remove it in Settings → Source Control."
+                    ? "GitHub refused the token saved in Settings. Replace or remove it in Settings → Source control & issues."
                     : signedIn
-                      ? `GitHub refused the ${appName} sign-in. Sign in again in Settings → Source Control.`
+                      ? `GitHub refused the ${appName} sign-in. Sign in again in Settings → Source control & issues.`
                       : `GitHub refused the token in ${tokenSource}. Replace it, or unset it to use \`gh auth login\`.`,
                 })),
           ...accounts,
@@ -339,10 +345,43 @@ class GitHubFailure extends Schema.TaggedError<GitHubFailure>()("GitHubFailure",
   cause: Schema.Defect(),
 }) {}
 
+class GitHubRepositoryLookupError extends Schema.TaggedError<GitHubRepositoryLookupError>()(
+  "GitHubRepositoryLookupError",
+  {
+    userFacingDetail: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
 const failure = (detail: string, cause?: unknown) => new GitHubFailure({ detail, cause });
+
+// A gh login confirms a GitHub Enterprise Server whose hostname does not identify its provider.
+const refineRepositoryIdentity: NonNullable<
+  SourceControlProvider.SourceControlProvider["Service"]["refineRepositoryIdentity"]
+> = Effect.fn("GitHubSourceControlProvider.refineRepositoryIdentity")(function* ({
+  identity,
+  resolveContext,
+}) {
+  if (!identity.rootPath || (identity.provider !== undefined && identity.provider !== "unknown"))
+    return identity;
+  const remote = parseGitRemoteHost(identity.locator.remoteUrl);
+  if (remote === null) return identity;
+  const context = yield* resolveContext({
+    cwd: identity.rootPath,
+    context: {
+      provider: unknownRemoteProvider(remote),
+      remoteName: identity.locator.remoteName,
+      remoteUrl: identity.locator.remoteUrl,
+    },
+  });
+  return context?.provider.kind === "github"
+    ? { ...identity, provider: SourceControlProviderKind.make("github") }
+    : identity;
+});
 
 const PULL_REQUEST_NOT_FOUND = "Pull request not found. Check the PR number or URL and try again.";
 const REPOSITORY_NOT_FOUND = "Repository not found. Check the owner and name and try again.";
+const isGitHubApiNotFoundError = Schema.is(GitHubRequestPolicy.GitHubApiNotFoundError);
 
 function fromGitHubApiError(
   error: GitHubRequestPolicy.GitHubApiError,
@@ -372,6 +411,7 @@ function fromGitHubApiError(
     case "GitHubApiNotFoundError":
       return failure(notFound, error);
     case "GitHubCliFailedError":
+    case "GitHubCliTimeoutError":
     case "GitHubAppSessionError":
     case "GitHubApiResponseError":
     case "GitHubApiRequestError":
@@ -618,9 +658,15 @@ export const make = Effect.gen(function* () {
     readonly limit: number;
     readonly context?: SourceControlProvider.SourceControlProviderContext | undefined;
     readonly host?: string | undefined;
+    readonly repository?: string | undefined;
     readonly allowReserve: boolean;
   }) {
-    const locator = yield* resolveRepository(input);
+    const base = yield* resolveRepository(input);
+    const locator =
+      input.repository === undefined
+        ? base
+        : parseGitHubRepositorySelector(input.repository, base.host);
+    if (locator === null) return yield* failure(`${input.repository} is not a GitHub repository.`);
     const limit = Math.min(Math.max(Math.trunc(input.limit), 1), 100);
     const ownerMatch = /^([^:/\s]+):(.+)$/u.exec(input.headSelector.trim());
     const headRefName = ownerMatch?.[2] ?? input.headSelector.trim();
@@ -970,6 +1016,7 @@ export const make = Effect.gen(function* () {
 
   return SourceControlProvider.SourceControlProvider.of({
     kind: SourceControlProviderKind.make("github"),
+    refineRepositoryIdentity,
     resolveRemoteWebHost: Effect.fn("GitHubSourceControlProvider.resolveRemoteWebHost")(
       ({ context }) => Effect.succeed(gitHubApiHostForRemote(context.remoteUrl)),
     ),
@@ -1054,6 +1101,7 @@ export const make = Effect.gen(function* () {
               limit: input.limit ?? (input.state === "open" ? 1 : 20),
               host: contextHost(input.context),
               context: input.context,
+              repository: input.repository,
               allowReserve,
             }),
           ),
@@ -1072,6 +1120,7 @@ export const make = Effect.gen(function* () {
         ),
       );
     }),
+    createsDraftChangeRequests: true,
     createChangeRequest: Effect.fn("GitHubSourceControlProvider.createChangeRequest")(
       function* (input) {
         const locator = yield* resolveRepository(input);
@@ -1095,6 +1144,7 @@ export const make = Effect.gen(function* () {
             title: input.title,
             body,
             maintainer_can_modify: true,
+            ...(input.draft === true ? { draft: true } : {}),
           },
         });
       },
@@ -1124,8 +1174,27 @@ export const make = Effect.gen(function* () {
                 name: bareName,
               }
             : null);
-        if (locator === null) return yield* failure("Repositories are named owner/name.");
-        return repositoryCloneUrls(yield* readRepository(locator));
+        if (locator === null) {
+          const detail = "Repositories are named owner/name.";
+          return yield* failure(
+            detail,
+            new GitHubRepositoryLookupError({ userFacingDetail: detail }),
+          );
+        }
+        return repositoryCloneUrls(
+          yield* readRepository(locator).pipe(
+            Effect.mapError((error) => {
+              if (!isGitHubApiNotFoundError(error.cause)) return error;
+              const detail = SourceControlProvider.repositoryNotFoundDetail(
+                `${locator.owner}/${locator.name}`,
+              );
+              return failure(
+                detail,
+                new GitHubRepositoryLookupError({ userFacingDetail: detail, cause: error.cause }),
+              );
+            }),
+          ),
+        );
       },
       (effect, input) =>
         effect.pipe(

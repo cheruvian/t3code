@@ -230,6 +230,7 @@ describe("environment shell synchronization", () => {
         attempt: 1,
         generation: 0,
         lastFailure: null,
+        refusedRouteIds: [],
         retryAt: null,
       });
       yield* Queue.offer(events, {
@@ -258,6 +259,7 @@ describe("environment shell synchronization", () => {
         attempt: 1,
         generation: 1,
         lastFailure: null,
+        refusedRouteIds: [],
         retryAt: null,
       });
 
@@ -321,6 +323,7 @@ describe("environment shell synchronization", () => {
         attempt: 1,
         generation: 1,
         lastFailure: null,
+        refusedRouteIds: [],
         retryAt: null,
       });
       yield* Queue.offer(events, { kind: "snapshot", snapshot: batchSnapshot });
@@ -716,6 +719,7 @@ describe("environment shell synchronization", () => {
         attempt: 1,
         generation: 0,
         lastFailure: null,
+        refusedRouteIds: [],
         retryAt: null,
       });
       yield* Queue.offer(events, {
@@ -736,6 +740,7 @@ describe("environment shell synchronization", () => {
         attempt: 2,
         generation: 1,
         lastFailure: null,
+        refusedRouteIds: [],
         retryAt: null,
       });
       yield* SubscriptionRef.set(supervisorState, {
@@ -746,6 +751,7 @@ describe("environment shell synchronization", () => {
         attempt: 2,
         generation: 2,
         lastFailure: null,
+        refusedRouteIds: [],
         retryAt: null,
       });
       yield* Deferred.await(saveStarted);
@@ -758,6 +764,7 @@ describe("environment shell synchronization", () => {
         attempt: 3,
         generation: 3,
         lastFailure: null,
+        refusedRouteIds: [],
         retryAt: null,
       });
       yield* SubscriptionRef.changes(shellState).pipe(
@@ -858,6 +865,7 @@ describe("environment shell synchronization", () => {
         attempt: 1,
         generation: 0,
         lastFailure: null,
+        refusedRouteIds: [],
         retryAt: null,
       });
       yield* Queue.offer(events, {
@@ -880,6 +888,7 @@ describe("environment shell synchronization", () => {
         attempt: 1,
         generation: 1,
         lastFailure: null,
+        refusedRouteIds: [],
         retryAt: null,
       });
       yield* Deferred.await(unenrichedSaveStarted);
@@ -976,6 +985,7 @@ describe("environment shell synchronization", () => {
         attempt: 1,
         generation: 0,
         lastFailure: null,
+        refusedRouteIds: [],
         retryAt: null,
       });
       yield* Queue.offer(events, {

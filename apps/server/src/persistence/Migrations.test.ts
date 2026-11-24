@@ -160,7 +160,7 @@ describe("runMigrations", () => {
   it.effect("keeps the migrations that finished before a later one failed", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 81 });
+      yield* runMigrations({ toMigrationInclusive: 93 });
       yield* sql`CREATE TABLE orchestration_v2_projection_turn_item_counts (thread_id TEXT)`;
 
       const exit = yield* Effect.exit(runMigrations());
@@ -168,7 +168,7 @@ describe("runMigrations", () => {
       assert.isTrue(Exit.isFailure(exit));
       assert.deepStrictEqual(
         yield* history,
-        migrationManifest.filter(([id]) => id <= 84),
+        migrationManifest.filter(([id]) => id <= 96),
       );
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
@@ -176,12 +176,12 @@ describe("runMigrations", () => {
   it.effect("reapplies peer link migrations whose ledger rows are missing", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 72 });
-      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id BETWEEN 70 AND 72`;
+      yield* runMigrations({ toMigrationInclusive: 83 });
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id BETWEEN 81 AND 83`;
 
       assert.deepStrictEqual(
         yield* runMigrations(),
-        migrationManifest.filter(([id]) => id >= 70),
+        migrationManifest.filter(([id]) => id >= 81),
       );
       assert.deepStrictEqual(yield* history, migrationManifest);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
@@ -212,8 +212,9 @@ it.effect("registers every migration file", () =>
       return match ? [[Number(match[1]), match[2]] as const] : [];
     });
     assert.deepStrictEqual(
-      files.toSorted(([a], [b]) => a - b),
-      migrationManifest,
+      files.map(([, name]) => name).toSorted(),
+      migrationManifest.map(([, name]) => name).toSorted(),
     );
+    assert.equal(Math.max(...files.map(([id]) => id)), newerMigrationId - 1);
   }).pipe(Effect.provide(NodeServices.layer)),
 );

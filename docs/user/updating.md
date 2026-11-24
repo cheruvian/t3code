@@ -88,7 +88,7 @@ If you previously enabled continuation for updates, enable this setting once
 to allow recovery without a connected client.
 
 A thread that finished its turn to wait on a subagent, a background task, a Claude
-monitor, or a command or other monitor the agent said it was waiting on is woken and told that this work
+monitor or `sleep` timer, or a command or other monitor the agent said it was waiting on is woken and told that this work
 stopped. Other background shells and monitors, such as a dev server and its
 watchdog, do not wake it; the thread learns about them with your next message.
 A thread is not resumed while it waits for your approval, answer, or secret, or

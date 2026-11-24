@@ -57,29 +57,16 @@ if (
   const launcherOptions = launcher?.parseServiceLauncherArgs(process.argv.slice(3));
   if (launcher !== undefined && launcherOptions !== undefined) {
     await launcher.runServiceLauncherCli(launcherOptions);
-  } else if (command === "__document-text") {
-    const { extractDocumentText } = await import("./provider/documentTextWorker.ts");
-    try {
-      process.stdout.write(await extractDocumentText(process.argv[3]!, process.argv[4]!));
-    } catch (error) {
-      if (error instanceof Error && "code" in error && /^E[A-Z0-9]+$/.test(String(error.code))) {
-        throw error;
-      }
-      // Exit 2 identifies document rejections; OS and process failures remain retryable.
-      process.exitCode = 2;
-    }
-  } else if (command === "__managed-chatgpt-token") {
-    const { runManagedChatGptTokenCli } = await import("./cli/managedChatGptToken.ts");
-    await runManagedChatGptTokenCli(process.argv.slice(3));
   } else if (command === "__credential-broker-worker") {
     const { runCredentialWorker } = await import("@t3tools/credential-broker/worker");
     await runCredentialWorker(process.argv[3]);
   } else if (command === "credential-broker") {
     process.argv.splice(2, 1);
     await import("@t3tools/credential-broker/cli");
-  } else if (command === "acp-mcp-bridge" || command === "acp-mcp-call") {
-    const { runAcpMcpCliFastPath } = await import("./mcp/AcpMcpStdioBridge.ts");
-    await runAcpMcpCliFastPath(command, process.argv.slice(3));
+  } else if (process.argv[2] === "__process-launcher") {
+    // Single executables host the launcher here; other builds start process-launcher.mjs directly.
+    const { runProcessLauncher } = await import("./process/processLauncherWorker.ts");
+    runProcessLauncher();
   } else {
     const { runCliCommand } = await loadCliMain();
     await runCliCommand();

@@ -2468,7 +2468,7 @@ describe("MessagesTimeline", () => {
       if (result?.trim() && result !== preview) expect(content).not.toContain(result);
       if (progress && progress !== preview) expect(content).not.toContain(progress);
       await act(() => child()[0]!.click());
-      expect(onOpenThread).toHaveBeenCalledWith("thread-subagent-1");
+      expect(onOpenThread).toHaveBeenCalledWith("thread-subagent-1", undefined, "primary");
       if (count > 1) {
         await act(() => group().click());
         expect(child()).toHaveLength(0);

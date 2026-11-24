@@ -1,26 +1,29 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+
 import "@fontsource-variable/inter";
 import "./index.css";
+
+import { trackKeyboardLayout } from "./keyboardLayout";
 import { hasCloudPublicConfig } from "./cloud/publicConfig";
 import { isElectron } from "./env";
 import { startAppServices } from "./appInit";
 import { AppRoot } from "./AppRoot";
 import { whenLocaleReady } from "./i18n/runtime";
 import { refreshDesktopSecondaryBootstraps } from "./connection/desktopLocal";
-import { reloadOnceForChunkLoadError } from "./lib/chunkReloadGuard";
+import { chunkLoadState } from "./lib/chunkReloadGuard";
+
+const stopTrackingKeyboardLayout = trackKeyboardLayout();
+import.meta.hot?.dispose(stopTrackingKeyboardLayout);
+
 async function initializeApp() {
   if (isElectron) await refreshDesktopSecondaryBootstraps();
   const router = startAppServices();
+
   const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
-  let reloadScheduled = false;
-  window.addEventListener("vite:preloadError", (event) => {
-    if (reloadOnceForChunkLoadError()) {
-      reloadScheduled = true;
-      event.preventDefault();
-    }
-  });
+
   const app = <AppRoot router={router} />;
+
   // Split by runtime to keep Clerk out of local startup and clerk-js out of browser builds.
   const managedAuthShellModule =
     clerkPublishableKey && hasCloudPublicConfig()
@@ -28,13 +31,15 @@ async function initializeApp() {
         ? import("./components/clerk/ElectronManagedAuthShell")
         : import("./components/clerk/BrowserManagedAuthShell")
       : null;
+
   return Promise.all([
     managedAuthShellModule?.then((module) => module.default) ?? null,
+    // Chained so settings have usually hydrated; English resolves without a chunk load.
     router.load().then(whenLocaleReady),
   ])
     .then(([ManagedAuthShell]) => {
       // Route chunk failures resolve router.load() and surface later through the error boundary.
-      if (reloadScheduled) return;
+      if (chunkLoadState.reloadScheduled) return;
       ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
         <React.StrictMode>
           {ManagedAuthShell && clerkPublishableKey ? (
@@ -46,8 +51,9 @@ async function initializeApp() {
       );
     })
     .catch((error: unknown) => {
-      if (reloadScheduled) return;
+      if (chunkLoadState.reloadScheduled) return;
       throw error;
     });
 }
+
 export const startup = initializeApp();

@@ -7,6 +7,7 @@ import {
 import type { EnvironmentId, PullRequestSummary } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { Atom } from "effect/reactivity";
+import { useMessages } from "gt-react-native";
 import { use, useMemo, useContext } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
@@ -88,6 +89,7 @@ export function useThreadPr(
 ): ThreadPrPresentation | null {
   const visible = useContext(ThreadPrVisibilityContext) && enabled;
   const demand = use(ThreadPrDemandContext);
+  const resolve = useMessages();
   const capabilities = useAtomValue(
     serverEnvironment.configValueAtom(thread.environmentId),
     (config) => config?.environment.capabilities,
@@ -101,8 +103,15 @@ export function useThreadPr(
           branchPullRequest: thread.branchPullRequest,
         },
         capabilities,
+        resolve,
       ),
-    [thread.pullRequests, thread.linkedPullRequest, thread.branchPullRequest, capabilities],
+    [
+      thread.pullRequests,
+      thread.linkedPullRequest,
+      thread.branchPullRequest,
+      capabilities,
+      resolve,
+    ],
   );
   const key = pullRequestRef === null ? null : snapshotKey(thread.environmentId, pullRequestRef);
   // Select this row's entry so answers for other pull requests do not re-render it.
@@ -126,10 +135,14 @@ export function useThreadPr(
   const summaryPresentation =
     summary === undefined
       ? null
-      : presentThreadPr(pullRequestDetailToVcsStatus(summary), {
-          kind: summary.provider,
-          name: summary.provider,
-          baseUrl: "",
-        });
+      : presentThreadPr(
+          pullRequestDetailToVcsStatus(summary),
+          {
+            kind: summary.provider,
+            name: summary.provider,
+            baseUrl: "",
+          },
+          resolve,
+        );
   return linkedPresentation ?? summaryPresentation;
 }

@@ -1,13 +1,10 @@
-import type { Root, RootContent } from "mdast";
-import remarkParse from "remark-parse";
-import remarkGfm from "remark-gfm";
-import { unified } from "unified";
+import { parseMarkdownWithMath } from "@t3tools/shared/markdownMath";
 
-const parser = unified().use(remarkParse).use(remarkGfm);
+type Root = ReturnType<typeof parseMarkdownWithMath>;
 export const MESSAGE_SPEECH_RATES = [1, 2, 3, 4] as const;
 const RATE_STORAGE_KEY = "t3.message-speech-rate";
 
-function readSpeechNode(node: Root | RootContent): string {
+function readSpeechNode(node: Root | Root["children"][number]): string {
   if (node.type === "code") return " Code block omitted. ";
   if (node.type === "html" || node.type === "definition") return "";
   if ("alt" in node) return node.alt ?? "";
@@ -23,7 +20,7 @@ function readSpeechNode(node: Root | RootContent): string {
 
 /** Read prose and inline code, without Markdown punctuation or fenced code dumps. */
 export function messageSpeechText(markdown: string): string {
-  return readSpeechNode(parser.parse(markdown))
+  return readSpeechNode(parseMarkdownWithMath(markdown))
     .replace(/[ \t]+/g, " ")
     .trim();
 }
@@ -36,7 +33,7 @@ export type MessageSpeechSection = {
 
 /** The rendered reply's top-level paragraphs, headings, lists and other blocks. */
 export function messageSpeechSections(markdown: string): MessageSpeechSection[] {
-  return parser.parse(markdown).children.flatMap((node) => {
+  return parseMarkdownWithMath(markdown).children.flatMap((node) => {
     const text = readSpeechNode(node)
       .replace(/[ \t]+/g, " ")
       .trim();

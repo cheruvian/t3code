@@ -106,6 +106,7 @@ vi.mock(import("../localApi"), async (original) => ({
       shell: { openExternal: state.openExternal },
     }) as never,
 }));
+vi.mock(import("../env"), async (original) => ({ ...(await original()), isElectron: true }));
 vi.mock(import("@t3tools/client-runtime/change-request-links"), async (original) => ({
   ...(await original()),
   resolvePullRequestPreviewTarget: () => null,
@@ -364,3 +365,19 @@ it.each([false, true])(
     expect(state.unlink).not.toHaveBeenCalled();
   },
 );
+
+it("opens an editor link over the desktop bridge on a click and on a middle-click", async () => {
+  using _setup = setup();
+  const href = "vscode://file/work/docs/readme.md:3";
+  await using screen = await renderMarkdown(`[Open in editor](${href})`);
+  for (const [type, button] of [
+    ["click", 0],
+    ["auxclick", 1],
+  ] as const) {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, button });
+    await act(async () => screen.anchor().dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(true);
+    expect(state.openExternal).toHaveBeenLastCalledWith(href);
+  }
+  expect(state.openExternal).toHaveBeenCalledTimes(2);
+});

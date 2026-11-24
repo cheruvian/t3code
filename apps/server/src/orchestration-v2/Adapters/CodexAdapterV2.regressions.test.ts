@@ -106,63 +106,6 @@ describe("Codex context usage compatibility", () => {
   });
 });
 
-describe("CodexAdapterV2 file change approvals", () => {
-  it("uses nonblank reasons before sorted file operations and renamed paths", () => {
-    const fileChanges = {
-      "/tmp/removed.md": { type: "delete" as const, content: "gone" },
-      "/tmp/added.ts": { type: "add" as const, content: "export {};" },
-      "/tmp/moved.ts": {
-        type: "update" as const,
-        unified_diff: "@@",
-        move_path: "/tmp/renamed.ts",
-      },
-    };
-    assert.equal(
-      CodexAdapterV2.codexFileChangeApprovalPrompt({
-        reason: "  Update configuration. ",
-        fileChanges,
-      }),
-      "Update configuration.",
-    );
-    assert.equal(
-      CodexAdapterV2.codexFileChangeApprovalPrompt({ reason: " ", fileChanges }),
-      "add /tmp/added.ts\nupdate /tmp/moved.ts -> /tmp/renamed.ts\ndelete /tmp/removed.md",
-    );
-  });
-
-  it("falls back to a nonblank grant root and omits empty details", () => {
-    assert.equal(
-      CodexAdapterV2.codexFileChangeApprovalPrompt({ reason: " ", grantRoot: " /workspace " }),
-      "/workspace",
-    );
-    assert.equal(
-      CodexAdapterV2.codexFileChangeApprovalPrompt({ fileChanges: {}, grantRoot: "/workspace" }),
-      "/workspace",
-    );
-    assert.isUndefined(
-      CodexAdapterV2.codexFileChangeApprovalPrompt({
-        reason: " ",
-        grantRoot: " ",
-        fileChanges: {},
-      }),
-    );
-  });
-
-  it("bounds large patch descriptions without losing the remaining count", () => {
-    const fileChanges = Object.fromEntries(
-      Array.from({ length: 25 }, (_, index) => [
-        `/tmp/file-${String(index).padStart(2, "0")}.ts`,
-        { type: "add" as const, content: "" },
-      ]),
-    );
-    const detail = CodexAdapterV2.codexFileChangeApprovalPrompt({ fileChanges });
-    assert.equal(detail?.split("\n").length, 21);
-    assert.isTrue(detail?.startsWith("add /tmp/file-00.ts") ?? false);
-    assert.isTrue(detail?.endsWith("+5 more") ?? false);
-    assert.notInclude(detail, "file-20.ts");
-  });
-});
-
 describe("CodexAdapterV2 assistant message streaming", () => {
   it.effect(
     "reads changed flush timing for new windows and completes buffered text immediately",

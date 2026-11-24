@@ -9,6 +9,15 @@ const state = vi.hoisted(() => ({
   result: Promise.resolve(null) as Promise<unknown>,
 }));
 
+vi.mock("gt-react-native", () => ({ useGT: () => (text: string) => text }));
+vi.mock("../use-refresh-branches-on-focus", () => ({ useRefreshBranchesOnFocus: () => {} }));
+vi.mock("../../../components/ui/FitSheet", () => ({ FitSheet: "FitSheet" }));
+vi.mock("../../../components/ui/FormSection", () => ({
+  FormSection: "FormSection",
+  FormField: "FormField",
+}));
+vi.mock("../../../components/ui/ListSection", () => ({ ListSection: "ListSection" }));
+vi.mock("../../../components/ui/ListChoiceRow", () => ({ ListChoiceRow: "ListChoiceRow" }));
 vi.mock("react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("react")>()),
   useState: (initial: string) => {
@@ -25,7 +34,7 @@ vi.mock("react-native", () => ({
   View: "View",
 }));
 vi.mock("@react-navigation/native", () => ({
-  useNavigation: () => ({ goBack: () => state.navigations++ }),
+  useNavigation: () => ({ isFocused: () => true, goBack: () => state.navigations++ }),
   useIsFocused: () => true,
 }));
 vi.mock("react-native-safe-area-context", () => ({
@@ -91,9 +100,9 @@ function findControl(node: ReactNode, label: string): ControlProps | null {
   }
   if (!isValidElement<ControlProps>(node)) return null;
   if (
-    node.props.label === label ||
+    (label === "main" ? node.props.placeholder === label : node.props.label === label) ||
     node.props.placeholder === label ||
-    (label === "checkout" && node.type === "Pressable")
+    (label === "checkout" && node.type === "ListChoiceRow")
   ) {
     return node.props;
   }

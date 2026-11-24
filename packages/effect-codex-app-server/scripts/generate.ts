@@ -72,7 +72,27 @@ class GeneratorError extends Schema.TaggedError<GeneratorError>()("GeneratorErro
   }
 }
 
+// Codex leaves experimental requests out of its published schema.
+const ManualClientRequests: ReadonlyArray<MethodEntry> = [
+  { method: "thread/settings/update", paramsType: "ThreadSettingsUpdateParams" },
+];
+
 const ManualSchemas: Record<string, Schema.Json> = {
+  ThreadSettingsUpdateParams: {
+    type: "object",
+    title: "ThreadSettingsUpdateParams",
+    properties: {
+      threadId: { type: "string" },
+      serviceTier: {
+        anyOf: [{ type: "string" }, { type: "null" }],
+      },
+    },
+    required: ["threadId"],
+  },
+  ThreadSettingsUpdateResponse: {
+    type: "object",
+    title: "ThreadSettingsUpdateResponse",
+  },
   GetAuthStatusParams: {
     type: "object",
     title: "GetAuthStatusParams",
@@ -788,7 +808,7 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
   const parsedClientRequestEntries = parseRequestEntries(clientRequestRaw);
   const clientRequestEntries = [
     ...parsedClientRequestEntries,
-    ...ManualClientRequestEntries.filter(
+    ...[...ManualClientRequestEntries, ...ManualClientRequests].filter(
       (manual) => !parsedClientRequestEntries.some((entry) => entry.method === manual.method),
     ),
   ];

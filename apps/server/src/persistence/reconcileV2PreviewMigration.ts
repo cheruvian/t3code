@@ -60,6 +60,21 @@ const upstreamNames = [
   "TurnItemMessageOrdinalIndex",
   "TurnItemInlineWorkOutput",
   "RepairStaleTitleRegeneration",
+  "IssueTrackerBindings",
+  "ActiveShellIndexIndexes",
+  "BackgroundRecoveryIndexes",
+  "TurnStartReadIndexes",
+  "DelegatedTaskReadIndexes",
+  "ThreadItemCounts",
+  "IssueTrackerAdditionalScopes",
+  "ProjectionProjectsTrackedFolders",
+  "TaskFolders",
+  "WorktreePathKeyIndex",
+  "DeferredSlashCommandIndex",
+  "AgentFeedback",
+  "IssueTrackerAccounts",
+  "Workflows",
+  "SupersededRunAttemptIndex",
 ];
 
 type MigrationRow = { readonly id: number; readonly name: string };

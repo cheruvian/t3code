@@ -115,7 +115,7 @@ describe("createAssetEnvironmentAtoms", () => {
                 });
           },
         } as unknown as WsRpcProtocolClient;
-        const session = { client } as RpcSession;
+        const session = { client } as RpcSession.RpcSession;
         supervisors.set(
           environmentId,
           EnvironmentSupervisor.EnvironmentSupervisor.of({
@@ -250,7 +250,7 @@ describe("createAssetEnvironmentAtoms", () => {
                 initialConfig: Effect.succeed({
                   environment: { capabilities: { assetUrlBatches: scenario.batch } },
                 } as ServerConfig),
-              } as unknown as RpcSession),
+              } as unknown as RpcSession.RpcSession),
             ),
             prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
             connect: Effect.void,
@@ -454,7 +454,7 @@ const makeAssetUrlHarness = Effect.fn("TestAssetUrl.makeHarness")(function* (
   >();
   const sessions = new Map<
     EnvironmentId,
-    SubscriptionRef.SubscriptionRef<Option.Option<RpcSession>>
+    SubscriptionRef.SubscriptionRef<Option.Option<RpcSession.RpcSession>>
   >();
   const makeSession = (environmentId: EnvironmentId) =>
     ({
@@ -476,7 +476,7 @@ const makeAssetUrlHarness = Effect.fn("TestAssetUrl.makeHarness")(function* (
             ),
           ),
       },
-    }) as unknown as RpcSession;
+    }) as unknown as RpcSession.RpcSession;
   for (const environmentId of environmentIds) {
     releases.set(environmentId, yield* Queue.unbounded<void>());
     const session = yield* SubscriptionRef.make(Option.some(makeSession(environmentId)));

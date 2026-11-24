@@ -7,6 +7,7 @@ import {
   type HtmlRenderOutlineBox,
   type HtmlRenderReference,
 } from "@t3tools/shared/htmlRender";
+import { T, useGT, Var } from "gt-react";
 import { Maximize2Icon, PanelRightOpenIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -26,6 +27,19 @@ import { observeResize } from "~/lib/observeResize";
 
 // A frame may load its URL a little after mounting.
 const MIN_URL_LIFE_MS = 5 * 60_000;
+const MAX_MEASURED_CONTENT_HEIGHTS = 200;
+
+// The height each render's page last reported, so a remounted frame opens at it before its page loads.
+const measuredContentHeights = new Map<string, number>();
+
+function rememberContentHeight(attachmentId: string, height: number) {
+  measuredContentHeights.delete(attachmentId);
+  measuredContentHeights.set(attachmentId, height);
+  if (measuredContentHeights.size > MAX_MEASURED_CONTENT_HEIGHTS) {
+    const oldest = measuredContentHeights.keys().next().value;
+    if (oldest !== undefined) measuredContentHeights.delete(oldest);
+  }
+}
 
 /**
  * An agent's HTML render inline in the thread: the page itself on the thread's
@@ -40,6 +54,7 @@ export function HtmlRenderFrame(props: {
   readonly onOpen?: (attachment: ChatFileAttachment) => void;
   readonly onFullscreenChange?: (fullscreen: boolean) => void;
 }) {
+  const gt = useGT();
   const { attachmentId, title } = props.htmlRender;
   const defaultMode = useClientSettings((settings) => settings.htmlPreviewDefaultMode);
   const [collapsedOverride, setCollapsed] = useState<boolean | null>(null);
@@ -51,9 +66,10 @@ export function HtmlRenderFrame(props: {
       if (entry) setWidth(entry.contentRect.width);
     });
   };
-  // Client fonts can wrap a page taller than the server measured it; a frame
-  // left short would scroll inside the thread and take the reader's scroll.
-  const [contentHeight, setContentHeight] = useState<number>();
+  // Client fonts can exceed the server-measured height and cause nested scrolling.
+  const [contentHeight, setContentHeight] = useState(() =>
+    measuredContentHeights.get(attachmentId),
+  );
   const height = htmlRenderFrameHeight(props.htmlRender, width, contentHeight);
   const fileName = htmlRenderFileName(title);
   const resource = (() => ({
@@ -80,6 +96,7 @@ export function HtmlRenderFrame(props: {
   const [ready, setReady] = useState(false);
   const showPage = () => setReady(true);
   const fitPage = (contentHeight: number) => {
+    rememberContentHeight(attachmentId, contentHeight);
     setContentHeight(contentHeight);
     setReady(true);
   };

@@ -15,6 +15,21 @@ import Migration0105 from "./Migrations/093_ProviderTurnAttemptIndex.ts";
 import Migration0106 from "./Migrations/094_TurnItemMessageOrdinalIndex.ts";
 import Migration0107 from "./Migrations/095_TurnItemInlineWorkOutput.ts";
 import Migration0108 from "./Migrations/096_RepairStaleTitleRegeneration.ts";
+import Migration0109 from "./Migrations/097_IssueTrackerBindings.ts";
+import Migration0110 from "./Migrations/098_ActiveShellIndexIndexes.ts";
+import Migration0111 from "./Migrations/099_BackgroundRecoveryIndexes.ts";
+import Migration0112 from "./Migrations/100_TurnStartReadIndexes.ts";
+import Migration0113 from "./Migrations/101_DelegatedTaskReadIndexes.ts";
+import Migration0114 from "./Migrations/102_ThreadItemCounts.ts";
+import Migration0115 from "./Migrations/103_IssueTrackerAdditionalScopes.ts";
+import Migration0116 from "./Migrations/104_ProjectionProjectsTrackedFolders.ts";
+import Migration0117 from "./Migrations/105_TaskFolders.ts";
+import Migration0118 from "./Migrations/106_WorktreePathKeyIndex.ts";
+import Migration0119 from "./Migrations/107_DeferredSlashCommandIndex.ts";
+import Migration0120 from "./Migrations/108_AgentFeedback.ts";
+import Migration0121 from "./Migrations/109_IssueTrackerAccounts.ts";
+import Migration0122 from "./Migrations/110_Workflows.ts";
+import Migration0123 from "./Migrations/123_SupersededRunAttemptIndex.ts";
 import Migration0091 from "./Migrations/091_GuardRecoveryPayloadIndexes.ts";
 import Migration0081 from "./Migrations/081_PeerLinks.ts";
 import Migration0082 from "./Migrations/082_PeerLinkFence.ts";
@@ -239,6 +254,21 @@ export const migrationEntries = [
   [106, "TurnItemMessageOrdinalIndex", Migration0106],
   [107, "TurnItemInlineWorkOutput", Migration0107],
   [108, "RepairStaleTitleRegeneration", Migration0108],
+  [109, "IssueTrackerBindings", Migration0109],
+  [110, "ActiveShellIndexIndexes", Migration0110],
+  [111, "BackgroundRecoveryIndexes", Migration0111],
+  [112, "TurnStartReadIndexes", Migration0112],
+  [113, "DelegatedTaskReadIndexes", Migration0113],
+  [114, "ThreadItemCounts", Migration0114],
+  [115, "IssueTrackerAdditionalScopes", Migration0115],
+  [116, "ProjectionProjectsTrackedFolders", Migration0116],
+  [117, "TaskFolders", Migration0117],
+  [118, "WorktreePathKeyIndex", Migration0118],
+  [119, "DeferredSlashCommandIndex", Migration0119],
+  [120, "AgentFeedback", Migration0120],
+  [121, "IssueTrackerAccounts", Migration0121],
+  [122, "Workflows", Migration0122],
+  [123, "SupersededRunAttemptIndex", Migration0123],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

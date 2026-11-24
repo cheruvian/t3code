@@ -1,5 +1,6 @@
+import { T, useGT } from "gt-react";
 import { CheckIcon, CopyIcon, Maximize2Icon, Minimize2Icon } from "lucide-react";
-import { useRef, useState, type ComponentProps } from "react";
+import { useRef, type ComponentProps, useState } from "react";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useClientSettings } from "../../hooks/useSettings";
@@ -7,13 +8,20 @@ import { useUiStateStore } from "../../uiStateStore";
 import { observeResize } from "../../lib/observeResize";
 import {
   serializeTableElementToCsv,
+  serializeTableElementToHtml,
   serializeTableElementToMarkdown,
 } from "../../markdown-clipboard";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { reportMarkdownActionFailure } from "./markdownActionFailure";
+import { reportMarkdownActionFailure, type TableCopyFormat } from "./markdownActionFailure";
+
+const TABLE_COPY_SERIALIZERS: Record<TableCopyFormat, (table: Element) => string> = {
+  markdown: serializeTableElementToMarkdown,
+  csv: serializeTableElementToCsv,
+  html: serializeTableElementToHtml,
+};
 
 /**
  * Whether any cell is clipped in the unwrapped layout. Only then does the wrap
@@ -41,6 +49,7 @@ function tableHasClippedCells(container: HTMLElement, table: HTMLTableElement): 
 }
 
 export function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
+  const gt = useGT();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const wordWrap = useClientSettings((settings) => settings.wordWrap);
   const tableWrap = useUiStateStore((state) => state.wrapTableCells);
@@ -52,13 +61,13 @@ export function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
   const expanded =
     wrapping.defaultExpanded === defaultExpanded ? wrapping.expanded : defaultExpanded;
   const [hasClippedCells, setHasClippedCells] = useState(false);
-  const { copyToClipboard, isCopied: copied } = useCopyToClipboard<"markdown" | "csv">({
+  const { copyToClipboard, isCopied: copied } = useCopyToClipboard<TableCopyFormat>({
     timeout: 1200,
     onError: (cause, format) =>
       reportMarkdownActionFailure({ operation: "copy-table", format }, cause),
   });
-  const expandLabel = expanded ? "Collapse table cells" : "Expand table cells";
-  const copyLabel = copied ? "Copied" : "Copy table";
+  const expandLabel = expanded ? gt("Collapse table cells") : gt("Expand table cells");
+  const copyLabel = copied ? gt("Copied") : gt("Copy table");
 
   // React calls this with null when a previous attach returned no cleanup.
   const attachContainer = (container: HTMLDivElement | null) => {
@@ -79,14 +88,16 @@ export function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
     };
   };
 
-  const handleCopy = (format: "markdown" | "csv") => {
+  const handleCopy = (format: TableCopyFormat) => {
     const table = containerRef.current?.querySelector("table");
     if (!table) return;
+    const text = TABLE_COPY_SERIALIZERS[format](table);
+    // Plain-text targets get the markup; rich targets (mail, docs, wikis) paste a real table.
     copyToClipboard(
-      format === "markdown"
-        ? serializeTableElementToMarkdown(table)
-        : serializeTableElementToCsv(table),
+      text,
       format,
+      format === "html" ? { "text/html": `<meta charset="utf-8">${text}` } : undefined,
+      { requireHtml: format === "html" },
     );
   };
 
@@ -147,8 +158,15 @@ export function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
             <TooltipPopup side="top">{copyLabel}</TooltipPopup>
           </Tooltip>
           <MenuPopup align="end">
-            <MenuItem onClick={() => handleCopy("markdown")}>Copy as Markdown</MenuItem>
-            <MenuItem onClick={() => handleCopy("csv")}>Copy as CSV</MenuItem>
+            <MenuItem onClick={() => handleCopy("markdown")}>
+              <T>Copy as Markdown</T>
+            </MenuItem>
+            <MenuItem onClick={() => handleCopy("csv")}>
+              <T>Copy as CSV</T>
+            </MenuItem>
+            <MenuItem onClick={() => handleCopy("html")}>
+              <T>Copy as HTML</T>
+            </MenuItem>
           </MenuPopup>
         </Menu>
       </div>

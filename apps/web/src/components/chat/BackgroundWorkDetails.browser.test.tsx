@@ -103,6 +103,38 @@ it("opens full command details for short labels and keeps pending tasks current"
   await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
 });
 
+it("gives a subagent the same status as the background work line", async () => {
+  await using screen = await render(
+    <ThreadNow
+      attention={null}
+      syncPhase={null}
+      goal={null}
+      work={backgroundWorkNowItem({
+        environmentId: EnvironmentId.make("test"),
+        threadId: ThreadId.make("thread"),
+        tasks: [
+          {
+            taskId: "subagent-task",
+            kind: "subagent",
+            description: "Review refactor diffs",
+            childThreadId: ThreadId.make("child"),
+          },
+        ],
+        turnItems: [],
+        stopDisabled: false,
+        stopping: false,
+        onStop: async () => undefined,
+        onOpenThread: () => undefined,
+      })}
+    />,
+  );
+  await expect.element(page.getByText("Waiting · Review refactor diffs")).toBeVisible();
+  await screen.getByRole("button", { name: "Details", exact: true }).click();
+  await expect
+    .element(page.getByRole("dialog").getByText("Waiting", { exact: true }))
+    .toBeVisible();
+});
+
 it("opens a native subagent whose child thread is present only on its turn item", async () => {
   const childThreadId = ThreadId.make("child");
   const onOpenThread = vi.fn();

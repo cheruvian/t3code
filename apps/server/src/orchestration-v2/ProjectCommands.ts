@@ -9,6 +9,7 @@ import {
   type ProjectResourceRequest,
   type ProjectResourceLock,
   type OrchestrationV2ThreadShell,
+  type ProjectTrackedFolder,
   SCRIPT_RUN_COMMAND_PATTERN,
   type ThreadEnvMode,
 } from "@t3tools/contracts";
@@ -28,6 +29,7 @@ export interface ProjectCreateCommand {
   readonly workspaceRoot: string;
   readonly scripts?: ReadonlyArray<ProjectScript>;
   readonly disabledInheritedScriptIds?: ReadonlyArray<string>;
+  readonly trackedFolders?: ReadonlyArray<ProjectTrackedFolder>;
 }
 
 export interface ProjectMetaUpdateCommand {
@@ -43,6 +45,7 @@ export interface ProjectMetaUpdateCommand {
   readonly projectIcon?: ProjectIconOverride | null;
   readonly scripts?: ReadonlyArray<ProjectScript>;
   readonly disabledInheritedScriptIds?: ReadonlyArray<string>;
+  readonly trackedFolders?: ReadonlyArray<ProjectTrackedFolder>;
   readonly pinned?: boolean;
   readonly archived?: boolean;
 }
@@ -193,6 +196,9 @@ export function planProjectCommand(input: {
           projectIcon: null,
           scripts: command.scripts ?? [],
           disabledInheritedScriptIds: command.disabledInheritedScriptIds ?? [],
+          ...(command.trackedFolders === undefined || command.trackedFolders.length === 0
+            ? {}
+            : { trackedFolders: command.trackedFolders }),
           createdAt: occurredAt,
           updatedAt: occurredAt,
         },
@@ -244,6 +250,9 @@ export function planProjectCommand(input: {
           ...(command.disabledInheritedScriptIds === undefined
             ? {}
             : { disabledInheritedScriptIds: command.disabledInheritedScriptIds }),
+          ...(command.trackedFolders === undefined
+            ? {}
+            : { trackedFolders: command.trackedFolders }),
           // Repeating a pin or archive keeps the original time.
           ...(command.pinned === undefined
             ? {}

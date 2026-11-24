@@ -23,7 +23,10 @@ export const vcsRefreshCommandScheduler: AtomCommandScheduler = {
   schedule: (registry, concurrency, input, execute) =>
     concurrency.mode === "parallel"
       ? vcsCommandScheduler.schedule(registry, concurrency, input, execute)
-      : refreshCommands.schedule(registry, { mode: "latest", key: concurrency.key }, input, () =>
+      : refreshCommands.schedule(
+          registry,
+          { mode: "latest", key: concurrency.key },
+          input,
           vcsCommandScheduler.schedule(registry, concurrency, input, execute),
         ),
 };

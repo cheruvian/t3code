@@ -1672,6 +1672,7 @@ describe("EnvironmentThreads", () => {
         attempt: 1,
         generation: 0,
         lastFailure: null,
+        refusedRouteIds: [],
         retryAt: null,
       });
       yield* Queue.offer(harness.inputs, snapshot(BASE_PROJECTION));
@@ -1685,6 +1686,7 @@ describe("EnvironmentThreads", () => {
         attempt: 1,
         generation: 1,
         lastFailure: null,
+        refusedRouteIds: [],
         retryAt: null,
       });
 

@@ -11,9 +11,10 @@ import { toastManager } from "../ui/toast";
 import { Button } from "../ui/button";
 import { Select, SelectTrigger, SelectValue, SelectPopup, SelectItem } from "../ui/select";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 
 export function ConnectionTimingSettings() {
+  const searchableSetting = useSearchableSetting();
   const settings = useAtomValue(environmentCatalog.timingValueAtom);
   const update = useAtomCommand(environmentCatalog.setTiming, { reportFailure: false });
   const [saving, setSaving] = useState(false);

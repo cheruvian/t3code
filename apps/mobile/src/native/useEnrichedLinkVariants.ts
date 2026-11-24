@@ -1,6 +1,10 @@
 import { resolvedMarkdownFileHref } from "@t3tools/client-runtime/markdown-file-resolution";
 import { modelChipIcon } from "../lib/contextChipIconSource";
 import { useMemo } from "react";
+import {
+  assistantCitationLabel,
+  parseAssistantCitationHref,
+} from "@t3tools/shared/assistantCitations";
 import { Image } from "react-native";
 import type { LinkPillContent, MarkdownStyle } from "react-native-enriched-markdown";
 import type { ComposerContextRecord } from "@t3tools/contracts";
@@ -72,6 +76,13 @@ function presentation(
   const file = fileLinks?.get(url);
   const custom = props.linkCustomization?.(file?.href ?? url);
   if (custom) return custom;
+  const citation = parseAssistantCitationHref(url);
+  if (citation)
+    return {
+      label: assistantCitationLabel(citation),
+      icon: CONTEXT_CHIP_ICON_SOURCES["message-circle"],
+      chip: { accent: contextChipPresentation("citation").accent, tintsIcon: true },
+    };
   const context = enrichedContextLinkCustomization(url);
   if (context) return context;
   const skill = enrichedSkillReference(url, props.skills);

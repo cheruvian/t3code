@@ -179,6 +179,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           "orchestration",
           "worktree",
           "pull-requests",
+          "issues",
           ...Array.from(
             request.capabilities ?? (browserToolsAvailable ? ["preview" as const] : []),
           ).filter((capability) => capability !== "environment"),

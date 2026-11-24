@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   EnvironmentId,
@@ -44,15 +45,19 @@ vi.mock("../../state/server", async () => {
       },
       refreshProviders: {
         label: "refresh",
-        run: async (
+        run: (
           registry: import("effect/reactivity").AtomRegistry.AtomRegistry,
           input: { environmentId: string },
-        ) => {
-          const result = await refreshProviders(input);
-          const atom = providerAtoms.get(input.environmentId);
-          if (result._tag === "Success" && atom) registry.set(atom, result.value.providers);
-          return result;
-        },
+        ) =>
+          Effect.tryPromise({
+            try: async () => {
+              const result = await refreshProviders(input);
+              const atom = providerAtoms.get(input.environmentId);
+              if (result._tag === "Success" && atom) registry.set(atom, result.value.providers);
+              return result.value;
+            },
+            catch: (cause) => ({ _tag: "ProviderRefreshFailed" as const, cause }),
+          }),
       },
     },
   };

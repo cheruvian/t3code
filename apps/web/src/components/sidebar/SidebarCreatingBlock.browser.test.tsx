@@ -118,7 +118,10 @@ function DraftAndCreationRows(props: { draftId: DraftId }) {
       <SidebarDraftBlock
         projectByKey={new Map()}
         projectDisplayNameByKey={new Map()}
-        scopedProjectKeys={null}
+        draftIds={[props.draftId]}
+        routeDraftComposer={null}
+        terminalLabels={new Map()}
+        jumpLabelByDraftId={null}
         routeDraftId={props.draftId}
         creatingDraftIds={creatingDraftIds}
         onNavigateToDraft={() => {}}

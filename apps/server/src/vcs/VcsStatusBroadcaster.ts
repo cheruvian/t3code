@@ -1,3 +1,5 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- A synchronous digest of the ref snapshot already in memory.
+import * as NodeCrypto from "node:crypto";
 import * as Schedule from "effect/Schedule";
 import * as Path from "effect/Path";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
@@ -24,6 +26,7 @@ import type {
   VcsStatusLocalResult,
   VcsStatusRemoteResult,
   VcsStatusResult,
+  VcsRefreshStatusResult,
   VcsStatusSubscriptionInput,
   VcsStatusStreamEvent,
 } from "@t3tools/contracts";
@@ -244,7 +247,7 @@ export class VcsStatusBroadcaster extends Context.Service<
     readonly refreshStatus: (
       cwd: string,
       options?: { readonly localOnly?: boolean },
-    ) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
+    ) => Effect.Effect<VcsRefreshStatusResult, GitManagerServiceError>;
     readonly refreshStatusInBackground: (cwd: string) => Effect.Effect<void>;
     readonly refreshPullRequestStatus: (
       cwd: string,
@@ -379,6 +382,12 @@ export const make = Effect.gen(function* () {
           : Effect.succeed(false),
       ),
       Stream.filter((event) => path.basename(event.path) === "HEAD"),
+      Stream.tap(() =>
+        Effect.sync(() => {
+          branchConfirmedUnder.delete(cwd);
+          headGenerations.set(cwd, (headGenerations.get(cwd) ?? 0) + 1);
+        }),
+      ),
       Stream.buffer({ capacity: 1, strategy: "sliding" }),
       Stream.mapEffect(() => readAndPublishBranch(cwd).pipe(Effect.retry(headRefreshRetry))),
       Stream.buffer({ capacity: 1, strategy: "sliding" }),
@@ -440,6 +449,8 @@ export const make = Effect.gen(function* () {
         return [null, next] as const;
       }
       next.delete(cwd);
+      branchConfirmedUnder.delete(cwd);
+      headGenerations.delete(cwd);
       return [current.fiber, next] as const;
     });
     if (fiber) yield* Fiber.interrupt(fiber).pipe(Effect.ignore);
@@ -539,15 +550,34 @@ export const make = Effect.gen(function* () {
   const pollersRef = yield* SynchronizedRef.make(new Map<string, ActiveRemotePoller>());
 
   const cacheCommitLock = yield* Semaphore.make(1);
-  const remoteOperationLocksRef = yield* SynchronizedRef.make(
-    new Map<string, Semaphore.Semaphore>(),
-  );
+  const remoteLocks = yield* KeyedLock.make<string>();
+  const upstreamReads = new Map<string, import("./GitVcsDriver.ts").GitRemoteStatusDetails>();
+  const activeRemoteReads = new Map<string, number>();
+  const cacheCapacity = 256;
+  const trimCache = (cache: Map<string, CachedVcsStatus>, retained?: string) => {
+    for (const key of cache.keys()) {
+      if (cache.size <= cacheCapacity) break;
+      if (key !== retained && !detailedSubscribers.has(key) && !activeRemoteReads.has(key)) {
+        cache.delete(key);
+        localRefreshResults.delete(key);
+        upstreamReads.delete(key);
+      }
+    }
+    return cache;
+  };
   const emptyCachedStatus = (): CachedVcsStatus => ({ revision: 0, local: null, remote: null });
 
   const getCachedStatus = Effect.fn("VcsStatusBroadcaster.getCachedStatus")(function* (
     cwd: string,
   ) {
-    return yield* Ref.get(cacheRef).pipe(Effect.map((cache) => cache.get(cwd) ?? null));
+    return yield* Ref.modify(cacheRef, (cache) => {
+      const cached = cache.get(cwd);
+      if (!cached) return [null, cache] as const;
+      const next = new Map(cache);
+      next.delete(cwd);
+      next.set(cwd, cached);
+      return [cached, trimCache(next, cwd)] as const;
+    });
   });
 
   const getCompatibleCachedRemote = (
@@ -564,27 +594,23 @@ export const make = Effect.gen(function* () {
   const remotePollerIdentity = (local: VcsStatusLocalResult) =>
     local.isRepo ? fingerprintStatusPart({ isRepo: true, refName: local.refName }) : null;
 
-  const getRemoteOperationLock = (cwd: string) =>
-    SynchronizedRef.modifyEffect(remoteOperationLocksRef, (locks) => {
-      const existing = locks.get(cwd);
-      if (existing) {
-        return Effect.succeed([existing, locks] as const);
-      }
-      return Semaphore.make(1).pipe(
-        Effect.map((semaphore) => {
-          const next = new Map(locks);
-          next.set(cwd, semaphore);
-          return [semaphore, next] as const;
-        }),
-      );
-    });
-
-  const withRemoteOperationLock = <A, E, R>(
-    cwd: string,
-    effect: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, E, R> =>
-    Effect.flatMap(getRemoteOperationLock(cwd), (lock) => lock.withPermit(effect));
-
+  const withRemoteOperationLock = <A, E, R>(cwd: string, effect: Effect.Effect<A, E, R>) =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => activeRemoteReads.set(cwd, (activeRemoteReads.get(cwd) ?? 0) + 1)),
+      () => remoteLocks.withLock(cwd, effect),
+      () =>
+        Effect.sync(() => {
+          const count = activeRemoteReads.get(cwd)! - 1;
+          if (count) activeRemoteReads.set(cwd, count);
+          else activeRemoteReads.delete(cwd);
+        }).pipe(
+          Effect.andThen(
+            Ref.update(cacheRef, (cache) =>
+              cache.size > cacheCapacity ? trimCache(new Map(cache)) : cache,
+            ),
+          ),
+        ),
+    );
   const observeRemoteStatusWithinLock = Effect.fn(
     "VcsStatusBroadcaster.observeRemoteStatusWithinLock",
   )(function* (
@@ -598,7 +624,13 @@ export const make = Effect.gen(function* () {
     const effectiveOptions = options ?? {
       refreshUpstream: !Duration.isZero(yield* automaticFetchInterval),
     };
-    const remoteExit = yield* workflow.remoteStatus({ cwd }, effectiveOptions).pipe(Effect.exit);
+    const details = upstreamReads.get(cwd);
+    upstreamReads.delete(cwd);
+    const remoteOptions =
+      options?.refreshMissingPullRequest && details && details.branch === localBefore.refName
+        ? { ...effectiveOptions, statusDetails: details }
+        : effectiveOptions;
+    const remoteExit = yield* workflow.remoteStatus({ cwd }, remoteOptions).pipe(Effect.exit);
     yield* workflow.invalidateLocalStatus(cwd);
     const localAfter = yield* readLocalStatus(cwd);
     if (!sameLocalIdentity(localBefore, localAfter)) {
@@ -688,6 +720,7 @@ export const make = Effect.gen(function* () {
                 return [{ committed: true, shouldPublish: false }, cache] as const;
               }
               const nextCache = new Map(cache);
+              nextCache.delete(cwd);
               nextCache.set(cwd, {
                 ...previous,
                 revision: previous.revision + 1,
@@ -698,7 +731,7 @@ export const make = Effect.gen(function* () {
                   committed: true,
                   shouldPublish: previous.local?.fingerprint !== nextLocal.fingerprint,
                 },
-                nextCache,
+                trimCache(nextCache, cwd),
               ] as const;
             },
           );
@@ -766,12 +799,16 @@ export const make = Effect.gen(function* () {
                 previous.remote?.remoteRefName !== nextRemote.remoteRefName ||
                 previous.remote?.remoteIsRepo !== nextRemote.remoteIsRepo;
               const nextCache = new Map(cache);
+              nextCache.delete(cwd);
               nextCache.set(cwd, {
                 revision: previous.revision + 1,
                 local: nextLocal,
                 remote: nextRemote,
               });
-              return [{ committed: true, localChanged, remoteChanged }, nextCache] as const;
+              return [
+                { committed: true, localChanged, remoteChanged },
+                trimCache(nextCache, cwd),
+              ] as const;
             },
           );
 
@@ -827,6 +864,7 @@ export const make = Effect.gen(function* () {
               return [{ committed: false, shouldPublish: false }, cache] as const;
             }
             const nextCache = new Map(cache);
+            nextCache.delete(cwd);
             nextCache.set(cwd, {
               revision: previous.revision + 1,
               local: nextLocal,
@@ -841,7 +879,7 @@ export const make = Effect.gen(function* () {
                   previous.remote?.remoteRefName !== nextRemote.remoteRefName ||
                   previous.remote?.remoteIsRepo !== nextRemote.remoteIsRepo,
               },
-              nextCache,
+              trimCache(nextCache, cwd),
             ] as const;
           },
         );
@@ -872,16 +910,45 @@ export const make = Effect.gen(function* () {
     return local;
   });
 
+  const branchConfirmedUnder = new Map<string, Fiber.Fiber<void, never>>();
+  // Bumped on every HEAD event, so a read that a checkout overtook cannot confirm its branch.
+  const headGenerations = new Map<string, number>();
+  const readyHeadWatch = (cwd: string) =>
+    SynchronizedRef.get(headWatchers).pipe(
+      Effect.map((watchers) => {
+        const watcher = watchers.get(cwd);
+        return watcher &&
+          watcher.fiber.pollUnsafe() === undefined &&
+          Deferred.isDoneUnsafe(watcher.ready)
+          ? watcher.fiber
+          : undefined;
+      }),
+    );
+
   const getOrLoadLocalStatus = Effect.fn("VcsStatusBroadcaster.getOrLoadLocalStatus")(function* (
     cwd: string,
   ) {
+    const watch = yield* readyHeadWatch(cwd);
+    const generation = headGenerations.get(cwd);
+    const confirm = <A>(value: A) => {
+      if (watch !== undefined && headGenerations.get(cwd) === generation) {
+        branchConfirmedUnder.set(cwd, watch);
+      }
+      return value;
+    };
     const cached = yield* getCachedStatus(cwd);
     if (cached?.local) {
-      if (!wantsBranchChanges(cwd) || branchChangesRead.get(cwd)) return cached.local.value;
+      if (branchChangesRead.get(cwd) || !wantsBranchChanges(cwd)) {
+        if (watch !== undefined && branchConfirmedUnder.get(cwd) === watch) {
+          return cached.local.value;
+        }
+        const branch = yield* workflow.currentBranch(cwd);
+        if (branch === cached.local.value.refName) return confirm(cached.local.value);
+      }
       yield* workflow.invalidateLocalStatus(cwd);
-      return yield* loadLocalStatus(cwd, { publish: true });
+      return confirm(yield* loadLocalStatus(cwd, { publish: true }));
     }
-    return yield* loadLocalStatus(cwd);
+    return confirm(yield* loadLocalStatus(cwd));
   });
 
   const withFileSystem = Effect.provideService(FileSystem.FileSystem, fs);
@@ -1098,6 +1165,21 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  const withRefsDigest = Effect.fnUntraced(function* (
+    cwd: string,
+    status: VcsStatusResult,
+  ): Effect.fn.Return<VcsRefreshStatusResult> {
+    // The digest is a cache hint. Preserve the refreshed status if its lookup fails.
+    const refs = yield* Effect.suspend(() => workflow.readRefSnapshot(cwd)).pipe(
+      Effect.catchDefect(() => Effect.succeed(null)),
+    );
+    return refs === null
+      ? status
+      : {
+          ...status,
+          refsDigest: NodeCrypto.createHash("sha256").update(refs).digest("hex").slice(0, 32),
+        };
+  });
   const refreshStatusCore = Effect.fn("VcsStatusBroadcaster.refreshStatusCore")(function* (
     cwd: string,
     rawCwd: string,
@@ -1154,9 +1236,12 @@ export const make = Effect.gen(function* () {
         });
         const current = yield* getCachedStatus(cwd);
         const currentLocal = current?.local?.value ?? observed.local;
-        return mergeGitStatusParts(
-          currentLocal,
-          getCompatibleCachedRemote(currentLocal, current)?.value ?? null,
+        return yield* withRefsDigest(
+          cwd,
+          mergeGitStatusParts(
+            currentLocal,
+            getCompatibleCachedRemote(currentLocal, current)?.value ?? null,
+          ),
         );
       }),
     );
@@ -1333,9 +1418,9 @@ export const make = Effect.gen(function* () {
           ? Effect.gen(function* () {
               const local = yield* localRefresh.refreshCanonical(cwd, rawCwd, requestId);
               const cache = yield* getCachedStatus(cwd);
-              return mergeGitStatusParts(
-                local,
-                getCompatibleCachedRemote(local, cache)?.value ?? null,
+              return yield* withRefsDigest(
+                cwd,
+                mergeGitStatusParts(local, getCompatibleCachedRemote(local, cache)?.value ?? null),
               );
             })
           : fullRefresh.refreshCanonical(cwd, rawCwd, requestId);
@@ -1358,12 +1443,14 @@ export const make = Effect.gen(function* () {
         !getCompatibleCachedRemote(cached.local.value, cached)?.value?.hasUpstream
       )
         return;
+      upstreamReads.delete(cwd);
       const divergence = yield* workflow.upstreamDivergence(cwd);
       const latest = yield* getCachedStatus(cwd);
       if (!divergence || !latest?.local || latest.local.value.refName !== divergence.refName)
         return;
       const remote = getCompatibleCachedRemote(latest.local.value, latest)?.value;
       if (!remote) return;
+      if (divergence.details) upstreamReads.set(cwd, divergence.details);
       yield* updateCachedRemoteStatus(
         cwd,
         { ...remote, aheadCount: divergence.aheadCount, behindCount: divergence.behindCount },
@@ -1691,7 +1778,13 @@ export const make = Effect.gen(function* () {
               const count = (detailedSubscribers.get(cwd) ?? 1) - 1;
               if (count === 0) detailedSubscribers.delete(cwd);
               else detailedSubscribers.set(cwd, count);
-            }),
+            }).pipe(
+              Effect.andThen(
+                Ref.update(cacheRef, (cache) =>
+                  cache.size > cacheCapacity ? trimCache(new Map(cache)) : cache,
+                ),
+              ),
+            ),
         );
         yield* Effect.acquireRelease(retainHeadWatcher(cwd), () => releaseHeadWatcher(cwd));
         const initialLocal = yield* localRefreshLocks.withLock(cwd, getOrLoadLocalStatus(cwd));

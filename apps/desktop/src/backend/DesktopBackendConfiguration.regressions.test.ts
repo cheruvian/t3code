@@ -290,7 +290,7 @@ describe("DesktopBackendConfiguration", () => {
           prepareRuntime: () => ({ ok: false, reason: "archive is corrupt" }),
           ensureNodePty: (_distro, root) => {
             observedNodePtyRoots.push(root);
-            return { ok: true, nodePath: "/usr/bin/node", resolvedPath: "/usr/bin:/bin" };
+            return { ok: true, nodePath: "/usr/bin/node", resolvedPath: "/usr/bin:/bin", t3Home: null };
           },
         }),
       },
@@ -309,27 +309,23 @@ describe("DesktopBackendConfiguration", () => {
     );
   });
 
-  it.effect("resolveWsl keeps the staged runtime when the mounted tree fails too", () => {
-    const stagedAppRoot = "/home/test/.t3/wsl-runtime/cache";
-    const invalidatedRuntimeIds: string[] = [];
+  it.effect("resolveWsl reports the probe failure when the mounted tree fails too", () => {
+    let mountedAttempts = 0;
     return withPackagedWslHarness(
       {
         archiveHash: "d".repeat(64),
         wsl: () => ({
-          prepareRuntime: () => ({ ok: true, linuxAppRoot: stagedAppRoot }),
-          invalidateRuntime: (_distro, runtimeId) =>
-            Effect.sync(() => {
-              invalidatedRuntimeIds.push(runtimeId);
-            }),
+          prepareRuntime: () => {
+            throw new Error("a failed probe must not stage the runtime");
+          },
           probeRuntime: () => ({
             ok: false,
             reason: "unsupported CPU architecture or incompatible system libraries",
           }),
-          ensureNodePty: () => ({
-            ok: false,
-            reason: "mounted tree is broken in some other way",
-            fatal: true,
-          }),
+          ensureNodePty: () => {
+            mountedAttempts += 1;
+            return { ok: false, reason: "mounted tree is broken in some other way", fatal: true };
+          },
         }),
       },
       () =>
@@ -340,7 +336,7 @@ describe("DesktopBackendConfiguration", () => {
 
           assert.isTrue(failure.fatal);
           assert.include(failure.reason, "unsupported CPU architecture");
-          assert.deepEqual(invalidatedRuntimeIds, []);
+          assert.equal(mountedAttempts, 1);
         }),
     );
   });

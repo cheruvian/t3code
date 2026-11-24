@@ -13,25 +13,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
-import { setMarkdownTaskChecked } from "@t3tools/shared/markdownTaskList";
+import { setMarkdownTaskChecked } from "@t3tools/shared/markdownTaskEdits";
 import { FileMarkdownPreview } from "./files/FileMarkdownPreview";
 
 const { workspaceSearch, filesystemMetadata } = vi.hoisted(() => ({
   workspaceSearch: vi.fn(),
   filesystemMetadata: vi.fn(),
 }));
-const parsedSources = vi.hoisted(() => [] as string[]);
-vi.mock(import("mdast-util-from-markdown"), async (original) => {
-  const actual = await original();
-  return {
-    ...actual,
-    fromMarkdown: ((source: string, ...rest: never[]) => {
-      parsedSources.push(String(source));
-      return (actual.fromMarkdown as (...args: unknown[]) => unknown)(source, ...rest);
-    }) as typeof actual.fromMarkdown,
-  };
-});
-
 vi.mock(import("../state/use-atom-query-runner"), async (original) => ({
   ...(await original()),
   useAtomQueryRunner: ((family: unknown) =>
@@ -1494,7 +1482,6 @@ describe("ChatMarkdown in-page links", () => {
 
 function setup() {
   appearance.value = "dark";
-  parsedSources.length = 0;
   settingsOverrides.mathRenderingEnabled = false;
   renderDiagram.mockReset();
   workspaceSearch

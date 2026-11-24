@@ -109,21 +109,3 @@ export const readAntigravityClientTextFile = Effect.fn("AntigravityClientFiles.r
     return { content: lines.slice(start, end).join("\n") };
   },
 );
-
-export const writeAntigravityClientTextFile = Effect.fn("AntigravityClientFiles.writeTextFile")(
-  function* (input: {
-    readonly fileSystem: FileSystem.FileSystem;
-    readonly path: Path.Path;
-    readonly allowedRoots: ReadonlyArray<string>;
-    readonly request: EffectAcpSchema.WriteTextFileRequest;
-  }): Effect.fn.Return<EffectAcpSchema.WriteTextFileResponse, EffectAcpErrors.AcpError> {
-    const filePath = yield* resolveClientFilePath({ ...input, requestPath: input.request.path });
-    yield* input.fileSystem.makeDirectory(input.path.dirname(filePath), { recursive: true }).pipe(
-      Effect.andThen(input.fileSystem.writeFileString(filePath, input.request.content)),
-      Effect.mapError(() =>
-        EffectAcpErrors.AcpRequestError.internalError(`Could not write '${input.request.path}'.`),
-      ),
-    );
-    return {};
-  },
-);

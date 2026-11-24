@@ -18,6 +18,7 @@ vi.mock("react-native", () => ({
   useWindowDimensions: () => ({ height: 800 }),
 }));
 vi.mock("@react-navigation/native", () => ({
+  useFocusEffect: () => {},
   useIsFocused: () => true,
   useNavigation: () => ({}),
 }));

@@ -7,8 +7,10 @@ import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { ReadOnlySqlClient } from "../persistence/Services/ReadOnlySqlClient.ts";
+import { HttpApiSchemaError } from "effect/http-api/HttpApiError";
 
 import {
   annotateEnvironmentRequest,
@@ -36,6 +38,7 @@ import {
   loadSubscriberShellSnapshot,
   projectIdentitiesDigest,
 } from "./ShellStream.ts";
+import { encodeThreadSnapshotBody } from "./threadSnapshotBody.ts";
 import { boundedSnapshotResponseFields } from "./ThreadStream.ts";
 import { projectThreadProjectionForWire } from "./WireProjection.ts";
 
@@ -201,14 +204,24 @@ export const layer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.threadSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          const snapshot = yield* loadThreadSnapshot(
+          const body = yield* loadThreadSnapshot(
             args.params.threadId,
             "orchestration_thread_snapshot_failed",
-          ).pipe(traceLocalHandlerWork);
-          return {
-            snapshotSequence: snapshot.snapshotSequence,
-            projection: snapshot.projection,
-          };
+          ).pipe(
+            Effect.flatMap((snapshot) =>
+              encodeThreadSnapshotBody({
+                snapshotSequence: snapshot.snapshotSequence,
+                projection: snapshot.projection,
+              }).pipe(
+                // The same defect, and the same empty 500, as a failed response encoding.
+                Effect.catch((cause) =>
+                  Effect.die(new HttpApiSchemaError({ kind: "Body", cause })),
+                ),
+              ),
+            ),
+            traceLocalHandlerWork,
+          );
+          return HttpServerResponse.stream(body, { contentType: "application/json" });
         }),
       )
       .handle(

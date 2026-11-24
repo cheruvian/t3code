@@ -28,7 +28,7 @@ export function useReviewHeaderPresentation(props: {
   readonly selectedSection: ReviewSectionItem | null;
   readonly onRefresh: () => Promise<void>;
 }): ReviewHeaderPresentation {
-  const { selectedThread } = useThreadSelection();
+  const { selectedThread, selectedThreadProject } = useThreadSelection();
   const gitState = useSelectedThreadGitState();
   const isFocused = useIsFocused();
   const gitStatusQuery = useMobileGitStatus({
@@ -58,6 +58,7 @@ export function useReviewHeaderPresentation(props: {
     threadId: props.threadId,
     gitCwd: props.selectedThreadCwd,
     currentBranch: selectedThread?.branch ?? null,
+    tracksRepositories: (selectedThreadProject?.trackedFolders?.length ?? 0) > 0,
     gitStatus: gitStatusQuery.data,
     gitOperationLabel: gitState.gitOperationLabel,
     onPull: gitActions.onPullSelectedThreadBranch,
